@@ -1,0 +1,158 @@
+# 分类数据库示例
+# 用于桌面图标智能分类
+
+version: "1.0"
+
+categories:
+  # 游戏分类
+  - id: games
+    name: 游戏
+    icon: 🎮
+    exe_patterns:
+      - steam.exe
+      - epicgameslauncher.exe
+      - lol.exe
+      - dota2.exe
+      - csgo.exe
+    path_patterns:
+      - "\\Games\\"
+      - "\\Steam\\"
+      - "\\Epic Games\\"
+    keywords:
+      - game
+      - play
+      - 游戏
+      - 娱乐
+
+  # 开发工具分类
+  - id: dev
+    name: 开发工具
+    icon: 💻
+    exe_patterns:
+      - code.exe
+      - idea*.exe
+      - rust*.exe
+      - python.exe
+      - git*.exe
+      - node*.exe
+    path_patterns:
+      - "\\Dev\\"
+      - "\\IDE\\"
+      - "\\Programming\\"
+    keywords:
+      - dev
+      - code
+      - ide
+      - editor
+      - 开发
+      - 编程
+
+  # 办公分类
+  - id: office
+    name: 办公
+    icon: 📄
+    exe_patterns:
+      - word.exe
+      - excel.exe
+      - powerpoint.exe
+      - outlook.exe
+      - teams.exe
+    path_patterns:
+      - "\\Office\\"
+      - "\\Microsoft Office\\"
+      - "\\Documents\\"
+    keywords:
+      - office
+      - document
+      - 文档
+      - 办公
+      - 工作
+
+  # 媒体分类
+  - id: media
+    name: 媒体
+    icon: 🎵
+    exe_patterns:
+      - vlc.exe
+      - spotify.exe
+      - netflix.exe
+      - musicbee.exe
+    path_patterns:
+      - "\\Music\\"
+      - "\\Video\\"
+      - "\\Media\\"
+    keywords:
+      - music
+      - video
+      - media
+      - 音乐
+      - 视频
+
+  # 工具分类
+  - id: tools
+    name: 工具
+    icon: 🔧
+    exe_patterns:
+      - notepad.exe
+      - calc.exe
+      - paint.exe
+      - snippingtool.exe
+    path_patterns:
+      - "\\Tools\\"
+      - "\\Utilities\\"
+    keywords:
+      - tool
+      - utility
+      - 工具
+      - 实用
+
+  # 浏览器分类
+  - id: browser
+    name: 浏览器
+    icon: 🌐
+    exe_patterns:
+      - chrome.exe
+      - firefox.exe
+      - edge.exe
+      - safari.exe
+    path_patterns:
+      - "\\Browser\\"
+    keywords:
+      - browser
+      - web
+      - 浏览器
+      - 网页
+
+  # 社交分类
+  - id: social
+    name: 社交
+    icon: 💬
+    exe_patterns:
+      - discord.exe
+      - slack.exe
+      - telegram.exe
+      - wechat.exe
+    path_patterns:
+      - "\\Social\\"
+    keywords:
+      - social
+      - chat
+      - 社交
+      - 聊天
+
+  # 系统分类
+  - id: system
+    name: 系统
+    icon: ⚙️
+    exe_patterns:
+      - cmd.exe
+      - powershell.exe
+      - control.exe
+      - taskmgr.exe
+    path_patterns:
+      - "\\System\\"
+    keywords:
+      - system
+      - settings
+      - 系统
+      - 设置
