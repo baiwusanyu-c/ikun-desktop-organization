@@ -1,0 +1,30 @@
+AGENTS.md
+  s_6ff76e76207625::t_08150484acb77f 1-22
+CLAUDE.md
+  s_6ff76e76207625::t_6e32db8f34baaa 1-29,54-76
+  s_3c987a1022b127::t_656b0da27781bb 30-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "1c503f155375ff425825bec4d78a92d4d9c5622c",
+  "prompts": {},
+  "sessions": {
+    "s_3c987a1022b127": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9d7b0984-df9e-477f-83a0-3d1f9c8354eb",
+        "model": "glm-5"
+      },
+      "human_author": "白雾三语 <32354856+baiwusanyu-c@users.noreply.github.com>"
+    },
+    "s_6ff76e76207625": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e2369b9d-51e0-4582-bc17-691658f32380",
+        "model": "glm-5"
+      },
+      "human_author": "白雾三语 <32354856+baiwusanyu-c@users.noreply.github.com>"
+    }
+  }
+}
