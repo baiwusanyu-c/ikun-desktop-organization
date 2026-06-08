@@ -1,0 +1,258 @@
+.cursor/commands/trellis-brainstorm.md
+  s_6ff76e76207625::t_08150484acb77f 1-487
+.claude/commands/trellis/update-spec.md
+  s_6ff76e76207625::t_08150484acb77f 1-354
+src/utils/logger.rs
+  s_ced9e347d38aae::t_1da3c2f0820c46 1-88
+.claude/commands/trellis/check-cross-layer.md
+  s_6ff76e76207625::t_08150484acb77f 1-153
+src/app.rs
+  s_5b5e756e753776::t_369816f540abde 22-29,32-36,39-43,45,51-57
+.claude/commands/trellis/brainstorm.md
+  s_6ff76e76207625::t_08150484acb77f 1-487
+.claude/agents/dispatch.md
+  s_6ff76e76207625::t_08150484acb77f 1-213
+.trellis/scripts/multi_agent/plan.py
+  s_6ff76e76207625::t_08150484acb77f 1-213
+.claude/commands/trellis/parallel.md
+  s_6ff76e76207625::t_08150484acb77f 1-192
+.trellis/scripts/add_session.py
+  s_6ff76e76207625::t_08150484acb77f 1-521
+.trellis/spec/backend/logging-guidelines.md
+  s_6ff76e76207625::t_08150484acb77f 1-8,10,16,62,78-81,83,90,96,99,102,106-109,122,124,126,149-151,291,293
+  s_3c987a1022b127::t_a999d6aaac3c3b 9,11-15,17-30,33,35,37-40,61,63-72,77,82,84-89,91-95,97-98,100-101,103-105,110-121,123,125,127-148,152-290,292,294-298
+  s_ced9e347d38aae::t_a4d565d7bcd4e5 31-32,34,36,41-60,73-76
+.trellis/scripts/common/session_context.py
+  s_6ff76e76207625::t_08150484acb77f 1-562
+.claude/commands/trellis/record-session.md
+  s_6ff76e76207625::t_08150484acb77f 1-62
+.trellis/spec/backend/error-handling.md
+  s_6ff76e76207625::t_08150484acb77f 1-8,10,15,20-24,26,30,56-58,132,136,139,181,190,193,201,203,224-226,234,236
+  s_3c987a1022b127::t_2f3dbd52c1c7a5 9,11-14,16-19,25,27-29,31-55,59-131,133-135,137-138,140-180,182-189,191-192,194-200,202,204-223,227-233,235,237-241
+.trellis/scripts/common/task_context.py
+  s_6ff76e76207625::t_08150484acb77f 1-410
+src/utils/mod.rs
+  s_ced9e347d38aae::t_5fd77257222499 1,3,5
+.claude/commands/trellis/create-command.md
+  s_6ff76e76207625::t_08150484acb77f 1-154
+.trellis/scripts/common/task_queue.py
+  s_6ff76e76207625::t_08150484acb77f 1-188
+.claude/agents/debug.md
+  s_6ff76e76207625::t_08150484acb77f 1-106
+.trellis/scripts/multi_agent/cleanup.py
+  s_6ff76e76207625::t_08150484acb77f 1-398
+.trellis/spec/guides/code-reuse-thinking-guide.md
+  s_6ff76e76207625::t_08150484acb77f 1-105
+.cursor/commands/trellis-before-dev.md
+  s_6ff76e76207625::t_08150484acb77f 1-29
+.trellis/spec/guides/index.md
+  s_6ff76e76207625::t_08150484acb77f 1-79
+.claude/commands/trellis/start.md
+  s_6ff76e76207625::t_08150484acb77f 1-393
+.trellis/.gitignore
+  s_6ff76e76207625::t_08150484acb77f 1-29
+.cursor/commands/trellis-check.md
+  s_6ff76e76207625::t_08150484acb77f 1-25
+.trellis/worktree.yaml
+  s_6ff76e76207625::t_08150484acb77f 1-47
+.claude/agents/research.md
+  s_6ff76e76207625::t_08150484acb77f 1-120
+.trellis/scripts/common/paths.py
+  s_6ff76e76207625::t_08150484acb77f 1-444
+.trellis/scripts/multi_agent/status_monitor.py
+  s_6ff76e76207625::t_08150484acb77f 1-225
+.claude/commands/trellis/break-loop.md
+  s_6ff76e76207625::t_08150484acb77f 1-125
+.trellis/spec/guides/cross-layer-thinking-guide.md
+  s_6ff76e76207625::t_08150484acb77f 1-94
+.trellis/scripts/common/git.py
+  s_6ff76e76207625::t_08150484acb77f 1-31
+.trellis/scripts/task.py
+  s_6ff76e76207625::t_08150484acb77f 1-445
+.trellis/scripts/create_bootstrap.py
+  s_6ff76e76207625::t_08150484acb77f 1-298
+.claude/agents/check.md
+  s_6ff76e76207625::t_08150484acb77f 1-122
+.trellis/spec/backend/directory-structure.md
+  s_6ff76e76207625::t_08150484acb77f 1-8,17-23,57-58,63-65,81,87,134-138,140,147,158-160,184,225
+  s_3c987a1022b127::t_9403288aef718d 9-16,24-56,59-62,66-80,82-86,88-133,139,141-146,148-157,161-183,185-224,226-233
+.trellis/scripts/common/git_context.py
+  s_6ff76e76207625::t_08150484acb77f 1-78
+.claude/commands/trellis/integrate-skill.md
+  s_6ff76e76207625::t_08150484acb77f 1-219
+.cursor/commands/trellis-onboard.md
+  s_6ff76e76207625::t_08150484acb77f 1-358
+.trellis/scripts/multi_agent/status.py
+  s_6ff76e76207625::t_08150484acb77f 1-76
+.claude/agents/implement.md
+  s_6ff76e76207625::t_08150484acb77f 1-95
+.trellis/scripts/get_context.py
+  s_6ff76e76207625::t_08150484acb77f 1-16
+.cursor/commands/trellis-integrate-skill.md
+  s_6ff76e76207625::t_08150484acb77f 1-219
+.run/Debug.run.xml
+  s_ced9e347d38aae::t_66fb330f93ff04 1-21
+.cursor/commands/trellis-start.md
+  s_6ff76e76207625::t_08150484acb77f 1-373
+.trellis/spec/backend/index.md
+  s_6ff76e76207625::t_08150484acb77f 1-8,17-23,29-31,33,35,40,44,190-191
+  s_ced9e347d38aae::t_8a27f233b74844 143-158
+  s_ced9e347d38aae::t_28a6d8a5d23e9c 51-112,121-125
+  s_3c987a1022b127::t_1d775f788d77e7 9-16,24-28,32,34,36-39,41-43,45-50,113-120,126-142,159-189,192
+.trellis/scripts/common/task_store.py
+  s_6ff76e76207625::t_08150484acb77f 1-536
+.claude/hooks/inject-subagent-context.py
+  s_6ff76e76207625::t_08150484acb77f 1-803
+".run/Watch Check.run.xml"
+  s_ced9e347d38aae::t_cb41d1748747b7 1-17
+.trellis/scripts/common/log.py
+  s_6ff76e76207625::t_08150484acb77f 1-45
+.cursor/commands/trellis-record-session.md
+  s_6ff76e76207625::t_08150484acb77f 1-62
+.trellis/scripts/common/tasks.py
+  s_6ff76e76207625::t_08150484acb77f 1-109
+.trellis/scripts/common/packages_context.py
+  s_6ff76e76207625::t_08150484acb77f 1-238
+.trellis/config.yaml
+  s_6ff76e76207625::t_08150484acb77f 1-53
+.claude/commands/trellis/onboard.md
+  s_6ff76e76207625::t_08150484acb77f 1-358
+.trellis/spec/index.md
+  s_ced9e347d38aae::t_9d08b130011c9f 1-172
+.trellis/workspace/baiwusanyu/spec-update-summary.md
+  s_ced9e347d38aae::t_4d9d5f9b06cbbd 1-189
+src/main.rs
+  s_ced9e347d38aae::t_cd018234bdb476 16-22,24,26
+  s_5b5e756e753776::t_3e6706c90e4d2f 42
+.claude/commands/trellis/check.md
+  s_6ff76e76207625::t_08150484acb77f 1-25
+.run/Run.run.xml
+  s_ced9e347d38aae::t_b2258c45e716d1 1-20
+.cursor/commands/trellis-break-loop.md
+  s_6ff76e76207625::t_08150484acb77f 1-107
+.trellis/scripts/common/types.py
+  s_6ff76e76207625::t_08150484acb77f 1-112
+.cursor/commands/trellis-update-spec.md
+  s_6ff76e76207625::t_08150484acb77f 1-354
+.cursor/commands/trellis-create-command.md
+  s_6ff76e76207625::t_08150484acb77f 1-154
+.trellis/scripts/common/io.py
+  s_6ff76e76207625::t_08150484acb77f 1-37
+.trellis/.template-hashes.json
+  s_6ff76e76207625::t_08150484acb77f 1-78
+.trellis/scripts/common/registry.py
+  s_6ff76e76207625::t_08150484acb77f 1-335
+.trellis/scripts/common/config.py
+  s_6ff76e76207625::t_08150484acb77f 1-264
+src/classification/mod.rs
+  s_5b5e756e753776::t_75bfb68efcebc6 21-28
+.trellis/scripts/common/task_utils.py
+  s_6ff76e76207625::t_08150484acb77f 1-274
+.trellis/scripts/multi_agent/__init__.py
+  s_6ff76e76207625::t_08150484acb77f 1-5
+.trellis/scripts/common/developer.py
+  s_6ff76e76207625::t_08150484acb77f 1-190
+.claude/commands/trellis/finish-work.md
+  s_6ff76e76207625::t_08150484acb77f 1-153
+.trellis/scripts/init_developer.py
+  s_6ff76e76207625::t_08150484acb77f 1-51
+.run/Test.run.xml
+  s_ced9e347d38aae::t_3369ff48cc13a1 1-20
+.claude/hooks/statusline.py
+  s_6ff76e76207625::t_08150484acb77f 1-218
+.trellis/scripts/hooks/linear_sync.py
+  s_6ff76e76207625::t_08150484acb77f 1-243
+.cursor/commands/trellis-check-cross-layer.md
+  s_6ff76e76207625::t_08150484acb77f 1-153
+.trellis/spec/backend/quality-guidelines.md
+  s_3c987a1022b127::t_2a7fd8bbf9c038 9-16,18-48,50-52,57-101,103,105-133,139-202,208-251,256-334,336-365,367-376
+  s_6ff76e76207625::t_08150484acb77f 1-8,17,49,53-56,102,104,134-138,203-207,252-255,335,366
+.claude/agents/plan.md
+  s_6ff76e76207625::t_08150484acb77f 1-396
+.trellis/scripts/multi_agent/status_display.py
+  s_6ff76e76207625::t_08150484acb77f 1-542
+.trellis/scripts/common/phase.py
+  s_6ff76e76207625::t_08150484acb77f 1-254
+.claude/hooks/ralph-loop.py
+  s_6ff76e76207625::t_08150484acb77f 1-396
+.claude/settings.json
+  s_6ff76e76207625::t_08150484acb77f 1-75
+.trellis/scripts/multi_agent/_bootstrap.py
+  s_6ff76e76207625::t_08150484acb77f 1-17
+.trellis/scripts/common/worktree.py
+  s_6ff76e76207625::t_08150484acb77f 1-305
+.trellis/scripts/multi_agent/start.py
+  s_6ff76e76207625::t_08150484acb77f 1-539
+CLAUDE.md
+  s_6ff76e76207625::t_6e32db8f34baaa 156,204,505
+  s_ced9e347d38aae::t_4d24e92ef33f8d 247-248
+  s_ced9e347d38aae::t_f1a7faf050072b 132-134,148-149,153-155
+  s_ced9e347d38aae::t_6f3651bab95957 485-488
+  s_3c987a1022b127::t_656b0da27781bb 5-23,146-147,150,157-189,191-203,205-215,221-225,227-232,234,236,239,241-242,244,246,253-484,489-504,506,508-514,516,518,520-523,525-527,529,531-532
+  s_ced9e347d38aae::t_33dc84fed7d451 24-119
+.trellis/spec/backend/database-guidelines.md
+  s_3c987a1022b127::t_121fece9f2ea7e 3,9,11-13,15-18,22-38,40-126,128-131,133-140,143,145,147-153,155-158,160-163,165-169,171,173-176,180-225,228-233,235-242
+  s_6ff76e76207625::t_08150484acb77f 1-2,4-8,10,14,19-21,39,127,132,141-142,144,146,154,159,164,170,172,177-179,226-227,234
+.claude/hooks/session-start.py
+  s_6ff76e76207625::t_08150484acb77f 1-414
+.trellis/scripts/multi_agent/create_pr.py
+  s_6ff76e76207625::t_08150484acb77f 1-620
+.trellis/workflow.md
+  s_6ff76e76207625::t_08150484acb77f 1-416
+.claude/commands/trellis/before-dev.md
+  s_6ff76e76207625::t_08150484acb77f 1-29
+src/desktop/macos.rs
+  s_5b5e756e753776::t_2ad29ea028249f 5,15-21
+.trellis/scripts/common/__init__.py
+  s_6ff76e76207625::t_08150484acb77f 1-84
+.trellis/scripts/get_developer.py
+  s_6ff76e76207625::t_08150484acb77f 1-26
+.trellis/.version
+  s_6ff76e76207625::t_08150484acb77f 1
+.trellis/scripts/common/cli_adapter.py
+  s_6ff76e76207625::t_08150484acb77f 1-753
+.cursor/commands/trellis-finish-work.md
+  s_6ff76e76207625::t_08150484acb77f 1-143
+.trellis/scripts/__init__.py
+  s_6ff76e76207625::t_08150484acb77f 1-5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "ea264e318dd7ddb5af9d49a672feb4a6364abdf3",
+  "prompts": {},
+  "sessions": {
+    "s_3c987a1022b127": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9d7b0984-df9e-477f-83a0-3d1f9c8354eb",
+        "model": "glm-5"
+      },
+      "human_author": "白雾三语 <32354856+baiwusanyu-c@users.noreply.github.com>"
+    },
+    "s_5b5e756e753776": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "097d3a07-c13d-4fc5-9f05-f210798b9174",
+        "model": "glm-5"
+      },
+      "human_author": "白雾三语 <32354856+baiwusanyu-c@users.noreply.github.com>"
+    },
+    "s_6ff76e76207625": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e2369b9d-51e0-4582-bc17-691658f32380",
+        "model": "glm-5"
+      },
+      "human_author": "白雾三语 <32354856+baiwusanyu-c@users.noreply.github.com>"
+    },
+    "s_ced9e347d38aae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9fdfebdf-e882-49d6-9930-6b8f6165e963",
+        "model": "glm-5"
+      },
+      "human_author": "白雾三语 <32354856+baiwusanyu-c@users.noreply.github.com>"
+    }
+  }
+}
