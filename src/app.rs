@@ -71,7 +71,7 @@ impl MyApp {
         for icon in icons {
             if let Some(category) = self.classifier.classify(&icon) {
                 classified.entry(category.id.clone())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(icon);
             }
         }

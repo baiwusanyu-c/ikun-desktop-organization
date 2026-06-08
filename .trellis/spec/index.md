@@ -59,10 +59,10 @@
 |--------|------|----------|
 | **Run** | 正常运行 | `RUST_LOG=info` |
 | **Debug** | 调试运行 | `RUST_LOG=debug` |
-| **Watch Check** | 自动检查 | - |
+| **Check** | 快速检查 | - |
 | **Test** | 运行测试 | `RUST_LOG=debug` |
 
-配置文件位置：`.run/*.run.xml`
+配置文件位置：`.idea/runConfigurations/*.xml`
 
 ### 自动编译工具
 

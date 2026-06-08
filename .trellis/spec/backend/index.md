@@ -52,13 +52,13 @@
 
 ### RustRover 运行配置
 
-项目已配置 4 个 RustRover 运行配置（位于 `.run/` 目录）：
+项目已配置 4 个 RustRover 运行配置（位于 `.idea/runConfigurations/` 目录）：
 
 | 配置名 | 用途 | 环境变量 | 快捷键 |
 |--------|------|----------|--------|
 | **Run** | 正常运行 | `RUST_LOG=info` | `Cmd+R` |
 | **Debug** | 调试运行 | `RUST_LOG=debug` | `Cmd+D` |
-| **Watch Check** | 自动检查代码 | - | 手动启动 |
+| **Check** | 快速检查代码 | - | 手动启动 |
 | **Test** | 运行测试 | `RUST_LOG=debug` | `Cmd+R` |
 
 **推荐使用**：
@@ -154,7 +154,7 @@ cargo test             # 运行测试
 |------|------|----------|
 | Debug | 调试运行 | `RUST_LOG=debug` |
 | Run | 正常运行 | `RUST_LOG=info` |
-| Watch Check | 自动检查 | - |
+| Check | 快速检查 | - |
 
 ### 架构层次
 

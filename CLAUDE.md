@@ -27,10 +27,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 项目已完整配置开发调试环境，包括：
 
-1. **RustRover 运行配置**（`.run/` 目录）
+1. **RustRover 运行配置**（`.idea/runConfigurations/` 目录）
    - **Run**：正常运行（`RUST_LOG=info`）
    - **Debug**：调试运行（`RUST_LOG=debug`）← 推荐日常使用
-   - **Watch Check**：自动检查代码
+   - **Check**：快速检查代码
    - **Test**：运行测试
 
 2. **自动编译工具**
