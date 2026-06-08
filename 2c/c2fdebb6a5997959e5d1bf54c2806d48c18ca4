@@ -1,0 +1,23 @@
+data/categories.yaml
+  s_5b5e756e753776::t_66ef179a06374d 1-158
+src/main.rs
+  s_5b5e756e753776::t_f4d185772e0dc9 1-37
+README.md
+  s_5b5e756e753776::t_1717c52c0d9403 1-129
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "2cc2fdebb6a5997959e5d1bf54c2806d48c18ca4",
+  "prompts": {},
+  "sessions": {
+    "s_5b5e756e753776": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "097d3a07-c13d-4fc5-9f05-f210798b9174",
+        "model": "glm-5"
+      },
+      "human_author": "白雾三语 <32354856+baiwusanyu-c@users.noreply.github.com>"
+    }
+  }
+}
