@@ -1,0 +1,28 @@
+src/main.rs
+  s_5b5e756e753776::t_e4eddcb5c4d3c2 35,38
+  s_5b5e756e753776::t_dd369de04ef053 36-37
+src/classification/database.rs
+  s_5b5e756e753776::t_89fcc6f354f82d 38,42,45-46,83-96,102-116,122-135,141-154,160-172
+src/app.rs
+  s_5b5e756e753776::t_b573773eda99f5 4,6
+src/ui/box_widget.rs
+  s_5b5e756e753776::t_8b439ee9654521 23-25,32-35,42-44
+  s_5b5e756e753776::t_61456d534b91fe 13-14,17-18,26-31,36-41,48,50
+  s_5b5e756e753776::t_81c9a801574435 104,108
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "bc9ea5ab12e5b81db778e8122c9edc1a1311d5d9",
+  "prompts": {},
+  "sessions": {
+    "s_5b5e756e753776": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "097d3a07-c13d-4fc5-9f05-f210798b9174",
+        "model": "glm-5"
+      },
+      "human_author": "白雾三语 <32354856+baiwusanyu-c@users.noreply.github.com>"
+    }
+  }
+}
