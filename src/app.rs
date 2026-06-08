@@ -1,9 +1,9 @@
 //! egui 应用实现
 
 use eframe::egui;
-use crate::desktop::{DesktopIcon, DesktopManager};
+use crate::desktop::{DesktopIcon, DesktopManager, DesktopManagerTrait};
 use crate::classification::AppClassifier;
-use crate::ui::{ClassificationBoxWidget, IconWidget};
+use crate::ui::ClassificationBoxWidget;
 use crate::config::DesktopLayout;
 
 pub struct MyApp {

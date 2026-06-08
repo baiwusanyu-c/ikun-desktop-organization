@@ -10,22 +10,44 @@ use serde::{Serialize, Deserialize};
 /// 分类框样式
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct BoxStyle {
-    /// 背景颜色
-    pub background_color: egui::Color32,
+    /// 背景颜色 (R, G, B, A)
+    pub background_color: (u8, u8, u8, u8),
     /// 圆角半径
     pub border_radius: f32,
-    /// 边框颜色
-    pub border_color: egui::Color32,
+    /// 边框颜色 (R, G, B, A)
+    pub border_color: (u8, u8, u8, u8),
     /// 边框宽度
     pub border_width: f32,
+}
+
+impl BoxStyle {
+    /// 获取 egui Color32
+    pub fn get_background_color(&self) -> egui::Color32 {
+        egui::Color32::from_rgba_unmultiplied(
+            self.background_color.0,
+            self.background_color.1,
+            self.background_color.2,
+            self.background_color.3,
+        )
+    }
+
+    /// 获取 egui Color32
+    pub fn get_border_color(&self) -> egui::Color32 {
+        egui::Color32::from_rgba_unmultiplied(
+            self.border_color.0,
+            self.border_color.1,
+            self.border_color.2,
+            self.border_color.3,
+        )
+    }
 }
 
 impl Default for BoxStyle {
     fn default() -> Self {
         Self {
-            background_color: egui::Color32::from_rgba_unmultiplied(200, 200, 220, 150),
+            background_color: (200, 200, 220, 150),
             border_radius: 12.0,
-            border_color: egui::Color32::from_rgba_unmultiplied(255, 255, 255, 80),
+            border_color: (255, 255, 255, 80),
             border_width: 1.0,
         }
     }
@@ -79,11 +101,11 @@ impl ClassificationBoxWidget {
             .show(ctx, |ui| {
                 // 分类框容器
                 egui::Frame::none()
-                    .fill(self.style.background_color)
+                    .fill(self.style.get_background_color())
                     .rounding(egui::Rounding::same(self.style.border_radius))
                     .stroke(egui::Stroke::new(
                         self.style.border_width,
-                        self.style.border_color,
+                        self.style.get_border_color(),
                     ))
                     .inner_margin(10.0)
                     .show(ui, |ui| {

@@ -35,14 +35,15 @@ impl AppCategoryDB {
     /// 从文件加载分类数据库
     pub fn load() -> anyhow::Result<Self> {
         // 尝试从多个位置加载
-        let paths = [
+        let paths: Vec<PathBuf> = vec![
             PathBuf::from("data/categories.yaml"),
             dirs::config_dir()
                 .map(|p| p.join("ikun-desktop-organization/categories.yaml"))
+                .unwrap_or_else(|| PathBuf::from("")),
         ];
 
-        for path in paths.iter().flatten() {
-            if path.exists() {
+        for path in paths.iter() {
+            if !path.as_os_str().is_empty() && path.exists() {
                 let content = std::fs::read_to_string(path)?;
                 let db: AppCategoryDB = serde_yaml::from_str(&content)?;
                 log::info!("加载分类数据库成功，版本: {}", db.version);
@@ -79,41 +80,96 @@ impl Default for AppCategoryDB {
                     id: "games".to_string(),
                     name: "游戏".to_string(),
                     icon: "🎮".to_string(),
-                    exe_patterns: vec!["steam.exe", "epicgameslauncher.exe", "lol.exe"],
-                    path_patterns: vec!["\\Games\\", "\\Steam\\"],
-                    keywords: vec!["game", "play", "娱乐"],
+                    exe_patterns: vec![
+                        "steam.exe".to_string(),
+                        "epicgameslauncher.exe".to_string(),
+                        "lol.exe".to_string(),
+                    ],
+                    path_patterns: vec![
+                        "\\Games\\".to_string(),
+                        "\\Steam\\".to_string(),
+                    ],
+                    keywords: vec![
+                        "game".to_string(),
+                        "play".to_string(),
+                        "娱乐".to_string(),
+                    ],
                 },
                 AppCategory {
                     id: "dev".to_string(),
                     name: "开发工具".to_string(),
                     icon: "💻".to_string(),
-                    exe_patterns: vec!["code.exe", "idea*.exe", "rust*.exe"],
-                    path_patterns: vec!["\\Dev\\", "\\IDE\\"],
-                    keywords: vec!["dev", "code", "ide", "editor"],
+                    exe_patterns: vec![
+                        "code.exe".to_string(),
+                        "idea*.exe".to_string(),
+                        "rust*.exe".to_string(),
+                    ],
+                    path_patterns: vec![
+                        "\\Dev\\".to_string(),
+                        "\\IDE\\".to_string(),
+                    ],
+                    keywords: vec![
+                        "dev".to_string(),
+                        "code".to_string(),
+                        "ide".to_string(),
+                        "editor".to_string(),
+                    ],
                 },
                 AppCategory {
                     id: "office".to_string(),
                     name: "办公".to_string(),
                     icon: "📄".to_string(),
-                    exe_patterns: vec!["word.exe", "excel.exe", "powerpoint.exe"],
-                    path_patterns: vec!["\\Office\\", "\\Microsoft Office\\"],
-                    keywords: vec!["office", "document", "文档"],
+                    exe_patterns: vec![
+                        "word.exe".to_string(),
+                        "excel.exe".to_string(),
+                        "powerpoint.exe".to_string(),
+                    ],
+                    path_patterns: vec![
+                        "\\Office\\".to_string(),
+                        "\\Microsoft Office\\".to_string(),
+                    ],
+                    keywords: vec![
+                        "office".to_string(),
+                        "document".to_string(),
+                        "文档".to_string(),
+                    ],
                 },
                 AppCategory {
                     id: "media".to_string(),
                     name: "媒体".to_string(),
                     icon: "🎵".to_string(),
-                    exe_patterns: vec!["vlc.exe", "spotify.exe"],
-                    path_patterns: vec!["\\Music\\", "\\Video\\"],
-                    keywords: vec!["music", "video", "media", "音乐"],
+                    exe_patterns: vec![
+                        "vlc.exe".to_string(),
+                        "spotify.exe".to_string(),
+                    ],
+                    path_patterns: vec![
+                        "\\Music\\".to_string(),
+                        "\\Video\\".to_string(),
+                    ],
+                    keywords: vec![
+                        "music".to_string(),
+                        "video".to_string(),
+                        "media".to_string(),
+                        "音乐".to_string(),
+                    ],
                 },
                 AppCategory {
                     id: "tools".to_string(),
                     name: "工具".to_string(),
                     icon: "🔧".to_string(),
-                    exe_patterns: vec!["notepad.exe", "calc.exe"],
-                    path_patterns: vec!["\\Tools\\", "\\Utilities\\"],
-                    keywords: vec!["tool", "utility", "工具"],
+                    exe_patterns: vec![
+                        "notepad.exe".to_string(),
+                        "calc.exe".to_string(),
+                    ],
+                    path_patterns: vec![
+                        "\\Tools\\".to_string(),
+                        "\\Utilities\\".to_string(),
+                    ],
+                    keywords: vec![
+                        "tool".to_string(),
+                        "utility".to_string(),
+                        "工具".to_string(),
+                    ],
                 },
             ],
         }

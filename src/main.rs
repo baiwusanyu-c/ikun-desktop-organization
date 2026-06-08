@@ -32,6 +32,9 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Desktop Organizer",
         options,
-        Box::new(|cc| Ok(Box::new(app::MyApp::new(cc)?))),
+        Box::new(|cc| {
+            app::MyApp::new(cc)
+                .map(|app| Box::new(app) as Box<dyn eframe::App>)
+        }),
     )
 }
