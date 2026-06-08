@@ -1,0 +1,48 @@
+CLAUDE.md
+  s_ced9e347d38aae::t_e84bcd4811f02a 30,33
+.github/workflows/build.yml
+  s_ced9e347d38aae::t_d85a5fa0965941 1-72
+.idea/runConfigurations/Check.xml
+  s_ced9e347d38aae::t_eb8824604790e4 2-4,13
+.idea/runConfigurations/Test.xml
+  s_ced9e347d38aae::t_f58b186a9f913e 2,4,16
+.trellis/workspace/baiwusanyu/journal-1.md
+  s_36d8117766ae66::t_98b30565ec1f73 39-172
+.idea/runConfigurations/Run.xml
+  s_ced9e347d38aae::t_3e23775e2987e2 2,19
+.trellis/spec/index.md
+  s_ced9e347d38aae::t_46aa7f2b098624 62,65
+.trellis/workspace/baiwusanyu/rustrover-config-fix.md
+  s_ced9e347d38aae::t_6e535d0891a16b 1-133
+.trellis/spec/backend/index.md
+  s_ced9e347d38aae::t_14b97cc457bb2c 157
+  s_ced9e347d38aae::t_1c2269f5ee663b 55,61
+src/app.rs
+  s_36d8117766ae66::t_6cf5374c29ced6 74
+.idea/runConfigurations/Debug.xml
+  s_ced9e347d38aae::t_b4df82eb94883b 2,4,16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "5f1c6bbed0a6119e36adf2d91f536bf827defcc8",
+  "prompts": {},
+  "sessions": {
+    "s_36d8117766ae66": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5ee5e2fa-4449-4bbe-900a-73ef21a9406d",
+        "model": "glm-5"
+      },
+      "human_author": "白雾三语 <32354856+baiwusanyu-c@users.noreply.github.com>"
+    },
+    "s_ced9e347d38aae": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9fdfebdf-e882-49d6-9930-6b8f6165e963",
+        "model": "glm-5"
+      },
+      "human_author": "白雾三语 <32354856+baiwusanyu-c@users.noreply.github.com>"
+    }
+  }
+}
