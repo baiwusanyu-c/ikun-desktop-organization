@@ -1,0 +1,23 @@
+.trellis/workspace/baiwusanyu/journal-1.md
+  s_6ff76e76207625::t_08150484acb77f 1-7
+.trellis/workspace/index.md
+  s_6ff76e76207625::t_08150484acb77f 1-125
+.trellis/workspace/baiwusanyu/index.md
+  s_6ff76e76207625::t_08150484acb77f 1-10,13-21,23-41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "a2859b69b773f4722fb217afa83fcf6c3a8489ff",
+  "prompts": {},
+  "sessions": {
+    "s_6ff76e76207625": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e2369b9d-51e0-4582-bc17-691658f32380",
+        "model": "glm-5"
+      },
+      "human_author": "白雾三语 <32354856+baiwusanyu-c@users.noreply.github.com>"
+    }
+  }
+}
