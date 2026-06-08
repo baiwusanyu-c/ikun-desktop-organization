@@ -1,0 +1,4 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Windows API 错误处理规范"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "代码质量要求"}

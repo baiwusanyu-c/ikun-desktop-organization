@@ -15,8 +15,7 @@ pub struct DesktopManager {
 impl Default for DesktopManager {
     fn default() -> Self {
         Self {
-            desktop_path: dirs::desktop_dir()
-                .unwrap_or_else(|| PathBuf::from("~/Desktop")),
+            desktop_path: dirs::desktop_dir().unwrap_or_else(|| PathBuf::from("~/Desktop")),
         }
     }
 }
@@ -24,14 +23,12 @@ impl Default for DesktopManager {
 impl DesktopManagerTrait for DesktopManager {
     fn new() -> Result<Self> {
         // 获取桌面路径
-        let desktop_path = dirs::desktop_dir()
-            .ok_or_else(|| anyhow::anyhow!("无法获取桌面路径"))?;
+        let desktop_path =
+            dirs::desktop_dir().ok_or_else(|| anyhow::anyhow!("无法获取桌面路径"))?;
 
         log::info!("macOS DesktopManager 初始化, 桌面路径: {:?}", desktop_path);
 
-        Ok(Self {
-            desktop_path,
-        })
+        Ok(Self { desktop_path })
     }
 
     fn get_desktop_icons(&self) -> Vec<DesktopIcon> {

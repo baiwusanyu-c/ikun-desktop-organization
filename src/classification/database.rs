@@ -2,7 +2,7 @@
 //!
 //! 从 YAML 文件加载应用分类数据
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// 应用分类数据库
@@ -85,15 +85,8 @@ impl Default for AppCategoryDB {
                         "epicgameslauncher.exe".to_string(),
                         "lol.exe".to_string(),
                     ],
-                    path_patterns: vec![
-                        "\\Games\\".to_string(),
-                        "\\Steam\\".to_string(),
-                    ],
-                    keywords: vec![
-                        "game".to_string(),
-                        "play".to_string(),
-                        "娱乐".to_string(),
-                    ],
+                    path_patterns: vec!["\\Games\\".to_string(), "\\Steam\\".to_string()],
+                    keywords: vec!["game".to_string(), "play".to_string(), "娱乐".to_string()],
                 },
                 AppCategory {
                     id: "dev".to_string(),
@@ -104,10 +97,7 @@ impl Default for AppCategoryDB {
                         "idea*.exe".to_string(),
                         "rust*.exe".to_string(),
                     ],
-                    path_patterns: vec![
-                        "\\Dev\\".to_string(),
-                        "\\IDE\\".to_string(),
-                    ],
+                    path_patterns: vec!["\\Dev\\".to_string(), "\\IDE\\".to_string()],
                     keywords: vec![
                         "dev".to_string(),
                         "code".to_string(),
@@ -138,14 +128,8 @@ impl Default for AppCategoryDB {
                     id: "media".to_string(),
                     name: "媒体".to_string(),
                     icon: "🎵".to_string(),
-                    exe_patterns: vec![
-                        "vlc.exe".to_string(),
-                        "spotify.exe".to_string(),
-                    ],
-                    path_patterns: vec![
-                        "\\Music\\".to_string(),
-                        "\\Video\\".to_string(),
-                    ],
+                    exe_patterns: vec!["vlc.exe".to_string(), "spotify.exe".to_string()],
+                    path_patterns: vec!["\\Music\\".to_string(), "\\Video\\".to_string()],
                     keywords: vec![
                         "music".to_string(),
                         "video".to_string(),
@@ -157,14 +141,8 @@ impl Default for AppCategoryDB {
                     id: "tools".to_string(),
                     name: "工具".to_string(),
                     icon: "🔧".to_string(),
-                    exe_patterns: vec![
-                        "notepad.exe".to_string(),
-                        "calc.exe".to_string(),
-                    ],
-                    path_patterns: vec![
-                        "\\Tools\\".to_string(),
-                        "\\Utilities\\".to_string(),
-                    ],
+                    exe_patterns: vec!["notepad.exe".to_string(), "calc.exe".to_string()],
+                    path_patterns: vec!["\\Tools\\".to_string(), "\\Utilities\\".to_string()],
                     keywords: vec![
                         "tool".to_string(),
                         "utility".to_string(),

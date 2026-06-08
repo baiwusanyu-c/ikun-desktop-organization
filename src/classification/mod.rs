@@ -41,9 +41,7 @@ impl AppClassifier {
 
     /// 获取分类信息
     pub fn get_category(&self, id: &str) -> Option<AppCategory> {
-        self.db.categories.iter()
-            .find(|c| c.id == id)
-            .cloned()
+        self.db.categories.iter().find(|c| c.id == id).cloned()
     }
 
     /// 获取所有分类

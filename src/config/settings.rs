@@ -1,6 +1,6 @@
 //! 应用设置
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// 应用设置
 #[derive(Debug, Clone, Serialize, Deserialize)]

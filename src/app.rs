@@ -1,10 +1,10 @@
 //! egui 应用实现
 
-use eframe::egui;
-use crate::desktop::{DesktopIcon, DesktopManager, DesktopManagerTrait};
 use crate::classification::AppClassifier;
-use crate::ui::ClassificationBoxWidget;
 use crate::config::DesktopLayout;
+use crate::desktop::{DesktopIcon, DesktopManager, DesktopManagerTrait};
+use crate::ui::ClassificationBoxWidget;
+use eframe::egui;
 
 pub struct MyApp {
     /// 桌面管理器
@@ -22,25 +22,22 @@ pub struct MyApp {
 impl Default for MyApp {
     fn default() -> Self {
         // 加载布局配置（使用默认值如果失败）
-        let layout = DesktopLayout::load()
-            .unwrap_or_else(|e| {
-                log::warn!("加载布局失败: {}, 使用默认布局", e);
-                DesktopLayout::default()
-            });
+        let layout = DesktopLayout::load().unwrap_or_else(|e| {
+            log::warn!("加载布局失败: {}, 使用默认布局", e);
+            DesktopLayout::default()
+        });
 
         // 初始化桌面管理器
-        let desktop_manager = DesktopManager::new()
-            .unwrap_or_else(|e| {
-                log::warn!("初始化桌面管理器失败: {}", e);
-                DesktopManager::default()
-            });
+        let desktop_manager = DesktopManager::new().unwrap_or_else(|e| {
+            log::warn!("初始化桌面管理器失败: {}", e);
+            DesktopManager::default()
+        });
 
         // 初始化分类器
-        let classifier = AppClassifier::new()
-            .unwrap_or_else(|e| {
-                log::warn!("初始化分类器失败: {}", e);
-                AppClassifier::default()
-            });
+        let classifier = AppClassifier::new().unwrap_or_else(|e| {
+            log::warn!("初始化分类器失败: {}", e);
+            AppClassifier::default()
+        });
 
         Self {
             desktop_manager,
@@ -70,7 +67,8 @@ impl MyApp {
 
         for icon in icons {
             if let Some(category) = self.classifier.classify(&icon) {
-                classified.entry(category.id.clone())
+                classified
+                    .entry(category.id.clone())
                     .or_default()
                     .push(icon);
             }
@@ -80,16 +78,15 @@ impl MyApp {
         self.classification_boxes.clear();
         for (category_id, icons) in classified {
             if let Some(category) = self.classifier.get_category(&category_id) {
-                let box_widget = ClassificationBoxWidget::new(
-                    category.id,
-                    category.name,
-                    icons,
-                );
+                let box_widget = ClassificationBoxWidget::new(category.id, category.name, icons);
                 self.classification_boxes.push(box_widget);
             }
         }
 
-        log::info!("分类完成，创建了 {} 个分类框", self.classification_boxes.len());
+        log::info!(
+            "分类完成，创建了 {} 个分类框",
+            self.classification_boxes.len()
+        );
     }
 }
 

@@ -2,8 +2,8 @@
 //!
 //! 单个桌面图标的显示组件
 
-use eframe::egui;
 use crate::desktop::DesktopIcon;
+use eframe::egui;
 
 /// 图标组件
 pub struct IconWidget {
@@ -24,10 +24,7 @@ impl IconWidget {
     /// 显示图标
     pub fn show(&self, ui: &mut egui::Ui) -> egui::Response {
         // 图标按钮
-        let response = ui.selectable_label(
-            self.selected,
-            &self.icon.display_name,
-        );
+        let response = ui.selectable_label(self.selected, &self.icon.display_name);
 
         // TODO: 添加实际图标图片显示
         // TODO: 添加双击打开功能

@@ -1,7 +1,7 @@
 //! 应用分类匹配算法
 
-use crate::desktop::DesktopIcon;
 use crate::classification::database::{AppCategory, AppCategoryDB};
+use crate::desktop::DesktopIcon;
 
 /// 应用匹配器
 pub struct AppMatcher {
@@ -16,14 +16,16 @@ impl AppMatcher {
     /// 分类图标
     pub fn classify(&self, icon: &DesktopIcon) -> Option<AppCategory> {
         // 获取可执行文件名
-        let exe_name = icon.target_path
+        let exe_name = icon
+            .target_path
             .as_ref()
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
             .map(|s| s.to_lowercase());
 
         // 获取路径
-        let path = icon.target_path
+        let path = icon
+            .target_path
             .as_ref()
             .or(Some(&icon.path))
             .and_then(|p| p.to_str())
@@ -35,8 +37,12 @@ impl AppMatcher {
             if let Some(exe) = &exe_name {
                 for pattern in &category.exe_patterns {
                     if self.match_pattern(exe, pattern) {
-                        log::info!("图标 '{}' 匹配分类 '{}' (exe: {})",
-                            icon.display_name, category.name, exe);
+                        log::info!(
+                            "图标 '{}' 匹配分类 '{}' (exe: {})",
+                            icon.display_name,
+                            category.name,
+                            exe
+                        );
                         return Some(category.clone());
                     }
                 }
@@ -46,8 +52,12 @@ impl AppMatcher {
             if let Some(p) = &path {
                 for pattern in &category.path_patterns {
                     if p.contains(&pattern.to_lowercase()) {
-                        log::info!("图标 '{}' 匹配分类 '{}' (path: {})",
-                            icon.display_name, category.name, p);
+                        log::info!(
+                            "图标 '{}' 匹配分类 '{}' (path: {})",
+                            icon.display_name,
+                            category.name,
+                            p
+                        );
                         return Some(category.clone());
                     }
                 }
@@ -57,8 +67,12 @@ impl AppMatcher {
             let name_lower = icon.display_name.to_lowercase();
             for keyword in &category.keywords {
                 if name_lower.contains(&keyword.to_lowercase()) {
-                    log::info!("图标 '{}' 匹配分类 '{}' (keyword: {})",
-                        icon.display_name, category.name, keyword);
+                    log::info!(
+                        "图标 '{}' 匹配分类 '{}' (keyword: {})",
+                        icon.display_name,
+                        category.name,
+                        keyword
+                    );
                     return Some(category.clone());
                 }
             }

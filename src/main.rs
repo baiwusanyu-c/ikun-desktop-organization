@@ -4,10 +4,10 @@
 //! 支持平台: Windows 10/11, macOS
 
 mod app;
-mod desktop;
 mod classification;
-mod ui;
 mod config;
+mod desktop;
+mod ui;
 mod utils;
 
 use eframe::egui;
@@ -30,8 +30,8 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title("Desktop Organizer")
             .with_inner_size([800.0, 600.0])
-            .with_decorations(false)     // 无边框
-            .with_transparent(true),     // 透明背景
+            .with_decorations(false) // 无边框
+            .with_transparent(true), // 透明背景
         ..Default::default()
     };
 

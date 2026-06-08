@@ -71,10 +71,6 @@ RUST_LOG=warn cargo run
 RUST_LOG=ikun_desktop_organization::classification=debug cargo run
 ```
 
-**RustRover 配置**：
-
-使用 **Debug** 配置运行（已设置 `RUST_LOG=debug`），日志自动显示在 Run 面板。
-
 ---
 
 ## Log Levels

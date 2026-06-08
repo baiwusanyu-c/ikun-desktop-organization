@@ -1,6 +1,6 @@
 //! 桌面图标数据结构
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// 桌面图标信息

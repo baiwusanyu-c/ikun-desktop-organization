@@ -25,7 +25,9 @@ pub use macos::DesktopManager;
 /// 不同平台的具体实现在各自的模块中
 pub trait DesktopManagerTrait {
     /// 初始化桌面管理器
-    fn new() -> anyhow::Result<Self> where Self: Sized;
+    fn new() -> anyhow::Result<Self>
+    where
+        Self: Sized;
 
     /// 获取桌面图标列表
     fn get_desktop_icons(&self) -> Vec<DesktopIcon>;

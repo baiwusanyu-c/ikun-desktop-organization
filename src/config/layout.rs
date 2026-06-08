@@ -2,7 +2,7 @@
 //!
 //! 保存和恢复分类框布局
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// 桌面布局
