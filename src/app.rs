@@ -19,24 +19,42 @@ pub struct MyApp {
     initialized: bool,
 }
 
-impl MyApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> anyhow::Result<Self> {
-        // 加载布局配置
-        let layout = DesktopLayout::load()?;
+impl Default for MyApp {
+    fn default() -> Self {
+        // 加载布局配置（使用默认值如果失败）
+        let layout = DesktopLayout::load()
+            .unwrap_or_else(|e| {
+                log::warn!("加载布局失败: {}, 使用默认布局", e);
+                DesktopLayout::default()
+            });
 
         // 初始化桌面管理器
-        let desktop_manager = DesktopManager::new()?;
+        let desktop_manager = DesktopManager::new()
+            .unwrap_or_else(|e| {
+                log::warn!("初始化桌面管理器失败: {}", e);
+                DesktopManager::default()
+            });
 
         // 初始化分类器
-        let classifier = AppClassifier::new()?;
+        let classifier = AppClassifier::new()
+            .unwrap_or_else(|e| {
+                log::warn!("初始化分类器失败: {}", e);
+                AppClassifier::default()
+            });
 
-        Ok(Self {
+        Self {
             desktop_manager,
             classifier,
             classification_boxes: Vec::new(),
             layout,
             initialized: false,
-        })
+        }
+    }
+}
+
+impl MyApp {
+    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        Self::default()
     }
 
     /// 执行一键智能分类

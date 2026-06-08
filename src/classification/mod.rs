@@ -18,6 +18,14 @@ pub struct AppClassifier {
     matcher: AppMatcher,
 }
 
+impl Default for AppClassifier {
+    fn default() -> Self {
+        let db = AppCategoryDB::default();
+        let matcher = AppMatcher::new(db.clone());
+        Self { db, matcher }
+    }
+}
+
 impl AppClassifier {
     pub fn new() -> anyhow::Result<Self> {
         let db = AppCategoryDB::load()?;

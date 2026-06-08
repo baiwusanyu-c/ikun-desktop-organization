@@ -13,10 +13,17 @@ mod utils;
 use eframe::egui;
 
 fn main() -> eframe::Result<()> {
-    // 初始化日志
-    env_logger::init();
+    // 初始化日志系统
+    // 通过环境变量 RUST_LOG 控制日志级别：
+    // - RUST_LOG=debug  显示所有日志
+    // - RUST_LOG=info   显示 info/warn/error
+    // - RUST_LOG=warn   显示 warn/error
+    // - RUST_LOG=error  只显示 error
+    utils::init_logger();
 
+    log::info!("========================================");
     log::info!("启动 Desktop Organizer...");
+    log::info!("========================================");
 
     // 窗口配置
     let options = eframe::NativeOptions {
@@ -32,9 +39,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Desktop Organizer",
         options,
-        Box::new(|cc| {
-            app::MyApp::new(cc)
-                .map(|app| Box::new(app) as Box<dyn eframe::App>)
-        }),
+        Box::new(|cc| Box::new(app::MyApp::new(cc))),
     )
 }

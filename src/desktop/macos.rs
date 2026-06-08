@@ -2,7 +2,7 @@
 //!
 //! 使用 macOS API 读取桌面图标信息
 
-use crate::desktop::{DesktopIcon, DesktopManagerTrait, icons::IconInfo};
+use crate::desktop::{DesktopIcon, DesktopManagerTrait};
 use anyhow::Result;
 use std::path::PathBuf;
 
@@ -10,6 +10,15 @@ use std::path::PathBuf;
 pub struct DesktopManager {
     /// 桌面路径
     desktop_path: PathBuf,
+}
+
+impl Default for DesktopManager {
+    fn default() -> Self {
+        Self {
+            desktop_path: dirs::desktop_dir()
+                .unwrap_or_else(|| PathBuf::from("~/Desktop")),
+        }
+    }
 }
 
 impl DesktopManagerTrait for DesktopManager {

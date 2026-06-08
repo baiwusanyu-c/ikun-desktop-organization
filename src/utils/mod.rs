@@ -1,5 +1,5 @@
-//! 工具函数模块
+//! 日志工具模块
 
-mod platform;
+mod logger;
 
-pub use platform::*;
+pub use logger::*;
