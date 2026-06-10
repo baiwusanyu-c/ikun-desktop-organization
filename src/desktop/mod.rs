@@ -1,8 +1,10 @@
 //! 桌面管理模块
 //!
-//! 负责与平台桌面系统集成，读取桌面图标信息
+//! 负责与平台桌面系统集成，读取和操控桌面图标
 
 mod icons;
+mod icon_mover;
+pub mod overlay;
 
 // 平台特定实现
 #[cfg(windows)]
@@ -12,6 +14,8 @@ mod windows;
 mod macos;
 
 pub use icons::{DesktopIcon, IconInfo};
+pub use icon_mover::{DesktopIconInfo, DesktopIconMover};
+pub use overlay::{BoxDrawData, SharedBoxData, create_shared_box_data, start_overlay};
 
 // 平台特定的导出
 #[cfg(windows)]

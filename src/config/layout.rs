@@ -31,6 +31,8 @@ pub struct BoxData {
     pub locked: bool,
     /// 包含的图标 ID
     pub icon_ids: Vec<uuid::Uuid>,
+    /// 包含的图标名称（用于重新匹配 SysListView32 index）
+    pub icon_names: Vec<String>,
 }
 
 impl DesktopLayout {

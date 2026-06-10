@@ -29,10 +29,15 @@ env_logger = "0.11"
 windows = { version = "0.58", features = [
     "Win32_UI_Shell",              # Shell API（桌面图标、IShellFolder、IShellLink）
     "Win32_System_Com",            # COM 组件（CoInitializeEx、CoUninitialize）
-    "Win32_UI_WindowsAndMessaging", # 窗口管理（FindWindow、SetWindowPos）
+    "Win32_UI_WindowsAndMessaging", # 窗口管理（FindWindow、SetWindowPos、CreateWindowExW）
     "Win32_Storage_FileSystem",    # 文件系统操作
-    "Win32_Graphics_Gdi",          # GDI（多显示器支持）
-    "Win32_Foundation",            # 基础类型（HWND、HRESULT 等）
+    "Win32_Graphics_Gdi",          # GDI（绘图、COLORREF、HDC、BitBlt）
+    "Win32_Foundation",            # 基础类型（HWND、HRESULT、RECT 等）
+    "Win32_System_Memory",         # VirtualAllocEx、VirtualFreeEx、ReadProcessMemory、WriteProcessMemory
+    "Win32_System_Threading",      # OpenProcess
+    "Win32_System_Diagnostics_Debug", # PROCESS_VM_* 权限常量
+    "Win32_UI_Controls",           # LVM_* 常量、LVITEM 结构体
+    "Win32_System_LibraryLoader",  # GetModuleHandleW
 ]}
 
 # ===== macOS API =====

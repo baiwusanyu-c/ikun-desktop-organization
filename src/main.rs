@@ -1,7 +1,4 @@
 //! 桌面图标智能分类管理应用
-//!
-//! Desktop Organizer - 桌面图标智能分类管理工具
-//! 支持平台: Windows 10/11, macOS
 
 mod app;
 mod classification;
@@ -13,32 +10,66 @@ mod utils;
 use eframe::egui;
 
 fn main() -> eframe::Result<()> {
-    // 初始化日志系统
-    // 通过环境变量 RUST_LOG 控制日志级别：
-    // - RUST_LOG=debug  显示所有日志
-    // - RUST_LOG=info   显示 info/warn/error
-    // - RUST_LOG=warn   显示 warn/error
-    // - RUST_LOG=error  只显示 error
     utils::init_logger();
 
     log::info!("========================================");
     log::info!("启动 Desktop Organizer...");
     log::info!("========================================");
 
-    // 窗口配置
+    // 控制面板窗口（正常窗口，非全屏）
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Desktop Organizer")
-            .with_inner_size([800.0, 600.0])
-            .with_decorations(false) // 无边框
-            .with_transparent(true), // 透明背景
+            .with_title("Desktop Organizer - 控制面板")
+            .with_inner_size([320.0, 500.0])
+            .with_decorations(true)
+            .with_always_on_top()
+            .with_resizable(true),
         ..Default::default()
     };
 
-    // 启动应用
     eframe::run_native(
         "Desktop Organizer",
         options,
-        Box::new(|cc| Box::new(app::MyApp::new(cc))),
+        Box::new(|cc| {
+            // 加载中文字体
+            setup_chinese_fonts(&cc.egui_ctx);
+            Box::new(app::MyApp::new(cc))
+        }),
     )
+}
+
+/// 加载系统中文字体（微软雅黑）
+fn setup_chinese_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+
+    // 尝试加载微软雅黑字体（Windows 系统自带中文字体）
+    let font_paths = [
+        "C:\\Windows\\Fonts\\msyh.ttc",
+        "C:\\Windows\\Fonts\\msyhbd.ttc",
+        "C:\\Windows\\Fonts\\simhei.ttf",
+        "C:\\Windows\\Fonts\\simsun.ttc",
+    ];
+
+    for path in &font_paths {
+        if let Ok(font_data) = std::fs::read(path) {
+            log::info!("加载中文字体: {}", path);
+            fonts.font_data.insert(
+                "chinese_font".to_owned(),
+                egui::FontData::from_owned(font_data),
+            );
+
+            // 将中文字体插入到比例字体族的最前面
+            if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+                family.insert(0, "chinese_font".to_owned());
+            }
+            if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+                family.insert(0, "chinese_font".to_owned());
+            }
+
+            ctx.set_fonts(fonts);
+            return;
+        }
+    }
+
+    log::warn!("未找到中文字体，界面中文可能显示为方块");
 }
