@@ -1,0 +1,4 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": "src/desktop/grid_window.rs", "reason": "格子窗口核心实现"}
+{"file": "src/app.rs", "reason": "分类框尺寸计算"}
