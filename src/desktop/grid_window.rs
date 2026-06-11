@@ -863,24 +863,17 @@ unsafe extern "system" fn grid_wnd_proc(
             let dpi = if dpi > 0 { dpi } else { 96 };
             let edge = scale_for_dpi(30, dpi);
 
-            // 主体区域边缘检测（优先于标题栏检测，确保角落可缩放）
-            if dy >= title_h {
-                let on_left = dx >= 0 && dx < edge;
-                let on_right = dx > win_w - edge && dx <= win_w;
-                let on_bottom = dy > win_h - edge && dy <= win_h;
-                let on_top_body = dy >= title_h && dy < title_h + edge;
+            let on_left = dx >= 0 && dx < edge;
+            let on_right = dx > win_w - edge && dx <= win_w;
+            let on_bottom = dy > win_h - edge && dy <= win_h;
 
+            // 主体区域边缘检测（不含顶部：顶部 resize 由 header 接管）
+            if dy >= title_h {
                 if on_left && on_bottom {
                     return HTBOTTOMLEFT as LRESULT;
                 }
                 if on_right && on_bottom {
                     return HTBOTTOMRIGHT as LRESULT;
-                }
-                if on_left && on_top_body {
-                    return HTTOPLEFT as LRESULT;
-                }
-                if on_right && on_top_body {
-                    return HTTOPRIGHT as LRESULT;
                 }
                 if on_left {
                     return HTLEFT as LRESULT;
@@ -893,8 +886,28 @@ unsafe extern "system" fn grid_wnd_proc(
                 }
             }
 
-            // 标题栏区域 → 拖拽移动
+            // 标题栏区域：边缘可缩放（阈值更小），其余区域拖拽移动
             if dy >= 0 && dy < title_h {
+                let h_edge = scale_for_dpi(8, dpi);
+                let on_h_left = dx >= 0 && dx < h_edge;
+                let on_h_right = dx > win_w - h_edge && dx <= win_w;
+                let on_h_top = dy >= 0 && dy < h_edge;
+
+                if on_h_top && on_h_left {
+                    return HTTOPLEFT as LRESULT;
+                }
+                if on_h_top && on_h_right {
+                    return HTTOPRIGHT as LRESULT;
+                }
+                if on_h_top {
+                    return HTTOP as LRESULT;
+                }
+                if on_h_left {
+                    return HTLEFT as LRESULT;
+                }
+                if on_h_right {
+                    return HTRIGHT as LRESULT;
+                }
                 return HTCAPTION as LRESULT;
             }
 
