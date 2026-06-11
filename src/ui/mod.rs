@@ -1,7 +1,6 @@
 //! UI 组件模块
+//!
+//! 格子窗口已移至 desktop/grid_window.rs（Win32 原生实现）
+//! 控制面板 UI 在 app.rs 中直接使用 egui
 
-mod box_widget;
-mod icon_widget;
-
-pub use box_widget::ClassificationBoxWidget;
-pub use icon_widget::IconWidget;
+// 当前无额外 UI 组件
