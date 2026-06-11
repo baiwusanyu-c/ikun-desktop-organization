@@ -9,6 +9,7 @@ use crate::desktop::{
 };
 use eframe::egui;
 
+/// 主应用
 pub struct MyApp {
     desktop_manager: DesktopManager,
     classifier: AppClassifier,
@@ -40,7 +41,7 @@ impl MyApp {
         Self::default()
     }
 
-    /// 一键分类：隐藏原生图标 → 分类 → 创建格子窗口
+    /// 一键分类：隐藏原生图标 → 固定 3 个分类框（游戏/开发工具/办公）
     fn perform_auto_classify(&mut self) {
         log::info!("=== 一键分类开始 ===");
 
@@ -61,75 +62,55 @@ impl MyApp {
             return;
         }
 
-        // 3. 分类
-        let mut classified: std::collections::HashMap<String, Vec<DesktopIcon>> =
-            std::collections::HashMap::new();
+        // 3. 固定分为 3 类：游戏、开发工具、办公（剩余全部归入办公）
+        let mut games: Vec<DesktopIcon> = Vec::new();
+        let mut dev_tools: Vec<DesktopIcon> = Vec::new();
+        let mut office: Vec<DesktopIcon> = Vec::new();
 
         for icon in &icons {
-            if let Some(category) = self.classifier.classify(icon) {
-                classified
-                    .entry(category.id.clone())
-                    .or_default()
-                    .push(icon.clone());
+            match self.classifier.classify(icon) {
+                Some(cat) if cat.id == "games" => games.push(icon.clone()),
+                Some(cat) if cat.id == "dev" => dev_tools.push(icon.clone()),
+                _ => office.push(icon.clone()),
             }
         }
 
-        // 未分类的图标放入"其他"
-        let mut others = Vec::new();
-        for icon in &icons {
-            let dominated = classified
-                .values()
-                .any(|v| v.iter().any(|i| i.id == icon.id));
-            if !dominated {
-                others.push(icon.clone());
-            }
-        }
-        if !others.is_empty() {
-            classified.insert("_other".to_string(), others);
-        }
+        log::info!(
+            "分类结果: 游戏={}, 开发工具={}, 办公={}",
+            games.len(),
+            dev_tools.len(),
+            office.len()
+        );
 
         // 4. 销毁旧格子
         destroy_all_grid_windows();
 
-        // 5. 创建格子窗口
-        let box_w: i32 = 240;
-        let box_h: i32 = 300;
+        // 5. 创建固定 3 个格子窗口
+        let categories: Vec<(&str, &Vec<DesktopIcon>)> = vec![
+            ("游戏", &games),
+            ("开发工具", &dev_tools),
+            ("办公", &office),
+        ];
+
+        let box_w: i32 = 280;
+        let box_h: i32 = 400;
         let padding: i32 = 20;
         let start_x: i32 = 30;
         let start_y: i32 = 80;
-        let icon_cols: i32 = 3;
-        let icon_cell_w: i32 = 72;
-        let icon_cell_h: i32 = 68;
-        let title_h: i32 = 36;
 
-        for (i, (category_id, icon_list)) in classified.iter().enumerate() {
-            let title = if category_id == "_other" {
-                "其他".to_string()
-            } else {
-                self.classifier
-                    .get_category(category_id)
-                    .map(|c| c.name.clone())
-                    .unwrap_or_else(|| category_id.clone())
-            };
+        let mut created_count = 0;
+        for (i, (title, icon_list)) in categories.iter().enumerate() {
+            if icon_list.is_empty() {
+                log::info!("分类 '{}' 为空，跳过", title);
+                continue;
+            }
 
-            let x = start_x + (i as i32) * (box_w + padding);
+            let x = start_x + (created_count as i32) * (box_w + padding);
             let y = start_y;
 
-            // 计算需要的行数以确定窗口高度
-            let rows = ((icon_list.len() as i32) + icon_cols - 1) / icon_cols;
-            let needed_h = title_h + 10 + rows * icon_cell_h + 20;
-            let final_h = needed_h.max(box_h);
-
-            // 提取文件图标
+            // 提取文件图标并构建 GridFileItem 列表
             let mut items: Vec<GridFileItem> = Vec::new();
-            for (j, icon) in icon_list.iter().enumerate() {
-                let col = (j as i32) % icon_cols;
-                let row = (j as i32) / icon_cols;
-
-                let client_x = 10 + col * icon_cell_w;
-                let client_y = title_h + 8 + row * icon_cell_h;
-
-                // 提取系统图标
+            for icon in icon_list.iter() {
                 let path_str = icon.path.to_string_lossy().to_string();
                 let hicon = extract_file_icon(&path_str)
                     .map(|fi| fi.hicon)
@@ -139,23 +120,23 @@ impl MyApp {
                     file_path: path_str,
                     display_name: icon.display_name.clone(),
                     icon_handle: hicon,
-                    client_x,
-                    client_y,
                 });
             }
 
             let params = GridCreateParams {
                 id: i,
-                title,
+                title: title.to_string(),
                 x,
                 y,
                 width: box_w,
-                height: final_h,
+                height: box_h,
                 items,
             };
 
             if let Err(e) = create_grid_window(params) {
                 log::error!("创建格子窗口失败: {}", e);
+            } else {
+                created_count += 1;
             }
         }
 
@@ -222,8 +203,11 @@ impl eframe::App for MyApp {
 
             ui.separator();
             ui.label("操作说明:");
-            ui.label("• 点击「一键分类」→ 自动隐藏桌面图标 + 创建分类格子");
-            ui.label("• 拖动格子标题栏 → 整体移动，图标跟随");
+            ui.label("• 点击「一键分类」→ 自动隐藏桌面图标 + 创建 3 个分类格子");
+            ui.label("• 拖动格子标题栏 → 整体移动");
+            ui.label("• 拖动格子边缘 → 调整大小");
+            ui.label("• 双击格子内图标 → 打开应用");
+            ui.label("• 右键格子内图标 → 弹出菜单");
             ui.label("• 点击「清除 & 恢复」→ 恢复原始桌面");
         });
 

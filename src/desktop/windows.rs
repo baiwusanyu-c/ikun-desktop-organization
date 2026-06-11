@@ -52,7 +52,7 @@ impl DesktopManager {
         }
 
         // 公共桌面
-        let public_desktop = PathBuf::from(r"C:\Users\Public\Desktopktop");
+        let public_desktop = PathBuf::from(r"C:\Users\Public\Desktop");
         if public_desktop.exists() {
             paths.push(public_desktop);
         }

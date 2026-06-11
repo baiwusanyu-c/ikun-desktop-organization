@@ -1,8 +1,14 @@
 //! 格子窗口 - 核心组件
 //!
 //! 每个收纳格子是一个独立的 WS_POPUP 分层窗口。
-//! 所有图标在 WM_PAINT 中用 GDI 自绘，使用客户区相对坐标。
-//! 拖动标题栏 = SetWindowPos 移动整个窗口，图标自然跟随。
+//! 内部嵌入 SysListView32 控件渲染图标，原生支持：
+//! - 双击打开文件
+//! - 右键上下文菜单
+//! - 框选多个图标
+//! - 键盘导航
+//!
+//! 拖动标题栏 = WM_NCHITTEST 返回 HTCAPTION，Windows 原生移动。
+//! 边缘缩放 = WM_NCHITTEST 返回 HTLEFT/HTRIGHT/...，Windows 原生缩放。
 
 use anyhow::Result;
 use std::ffi::c_void;
@@ -19,6 +25,8 @@ type HGDIOBJ = *mut c_void;
 type HCURSOR = *mut c_void;
 type HBITMAP = *mut c_void;
 type HICON = *mut c_void;
+type HIMAGELIST = *mut c_void;
+type HMENU = *mut c_void;
 type LPARAM = isize;
 type WPARAM = usize;
 type LRESULT = isize;
@@ -32,18 +40,10 @@ struct RECT {
     bottom: i32,
 }
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct POINT {
     x: i32,
     y: i32,
-}
-#[repr(C)]
-struct MSG {
-    hwnd: HWND,
-    message: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-    time: u32,
-    pt: POINT,
 }
 #[repr(C)]
 struct PAINTSTRUCT {
@@ -71,34 +71,145 @@ struct WNDCLASSEXW {
     h_icon_sm: *mut c_void,
 }
 
-// Constants
+#[repr(C)]
+struct INITCOMMONCONTROLSEX {
+    dw_size: u32,
+    dw_icc: u32,
+}
+
+#[repr(C)]
+struct LVITEMW {
+    mask: u32,
+    i_item: i32,
+    i_sub_item: i32,
+    state: u32,
+    state_mask: u32,
+    psz_text: *const u16,
+    cch_text_max: i32,
+    i_image: i32,
+    l_param: isize,
+    i_indent: i32,
+    i_group_id: i32,
+    c_columns: u32,
+    pu_columns: *mut u32,
+}
+
+#[repr(C)]
+struct NMHDR {
+    hwnd_from: HWND,
+    id_from: usize,
+    code: u32,
+}
+
+#[repr(C)]
+struct NMITEMACTIVATE {
+    hdr: NMHDR,
+    i_item: i32,
+    i_sub_item: i32,
+    u_new_state: u32,
+    u_old_state: u32,
+    u_changed: u32,
+    pt_action: POINT,
+    l_param: isize,
+    i_key_flags: i32,
+    u_key_flags: u32,
+}
+
+#[repr(C)]
+struct MINMAXINFO {
+    pt_reserved: POINT,
+    pt_max_size: POINT,
+    pt_max_position: POINT,
+    pt_min_track_size: POINT,
+    pt_max_track_size: POINT,
+}
+
+// ===== Window Styles =====
 const WS_POPUP: u32 = 0x80000000;
 const WS_VISIBLE: u32 = 0x10000000;
+const WS_CHILD: u32 = 0x40000000;
 const WS_EX_LAYERED: u32 = 0x00080000;
 const WS_EX_TOOLWINDOW: u32 = 0x00000080;
 const WS_EX_TOPMOST: u32 = 0x00000008;
+
+// ===== Class Styles =====
 const CS_HREDRAW: u32 = 0x0002;
 const CS_VREDRAW: u32 = 0x0001;
+const CS_DBLCLKS: u32 = 0x0008;
+
+// ===== ListView Styles =====
+const LVS_ICON: u32 = 0x0000;
+const LVS_SHAREIMAGELISTS: u32 = 0x0040;
+const LVS_SHOWSELALWAYS: u32 = 0x0800;
+
+// ===== Common Controls =====
+const ICC_LISTVIEW_CLASSES: u32 = 0x00000001;
+const ILC_COLOR32: u32 = 0x0020;
+
+// ===== ListView Messages =====
+const LVM_FIRST: u32 = 0x1000;
+const LVM_SETIMAGELIST: u32 = LVM_FIRST + 3;
+const LVM_INSERTITEMW: u32 = LVM_FIRST + 77;
+const LVM_GETNEXTITEM: u32 = LVM_FIRST + 12;
+const LVSIL_NORMAL: usize = 0;
+
+// ===== ListView Item Flags =====
+const LVIF_TEXT: u32 = 0x0001;
+const LVIF_IMAGE: u32 = 0x0002;
+const LVNI_SELECTED: usize = 0x0002;
+
+// ===== Window Messages =====
 const WM_PAINT: u32 = 0x000F;
 const WM_DESTROY: u32 = 0x0002;
-const WM_LBUTTONDOWN: u32 = 0x0201;
-const WM_MOUSEMOVE: u32 = 0x0200;
-const WM_LBUTTONUP: u32 = 0x0202;
-const WM_RBUTTONUP: u32 = 0x0205;
-const LWA_ALPHA: u32 = 0x00000002;
-const GWLP_USERDATA: i32 = -21;
+const WM_SIZE: u32 = 0x0005;
+const WM_NOTIFY: u32 = 0x004E;
+const WM_NCHITTEST: u32 = 0x0084;
+const WM_SETCURSOR: u32 = 0x0020;
+const WM_GETMINMAXINFO: u32 = 0x0024;
+
+// ===== Notification Codes (as u32 from -i32) =====
+const NM_DBLCLK: u32 = (-3i32) as u32;
+const NM_RCLICK: u32 = (-5i32) as u32;
+
+// ===== Hit Test Constants =====
+const HTCLIENT: i32 = 1;
+const HTCAPTION: i32 = 2;
+const HTLEFT: i32 = 10;
+const HTRIGHT: i32 = 11;
+const HTTOP: i32 = 12;
+const HTTOPLEFT: i32 = 13;
+const HTTOPRIGHT: i32 = 14;
+const HTBOTTOM: i32 = 15;
+const HTBOTTOMLEFT: i32 = 16;
+const HTBOTTOMRIGHT: i32 = 17;
+
+// ===== Cursor IDs =====
+const IDC_ARROW_ID: u16 = 32512;
+const IDC_SIZENWSE_ID: u16 = 32642;
+const IDC_SIZENESW_ID: u16 = 32643;
+const IDC_SIZEWE_ID: u16 = 32644;
+const IDC_SIZENS_ID: u16 = 32645;
+
+// ===== GDI Constants =====
 const SRCCOPY: u32 = 0x00CC0020;
 const TRANSPARENT_MODE: i32 = 1;
 const DT_LEFT: u32 = 0x00000000;
-const DT_CENTER: u32 = 0x00000001;
 const DT_VCENTER: u32 = 0x00000004;
 const DT_SINGLELINE: u32 = 0x00000020;
-const DT_END_ELLIPSIS: u32 = 0x00008000;
 const PS_SOLID: i32 = 0;
+const NULL_BRUSH: i32 = 5;
+const LWA_ALPHA: u32 = 0x00000002;
+const SW_SHOW: i32 = 5;
 const SWP_NOZORDER: u32 = 0x0004;
 const SWP_NOSIZE: u32 = 0x0001;
-const IDC_ARROW_ID: u16 = 32512;
+const GWLP_USERDATA: i32 = -21;
 
+// ===== Menu Constants =====
+const MF_STRING: u32 = 0x00000000;
+const MF_SEPARATOR: u32 = 0x00000800;
+const TPM_RETURNCMD: u32 = 0x0100;
+
+// ===== Helpers =====
 fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
     (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
 }
@@ -108,8 +219,13 @@ fn get_x_lparam(lp: LPARAM) -> i32 {
 fn get_y_lparam(lp: LPARAM) -> i32 {
     ((lp >> 16) & 0xFFFF) as i16 as i32
 }
+fn scale_for_dpi(px: i32, dpi: u32) -> i32 {
+    (px * dpi as i32) / 96
+}
 
+// ===== FFI Declarations =====
 extern "system" {
+    // Window management
     fn GetModuleHandleW(lpModuleName: *const u16) -> HINSTANCE;
     fn RegisterClassExW(lpwcx: *const WNDCLASSEXW) -> u16;
     fn CreateWindowExW(
@@ -142,12 +258,14 @@ extern "system" {
     fn SetWindowLongPtrW(hWnd: HWND, nIndex: i32, dwNewLong: isize) -> isize;
     fn GetWindowLongPtrW(hWnd: HWND, nIndex: i32) -> isize;
     fn LoadCursorW(hInstance: HINSTANCE, lpCursorName: *const u16) -> HCURSOR;
+    fn SetCursor(hCursor: HCURSOR) -> HCURSOR;
     fn InvalidateRect(hWnd: HWND, lpRect: *const RECT, bErase: i32) -> i32;
     fn GetClientRect(hWnd: HWND, lpRect: *mut RECT) -> i32;
-    fn SetCapture(hWnd: HWND) -> HWND;
-    fn ReleaseCapture() -> i32;
-    fn GetCursorPos(lpPoint: *mut POINT) -> i32;
     fn ScreenToClient(hWnd: HWND, lpPoint: *mut POINT) -> i32;
+    fn GetCursorPos(lpPoint: *mut POINT) -> i32;
+    fn MoveWindow(hWnd: HWND, X: i32, Y: i32, nWidth: i32, nHeight: i32, bRepaint: i32) -> i32;
+    fn GetDpiForWindow(hwnd: HWND) -> u32;
+    fn SendMessageW(hWnd: HWND, Msg: u32, wParam: WPARAM, lParam: LPARAM) -> LRESULT;
 
     // GDI
     fn BeginPaint(hWnd: HWND, lpPaint: *mut PAINTSTRUCT) -> HDC;
@@ -193,50 +311,54 @@ extern "system" {
     ) -> HFONT;
     fn DrawTextW(hdc: HDC, lpchText: *const u16, cchText: i32, lprc: *mut RECT, format: u32)
         -> i32;
-    fn DrawIconEx(
-        hdc: HDC,
-        xLeft: i32,
-        yTop: i32,
-        hIcon: HICON,
-        cxWidth: i32,
-        cyWidth: i32,
-        istepIfAniCur: u32,
-        hbrFlickerFreeDraw: HBRUSH,
-        diFlags: u32,
+
+    // Shell
+    fn ShellExecuteW(
+        hwnd: HWND,
+        lpOperation: *const u16,
+        lpFile: *const u16,
+        lpParameters: *const u16,
+        lpDirectory: *const u16,
+        nShowCmd: i32,
+    ) -> HINSTANCE;
+
+    // Menu
+    fn CreatePopupMenu() -> HMENU;
+    fn AppendMenuW(hMenu: HMENU, uFlags: u32, uIDNewItem: usize, lpNewItem: *const u16) -> i32;
+    fn TrackPopupMenu(
+        hMenu: HMENU,
+        uFlags: u32,
+        x: i32,
+        y: i32,
+        nReserved: i32,
+        hwnd: HWND,
+        prcRect: *const RECT,
     ) -> i32;
+    fn DestroyMenu(hMenu: HMENU) -> i32;
 }
 
-const DI_NORMAL: u32 = 0x0003;
-const NULL_BRUSH: i32 = 5;
-const SW_SHOW: i32 = 5;
+// Common Controls (comctl32.dll) — 需要显式链接
+#[link(name = "comctl32")]
+extern "system" {
+    fn InitCommonControlsEx(lpInitCtrls: *const INITCOMMONCONTROLSEX) -> i32;
+    fn ImageList_Create(cx: i32, cy: i32, flags: u32, initial: i32, grow: i32) -> HIMAGELIST;
+    fn ImageList_AddIcon(himl: HIMAGELIST, hicon: HICON) -> i32;
+    fn ImageList_Destroy(himl: HIMAGELIST) -> i32;
+}
 
-// ===== 数据结构 =====
+// ===== 公共数据结构 =====
 
 /// 格子内的文件项
 pub struct GridFileItem {
+    /// 文件路径（.lnk 或实际路径，用于 ShellExecuteW 打开）
     pub file_path: String,
+    /// 显示名称
     pub display_name: String,
+    /// 系统图标句柄（调用者负责提供，格子窗口负责释放）
     pub icon_handle: HICON,
-    /// 相对于窗口客户区的坐标
-    pub client_x: i32,
-    pub client_y: i32,
 }
 
 unsafe impl Send for GridFileItem {}
-
-/// 格子窗口内部数据（存储在 GWLP_USERDATA）
-struct GridWindowData {
-    title: String,
-    items: Vec<GridFileItem>,
-    is_dragging: bool,
-    drag_start_x: i32,
-    drag_start_y: i32,
-    window_x: i32,
-    window_y: i32,
-    grid_id: usize, // 用于回调
-}
-
-unsafe impl Send for GridWindowData {}
 
 /// 格子窗口创建参数
 pub struct GridCreateParams {
@@ -249,6 +371,18 @@ pub struct GridCreateParams {
     pub items: Vec<GridFileItem>,
 }
 
+/// 格子窗口内部数据（存储在 GWLP_USERDATA）
+struct GridWindowData {
+    title: String,
+    items: Vec<GridFileItem>,
+    listview_hwnd: HWND,
+    image_list: HIMAGELIST,
+    grid_id: usize,
+    title_h: i32,
+}
+
+unsafe impl Send for GridWindowData {}
+
 /// 格子窗口句柄包装
 pub struct GridWindow {
     pub hwnd: HWND,
@@ -257,15 +391,17 @@ pub struct GridWindow {
 
 unsafe impl Send for GridWindow {}
 
-// 全局格子列表（用于管理）
+// 全局格子列表
 static GRID_WINDOWS: Mutex<Vec<GridWindow>> = Mutex::new(Vec::new());
-
-// 窗口类是否已注册
 static CLASS_REGISTERED: Mutex<bool> = Mutex::new(false);
 
 static CLASS_NAME: &[u16] = &[
     68, 101, 115, 107, 116, 111, 112, 79, 114, 103, 71, 114, 105, 100, 0,
 ]; // "DesktopOrgGrid"
+
+static LISTVIEW_CLASS_NAME: &[u16] = &[
+    83, 121, 115, 76, 105, 115, 116, 86, 105, 101, 119, 51, 50, 0,
+]; // "SysListView32"
 
 fn ensure_class_registered() -> HINSTANCE {
     let mut registered = CLASS_REGISTERED.lock().unwrap();
@@ -274,7 +410,7 @@ fn ensure_class_registered() -> HINSTANCE {
     if !*registered {
         let wc = WNDCLASSEXW {
             cb_size: std::mem::size_of::<WNDCLASSEXW>() as u32,
-            style: CS_HREDRAW | CS_VREDRAW,
+            style: CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS,
             lpfn_wnd_proc: Some(grid_wnd_proc),
             cb_cls_extra: 0,
             cb_wnd_extra: 0,
@@ -290,16 +426,37 @@ fn ensure_class_registered() -> HINSTANCE {
             RegisterClassExW(&wc);
         }
         *registered = true;
-        log::info!("格子窗口类已注册");
+        log::info!("格子窗口类已注册（含 CS_DBLCLKS）");
     }
 
     hinstance
 }
 
+/// 初始化 Common Controls（确保 SysListView32 可用）
+fn ensure_common_controls() {
+    let icc = INITCOMMONCONTROLSEX {
+        dw_size: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
+        dw_icc: ICC_LISTVIEW_CLASSES,
+    };
+    unsafe {
+        InitCommonControlsEx(&icc);
+    }
+}
+
 /// 创建一个格子窗口
 pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
     let hinstance = ensure_class_registered();
+    ensure_common_controls();
 
+    // DPI 感知：使用默认 96 DPI（窗口尚未创建，无法获取真实 DPI）
+    // 窗口创建后可通过 WM_DPICHANGED 更新
+    let dpi: u32 = 96;
+    let scaled_w = scale_for_dpi(params.width, dpi);
+    let scaled_h = scale_for_dpi(params.height, dpi);
+    let title_h = scale_for_dpi(36, dpi);
+    let icon_size = scale_for_dpi(48, dpi);
+
+    // 1. 创建主窗口
     let hwnd = unsafe {
         CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
@@ -308,8 +465,8 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
             WS_POPUP | WS_VISIBLE,
             params.x,
             params.y,
-            params.width,
-            params.height,
+            scaled_w,
+            scaled_h,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             hinstance,
@@ -321,21 +478,99 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         anyhow::bail!("CreateWindowExW 创建格子窗口失败");
     }
 
-    // 设置半透明（整体 alpha）
+    // 设置半透明（alpha = 180，比原来的 230 更透明）
     unsafe {
-        SetLayeredWindowAttributes(hwnd, 0, 230, LWA_ALPHA);
+        SetLayeredWindowAttributes(hwnd, 0, 180, LWA_ALPHA);
     }
 
-    // 存储数据
+    // 2. 创建 SysListView32 子窗口
+    let lv_hwnd = unsafe {
+        CreateWindowExW(
+            0,
+            LISTVIEW_CLASS_NAME.as_ptr(),
+            std::ptr::null(),
+            WS_CHILD | WS_VISIBLE | LVS_ICON | LVS_SHAREIMAGELISTS | LVS_SHOWSELALWAYS,
+            0,
+            title_h,
+            scaled_w,
+            scaled_h - title_h,
+            hwnd,
+            std::ptr::null_mut(),
+            hinstance,
+            std::ptr::null_mut(),
+        )
+    };
+
+    if lv_hwnd.is_null() {
+        unsafe {
+            DestroyWindow(hwnd);
+        }
+        anyhow::bail!("CreateWindowExW 创建 SysListView32 失败");
+    }
+
+    // 3. 创建 ImageList 并填充图标
+    let initial_count = params.items.len().max(1) as i32;
+    let himl = unsafe { ImageList_Create(icon_size, icon_size, ILC_COLOR32, initial_count, 4) };
+
+    if himl.is_null() {
+        unsafe {
+            DestroyWindow(hwnd);
+        }
+        anyhow::bail!("ImageList_Create 失败");
+    }
+
+    for (i, item) in params.items.iter().enumerate() {
+        // 添加图标到 ImageList（ImageList 会复制图标数据）
+        if !item.icon_handle.is_null() {
+            unsafe {
+                ImageList_AddIcon(himl, item.icon_handle);
+            }
+        }
+
+        // 插入 ListView 项
+        let text: Vec<u16> = item
+            .display_name
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let lvi = LVITEMW {
+            mask: LVIF_TEXT | LVIF_IMAGE,
+            i_item: i as i32,
+            i_sub_item: 0,
+            state: 0,
+            state_mask: 0,
+            psz_text: text.as_ptr(),
+            cch_text_max: 0,
+            i_image: i as i32,
+            l_param: 0,
+            i_indent: 0,
+            i_group_id: -1,
+            c_columns: 0,
+            pu_columns: std::ptr::null_mut(),
+        };
+        unsafe {
+            SendMessageW(
+                lv_hwnd,
+                LVM_INSERTITEMW,
+                0,
+                &lvi as *const LVITEMW as LPARAM,
+            );
+        }
+    }
+
+    // 关联 ImageList（LVS_SHAREIMAGELISTS 防止 ListView 销毁时自动删除 ImageList）
+    unsafe {
+        SendMessageW(lv_hwnd, LVM_SETIMAGELIST, LVSIL_NORMAL, himl as LPARAM);
+    }
+
+    // 4. 存储窗口数据
     let data = Box::new(GridWindowData {
         title: params.title,
         items: params.items,
-        is_dragging: false,
-        drag_start_x: 0,
-        drag_start_y: 0,
-        window_x: params.x,
-        window_y: params.y,
+        listview_hwnd: lv_hwnd,
+        image_list: himl,
         grid_id: params.id,
+        title_h,
     });
     let data_ptr = Box::into_raw(data);
     unsafe {
@@ -346,7 +581,7 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         ShowWindow(hwnd, SW_SHOW);
     }
 
-    // 注册到全局列表
+    // 5. 注册到全局列表
     if let Ok(mut grids) = GRID_WINDOWS.lock() {
         grids.push(GridWindow {
             hwnd,
@@ -354,7 +589,17 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         });
     }
 
-    log::info!("格子窗口已创建: id={} hwnd={:?}", params.id, hwnd);
+    log::info!(
+        "格子窗口已创建: id={} title='{}' items={} dpi={}",
+        params.id,
+        if let Ok(grids) = GRID_WINDOWS.lock() {
+            grids.last().map(|_| "ok").unwrap_or("?")
+        } else {
+            "?"
+        },
+        unsafe { &*data_ptr }.items.len(),
+        dpi
+    );
     Ok(hwnd)
 }
 
@@ -363,8 +608,6 @@ pub fn destroy_all_grid_windows() {
     if let Ok(mut grids) = GRID_WINDOWS.lock() {
         for grid in grids.drain(..) {
             unsafe {
-                // WM_DESTROY 会负责释放 GridWindowData 和图标
-                // 这里只需要销毁窗口
                 DestroyWindow(grid.hwnd);
             }
         }
@@ -379,6 +622,16 @@ pub fn get_grid_count() -> usize {
 
 // ===== 窗口过程 =====
 
+/// 从 HWND 获取 GridWindowData 引用
+unsafe fn get_data<'a>(hwnd: HWND) -> Option<&'a mut GridWindowData> {
+    let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GridWindowData;
+    if ptr.is_null() {
+        None
+    } else {
+        Some(&mut *ptr)
+    }
+}
+
 unsafe extern "system" fn grid_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -386,6 +639,7 @@ unsafe extern "system" fn grid_wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
+        // ===== 标题栏绘制 =====
         WM_PAINT => {
             let mut ps: PAINTSTRUCT = std::mem::zeroed();
             let hdc = BeginPaint(hwnd, &mut ps);
@@ -405,7 +659,7 @@ unsafe extern "system" fn grid_wnd_proc(
             let mem_bmp = CreateCompatibleBitmap(hdc, w, h);
             let old_bmp = SelectObject(mem_dc, mem_bmp as HGDIOBJ);
 
-            // 背景色
+            // 背景
             let bg_color = rgb(30, 35, 50);
             let bg_brush = CreateSolidBrush(bg_color);
             let bg_rect = RECT {
@@ -427,13 +681,9 @@ unsafe extern "system" fn grid_wnd_proc(
             SelectObject(mem_dc, old_brush);
             DeleteObject(border_pen as HGDIOBJ);
 
-            // 获取数据
-            let data_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GridWindowData;
-            if !data_ptr.is_null() {
-                let data = &*data_ptr;
-
-                // 标题栏背景
-                let title_h: i32 = 32;
+            // 标题栏
+            if let Some(data) = get_data(hwnd) {
+                let title_h = data.title_h;
                 let title_brush = CreateSolidBrush(rgb(40, 50, 70));
                 let title_rect = RECT {
                     left: 1,
@@ -446,8 +696,23 @@ unsafe extern "system" fn grid_wnd_proc(
 
                 // 标题文字
                 let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
-                let title_font =
-                    CreateFontW(15, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 0, 0, font_name.as_ptr());
+                let font_size = scale_for_dpi(15, 96);
+                let title_font = CreateFontW(
+                    font_size,
+                    0,
+                    0,
+                    0,
+                    700,
+                    0,
+                    0,
+                    0,
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    font_name.as_ptr(),
+                );
                 let old_font = SelectObject(mem_dc, title_font as HGDIOBJ);
                 SetBkMode(mem_dc, TRANSPARENT_MODE);
                 SetTextColor(mem_dc, rgb(220, 230, 255));
@@ -469,49 +734,8 @@ unsafe extern "system" fn grid_wnd_proc(
                     DT_LEFT | DT_VCENTER | DT_SINGLELINE,
                 );
 
-                // 图标列表
-                let icon_font =
-                    CreateFontW(12, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 0, 0, font_name.as_ptr());
-                SelectObject(mem_dc, icon_font as HGDIOBJ);
-                SetTextColor(mem_dc, rgb(200, 210, 220));
-
-                for item in &data.items {
-                    // 绘制图标（32x32）
-                    if !item.icon_handle.is_null() {
-                        DrawIconEx(
-                            mem_dc,
-                            item.client_x,
-                            item.client_y,
-                            item.icon_handle,
-                            32,
-                            32,
-                            0,
-                            std::ptr::null_mut(),
-                            DI_NORMAL,
-                        );
-                    }
-
-                    // 绘制文件名（图标下方）
-                    let name_text: Vec<u16> =
-                        format!("{}\0", item.display_name).encode_utf16().collect();
-                    let mut name_rect = RECT {
-                        left: item.client_x - 10,
-                        top: item.client_y + 34,
-                        right: item.client_x + 42,
-                        bottom: item.client_y + 56,
-                    };
-                    DrawTextW(
-                        mem_dc,
-                        name_text.as_ptr(),
-                        -1,
-                        &mut name_rect,
-                        DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
-                    );
-                }
-
                 SelectObject(mem_dc, old_font);
                 DeleteObject(title_font as HGDIOBJ);
-                DeleteObject(icon_font as HGDIOBJ);
             }
 
             // 复制到屏幕
@@ -523,92 +747,267 @@ unsafe extern "system" fn grid_wnd_proc(
             0
         }
 
-        WM_LBUTTONDOWN => {
-            let data_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GridWindowData;
-            if !data_ptr.is_null() {
-                let data = &mut *data_ptr;
-                let mx = get_x_lparam(lparam);
-                let my = get_y_lparam(lparam);
+        // ===== Hit Test：边缘缩放 + 标题栏拖拽 =====
+        WM_NCHITTEST => {
+            let screen_x = get_x_lparam(lparam);
+            let screen_y = get_y_lparam(lparam);
 
-                // 只在标题栏区域（y < 32）启动拖拽
-                if my < 32 {
-                    data.is_dragging = true;
-                    let mut cursor = POINT { x: 0, y: 0 };
-                    GetCursorPos(&mut cursor);
-                    data.drag_start_x = cursor.x;
-                    data.drag_start_y = cursor.y;
-                    SetCapture(hwnd);
+            // 屏幕坐标 → 客户区坐标
+            let mut pt = POINT {
+                x: screen_x,
+                y: screen_y,
+            };
+            ScreenToClient(hwnd, &mut pt);
+
+            let mut client = RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
+            GetClientRect(hwnd, &mut client);
+
+            let edge = 6; // 边缘检测宽度
+            let title_h = get_data(hwnd).map(|d| d.title_h).unwrap_or(36);
+
+            // 边缘检测（缩放）
+            let on_left = pt.x < edge;
+            let on_right = pt.x > client.right - edge;
+            let on_top = pt.y < edge;
+            let on_bottom = pt.y > client.bottom - edge;
+
+            if on_left && on_top {
+                return HTTOPLEFT as LRESULT;
+            }
+            if on_right && on_top {
+                return HTTOPRIGHT as LRESULT;
+            }
+            if on_left && on_bottom {
+                return HTBOTTOMLEFT as LRESULT;
+            }
+            if on_right && on_bottom {
+                return HTBOTTOMRIGHT as LRESULT;
+            }
+            if on_left {
+                return HTLEFT as LRESULT;
+            }
+            if on_right {
+                return HTRIGHT as LRESULT;
+            }
+            if on_top {
+                return HTTOP as LRESULT;
+            }
+            if on_bottom {
+                return HTBOTTOM as LRESULT;
+            }
+
+            // 标题栏区域 → 拖拽移动
+            if pt.y < title_h {
+                return HTCAPTION as LRESULT;
+            }
+
+            // 其余区域（ListView 子窗口）→ 让子控件处理
+            HTCLIENT as LRESULT
+        }
+
+        // ===== 光标设置 =====
+        WM_SETCURSOR => {
+            let hit_test = (lparam & 0xFFFF) as i16 as i32;
+            let cursor_id = match hit_test {
+                HTLEFT | HTRIGHT => IDC_SIZEWE_ID,
+                HTTOP | HTBOTTOM => IDC_SIZENS_ID,
+                HTTOPLEFT | HTBOTTOMRIGHT => IDC_SIZENWSE_ID,
+                HTTOPRIGHT | HTBOTTOMLEFT => IDC_SIZENESW_ID,
+                _ => {
+                    return DefWindowProcW(hwnd, msg, wparam, lparam);
                 }
+            };
+            let cursor = LoadCursorW(std::ptr::null_mut(), cursor_id as *const u16);
+            SetCursor(cursor);
+            1 // 已处理
+        }
+
+        // ===== 窗口缩放 → 调整 ListView 子窗口 =====
+        WM_SIZE => {
+            if let Some(data) = get_data(hwnd) {
+                let new_w = (lparam & 0xFFFF) as i32;
+                let new_h = ((lparam >> 16) & 0xFFFF) as i32;
+                let title_h = data.title_h;
+                let lv_h = (new_h - title_h).max(0);
+                MoveWindow(data.listview_hwnd, 0, title_h, new_w, lv_h, 1);
             }
             0
         }
 
-        WM_MOUSEMOVE => {
-            let data_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GridWindowData;
-            if !data_ptr.is_null() {
-                let data = &mut *data_ptr;
-                if data.is_dragging {
-                    let mut cursor = POINT { x: 0, y: 0 };
-                    GetCursorPos(&mut cursor);
-                    let dx = cursor.x - data.drag_start_x;
-                    let dy = cursor.y - data.drag_start_y;
-                    let new_x = data.window_x + dx;
-                    let new_y = data.window_y + dy;
-                    SetWindowPos(
-                        hwnd,
-                        std::ptr::null_mut(),
-                        new_x,
-                        new_y,
-                        0,
-                        0,
-                        SWP_NOZORDER | SWP_NOSIZE,
-                    );
-                }
-            }
+        // ===== 最小/最大窗口尺寸 =====
+        WM_GETMINMAXINFO => {
+            let mmi = &mut *(lparam as *mut MINMAXINFO);
+            mmi.pt_min_track_size = POINT { x: 200, y: 150 };
+            mmi.pt_max_track_size = POINT { x: 1200, y: 1600 };
             0
         }
 
-        WM_LBUTTONUP => {
-            let data_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GridWindowData;
-            if !data_ptr.is_null() {
-                let data = &mut *data_ptr;
-                if data.is_dragging {
-                    data.is_dragging = false;
-                    ReleaseCapture();
+        // ===== ListView 事件通知 =====
+        WM_NOTIFY => {
+            let nmhdr = &*(lparam as *const NMHDR);
 
-                    // 更新保存的窗口位置
-                    let mut cursor = POINT { x: 0, y: 0 };
-                    GetCursorPos(&mut cursor);
-                    let dx = cursor.x - data.drag_start_x;
-                    let dy = cursor.y - data.drag_start_y;
-                    data.window_x += dx;
-                    data.window_y += dy;
-
-                    log::debug!(
-                        "格子 {} 移动到新位置: ({}, {})",
-                        data.grid_id,
-                        data.window_x,
-                        data.window_y
-                    );
+            match nmhdr.code {
+                // 双击打开
+                NM_DBLCLK => {
+                    if let Some(data) = get_data(hwnd) {
+                        let nma = &*(lparam as *const NMITEMACTIVATE);
+                        let idx = nma.i_item;
+                        if idx >= 0 && (idx as usize) < data.items.len() {
+                            let item = &data.items[idx as usize];
+                            let op: Vec<u16> = "open\0".encode_utf16().collect();
+                            let path: Vec<u16> = item
+                                .file_path
+                                .encode_utf16()
+                                .chain(std::iter::once(0))
+                                .collect();
+                            ShellExecuteW(
+                                hwnd,
+                                op.as_ptr(),
+                                path.as_ptr(),
+                                std::ptr::null(),
+                                std::ptr::null(),
+                                SW_SHOW,
+                            );
+                            log::info!("双击打开: {}", item.display_name);
+                        }
+                    }
+                    0
                 }
+
+                // 右键菜单
+                NM_RCLICK => {
+                    if let Some(data) = get_data(hwnd) {
+                        // 获取当前选中项
+                        let sel = SendMessageW(
+                            data.listview_hwnd,
+                            LVM_GETNEXTITEM,
+                            (-1isize) as WPARAM,
+                            LVNI_SELECTED as LPARAM,
+                        ) as i32;
+
+                        if sel >= 0 && (sel as usize) < data.items.len() {
+                            let item = &data.items[sel as usize];
+
+                            // 获取光标位置（屏幕坐标）
+                            let mut pt = POINT { x: 0, y: 0 };
+                            GetCursorPos(&mut pt);
+
+                            // 创建弹出菜单
+                            let menu = CreatePopupMenu();
+                            let open_text: Vec<u16> = "打开(O)\0".encode_utf16().collect();
+                            let open_dir_text: Vec<u16> =
+                                "打开文件所在位置(I)\0".encode_utf16().collect();
+                            let props_text: Vec<u16> = "属性(R)\0".encode_utf16().collect();
+
+                            AppendMenuW(menu, MF_STRING, 1, open_text.as_ptr());
+                            AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+                            AppendMenuW(menu, MF_STRING, 2, open_dir_text.as_ptr());
+                            AppendMenuW(menu, MF_STRING, 3, props_text.as_ptr());
+
+                            let cmd = TrackPopupMenu(
+                                menu,
+                                TPM_RETURNCMD,
+                                pt.x,
+                                pt.y,
+                                0,
+                                hwnd,
+                                std::ptr::null(),
+                            );
+
+                            match cmd {
+                                1 => {
+                                    // 打开
+                                    let op: Vec<u16> = "open\0".encode_utf16().collect();
+                                    let path: Vec<u16> = item
+                                        .file_path
+                                        .encode_utf16()
+                                        .chain(std::iter::once(0))
+                                        .collect();
+                                    ShellExecuteW(
+                                        hwnd,
+                                        op.as_ptr(),
+                                        path.as_ptr(),
+                                        std::ptr::null(),
+                                        std::ptr::null(),
+                                        SW_SHOW,
+                                    );
+                                }
+                                2 => {
+                                    // 打开文件所在位置
+                                    let op: Vec<u16> = "explore\0".encode_utf16().collect();
+                                    let path: Vec<u16> = item
+                                        .file_path
+                                        .encode_utf16()
+                                        .chain(std::iter::once(0))
+                                        .collect();
+                                    ShellExecuteW(
+                                        hwnd,
+                                        op.as_ptr(),
+                                        path.as_ptr(),
+                                        std::ptr::null(),
+                                        std::ptr::null(),
+                                        SW_SHOW,
+                                    );
+                                }
+                                3 => {
+                                    // 属性
+                                    let op: Vec<u16> = "properties\0".encode_utf16().collect();
+                                    let path: Vec<u16> = item
+                                        .file_path
+                                        .encode_utf16()
+                                        .chain(std::iter::once(0))
+                                        .collect();
+                                    ShellExecuteW(
+                                        hwnd,
+                                        op.as_ptr(),
+                                        path.as_ptr(),
+                                        std::ptr::null(),
+                                        std::ptr::null(),
+                                        SW_SHOW,
+                                    );
+                                }
+                                _ => {}
+                            }
+
+                            DestroyMenu(menu);
+                        }
+                    }
+                    0
+                }
+
+                _ => DefWindowProcW(hwnd, msg, wparam, lparam),
             }
-            0
         }
 
+        // ===== 窗口销毁 =====
         WM_DESTROY => {
             let data_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GridWindowData;
             if !data_ptr.is_null() {
                 let data = Box::from_raw(data_ptr);
+
+                // 销毁 ImageList
+                if !data.image_list.is_null() {
+                    ImageList_Destroy(data.image_list);
+                }
+
+                // 释放图标句柄
                 for item in &data.items {
                     if !item.icon_handle.is_null() {
                         crate::desktop::file_icon::destroy_icon(item.icon_handle);
                     }
                 }
+
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             }
             0
         }
 
+        // ===== 默认处理 =====
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
