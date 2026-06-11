@@ -38,3 +38,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: 优化分类框UI - 4项修复
+
+**Date**: 2026-06-11
+**Task**: 优化分类框UI - 4项修复
+**Branch**: `master`
+
+### Summary
+
+修复分类框4个UI问题：(1)连续单击导致持续缩小-改用GetWindowRect+递归保护 (2)header字体24->18px (3)背景色rgba(1,1,1,0.15) (4)移除WS_EX_TOPMOST解决层级过高
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e8cc3ef` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
