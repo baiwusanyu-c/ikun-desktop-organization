@@ -15,6 +15,13 @@ fn main() -> eframe::Result<()> {
     log::info!("启动 Desktop Organizer (重写版)");
     log::info!("========================================");
 
+    // 设置 Per-Monitor DPI V2 感知（运行时设置，作为 manifest 的补充保障）
+    // 防止 Windows 对窗口做 bitmap-stretch 导致文字和图标模糊
+    #[cfg(target_os = "windows")]
+    {
+        set_per_monitor_dpi_v2();
+    }
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Desktop Organizer - 控制面板")
@@ -62,4 +69,30 @@ fn setup_chinese_fonts(ctx: &egui::Context) {
         }
     }
     log::warn!("未找到中文字体");
+}
+
+/// 设置 Per-Monitor DPI V2 感知（运行时调用，作为 manifest 的补充保障）
+///
+/// 确保 Windows 不对格子窗口做 bitmap-stretch，保持文字和图标清晰。
+/// DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+#[cfg(target_os = "windows")]
+fn set_per_monitor_dpi_v2() {
+    use std::ffi::c_void;
+
+    #[allow(non_camel_case_types)]
+    type DPI_AWARENESS_CONTEXT = *mut c_void;
+    const DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2: DPI_AWARENESS_CONTEXT =
+        -4isize as *mut c_void;
+
+    extern "system" {
+        fn SetProcessDpiAwarenessContext(value: DPI_AWARENESS_CONTEXT) -> i32;
+    }
+
+    let result =
+        unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+    if result != 0 {
+        log::info!("已设置 Per-Monitor DPI V2 感知（运行时）");
+    } else {
+        log::warn!("设置 Per-Monitor DPI V2 失败（可能系统版本不支持），依赖 manifest 配置");
+    }
 }

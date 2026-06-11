@@ -138,6 +138,9 @@ const GWLP_USERDATA: i32 = -21;
 // ===== DrawIconEx Flags =====
 const DI_NORMAL: u32 = 0x0003;
 
+// ===== StretchBlt Mode =====
+const HALFTONE: i32 = 4;
+
 // ===== Menu Constants =====
 const MF_STRING: u32 = 0x00000000;
 const MF_SEPARATOR: u32 = 0x00000800;
@@ -145,7 +148,15 @@ const TPM_RETURNCMD: u32 = 0x0100;
 
 // ===== System Metrics =====
 const SM_CXSCREEN: i32 = 0;
+#[allow(dead_code)]
 const SM_CYSCREEN: i32 = 1;
+
+// ===== DPI Change =====
+const WM_DPICHANGED: u32 = 0x02E0;
+
+// ===== Font Quality =====
+/// 灰度抗锯齿（适合透明背景分层窗口，ClearType 在透明 DIB 上会产生错误的子像素颜色）
+const ANTIALIASED_QUALITY: i32 = 4;
 
 // ===== Alpha Blend Constants =====
 const AC_SRC_OVER: u8 = 0x00;
@@ -287,6 +298,7 @@ extern "system" {
     ) -> i32;
 
     // GDI
+    fn SetStretchBltMode(hdc: HDC, iStretchMode: i32) -> i32;
     fn BeginPaint(hWnd: HWND, lpPaint: *mut PAINTSTRUCT) -> HDC;
     fn EndPaint(hWnd: HWND, lpPaint: *const PAINTSTRUCT) -> i32;
     fn CreateCompatibleDC(hdc: HDC) -> HDC;
@@ -687,19 +699,30 @@ fn render_layered_window(hwnd: HWND) {
         };
     }
 
-    // ===== 绘制半透明背景 rgba(1,1,1,0.15) =====
-    let bg_alpha: u8 = 38; // 0.15 * 255 ≈ 38
-    fill_rect_alpha(bits, w, h, 0, 0, w, h, 1, 1, 1, bg_alpha);
+    // ===== 绘制圆角背景（整体，四角圆角）=====
+    let bg_alpha: u8 = 38; // rgba(1,1,1,0.15)
+    let corner_radius = 16i32;
+    fill_rounded_rect_alpha(
+        bits,
+        w,
+        h,
+        0,
+        0,
+        w,
+        h,
+        corner_radius,
+        1,
+        1,
+        1,
+        bg_alpha,
+        0b1111, // 四个角全部圆角
+    );
 
-    // ===== 绘制圆角边框（完全不透明） =====
-    draw_rounded_border_alpha(bits, w, h, 0, 0, w, h, 16, 2, 80, 100, 150);
-
-    // ===== 绘制标题栏 =====
+    // ===== 绘制标题栏与主体的分隔线（灰色半透明）=====
     let title_h = data.title_h;
-    // 标题栏背景与主体相同 rgba(1,1,1,0.15)
-    fill_rect_alpha(bits, w, h, 1, 1, w - 2, title_h, 1, 1, 1, bg_alpha);
+    fill_rect_alpha(bits, w, h, 0, title_h - 1, w, 1, 100, 100, 100, 100);
 
-    // 标题文字（完全不透明，白色）
+    // 标题文字（alpha 合成渲染，解决 GDI 在透明 DIB 上的锯齿问题）
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     let dpi = if dpi > 0 { dpi } else { 96 };
     let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
@@ -717,42 +740,64 @@ fn render_layered_window(hwnd: HWND) {
             1,
             0,
             0,
-            0,
+            ANTIALIASED_QUALITY,
             0,
             font_name.as_ptr(),
         )
     };
-    let old_font = unsafe { SelectObject(mem_dc, title_font as HGDIOBJ) };
-    unsafe {
-        SetBkMode(mem_dc, TRANSPARENT_MODE);
-        SetTextColor(mem_dc, rgb(255, 255, 255));
-    }
 
     let title_text: Vec<u16> = format!("📁 {} ({})\0", data.title, data.items.len())
         .encode_utf16()
         .collect();
-    let mut title_draw = RECT {
-        left: 10,
-        top: 0,
-        right: w - 10,
-        bottom: title_h,
-    };
-    unsafe {
-        DrawTextW(
-            mem_dc,
-            title_text.as_ptr(),
-            -1,
-            &mut title_draw,
+    // 阴影描边（模拟原生桌面图标文字效果，提升可读性）
+    let shadow_offset = scale_for_dpi(1, dpi);
+    for &(dx, dy) in &[
+        (shadow_offset, 0),
+        (-shadow_offset, 0),
+        (0, shadow_offset),
+        (0, -shadow_offset),
+    ] {
+        draw_text_alpha(
+            bits,
+            w,
+            h,
+            10 + dx,
+            dy,
+            w - 20,
+            title_h,
+            &title_text,
+            title_font,
+            0,
+            0,
+            0,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE,
         );
     }
+    // 主文字（白色）
+    draw_text_alpha(
+        bits,
+        w,
+        h,
+        10,
+        0,
+        w - 20,
+        title_h,
+        &title_text,
+        title_font,
+        255,
+        255,
+        255,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+    );
 
     unsafe {
-        SelectObject(mem_dc, old_font);
         DeleteObject(title_font as HGDIOBJ);
     }
 
     // ===== 绘制图标网格 =====
+    // 设置高质量缩放模式（HALFTONE），改善图标在不同 DPI 下的缩放质量
+    unsafe { SetStretchBltMode(mem_dc, HALFTONE) };
+
     let icon_size = data.icon_size;
     let cell_w = data.cell_w;
     let cell_h = data.cell_h;
@@ -761,8 +806,8 @@ fn render_layered_window(hwnd: HWND) {
     let grid_top = title_h + scale_for_dpi(8, dpi);
     let icon_label_h = scale_for_dpi(20, dpi);
 
-    // 图标标签字体
-    let label_font_size = scale_for_dpi(12, dpi);
+    // 图标标签字体（alpha 合成渲染）
+    let label_font_size = scale_for_dpi(13, dpi);
     let label_font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
     let label_font = unsafe {
         CreateFontW(
@@ -777,16 +822,11 @@ fn render_layered_window(hwnd: HWND) {
             1,
             0,
             0,
-            0,
+            ANTIALIASED_QUALITY,
             0,
             label_font_name.as_ptr(),
         )
     };
-    let old_label_font = unsafe { SelectObject(mem_dc, label_font as HGDIOBJ) };
-    unsafe {
-        SetBkMode(mem_dc, TRANSPARENT_MODE);
-        SetTextColor(mem_dc, rgb(230, 230, 230));
-    }
 
     for (i, item) in data.items.iter().enumerate() {
         let col = (i as i32) % cols;
@@ -800,7 +840,7 @@ fn render_layered_window(hwnd: HWND) {
             fill_rect_alpha(bits, w, h, cell_x, cell_y, cell_w, cell_h, 60, 80, 120, 120);
         }
 
-        // 绘制图标（完全不透明）
+        // 绘制图标（DrawIconEx 正确处理 alpha + mask + 缩放）
         let icon_x = cell_x + (cell_w - icon_size) / 2;
         let icon_y = cell_y + 4;
         if !item.icon_handle.is_null() {
@@ -819,31 +859,54 @@ fn render_layered_window(hwnd: HWND) {
             }
         }
 
-        // 绘制图标标签文字（完全不透明）
+        // 绘制图标标签文字（阴影描边 + alpha 合成，模拟原生桌面效果）
         let label: Vec<u16> = item
             .display_name
             .encode_utf16()
             .chain(std::iter::once(0))
             .collect();
-        let mut label_rect = RECT {
-            left: cell_x + 2,
-            top: icon_y + icon_size + 2,
-            right: cell_x + cell_w - 2,
-            bottom: icon_y + icon_size + 2 + icon_label_h,
-        };
-        unsafe {
-            DrawTextW(
-                mem_dc,
-                label.as_ptr(),
-                -1,
-                &mut label_rect,
-                DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX,
+        let label_x = cell_x + 2;
+        let label_y = icon_y + icon_size + 2;
+        let label_w = cell_w - 4;
+        let label_fmt = DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX;
+        // 阴影描边
+        let lsh = scale_for_dpi(1, dpi);
+        for &(dx, dy) in &[(lsh, 0), (-lsh, 0), (0, lsh), (0, -lsh)] {
+            draw_text_alpha(
+                bits,
+                w,
+                h,
+                label_x + dx,
+                label_y + dy,
+                label_w,
+                icon_label_h,
+                &label,
+                label_font,
+                0,
+                0,
+                0,
+                label_fmt,
             );
         }
+        // 主文字（浅灰白色）
+        draw_text_alpha(
+            bits,
+            w,
+            h,
+            label_x,
+            label_y,
+            label_w,
+            icon_label_h,
+            &label,
+            label_font,
+            230,
+            230,
+            230,
+            label_fmt,
+        );
     }
 
     unsafe {
-        SelectObject(mem_dc, old_label_font);
         DeleteObject(label_font as HGDIOBJ);
     }
 
@@ -882,6 +945,146 @@ fn render_layered_window(hwnd: HWND) {
     RENDERING.store(false, Ordering::SeqCst);
 }
 
+/// 高质量文字渲染到半透明分层窗口 DIB
+///
+/// GDI 在 32 位 ARGB DIB 上做抗锯齿时，边缘像素 alpha 被强制设为 255，
+/// 导致在半透明背景上产生硬边缘锯齿。本函数通过以下方法解决：
+///
+/// 1. 在临时 DC 上用纯黑背景渲染白色文字（GDI 在纯色背景上能正确抗锯齿）
+/// 2. 读取每个像素的红色通道作为文字覆盖强度（0=无文字, 255=完全覆盖）
+/// 3. 用覆盖强度作为混合因子，将文字颜色合成到主 DIB 的半透明背景上
+///
+/// 这样抗锯齿边缘像素会获得正确的中间色值，实现平滑过渡。
+#[allow(clippy::too_many_arguments)]
+fn draw_text_alpha(
+    main_pixels: *mut Pixel32,
+    bmp_w: i32,
+    bmp_h: i32,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    text: &[u16],
+    font: HFONT,
+    text_r: u8,
+    text_g: u8,
+    text_b: u8,
+    format: u32,
+) {
+    let screen_dc = unsafe { GetDC(std::ptr::null_mut()) };
+    let text_dc = unsafe { CreateCompatibleDC(screen_dc) };
+
+    // 创建纯黑 DIB（用于获取正确的抗锯齿覆盖值）
+    let bi = BITMAPINFOHEADER {
+        bi_size: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+        bi_width: w,
+        bi_height: -h,
+        bi_planes: 1,
+        bi_bit_count: 32,
+        bi_compression: 0,
+        bi_size_image: 0,
+        bi_x_pels_per_meter: 0,
+        bi_y_pels_per_meter: 0,
+        bi_clr_used: 0,
+        bi_clr_important: 0,
+    };
+    let mut text_bits: *mut Pixel32 = std::ptr::null_mut();
+    let text_dib = unsafe {
+        CreateDIBSection(
+            text_dc,
+            &bi as *const BITMAPINFOHEADER as *const c_void,
+            0,
+            &mut text_bits as *mut *mut Pixel32 as *mut *mut c_void,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if text_dib.is_null() || text_bits.is_null() {
+        unsafe {
+            DeleteDC(text_dc);
+            ReleaseDC(std::ptr::null_mut(), screen_dc);
+        }
+        return;
+    }
+
+    let old_bmp = unsafe { SelectObject(text_dc, text_dib as HGDIOBJ) };
+    let old_font = unsafe { SelectObject(text_dc, font) };
+
+    // 填充纯黑背景
+    let total = (w as usize) * (h as usize);
+    let text_slice = unsafe { std::slice::from_raw_parts_mut(text_bits, total) };
+    for p in text_slice.iter_mut() {
+        *p = Pixel32 {
+            b: 0,
+            g: 0,
+            r: 0,
+            a: 255,
+        };
+    }
+
+    // 渲染白色文字到黑色背景（GDI 能正确产生抗锯齿灰度边缘）
+    unsafe {
+        SetBkMode(text_dc, TRANSPARENT_MODE);
+        SetTextColor(text_dc, rgb(255, 255, 255));
+    }
+    let mut text_rect = RECT {
+        left: 0,
+        top: 0,
+        right: w,
+        bottom: h,
+    };
+    unsafe {
+        DrawTextW(text_dc, text.as_ptr(), -1, &mut text_rect, format);
+    }
+
+    // 合成：将文字覆盖值应用到主 DIB
+    let bmp_w_usize = bmp_w as usize;
+    for py in 0..h {
+        let abs_y = y + py;
+        if abs_y < 0 || abs_y >= bmp_h {
+            continue;
+        }
+        for px in 0..w {
+            let abs_x = x + px;
+            if abs_x < 0 || abs_x >= bmp_w {
+                continue;
+            }
+            let src_idx = (py as usize) * (w as usize) + (px as usize);
+            // 红色通道值 = 文字覆盖强度（0=纯黑无文字, 255=纯白完全覆盖）
+            let coverage = unsafe { (*text_bits.add(src_idx)).r };
+            if coverage == 0 {
+                continue;
+            }
+
+            let dst_idx = abs_y as usize * bmp_w_usize + abs_x as usize;
+            let dst = unsafe { &mut *main_pixels.add(dst_idx) };
+
+            if coverage == 255 {
+                // 完全覆盖：直接写入文字颜色，保持目标 alpha
+                dst.r = text_r;
+                dst.g = text_g;
+                dst.b = text_b;
+            } else {
+                // 部分覆盖：混合文字颜色和当前像素颜色
+                let inv = 255u16 - coverage as u16;
+                let cov = coverage as u16;
+                dst.r = ((text_r as u16 * cov + dst.r as u16 * inv) / 255) as u8;
+                dst.g = ((text_g as u16 * cov + dst.g as u16 * inv) / 255) as u8;
+                dst.b = ((text_b as u16 * cov + dst.b as u16 * inv) / 255) as u8;
+                // alpha 保持不变（背景透明度不受文字影响）
+            }
+        }
+    }
+
+    unsafe {
+        SelectObject(text_dc, old_font);
+        SelectObject(text_dc, old_bmp);
+        DeleteObject(text_dib as HGDIOBJ);
+        DeleteDC(text_dc);
+        ReleaseDC(std::ptr::null_mut(), screen_dc);
+    }
+}
+
 /// 填充矩形区域（逐像素 alpha）
 #[allow(clippy::too_many_arguments)]
 fn fill_rect_alpha(
@@ -914,9 +1117,15 @@ fn fill_rect_alpha(
     }
 }
 
-/// 绘制圆角边框（逐像素，完全不透明）
+/// 绘制圆角矩形填充（高效扫描线算法）
+///
+/// `corner_flags`: 位掩码控制哪些角为圆角
+/// - bit 0 (1): 左上角
+/// - bit 1 (2): 右上角
+/// - bit 2 (4): 左下角
+/// - bit 3 (8): 右下角
 #[allow(clippy::too_many_arguments)]
-fn draw_rounded_border_alpha(
+fn fill_rounded_rect_alpha(
     pixels: *mut Pixel32,
     bmp_w: i32,
     bmp_h: i32,
@@ -925,95 +1134,81 @@ fn draw_rounded_border_alpha(
     w: i32,
     h: i32,
     radius: i32,
-    border_width: i32,
     r: u8,
     g: u8,
     b: u8,
+    a: u8,
+    corner_flags: u8,
 ) {
-    let color = Pixel32 { r, g, b, a: 255 };
-    let x_end = (x + w).min(bmp_w);
+    let color = Pixel32 { r, g, b, a };
+    let r = radius.min(w / 2).min(h / 2);
+    let y_start = y.max(0);
     let y_end = (y + h).min(bmp_h);
+    let bmp_w_usize = bmp_w as usize;
 
-    for py in y.max(0)..y_end {
-        for px in x.max(0)..x_end {
-            let lx = px - x;
-            let ly = py - y;
+    for py in y_start..y_end {
+        let ly = py - y;
+        let row_offset = (py as usize) * bmp_w_usize;
 
-            // 检查是否在圆角矩形边框上
-            let on_border = is_on_rounded_rect_border(lx, ly, w, h, radius, border_width);
-            if on_border {
-                let idx = (py as usize) * (bmp_w as usize) + (px as usize);
-                unsafe {
-                    *pixels.add(idx) = color;
-                }
+        // 计算当前行的左右内缩量（仅在角落行需要内缩）
+        let mut left_inset = 0i32;
+        let mut right_inset = 0i32;
+
+        // 上半部分角落（左上/右上）
+        if ly < r {
+            let dy = r - ly;
+            let dx = r - ((r * r - dy * dy) as f64).sqrt() as i32;
+            if corner_flags & 1 != 0 {
+                left_inset = left_inset.max(dx);
+            }
+            if corner_flags & 2 != 0 {
+                right_inset = right_inset.max(dx);
+            }
+        }
+
+        // 下半部分角落（左下/右下）
+        if ly >= h - r {
+            let dy = ly - (h - r - 1);
+            let dx = r - ((r * r - dy * dy) as f64).sqrt() as i32;
+            if corner_flags & 4 != 0 {
+                left_inset = left_inset.max(dx);
+            }
+            if corner_flags & 8 != 0 {
+                right_inset = right_inset.max(dx);
+            }
+        }
+
+        let fill_x_start = (x + left_inset).max(0);
+        let fill_x_end = (x + w - right_inset).min(bmp_w);
+
+        for px in fill_x_start..fill_x_end {
+            unsafe {
+                *pixels.add(row_offset + (px as usize)) = color;
             }
         }
     }
 }
 
-/// 判断点是否在圆角矩形的边框上
-fn is_on_rounded_rect_border(
-    lx: i32,
-    ly: i32,
-    w: i32,
-    h: i32,
-    radius: i32,
-    border_width: i32,
-) -> bool {
-    // 简化实现：检查点是否在外圆角矩形和内圆角矩形之间
-    let in_outer = is_in_rounded_rect(lx, ly, w, h, radius);
-    let in_inner = is_in_rounded_rect(
-        lx - border_width,
-        ly - border_width,
-        w - 2 * border_width,
-        h - 2 * border_width,
-        (radius - border_width).max(0),
-    );
-    in_outer && !in_inner
-}
-
-/// 判断点是否在圆角矩形内部
-fn is_in_rounded_rect(lx: i32, ly: i32, w: i32, h: i32, radius: i32) -> bool {
-    if lx < 0 || ly < 0 || lx >= w || ly >= h {
-        return false;
-    }
-    let r = radius.min(w / 2).min(h / 2);
-
-    // 检查四个角
-    if lx < r && ly < r {
-        // 左上角
-        let dx = r - lx;
-        let dy = r - ly;
-        return dx * dx + dy * dy <= r * r;
-    }
-    if lx >= w - r && ly < r {
-        // 右上角
-        let dx = lx - (w - r - 1);
-        let dy = r - ly;
-        return dx * dx + dy * dy <= r * r;
-    }
-    if lx < r && ly >= h - r {
-        // 左下角
-        let dx = r - lx;
-        let dy = ly - (h - r - 1);
-        return dx * dx + dy * dy <= r * r;
-    }
-    if lx >= w - r && ly >= h - r {
-        // 右下角
-        let dx = lx - (w - r - 1);
-        let dy = ly - (h - r - 1);
-        return dx * dx + dy * dy <= r * r;
-    }
-
-    // 非角落区域，只要在矩形内即可
-    true
+/// 根据当前窗口尺寸和 DPI 重新计算网格布局参数
+///
+/// 在 WM_SIZE 和 WM_DPICHANGED 时调用，确保跨显示器 DPI 变化时布局正确
+fn recalculate_layout(data: &mut GridWindowData, width: i32, height: i32, dpi: u32) {
+    data.title_h = scale_for_dpi(40, dpi);
+    data.icon_size = scale_for_dpi(48, dpi);
+    let icon_label_h = scale_for_dpi(20, dpi);
+    let cell_spacing = scale_for_dpi(16, dpi);
+    data.cell_w = data.icon_size + cell_spacing;
+    data.cell_h = data.icon_size + icon_label_h + cell_spacing;
+    let body_w = width - scale_for_dpi(16, dpi);
+    data.cols = (body_w / data.cell_w).max(1);
+    let _ = height; // height 当前未使用，保留用于未来行数限制
 }
 
 /// 命中测试：根据鼠标位置获取网格项索引
 fn grid_hit_test(data: &GridWindowData, w: i32, click_x: i32, click_y: i32) -> i32 {
     let cols = data.cols;
     let grid_left = (w - cols * data.cell_w) / 2;
-    let grid_top = data.title_h + 8;
+    let grid_top = data.title_h + scale_for_dpi(8, 96); // 使用与渲染一致的偏移
 
     if click_y < grid_top || click_x < grid_left {
         return -1;
@@ -1170,8 +1365,58 @@ unsafe extern "system" fn grid_wnd_proc(
             1 // 已处理
         }
 
-        // ===== 窗口缩放 → 重新渲染分层窗口 =====
+        // ===== 窗口缩放 → 重新计算布局并渲染 =====
         WM_SIZE => {
+            if wparam != 0 {
+                // SIZE_MINIMIZED = 1，最小化时跳过渲染
+                let dpi = unsafe { GetDpiForWindow(hwnd) };
+                let dpi = if dpi > 0 { dpi } else { 96 };
+                let mut wr = RECT {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                };
+                unsafe { GetWindowRect(hwnd, &mut wr) };
+                let win_w = wr.right - wr.left;
+                let win_h = wr.bottom - wr.top;
+
+                if let Some(data) = get_data(hwnd) {
+                    recalculate_layout(data, win_w, win_h, dpi);
+                }
+            }
+            render_layered_window(hwnd);
+            0
+        }
+
+        // ===== DPI 变化（跨显示器移动）→ 先更新布局参数，再调整窗口尺寸 =====
+        WM_DPICHANGED => {
+            let new_dpi = (wparam & 0xFFFF) as u32;
+            log::info!("DPI 变化: {} → 重新计算布局", new_dpi);
+
+            let suggested_rect = lparam as *const RECT;
+            let new_w = unsafe { (*suggested_rect).right - (*suggested_rect).left };
+            let new_h = unsafe { (*suggested_rect).bottom - (*suggested_rect).top };
+
+            // 关键：先更新布局参数（title_h 等），再调用 SetWindowPos
+            // 因为 SetWindowPos 会同步触发 WM_SIZE → render，需要新参数已就位
+            if let Some(data) = get_data(hwnd) {
+                recalculate_layout(data, new_w, new_h, new_dpi);
+            }
+
+            // 应用系统建议的新窗口位置和尺寸
+            unsafe {
+                SetWindowPos(
+                    hwnd,
+                    std::ptr::null_mut(),
+                    (*suggested_rect).left,
+                    (*suggested_rect).top,
+                    new_w,
+                    new_h,
+                    SWP_NOZORDER,
+                );
+            }
+
             render_layered_window(hwnd);
             0
         }
@@ -1189,8 +1434,8 @@ unsafe extern "system" fn grid_wnd_proc(
                 y: title_h + scale_for_dpi(100, dpi), // 标题栏 + 至少 100px 内容区
             };
             mmi.pt_max_track_size = POINT {
-                x: scale_for_dpi(1200, dpi),
-                y: scale_for_dpi(1600, dpi),
+                x: scale_for_dpi(3000, dpi),
+                y: scale_for_dpi(3000, dpi),
             };
             0
         }
