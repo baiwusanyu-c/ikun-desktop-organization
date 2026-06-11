@@ -127,6 +127,7 @@ struct MINMAXINFO {
 // ===== Window Styles =====
 const WS_POPUP: u32 = 0x80000000;
 const WS_VISIBLE: u32 = 0x10000000;
+const WS_THICKFRAME: u32 = 0x00040000;
 const WS_CHILD: u32 = 0x40000000;
 const WS_EX_LAYERED: u32 = 0x00080000;
 const WS_EX_TOOLWINDOW: u32 = 0x00000080;
@@ -145,13 +146,20 @@ const LVS_SHOWSELALWAYS: u32 = 0x0800;
 // ===== Common Controls =====
 const ICC_LISTVIEW_CLASSES: u32 = 0x00000001;
 const ILC_COLOR32: u32 = 0x0020;
+const ILC_MASK: u32 = 0x0001;
 
 // ===== ListView Messages =====
 const LVM_FIRST: u32 = 0x1000;
 const LVM_SETIMAGELIST: u32 = LVM_FIRST + 3;
 const LVM_INSERTITEMW: u32 = LVM_FIRST + 77;
 const LVM_GETNEXTITEM: u32 = LVM_FIRST + 12;
+const LVM_SETBKCOLOR: u32 = LVM_FIRST + 1;
+const LVM_SETTEXTBKCOLOR: u32 = LVM_FIRST + 38;
+const LVM_SETEXTENDEDLISTVIEWSTYLE: u32 = LVM_FIRST + 54;
 const LVSIL_NORMAL: usize = 0;
+
+// ===== ListView Extended Styles =====
+const LVS_EX_DOUBLEBUFFER: usize = 0x00010000;
 
 // ===== ListView Item Flags =====
 const LVIF_TEXT: u32 = 0x0001;
@@ -166,6 +174,14 @@ const WM_NOTIFY: u32 = 0x004E;
 const WM_NCHITTEST: u32 = 0x0084;
 const WM_SETCURSOR: u32 = 0x0020;
 const WM_GETMINMAXINFO: u32 = 0x0024;
+#[allow(dead_code)]
+const WM_LBUTTONDOWN: u32 = 0x0201;
+#[allow(dead_code)]
+const WM_LBUTTONUP: u32 = 0x0202;
+#[allow(dead_code)]
+const WM_MOUSEMOVE: u32 = 0x0200;
+#[allow(dead_code)]
+const WM_CAPTURECHANGED: u32 = 0x0215;
 
 // ===== Notification Codes (as u32 from -i32) =====
 const NM_DBLCLK: u32 = (-3i32) as u32;
@@ -198,16 +214,22 @@ const DT_VCENTER: u32 = 0x00000004;
 const DT_SINGLELINE: u32 = 0x00000020;
 const PS_SOLID: i32 = 0;
 const NULL_BRUSH: i32 = 5;
+#[allow(dead_code)]
 const LWA_ALPHA: u32 = 0x00000002;
+#[allow(dead_code)]
+const LWA_COLORKEY: u32 = 0x00000001;
 const SW_SHOW: i32 = 5;
 const SWP_NOZORDER: u32 = 0x0004;
-const SWP_NOSIZE: u32 = 0x0001;
 const GWLP_USERDATA: i32 = -21;
 
 // ===== Menu Constants =====
 const MF_STRING: u32 = 0x00000000;
 const MF_SEPARATOR: u32 = 0x00000800;
 const TPM_RETURNCMD: u32 = 0x0100;
+
+// ===== System Metrics =====
+const SM_CXSCREEN: i32 = 0;
+const SM_CYSCREEN: i32 = 1;
 
 // ===== Helpers =====
 fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
@@ -261,8 +283,14 @@ extern "system" {
     fn SetCursor(hCursor: HCURSOR) -> HCURSOR;
     fn InvalidateRect(hWnd: HWND, lpRect: *const RECT, bErase: i32) -> i32;
     fn GetClientRect(hWnd: HWND, lpRect: *mut RECT) -> i32;
+    fn GetWindowRect(hWnd: HWND, lpRect: *mut RECT) -> i32;
+    #[allow(dead_code)]
     fn ScreenToClient(hWnd: HWND, lpPoint: *mut POINT) -> i32;
     fn GetCursorPos(lpPoint: *mut POINT) -> i32;
+    #[allow(dead_code)]
+    fn SetCapture(hWnd: HWND) -> HWND;
+    #[allow(dead_code)]
+    fn ReleaseCapture() -> i32;
     fn MoveWindow(hWnd: HWND, X: i32, Y: i32, nWidth: i32, nHeight: i32, bRepaint: i32) -> i32;
     fn GetDpiForWindow(hwnd: HWND) -> u32;
     fn SendMessageW(hWnd: HWND, Msg: u32, wParam: WPARAM, lParam: LPARAM) -> LRESULT;
@@ -311,6 +339,9 @@ extern "system" {
     ) -> HFONT;
     fn DrawTextW(hdc: HDC, lpchText: *const u16, cchText: i32, lprc: *mut RECT, format: u32)
         -> i32;
+
+    // System
+    fn GetSystemMetrics(nIndex: i32) -> i32;
 
     // Shell
     fn ShellExecuteW(
@@ -443,18 +474,22 @@ fn ensure_common_controls() {
     }
 }
 
+/// 获取主屏幕分辨率（物理像素）
+pub fn get_screen_resolution() -> (i32, i32) {
+    let w = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+    let h = unsafe { GetSystemMetrics(SM_CYSCREEN) };
+    (w, h)
+}
+
 /// 创建一个格子窗口
 pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
     let hinstance = ensure_class_registered();
     ensure_common_controls();
 
-    // DPI 感知：使用默认 96 DPI（窗口尚未创建，无法获取真实 DPI）
-    // 窗口创建后可通过 WM_DPICHANGED 更新
-    let dpi: u32 = 96;
-    let scaled_w = scale_for_dpi(params.width, dpi);
-    let scaled_h = scale_for_dpi(params.height, dpi);
-    let title_h = scale_for_dpi(36, dpi);
-    let icon_size = scale_for_dpi(48, dpi);
+    // 先用初始 DPI 创建窗口，创建后查询实际 DPI 并重新计算尺寸
+    let initial_dpi: u32 = 96;
+    let initial_w = scale_for_dpi(params.width, initial_dpi);
+    let initial_h = scale_for_dpi(params.height, initial_dpi);
 
     // 1. 创建主窗口
     let hwnd = unsafe {
@@ -462,11 +497,11 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
             WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
             CLASS_NAME.as_ptr(),
             std::ptr::null(),
-            WS_POPUP | WS_VISIBLE,
+            WS_POPUP | WS_VISIBLE | WS_THICKFRAME,
             params.x,
             params.y,
-            scaled_w,
-            scaled_h,
+            initial_w,
+            initial_h,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             hinstance,
@@ -478,9 +513,44 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         anyhow::bail!("CreateWindowExW 创建格子窗口失败");
     }
 
-    // 设置半透明（alpha = 180，比原来的 230 更透明）
+    // 查询实际 DPI 并重新计算尺寸
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    if dpi == 0 {
+        log::warn!("GetDpiForWindow 返回 0，使用默认 DPI 96");
+    }
+    let dpi = if dpi > 0 { dpi } else { 96 };
+
+    let scaled_w = scale_for_dpi(params.width, dpi);
+    let scaled_h = scale_for_dpi(params.height, dpi);
+    let title_h = scale_for_dpi(40, dpi);
+    let icon_size = scale_for_dpi(48, dpi);
+
+    // 如果 DPI 不是 96，调整窗口尺寸
+    if dpi != initial_dpi {
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                params.x,
+                params.y,
+                scaled_w,
+                scaled_h,
+                SWP_NOZORDER,
+            );
+        }
+        log::info!(
+            "DPI 自适应: {} -> 窗口尺寸 {}x{}, title_h={}, icon_size={}",
+            dpi,
+            scaled_w,
+            scaled_h,
+            title_h,
+            icon_size
+        );
+    }
+
+    // 窗口整体半透明：alpha=26 约 10% 不透明（用户要求 0.1 透明度）
     unsafe {
-        SetLayeredWindowAttributes(hwnd, 0, 180, LWA_ALPHA);
+        SetLayeredWindowAttributes(hwnd, 0, 26, LWA_ALPHA);
     }
 
     // 2. 创建 SysListView32 子窗口
@@ -510,7 +580,15 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
 
     // 3. 创建 ImageList 并填充图标
     let initial_count = params.items.len().max(1) as i32;
-    let himl = unsafe { ImageList_Create(icon_size, icon_size, ILC_COLOR32, initial_count, 4) };
+    let himl = unsafe {
+        ImageList_Create(
+            icon_size,
+            icon_size,
+            ILC_COLOR32 | ILC_MASK,
+            initial_count,
+            4,
+        )
+    };
 
     if himl.is_null() {
         unsafe {
@@ -558,9 +636,22 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         }
     }
 
-    // 关联 ImageList（LVS_SHAREIMAGELISTS 防止 ListView 销毁时自动删除 ImageList）
+    // 关联 ImageList + 设置 ListView 样式
     unsafe {
         SendMessageW(lv_hwnd, LVM_SETIMAGELIST, LVSIL_NORMAL, himl as LPARAM);
+
+        // 设置背景色与窗口主题统一 rgb(20,25,40)
+        let bg = rgb(20, 25, 40);
+        SendMessageW(lv_hwnd, LVM_SETBKCOLOR, 0, bg as LPARAM);
+        SendMessageW(lv_hwnd, LVM_SETTEXTBKCOLOR, 0, bg as LPARAM);
+
+        // 启用双缓冲（减少闪烁，改善图标 alpha 渲染）
+        SendMessageW(
+            lv_hwnd,
+            LVM_SETEXTENDEDLISTVIEWSTYLE,
+            LVS_EX_DOUBLEBUFFER,
+            LVS_EX_DOUBLEBUFFER as LPARAM,
+        );
     }
 
     // 4. 存储窗口数据
@@ -659,8 +750,8 @@ unsafe extern "system" fn grid_wnd_proc(
             let mem_bmp = CreateCompatibleBitmap(hdc, w, h);
             let old_bmp = SelectObject(mem_dc, mem_bmp as HGDIOBJ);
 
-            // 背景
-            let bg_color = rgb(30, 35, 50);
+            // 背景（深色，配合 LWA_ALPHA 形成半透明效果）
+            let bg_color = rgb(20, 25, 40);
             let bg_brush = CreateSolidBrush(bg_color);
             let bg_rect = RECT {
                 left: 0,
@@ -684,7 +775,8 @@ unsafe extern "system" fn grid_wnd_proc(
             // 标题栏
             if let Some(data) = get_data(hwnd) {
                 let title_h = data.title_h;
-                let title_brush = CreateSolidBrush(rgb(40, 50, 70));
+                // 标题栏与主体统一颜色
+                let title_brush = CreateSolidBrush(rgb(20, 25, 40));
                 let title_rect = RECT {
                     left: 1,
                     top: 1,
@@ -694,9 +786,11 @@ unsafe extern "system" fn grid_wnd_proc(
                 FillRect(mem_dc, &title_rect, title_brush);
                 DeleteObject(title_brush as HGDIOBJ);
 
-                // 标题文字
+                // 标题文字（DPI 感知：使用实际 DPI 缩放字体）
+                let dpi = unsafe { GetDpiForWindow(hwnd) };
+                let dpi = if dpi > 0 { dpi } else { 96 };
                 let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
-                let font_size = scale_for_dpi(15, 96);
+                let font_size = scale_for_dpi(24, dpi);
                 let title_font = CreateFontW(
                     font_size,
                     0,
@@ -715,7 +809,7 @@ unsafe extern "system" fn grid_wnd_proc(
                 );
                 let old_font = SelectObject(mem_dc, title_font as HGDIOBJ);
                 SetBkMode(mem_dc, TRANSPARENT_MODE);
-                SetTextColor(mem_dc, rgb(220, 230, 255));
+                SetTextColor(mem_dc, rgb(255, 255, 255));
 
                 let title_text: Vec<u16> = format!("📁 {} ({})\0", data.title, data.items.len())
                     .encode_utf16()
@@ -747,66 +841,63 @@ unsafe extern "system" fn grid_wnd_proc(
             0
         }
 
-        // ===== Hit Test：边缘缩放 + 标题栏拖拽 =====
+        // ===== Hit Test：标题栏拖拽 + 边缘缩放（让 Windows 自动处理） =====
         WM_NCHITTEST => {
             let screen_x = get_x_lparam(lparam);
             let screen_y = get_y_lparam(lparam);
 
-            // 屏幕坐标 → 客户区坐标
-            let mut pt = POINT {
-                x: screen_x,
-                y: screen_y,
-            };
-            ScreenToClient(hwnd, &mut pt);
-
-            let mut client = RECT {
+            let mut wr = RECT {
                 left: 0,
                 top: 0,
                 right: 0,
                 bottom: 0,
             };
-            GetClientRect(hwnd, &mut client);
+            unsafe { GetWindowRect(hwnd, &mut wr) };
+            let dx = screen_x - wr.left;
+            let dy = screen_y - wr.top;
+            let win_w = wr.right - wr.left;
+            let win_h = wr.bottom - wr.top;
 
-            let edge = 6; // 边缘检测宽度
-            let title_h = get_data(hwnd).map(|d| d.title_h).unwrap_or(36);
+            let title_h = get_data(hwnd).map(|d| d.title_h).unwrap_or(40);
+            let dpi = unsafe { GetDpiForWindow(hwnd) };
+            let dpi = if dpi > 0 { dpi } else { 96 };
+            let edge = scale_for_dpi(30, dpi);
 
-            // 边缘检测（缩放）
-            let on_left = pt.x < edge;
-            let on_right = pt.x > client.right - edge;
-            let on_top = pt.y < edge;
-            let on_bottom = pt.y > client.bottom - edge;
+            // 主体区域边缘检测（优先于标题栏检测，确保角落可缩放）
+            if dy >= title_h {
+                let on_left = dx >= 0 && dx < edge;
+                let on_right = dx > win_w - edge && dx <= win_w;
+                let on_bottom = dy > win_h - edge && dy <= win_h;
+                let on_top_body = dy >= title_h && dy < title_h + edge;
 
-            if on_left && on_top {
-                return HTTOPLEFT as LRESULT;
-            }
-            if on_right && on_top {
-                return HTTOPRIGHT as LRESULT;
-            }
-            if on_left && on_bottom {
-                return HTBOTTOMLEFT as LRESULT;
-            }
-            if on_right && on_bottom {
-                return HTBOTTOMRIGHT as LRESULT;
-            }
-            if on_left {
-                return HTLEFT as LRESULT;
-            }
-            if on_right {
-                return HTRIGHT as LRESULT;
-            }
-            if on_top {
-                return HTTOP as LRESULT;
-            }
-            if on_bottom {
-                return HTBOTTOM as LRESULT;
+                if on_left && on_bottom {
+                    return HTBOTTOMLEFT as LRESULT;
+                }
+                if on_right && on_bottom {
+                    return HTBOTTOMRIGHT as LRESULT;
+                }
+                if on_left && on_top_body {
+                    return HTTOPLEFT as LRESULT;
+                }
+                if on_right && on_top_body {
+                    return HTTOPRIGHT as LRESULT;
+                }
+                if on_left {
+                    return HTLEFT as LRESULT;
+                }
+                if on_right {
+                    return HTRIGHT as LRESULT;
+                }
+                if on_bottom {
+                    return HTBOTTOM as LRESULT;
+                }
             }
 
             // 标题栏区域 → 拖拽移动
-            if pt.y < title_h {
+            if dy >= 0 && dy < title_h {
                 return HTCAPTION as LRESULT;
             }
 
-            // 其余区域（ListView 子窗口）→ 让子控件处理
             HTCLIENT as LRESULT
         }
 
@@ -839,11 +930,22 @@ unsafe extern "system" fn grid_wnd_proc(
             0
         }
 
-        // ===== 最小/最大窗口尺寸 =====
+        // ===== 最小/最大窗口尺寸（DPI 感知）=====
         WM_GETMINMAXINFO => {
+            let dpi = unsafe { GetDpiForWindow(hwnd) };
+            let dpi = if dpi > 0 { dpi } else { 96 };
+            let title_h = get_data(hwnd)
+                .map(|d| d.title_h)
+                .unwrap_or(scale_for_dpi(40, dpi));
             let mmi = &mut *(lparam as *mut MINMAXINFO);
-            mmi.pt_min_track_size = POINT { x: 200, y: 150 };
-            mmi.pt_max_track_size = POINT { x: 1200, y: 1600 };
+            mmi.pt_min_track_size = POINT {
+                x: scale_for_dpi(200, dpi),
+                y: title_h + scale_for_dpi(100, dpi), // 标题栏 + 至少 100px 内容区
+            };
+            mmi.pt_max_track_size = POINT {
+                x: scale_for_dpi(1200, dpi),
+                y: scale_for_dpi(1600, dpi),
+            };
             0
         }
 

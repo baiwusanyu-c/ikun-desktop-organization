@@ -13,7 +13,8 @@ mod macos;
 
 pub use file_icon::extract_file_icon;
 pub use grid_window::{
-    create_grid_window, destroy_all_grid_windows, get_grid_count, GridCreateParams, GridFileItem,
+    create_grid_window, destroy_all_grid_windows, get_grid_count, get_screen_resolution,
+    GridCreateParams, GridFileItem,
 };
 pub use icon_hider::{hide_native_icons, restore_native_icons};
 pub use icons::DesktopIcon;

@@ -48,30 +48,31 @@ pub struct FileIconInfo {
     pub type_name: String,
 }
 
-/// 提取文件的系统图标
+/// 提取文件的系统图标（优先大图标，确保 alpha 通道完整）
 pub fn extract_file_icon(file_path: &str) -> Option<FileIconInfo> {
     let path_wide: Vec<u16> = file_path.encode_utf16().chain(std::iter::once(0)).collect();
 
     let mut info = SHFILEINFOW::default();
+    // 优先尝试大图标（32x32），alpha 通道更完整
     let result = unsafe {
         SHGetFileInfoW(
             path_wide.as_ptr(),
             0,
             &mut info,
             std::mem::size_of::<SHFILEINFOW>() as u32,
-            SHGFI_ICON | SHGFI_DISPLAYNAME | SHGFI_SMALLICON,
+            SHGFI_ICON | SHGFI_DISPLAYNAME | SHGFI_LARGEICON,
         )
     };
 
     if result == 0 || info.h_icon.is_null() {
-        // 尝试大图标
+        // 回退到小图标
         let result2 = unsafe {
             SHGetFileInfoW(
                 path_wide.as_ptr(),
                 0,
                 &mut info,
                 std::mem::size_of::<SHFILEINFOW>() as u32,
-                SHGFI_ICON | SHGFI_DISPLAYNAME | SHGFI_LARGEICON,
+                SHGFI_ICON | SHGFI_DISPLAYNAME | SHGFI_SMALLICON,
             )
         };
         if result2 == 0 || info.h_icon.is_null() {

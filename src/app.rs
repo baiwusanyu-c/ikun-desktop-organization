@@ -4,8 +4,8 @@ use crate::classification::AppClassifier;
 use crate::config::DesktopLayout;
 use crate::desktop::{
     create_grid_window, destroy_all_grid_windows, extract_file_icon, get_grid_count,
-    hide_native_icons, restore_native_icons, DesktopIcon, DesktopManager, DesktopManagerTrait,
-    GridCreateParams, GridFileItem,
+    get_screen_resolution, hide_native_icons, restore_native_icons, DesktopIcon, DesktopManager,
+    DesktopManagerTrait, GridCreateParams, GridFileItem,
 };
 use eframe::egui;
 
@@ -92,11 +92,29 @@ impl MyApp {
             ("办公", &office),
         ];
 
-        let box_w: i32 = 280;
-        let box_h: i32 = 400;
+        // 根据 9×9 图标网格计算框尺寸（标准图标单元格约 75×80px）
+        let (screen_w, screen_h) = get_screen_resolution();
+        log::info!("屏幕分辨率: {}x{}", screen_w, screen_h);
+
+        let num_categories: i32 = 3;
+        // 9 列 × 75px 图标单元格 + 内边距
+        let box_w: i32 = 680;
+        // 9 行 × 80px + 标题栏 40px + 内边距
+        let box_h: i32 = 800;
         let padding: i32 = 20;
-        let start_x: i32 = 30;
-        let start_y: i32 = 80;
+        // 居中排列：总宽度 = 3 × box_w + 2 × padding
+        let total_w = num_categories * box_w + (num_categories - 1) * padding;
+        let start_x: i32 = ((screen_w - total_w) / 2).max(10);
+        let start_y: i32 = (screen_h as f32 * 0.08) as i32;
+
+        log::info!(
+            "框尺寸: {}x{}, padding={}, start=({}, {})",
+            box_w,
+            box_h,
+            padding,
+            start_x,
+            start_y
+        );
 
         let mut created_count = 0;
         for (i, (title, icon_list)) in categories.iter().enumerate() {
@@ -105,7 +123,7 @@ impl MyApp {
                 continue;
             }
 
-            let x = start_x + (created_count as i32) * (box_w + padding);
+            let x = start_x + created_count * (box_w + padding);
             let y = start_y;
 
             // 提取文件图标并构建 GridFileItem 列表
