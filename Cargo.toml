@@ -28,6 +28,7 @@ env_logger = "0.11"
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
     "Win32_UI_Shell",              # Shell API（桌面图标、IShellFolder、IShellLink）
+    "Win32_UI_Shell_Common",       # Shell 通用类型（ITEMIDLIST、SHParseDisplayName 等）
     "Win32_System_Com",            # COM 组件（CoInitializeEx、CoUninitialize）
     "Win32_UI_WindowsAndMessaging", # 窗口管理（FindWindow、SetWindowPos、CreateWindowExW）
     "Win32_Storage_FileSystem",    # 文件系统操作

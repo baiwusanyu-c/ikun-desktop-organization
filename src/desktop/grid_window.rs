@@ -408,8 +408,547 @@ extern "system" {
     ) -> i32;
     fn DestroyMenu(hMenu: HMENU) -> i32;
 
+    // Window
+    fn GetDesktopWindow() -> HWND;
+
     // Tooltip / Common Controls
     fn InitCommonControlsEx(lpInitCtrls: *const INITCOMMONCONTROLSEX) -> i32;
+}
+
+// ===== Shell Context Menu COM Types =====
+
+type HRESULT = i32;
+const S_OK: HRESULT = 0;
+#[allow(dead_code)]
+const COINIT_APARTMENTTHREADED: u32 = 0x2;
+
+// IID_IShellFolder = {000214E6-0000-0000-C000-000000000046}
+const IID_ISHELLFOLDER: [u8; 16] = [
+    0xE6, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
+];
+// IID_IContextMenu = {000214E4-0000-0000-C000-000000000046}
+const IID_ICONTEXTMENU: [u8; 16] = [
+    0xE4, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
+];
+// IID_IContextMenu2 = {000214F4-0000-0000-C000-000000000046}
+const IID_ICONTEXTMENU2: [u8; 16] = [
+    0xF4, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
+];
+// IID_IContextMenu3 = {BCFCE0A0-EC17-11D0-8D10-00A0C90F2719}
+const IID_ICONTEXTMENU3: [u8; 16] = [
+    0xA0, 0xE0, 0xCF, 0xBC, 0x17, 0xEC, 0xD0, 0x11, 0x8D, 0x10, 0x00, 0xA0, 0xC9, 0x0F, 0x27, 0x19,
+];
+
+#[repr(C)]
+struct ITEMIDLIST {
+    _opaque: u8,
+}
+
+/// IShellFolder vtable
+#[repr(C)]
+#[allow(non_snake_case)]
+struct IShellFolderVtbl {
+    QueryInterface: unsafe extern "system" fn(*mut c_void, *const u8, *mut *mut c_void) -> HRESULT,
+    AddRef: unsafe extern "system" fn(*mut c_void) -> u32,
+    Release: unsafe extern "system" fn(*mut c_void) -> u32,
+    ParseDisplayName: unsafe extern "system" fn(
+        *mut c_void,
+        HWND,
+        *mut c_void,
+        *const u16,
+        *mut u32,
+        *mut *mut ITEMIDLIST,
+        *mut u32,
+    ) -> HRESULT,
+    EnumObjects: unsafe extern "system" fn(*mut c_void, HWND, u32, *mut *mut c_void) -> HRESULT,
+    BindToObject: unsafe extern "system" fn(
+        *mut c_void,
+        *const ITEMIDLIST,
+        *mut c_void,
+        *const u8,
+        *mut *mut c_void,
+    ) -> HRESULT,
+    BindToStorage: unsafe extern "system" fn(
+        *mut c_void,
+        *const ITEMIDLIST,
+        *mut c_void,
+        *const u8,
+        *mut *mut c_void,
+    ) -> HRESULT,
+    CompareIDs: unsafe extern "system" fn(
+        *mut c_void,
+        LPARAM,
+        *const ITEMIDLIST,
+        *const ITEMIDLIST,
+    ) -> HRESULT,
+    CreateViewObject:
+        unsafe extern "system" fn(*mut c_void, HWND, *const u8, *mut *mut c_void) -> HRESULT,
+    GetAttributesOf:
+        unsafe extern "system" fn(*mut c_void, u32, *const *const ITEMIDLIST, *mut u32) -> HRESULT,
+    GetUIObjectOf: unsafe extern "system" fn(
+        *mut c_void,
+        HWND,
+        u32,
+        *const *const ITEMIDLIST,
+        *const u8,
+        *mut u32,
+        *mut *mut c_void,
+    ) -> HRESULT,
+    GetDisplayNameOf:
+        unsafe extern "system" fn(*mut c_void, *const ITEMIDLIST, u32, *mut c_void) -> HRESULT,
+    SetNameOf: unsafe extern "system" fn(
+        *mut c_void,
+        HWND,
+        *const ITEMIDLIST,
+        *const u16,
+        u32,
+        *mut *mut ITEMIDLIST,
+    ) -> HRESULT,
+}
+
+#[repr(C)]
+struct IShellFolder {
+    lpVtbl: *const IShellFolderVtbl,
+}
+
+/// IContextMenu vtable
+#[repr(C)]
+#[allow(non_snake_case)]
+struct IContextMenuVtbl {
+    QueryInterface: unsafe extern "system" fn(*mut c_void, *const u8, *mut *mut c_void) -> HRESULT,
+    AddRef: unsafe extern "system" fn(*mut c_void) -> u32,
+    Release: unsafe extern "system" fn(*mut c_void) -> u32,
+    QueryContextMenu: unsafe extern "system" fn(HMENU, u32, u32, u32, u32) -> HRESULT,
+    InvokeCommand: unsafe extern "system" fn(*mut c_void, *const CMINVOKECOMMANDINFO) -> HRESULT,
+    GetCommandString:
+        unsafe extern "system" fn(*mut c_void, usize, u32, *mut u32, *mut u16, u32) -> HRESULT,
+}
+
+#[repr(C)]
+struct IContextMenu {
+    lpVtbl: *const IContextMenuVtbl,
+}
+
+/// IContextMenu2 vtable
+#[repr(C)]
+#[allow(non_snake_case)]
+struct IContextMenu2Vtbl {
+    QueryInterface: unsafe extern "system" fn(*mut c_void, *const u8, *mut *mut c_void) -> HRESULT,
+    AddRef: unsafe extern "system" fn(*mut c_void) -> u32,
+    Release: unsafe extern "system" fn(*mut c_void) -> u32,
+    QueryContextMenu: unsafe extern "system" fn(HMENU, u32, u32, u32, u32) -> HRESULT,
+    InvokeCommand: unsafe extern "system" fn(*mut c_void, *const CMINVOKECOMMANDINFO) -> HRESULT,
+    GetCommandString:
+        unsafe extern "system" fn(*mut c_void, usize, u32, *mut u32, *mut u16, u32) -> HRESULT,
+    HandleMenuMsg: unsafe extern "system" fn(*mut c_void, u32, WPARAM, LPARAM) -> HRESULT,
+}
+
+#[repr(C)]
+struct IContextMenu2 {
+    lpVtbl: *const IContextMenu2Vtbl,
+}
+
+/// IContextMenu3 vtable
+#[repr(C)]
+#[allow(non_snake_case)]
+struct IContextMenu3Vtbl {
+    QueryInterface: unsafe extern "system" fn(*mut c_void, *const u8, *mut *mut c_void) -> HRESULT,
+    AddRef: unsafe extern "system" fn(*mut c_void) -> u32,
+    Release: unsafe extern "system" fn(*mut c_void) -> u32,
+    QueryContextMenu: unsafe extern "system" fn(HMENU, u32, u32, u32, u32) -> HRESULT,
+    InvokeCommand: unsafe extern "system" fn(*mut c_void, *const CMINVOKECOMMANDINFO) -> HRESULT,
+    GetCommandString:
+        unsafe extern "system" fn(*mut c_void, usize, u32, *mut u32, *mut u16, u32) -> HRESULT,
+    HandleMenuMsg: unsafe extern "system" fn(*mut c_void, u32, WPARAM, LPARAM) -> HRESULT,
+    HandleMenuMsg2:
+        unsafe extern "system" fn(*mut c_void, u32, WPARAM, LPARAM, *mut LRESULT) -> HRESULT,
+}
+
+#[repr(C)]
+struct IContextMenu3 {
+    lpVtbl: *const IContextMenu3Vtbl,
+}
+
+/// CMINVOKECOMMANDINFO（匹配 Windows 64-bit C 布局，40 字节）
+#[repr(C)]
+struct CMINVOKECOMMANDINFO {
+    cb_size: u32,
+    f_mask: u32,
+    hwnd: HWND,
+    lp_verb: *const u8,
+    lp_parameters: *const u8,
+    lp_directory: *const u8,
+    n_show: i32,
+    dw_hot_key: u32,
+    h_icon: HWND,
+}
+
+// Shell Context Menu FFI
+extern "system" {
+    fn SHGetDesktopFolder(ppshf: *mut *mut c_void) -> HRESULT;
+    fn SHParseDisplayName(
+        pszName: *const u16,
+        pbc: *mut c_void,
+        ppidl: *mut *mut ITEMIDLIST,
+        sfgaoIn: u32,
+        psfgaoOut: *mut u32,
+    ) -> HRESULT;
+    fn SHBindToParent(
+        pidl: *const ITEMIDLIST,
+        riid: *const u8,
+        ppv: *mut *mut c_void,
+        ppidlLast: *mut *const ITEMIDLIST,
+    ) -> HRESULT;
+    fn ILFree(pidl: *mut ITEMIDLIST);
+    fn CoInitializeEx(pvReserved: *mut c_void, dwCoInit: u32) -> HRESULT;
+    fn CoUninitialize();
+}
+
+const FCIDM_SHVIEWFIRST: u32 = 0x0000;
+const MENU_CMD_ID_LAST: u32 = FCIDM_SHVIEWFIRST + 0x7FFF;
+const CMF_NORMAL: u32 = 0x00000000;
+const CMF_EXPLORE: u32 = 0x00000004;
+const CMF_CANRENAME: u32 = 0x00000010;
+const CMF_EXTENDED_VERBS: u32 = 0x00000100;
+const CMF_ITEMMENU: u32 = 0x00000080;
+const CMF_NOVERBS: u32 = 0x00000008;
+
+// BHID_SFUIObject - 通过 IShellItem::BindToHandler 获取 IContextMenu
+// {b3a4b685-b6d5-4882-bcf6-f4107100a1e4}
+const BHID_SFUIOBJECT: [u8; 16] = [
+    0x85, 0xB6, 0xA4, 0xB3, 0xD5, 0xB6, 0x82, 0x48, 0xBC, 0xF6, 0xF4, 0x10, 0x71, 0x00, 0xA1, 0xE4,
+];
+
+// IID_IShellItem = {43826d1e-e718-42ee-bc55-a1e261c37bfe}
+const IID_ISHELLITEM: [u8; 16] = [
+    0x1E, 0x6D, 0x82, 0x43, 0x18, 0xE7, 0xEE, 0x42, 0xBC, 0x55, 0xA1, 0xE2, 0x61, 0xC3, 0x7B, 0xFE,
+];
+
+/// IShellItem vtable（继承 IUnknown）
+#[repr(C)]
+#[allow(non_snake_case)]
+struct IShellItemVtbl {
+    QueryInterface: unsafe extern "system" fn(*mut c_void, *const u8, *mut *mut c_void) -> HRESULT,
+    AddRef: unsafe extern "system" fn(*mut c_void) -> u32,
+    Release: unsafe extern "system" fn(*mut c_void) -> u32,
+    BindToHandler: unsafe extern "system" fn(
+        *mut c_void,
+        *mut c_void,
+        *const u8,
+        *const u8,
+        *mut *mut c_void,
+    ) -> HRESULT,
+    GetParent: unsafe extern "system" fn(*mut c_void, *mut *mut c_void) -> HRESULT,
+    GetDisplayName: unsafe extern "system" fn(*mut c_void, u32, *mut *mut u16) -> HRESULT,
+    GetAttributes: unsafe extern "system" fn(*mut c_void, u32, *mut u32) -> HRESULT,
+    Compare: unsafe extern "system" fn(*mut c_void, *mut c_void, u32, *mut i32) -> HRESULT,
+}
+
+#[repr(C)]
+struct IShellItem {
+    lpVtbl: *const IShellItemVtbl,
+}
+
+extern "system" {
+    fn SHCreateItemFromParsingName(
+        pszPath: *const u16,
+        pbc: *mut c_void,
+        riid: *const u8,
+        ppv: *mut *mut c_void,
+    ) -> HRESULT;
+}
+
+/// 显示文件的 Shell 右键菜单（尝试 windows crate 高级绑定 → ShellExecuteW 回退）
+fn show_shell_context_menu(hwnd: HWND, file_path: &str) {
+    // 尝试使用 windows crate 获取完整 Shell 上下文菜单
+    if try_windows_crate_context_menu(hwnd, file_path) {
+        return;
+    }
+    // 回退：ShellExecuteW 增强菜单
+    show_shell_fallback_menu(hwnd, file_path);
+}
+
+/// 使用 windows crate 高级 COM 绑定获取完整 Shell 菜单
+///
+/// 关键修复：使用 SHBindToParent 获取父文件夹和相对 PIDL，
+/// 而非将绝对 PIDL 直接传给桌面文件夹的 GetUIObjectOf。
+/// 使用 windows crate 自带的 QueryContextMenu/InvokeCommand 方法，
+/// 避免手动 vtable 调用导致的 ABI 兼容性问题。
+fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> bool {
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::Shell::{
+        IContextMenu, IShellFolder, ILFree, SHBindToParent, SHParseDisplayName,
+    };
+
+    unsafe {
+        let path_wide: Vec<u16> = file_path.encode_utf16().chain(std::iter::once(0)).collect();
+
+        // 1. 解析路径为绝对 PIDL
+        let mut full_pidl = std::ptr::null_mut();
+        if SHParseDisplayName(PCWSTR(path_wide.as_ptr()), None, &mut full_pidl, 0, None).is_err()
+            || full_pidl.is_null()
+        {
+            log::warn!("windows crate: SHParseDisplayName 失败");
+            return false;
+        }
+
+        // 2. 获取父文件夹和相对 PIDL（关键修复）
+        //    旧代码直接将绝对 PIDL 传给桌面文件夹的 GetUIObjectOf，
+        //    但 GetUIObjectOf 期望的是相对 PIDL（父文件夹的子项）。
+        //    对于深层嵌套路径，这会导致 GetUIObjectOf 返回损坏的 IContextMenu，
+        //    后续 QueryContextMenu 调用时崩溃 (STATUS_ACCESS_VIOLATION)。
+        let mut rel_pidl: *mut windows::Win32::UI::Shell::Common::ITEMIDLIST =
+            std::ptr::null_mut();
+        let parent: Result<IShellFolder, _> =
+            SHBindToParent(full_pidl as *const _, Some(&mut rel_pidl));
+        let parent = match parent {
+            Ok(f) => f,
+            Err(e) => {
+                log::warn!("windows crate: SHBindToParent 失败: {:?}", e);
+                let _ = ILFree(Some(full_pidl));
+                return false;
+            }
+        };
+
+        if rel_pidl.is_null() {
+            log::warn!("windows crate: SHBindToParent 返回空相对 PIDL");
+            let _ = ILFree(Some(full_pidl));
+            return false;
+        }
+
+        // 3. 使用父文件夹 + 相对 PIDL 获取 IContextMenu
+        log::debug!("windows crate: 调用 GetUIObjectOf (父文件夹 + 相对 PIDL)");
+        let pidl_array: [*const windows::Win32::UI::Shell::Common::ITEMIDLIST; 1] =
+            [rel_pidl as *const _];
+        let result: Result<IContextMenu, _> = parent.GetUIObjectOf(
+            windows::Win32::Foundation::HWND(std::ptr::null_mut()),
+            &pidl_array,
+            None,
+        );
+
+        match result {
+            Ok(cm) => {
+                log::debug!("windows crate: GetUIObjectOf 成功!");
+
+                // 4. 使用 windows crate 的 QueryContextMenu（安全方法调用，非手动 vtable）
+                let mut pt = POINT { x: 0, y: 0 };
+                GetCursorPos(&mut pt);
+                let menu = CreatePopupMenu();
+                let flags =
+                    CMF_NORMAL | CMF_EXPLORE | CMF_CANRENAME | CMF_EXTENDED_VERBS | CMF_ITEMMENU;
+
+                let hmenu =
+                    windows::Win32::UI::WindowsAndMessaging::HMENU(menu);
+                match cm.QueryContextMenu(hmenu, 0, FCIDM_SHVIEWFIRST, MENU_CMD_ID_LAST, flags) {
+                    Ok(()) => {
+                        log::debug!("windows crate: QueryContextMenu 成功");
+                        let cmd = TrackPopupMenu(
+                            menu,
+                            TPM_RETURNCMD,
+                            pt.x,
+                            pt.y,
+                            0,
+                            hwnd,
+                            std::ptr::null(),
+                        );
+                        if cmd > 0 {
+                            // 5. 使用 windows crate 的 InvokeCommand
+                            let invoke_info = windows::Win32::UI::Shell::CMINVOKECOMMANDINFO {
+                                cbSize: std::mem::size_of::<
+                                    windows::Win32::UI::Shell::CMINVOKECOMMANDINFO,
+                                >()
+                                    as u32,
+                                fMask: 0,
+                                hwnd: windows::Win32::Foundation::HWND(hwnd),
+                                lpVerb: windows::core::PCSTR(
+                                    (cmd as usize) as *const u8,
+                                ),
+                                lpParameters: windows::core::PCSTR(std::ptr::null()),
+                                lpDirectory: windows::core::PCSTR(std::ptr::null()),
+                                nShow: SW_SHOW,
+                                dwHotKey: 0,
+                                hIcon: windows::Win32::Foundation::HANDLE(
+                                    std::ptr::null_mut(),
+                                ),
+                            };
+                            if let Err(e) = cm.InvokeCommand(&invoke_info) {
+                                log::warn!("windows crate: InvokeCommand 失败: {:?}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("windows crate: QueryContextMenu 失败: {:?}", e);
+                    }
+                }
+                DestroyMenu(menu);
+                drop(cm); // Release COM object
+                let _ = ILFree(Some(full_pidl));
+                true
+            }
+            Err(e) => {
+                log::warn!("windows crate: GetUIObjectOf 失败: {:?}", e);
+                let _ = ILFree(Some(full_pidl));
+                false
+            }
+        }
+    }
+}
+
+/// ShellExecuteW 回退菜单
+fn show_shell_fallback_menu(hwnd: HWND, file_path: &str) {
+    unsafe {
+        let path_wide: Vec<u16> = file_path.encode_utf16().chain(std::iter::once(0)).collect();
+
+        let mut pt = POINT { x: 0, y: 0 };
+        GetCursorPos(&mut pt);
+        let menu = CreatePopupMenu();
+
+        let open_text: Vec<u16> = "打开(&O)\0".encode_utf16().collect();
+        let open_dir: Vec<u16> = "打开文件所在位置(&I)\0".encode_utf16().collect();
+        let runas_text: Vec<u16> = "以管理员身份运行(&A)\0".encode_utf16().collect();
+        let delete_text: Vec<u16> = "删除(&D)\0".encode_utf16().collect();
+        let props_text: Vec<u16> = "属性(&R)\0".encode_utf16().collect();
+
+        AppendMenuW(menu, MF_STRING, 1, open_text.as_ptr());
+        AppendMenuW(menu, MF_STRING, 2, open_dir.as_ptr());
+        let lower = file_path.to_lowercase();
+        if lower.ends_with(".exe") || lower.ends_with(".lnk") {
+            AppendMenuW(menu, MF_STRING, 3, runas_text.as_ptr());
+        }
+        AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+        AppendMenuW(menu, MF_STRING, 4, delete_text.as_ptr());
+        AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+        AppendMenuW(menu, MF_STRING, 5, props_text.as_ptr());
+
+        let cmd = TrackPopupMenu(menu, TPM_RETURNCMD, pt.x, pt.y, 0, hwnd, std::ptr::null());
+        match cmd {
+            1 => {
+                let op: Vec<u16> = "open\0".encode_utf16().collect();
+                ShellExecuteW(
+                    hwnd,
+                    op.as_ptr(),
+                    path_wide.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    SW_SHOW,
+                );
+            }
+            2 => {
+                let op: Vec<u16> = "explore\0".encode_utf16().collect();
+                ShellExecuteW(
+                    hwnd,
+                    op.as_ptr(),
+                    path_wide.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    SW_SHOW,
+                );
+            }
+            3 => {
+                let op: Vec<u16> = "runas\0".encode_utf16().collect();
+                ShellExecuteW(
+                    hwnd,
+                    op.as_ptr(),
+                    path_wide.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    SW_SHOW,
+                );
+            }
+            4 => {
+                let op: Vec<u16> = "delete\0".encode_utf16().collect();
+                ShellExecuteW(
+                    hwnd,
+                    op.as_ptr(),
+                    path_wide.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    SW_SHOW,
+                );
+            }
+            5 => {
+                let op: Vec<u16> = "properties\0".encode_utf16().collect();
+                ShellExecuteW(
+                    hwnd,
+                    op.as_ptr(),
+                    path_wide.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    SW_SHOW,
+                );
+            }
+            _ => {}
+        }
+        DestroyMenu(menu);
+    }
+}
+
+/// 显示桌面背景右键菜单（ShellExecuteW 实现）
+fn show_desktop_context_menu(hwnd: HWND) {
+    unsafe {
+        let mut pt = POINT { x: 0, y: 0 };
+        GetCursorPos(&mut pt);
+        let menu = CreatePopupMenu();
+
+        let open_desktop: Vec<u16> = "打开桌面文件夹(&O)\0".encode_utf16().collect();
+        let display: Vec<u16> = "显示设置(&D)\0".encode_utf16().collect();
+        let personalize: Vec<u16> = "个性化(&P)\0".encode_utf16().collect();
+
+        AppendMenuW(menu, MF_STRING, 1, open_desktop.as_ptr());
+        AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+        AppendMenuW(menu, MF_STRING, 2, display.as_ptr());
+        AppendMenuW(menu, MF_STRING, 3, personalize.as_ptr());
+
+        let cmd = TrackPopupMenu(menu, TPM_RETURNCMD, pt.x, pt.y, 0, hwnd, std::ptr::null());
+        match cmd {
+            1 => {
+                // 打开桌面文件夹
+                let desktop_path = dirs::desktop_dir().unwrap_or_default();
+                let path_wide: Vec<u16> = desktop_path
+                    .to_string_lossy()
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect();
+                let op: Vec<u16> = "explore\0".encode_utf16().collect();
+                ShellExecuteW(
+                    hwnd,
+                    op.as_ptr(),
+                    path_wide.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    SW_SHOW,
+                );
+            }
+            2 => {
+                // 显示设置
+                let uri: Vec<u16> = "ms-settings:display\0".encode_utf16().collect();
+                let op: Vec<u16> = "open\0".encode_utf16().collect();
+                ShellExecuteW(
+                    hwnd,
+                    op.as_ptr(),
+                    uri.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    SW_SHOW,
+                );
+            }
+            3 => {
+                // 个性化
+                let uri: Vec<u16> = "ms-settings:personalization\0".encode_utf16().collect();
+                let op: Vec<u16> = "open\0".encode_utf16().collect();
+                ShellExecuteW(
+                    hwnd,
+                    op.as_ptr(),
+                    uri.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    SW_SHOW,
+                );
+            }
+            _ => {}
+        }
+        DestroyMenu(menu);
+    }
 }
 
 // Tooltip 窗口创建（避免与主 CreateWindowExW 签名冲突）
@@ -1869,7 +2408,7 @@ unsafe extern "system" fn grid_wnd_proc(
             let click_x = get_x_lparam(lparam);
             let click_y = get_y_lparam(lparam);
 
-            let mut selected_idx = -1i32;
+            let mut file_path: Option<String> = None;
             if let Some(data) = get_data(hwnd) {
                 let mut client = RECT {
                     left: 0,
@@ -1882,82 +2421,17 @@ unsafe extern "system" fn grid_wnd_proc(
                 let hit = grid_hit_test(data, w, click_x, click_y);
                 if hit >= 0 {
                     data.selected_item = hit;
-                    selected_idx = hit;
+                    if (hit as usize) < data.items.len() {
+                        file_path = Some(data.items[hit as usize].file_path.clone());
+                    }
                     render_layered_window(hwnd);
                 }
             }
 
-            if selected_idx >= 0 {
-                let file_path;
-                let _display_name;
-                if let Some(data) = get_data(hwnd) {
-                    if (selected_idx as usize) < data.items.len() {
-                        let item = &data.items[selected_idx as usize];
-                        file_path = item.file_path.clone();
-                        _display_name = item.display_name.clone();
-                    } else {
-                        return 0;
-                    }
-                } else {
-                    return 0;
-                }
-
-                let mut pt = POINT { x: 0, y: 0 };
-                GetCursorPos(&mut pt);
-
-                let menu = CreatePopupMenu();
-                let open_text: Vec<u16> = "打开(O)\0".encode_utf16().collect();
-                let open_dir_text: Vec<u16> = "打开文件所在位置(I)\0".encode_utf16().collect();
-                let props_text: Vec<u16> = "属性(R)\0".encode_utf16().collect();
-
-                AppendMenuW(menu, MF_STRING, 1, open_text.as_ptr());
-                AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
-                AppendMenuW(menu, MF_STRING, 2, open_dir_text.as_ptr());
-                AppendMenuW(menu, MF_STRING, 3, props_text.as_ptr());
-
-                let cmd =
-                    TrackPopupMenu(menu, TPM_RETURNCMD, pt.x, pt.y, 0, hwnd, std::ptr::null());
-
-                let path: Vec<u16> = file_path.encode_utf16().chain(std::iter::once(0)).collect();
-
-                match cmd {
-                    1 => {
-                        let op: Vec<u16> = "open\0".encode_utf16().collect();
-                        ShellExecuteW(
-                            hwnd,
-                            op.as_ptr(),
-                            path.as_ptr(),
-                            std::ptr::null(),
-                            std::ptr::null(),
-                            SW_SHOW,
-                        );
-                    }
-                    2 => {
-                        let op: Vec<u16> = "explore\0".encode_utf16().collect();
-                        ShellExecuteW(
-                            hwnd,
-                            op.as_ptr(),
-                            path.as_ptr(),
-                            std::ptr::null(),
-                            std::ptr::null(),
-                            SW_SHOW,
-                        );
-                    }
-                    3 => {
-                        let op: Vec<u16> = "properties\0".encode_utf16().collect();
-                        ShellExecuteW(
-                            hwnd,
-                            op.as_ptr(),
-                            path.as_ptr(),
-                            std::ptr::null(),
-                            std::ptr::null(),
-                            SW_SHOW,
-                        );
-                    }
-                    _ => {}
-                }
-
-                DestroyMenu(menu);
+            if let Some(ref path) = file_path {
+                show_shell_context_menu(hwnd, path);
+            } else {
+                show_desktop_context_menu(hwnd);
             }
             0
         }
