@@ -5,6 +5,7 @@ edition = "2021"
 authors = ["baiwusanyu"]
 description = "ikun 桌面收纳器 - Desktop Organizer"
 license = "MIT"
+build = "build/build.rs"
 
 [dependencies]
 # ===== GUI 框架 =====

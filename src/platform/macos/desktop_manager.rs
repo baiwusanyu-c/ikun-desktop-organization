@@ -2,7 +2,8 @@
 //!
 //! 使用 macOS API 读取桌面图标信息
 
-use crate::desktop::{DesktopIcon, DesktopManagerTrait};
+use crate::platform::types::DesktopIcon;
+use crate::platform::DesktopManagerTrait;
 use anyhow::Result;
 use std::path::PathBuf;
 

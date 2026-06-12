@@ -29,6 +29,5 @@ pub fn get_config_dir() -> anyhow::Result<std::path::PathBuf> {
 
 /// 获取桌面路径
 pub fn get_desktop_path() -> anyhow::Result<std::path::PathBuf> {
-    dirs::desktop_dir()
-        .ok_or_else(|| anyhow::anyhow!("无法获取桌面路径"))
+    dirs::desktop_dir().ok_or_else(|| anyhow::anyhow!("无法获取桌面路径"))
 }

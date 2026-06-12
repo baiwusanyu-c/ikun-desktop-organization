@@ -7,7 +7,8 @@
 //! - 快捷方式检测：通过扩展名识别 .lnk 文件
 //! - 位置获取：由 `DesktopIconMover` 通过 SysListView32 提供
 
-use crate::desktop::{DesktopIcon, DesktopManagerTrait};
+use crate::platform::types::DesktopIcon;
+use crate::platform::DesktopManagerTrait;
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 

@@ -34,21 +34,16 @@ pub struct AppCategory {
 impl AppCategoryDB {
     /// 从文件加载分类数据库
     pub fn load() -> anyhow::Result<Self> {
-        // 尝试从多个位置加载
-        let paths: Vec<PathBuf> = vec![
-            PathBuf::from("data/categories.yaml"),
-            dirs::config_dir()
-                .map(|p| p.join("ikun-desktop-organization/categories.yaml"))
-                .unwrap_or_else(|| PathBuf::from("")),
-        ];
+        // 尝试从用户配置目录加载
+        let user_path = dirs::config_dir()
+            .map(|p| p.join("ikun-desktop-organization/categories.yaml"))
+            .unwrap_or_else(|| PathBuf::from(""));
 
-        for path in paths.iter() {
-            if !path.as_os_str().is_empty() && path.exists() {
-                let content = std::fs::read_to_string(path)?;
-                let db: AppCategoryDB = serde_yaml::from_str(&content)?;
-                log::info!("加载分类数据库成功，版本: {}", db.version);
-                return Ok(db);
-            }
+        if !user_path.as_os_str().is_empty() && user_path.exists() {
+            let content = std::fs::read_to_string(&user_path)?;
+            let db: AppCategoryDB = serde_yaml::from_str(&content)?;
+            log::info!("加载用户自定义分类数据库: {:?}", user_path);
+            return Ok(db);
         }
 
         // 返回默认分类

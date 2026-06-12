@@ -2,13 +2,14 @@
 //!
 //! 负责智能分类桌面图标
 
+pub mod ai_classifier;
 mod database;
 mod matcher;
 
 pub use database::{AppCategory, AppCategoryDB};
 pub use matcher::AppMatcher;
 
-use crate::desktop::DesktopIcon;
+use crate::platform::DesktopIcon;
 
 /// 应用分类器
 pub struct AppClassifier {

@@ -1,9 +1,14 @@
 //! Desktop Organizer - 入口
 
 mod app;
+mod box_core;
 mod classification;
 mod config;
-mod desktop;
+mod context;
+#[allow(dead_code)]
+mod ipc;
+mod platform;
+mod plugin;
 mod ui;
 mod utils;
 

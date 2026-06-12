@@ -1,37 +1,28 @@
 //! 控制面板 - egui 主窗口
+//!
+//! 通过 `AppContext` 统一管理配置、平台服务和分类器。
 
-use crate::classification::AppClassifier;
-use crate::config::DesktopLayout;
-use crate::desktop::{
+use crate::context::AppContext;
+use crate::platform::{
     create_grid_window, destroy_all_grid_windows, extract_file_icon, get_grid_count,
-    get_screen_resolution, hide_native_icons, restore_native_icons, DesktopIcon, DesktopManager,
+    get_screen_resolution, hide_native_icons, restore_native_icons, DesktopIcon,
     DesktopManagerTrait, GridCreateParams, GridFileItem,
 };
 use eframe::egui;
 
 /// 主应用
 pub struct MyApp {
-    desktop_manager: DesktopManager,
-    classifier: AppClassifier,
-    layout: DesktopLayout,
+    /// 应用上下文（统一管理所有状态）
+    ctx: AppContext,
     initialized: bool,
-    status_message: String,
-    icons_hidden: bool,
 }
 
 impl Default for MyApp {
     fn default() -> Self {
-        let layout = DesktopLayout::load().unwrap_or_default();
-        let desktop_manager = DesktopManager::new().unwrap_or_default();
-        let classifier = AppClassifier::new().unwrap_or_default();
-
+        let ctx = AppContext::new().unwrap_or_default();
         Self {
-            desktop_manager,
-            classifier,
-            layout,
+            ctx,
             initialized: false,
-            status_message: String::new(),
-            icons_hidden: false,
         }
     }
 }
@@ -46,19 +37,19 @@ impl MyApp {
         log::info!("=== 一键分类开始 ===");
 
         // 1. 隐藏原生图标
-        if !self.icons_hidden {
+        if !self.ctx.state.icons_hidden {
             if let Err(e) = hide_native_icons() {
-                self.status_message = format!("隐藏图标失败: {}", e);
-                log::error!("{}", self.status_message);
+                self.ctx.set_status(format!("隐藏图标失败: {}", e));
+                log::error!("{}", self.ctx.state.status_message);
                 return;
             }
-            self.icons_hidden = true;
+            self.ctx.state.icons_hidden = true;
         }
 
         // 2. 获取桌面图标
-        let icons = self.desktop_manager.get_desktop_icons();
+        let icons = self.ctx.desktop_manager.get_desktop_icons();
         if icons.is_empty() {
-            self.status_message = "未找到桌面图标".to_string();
+            self.ctx.set_status("未找到桌面图标");
             return;
         }
 
@@ -68,7 +59,7 @@ impl MyApp {
         let mut office: Vec<DesktopIcon> = Vec::new();
 
         for icon in &icons {
-            match self.classifier.classify(icon) {
+            match self.ctx.classifier.classify(icon) {
                 Some(cat) if cat.id == "games" => games.push(icon.clone()),
                 Some(cat) if cat.id == "dev" => dev_tools.push(icon.clone()),
                 _ => office.push(icon.clone()),
@@ -92,17 +83,13 @@ impl MyApp {
             ("办公", &office),
         ];
 
-        // 根据 9×9 图标网格计算框尺寸（标准图标单元格约 75×80px）
         let (screen_w, screen_h) = get_screen_resolution();
         log::info!("屏幕分辨率: {}x{}", screen_w, screen_h);
 
         let num_categories: i32 = 3;
-        // 9 列 × 75px 图标单元格 + 内边距
         let box_w: i32 = 680;
-        // 9 行 × 80px + 标题栏 40px + 内边距
         let box_h: i32 = 800;
         let padding: i32 = 20;
-        // 居中排列：总宽度 = 3 × box_w + 2 × padding
         let total_w = num_categories * box_w + (num_categories - 1) * padding;
         let start_x: i32 = ((screen_w - total_w) / 2).max(10);
         let start_y: i32 = (screen_h as f32 * 0.08) as i32;
@@ -126,7 +113,6 @@ impl MyApp {
             let x = start_x + created_count * (box_w + padding);
             let y = start_y;
 
-            // 提取文件图标并构建 GridFileItem 列表
             let mut items: Vec<GridFileItem> = Vec::new();
             for icon in icon_list.iter() {
                 let path_str = icon.path.to_string_lossy().to_string();
@@ -158,28 +144,28 @@ impl MyApp {
             }
         }
 
-        self.status_message = format!(
+        self.ctx.set_status(format!(
             "分类完成！隐藏了 {} 个图标，创建了 {} 个格子",
             icons.len(),
             get_grid_count()
-        );
-        log::info!("{}", self.status_message);
+        ));
+        log::info!("{}", self.ctx.state.status_message);
     }
 
     /// 清除所有格子，恢复原生图标
     fn clear_and_restore(&mut self) {
         destroy_all_grid_windows();
 
-        if self.icons_hidden {
+        if self.ctx.state.icons_hidden {
             if let Err(e) = restore_native_icons() {
-                self.status_message = format!("恢复图标失败: {}", e);
+                self.ctx.set_status(format!("恢复图标失败: {}", e));
                 return;
             }
-            self.icons_hidden = false;
+            self.ctx.state.icons_hidden = false;
         }
 
-        self.status_message = "已清除所有格子，桌面图标已恢复".to_string();
-        log::info!("{}", self.status_message);
+        self.ctx.set_status("已清除所有格子，桌面图标已恢复");
+        log::info!("{}", self.ctx.state.status_message);
     }
 }
 
@@ -199,9 +185,12 @@ impl eframe::App for MyApp {
                 if ui.button("🗑 清除 & 恢复").clicked() {
                     self.clear_and_restore();
                 }
-                if ui.button("💾 保存布局").clicked() {
-                    if let Err(e) = self.layout.save() {
+                if ui.button("💾 保存配置").clicked() {
+                    if let Err(e) = self.ctx.save_config() {
                         log::error!("保存失败: {}", e);
+                        self.ctx.set_status(format!("保存失败: {}", e));
+                    } else {
+                        self.ctx.set_status("配置已保存");
                     }
                 }
             });
@@ -209,11 +198,14 @@ impl eframe::App for MyApp {
             ui.separator();
 
             // 状态
-            if !self.status_message.is_empty() {
-                ui.colored_label(egui::Color32::from_rgb(0, 200, 0), &self.status_message);
+            if !self.ctx.state.status_message.is_empty() {
+                ui.colored_label(
+                    egui::Color32::from_rgb(0, 200, 0),
+                    &self.ctx.state.status_message,
+                );
             }
 
-            if self.icons_hidden {
+            if self.ctx.state.icons_hidden {
                 ui.colored_label(egui::Color32::YELLOW, "⚠ 原生图标已隐藏");
             }
 
@@ -235,9 +227,8 @@ impl eframe::App for MyApp {
 
 impl Drop for MyApp {
     fn drop(&mut self) {
-        // 程序退出时恢复图标
         destroy_all_grid_windows();
-        if self.icons_hidden {
+        if self.ctx.state.icons_hidden {
             let _ = restore_native_icons();
         }
     }

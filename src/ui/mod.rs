@@ -1,6 +1,9 @@
 //! UI 组件模块
 //!
-//! 格子窗口已移至 desktop/grid_window.rs（Win32 原生实现）
-//! 控制面板 UI 在 app.rs 中直接使用 egui
+//! - `control_panel` — 控制面板主界面
+//! - `settings_panel` — 设置面板（样式/AI/热键）
+//! - `tray_menu` — 系统托盘菜单逻辑
 
-// 当前无额外 UI 组件
+pub mod control_panel;
+pub mod settings_panel;
+pub mod tray_menu;

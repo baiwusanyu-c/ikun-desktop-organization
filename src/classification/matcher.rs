@@ -1,7 +1,7 @@
 //! 应用分类匹配算法
 
 use crate::classification::database::{AppCategory, AppCategoryDB};
-use crate::desktop::DesktopIcon;
+use crate::platform::DesktopIcon;
 
 /// 应用匹配器
 pub struct AppMatcher {
