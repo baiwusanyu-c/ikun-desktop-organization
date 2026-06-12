@@ -19,7 +19,7 @@ use log::{debug, error, info, warn};
 /// RUST_LOG=debug cargo run
 ///
 /// # 只显示模块特定日志
-/// RUST_LOG=ikun_desktop_organization=debug cargo run
+/// RUST_LOG=ikun_organizer=debug cargo run
 /// ```
 pub fn init_logger() {
     // env_logger::init() 会读取 RUST_LOG 环境变量

@@ -1,9 +1,9 @@
 [package]
-name = "ikun_desktop_organization"
+name = "ikun_organizer"
 version = "0.1.0"
 edition = "2021"
 authors = ["baiwusanyu"]
-description = "桌面图标智能分类管理工具 - Desktop Organizer"
+description = "ikun 桌面收纳器 - Desktop Organizer"
 license = "MIT"
 
 [dependencies]
