@@ -179,35 +179,32 @@ fn update(&mut self, ctx: &egui::Context) {
 
 ### 示例 1：应用启动
 
-[src/main.rs:16-19](src/main.rs#L16-L19):
+[src/main.rs](src/main.rs):
 ```rust
-env_logger::init();
-log::info!("启动 Desktop Organizer...");
+utils::init_logger();
+log::info!("启动 Desktop Organizer (重写版)");
 ```
 
 ### 示例 2：配置加载
 
-[src/app.rs:24-29](src/app.rs#L24-L29):
+[src/config/app_config.rs](src/config/app_config.rs):
 ```rust
-let layout = DesktopLayout::load()
-    .unwrap_or_else(|e| {
-        log::warn!("加载布局失败: {}, 使用默认布局", e);
-        DesktopLayout::default()
-    });
+log::info!("加载配置成功: {:?}", path);
+log::info!("配置文件不存在，使用默认配置");
 ```
 
 ### 示例 3：分类完成
 
-[src/app.rs:92](src/app.rs#L92):
+[src/app.rs](src/app.rs):
 ```rust
-log::info!("分类完成，创建了 {} 个分类框", self.classification_boxes.len());
+log::info!("分类结果: 游戏={}, 开发工具={}, 办公={}", games.len(), dev_tools.len(), office.len());
 ```
 
 ### 示例 4：数据加载成功
 
-[src/classification/database.rs:49](src/classification/database.rs#L49):
+[src/classification/database.rs](src/classification/database.rs):
 ```rust
-log::info!("加载分类数据库成功，版本: {}", db.version);
+log::info!("使用默认分类数据库");
 ```
 
 ---

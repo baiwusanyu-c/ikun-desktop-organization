@@ -371,20 +371,19 @@ impl MyApp {
 
 ### 示例 1：错误处理
 
-[src/app.rs:24-29](src/app.rs#L24-L29):
-- 使用 `unwrap_or_else` 优雅降级
-- 记录警告日志
+[src/context.rs](src/context.rs):
+- `AppContext::new()` 中使用 `unwrap_or_default()` 优雅降级
 
 ### 示例 2：模块文档
 
-[src/desktop/mod.rs:1-4](src/desktop/mod.rs#L1-L4):
+[src/platform/mod.rs](src/platform/mod.rs):
 - 完整的模块文档注释
 
 ### 示例 3：Default 实现
 
-[src/classification/database.rs:74-176](src/classification/database.rs#L74-L176):
+[src/config/app_config.rs](src/config/app_config.rs):
 - `Default` trait 实现
-- 提供合理的默认值
+- 所有子结构体都有合理的默认值
 
 ---
 

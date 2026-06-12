@@ -145,35 +145,36 @@ log::warn!("加载失败");  // 缺少具体错误信息
 
 ## Examples
 
-### 示例 1：配置加载
+### 示例 1：配置加载（AppContext）
 
-[src/app.rs:24-29](src/app.rs#L24-L29):
+[src/context.rs](src/context.rs):
 ```rust
-let layout = DesktopLayout::load()
-    .unwrap_or_else(|e| {
-        log::warn!("加载布局失败: {}, 使用默认布局", e);
-        DesktopLayout::default()
-    });
-```
-
-### 示例 2：数据保存
-
-[src/app.rs:113-114](src/app.rs#L113-L114):
-```rust
-if let Err(e) = self.layout.save() {
-    log::error!("保存布局失败: {}", e);
+pub fn new() -> anyhow::Result<Self> {
+    let config = AppConfig::load()?;  // 失败时调用者降级
+    let desktop_manager = DesktopManager::new().unwrap_or_default();
+    let classifier = AppClassifier::new().unwrap_or_default();
+    Ok(Self { config, desktop_manager, classifier, state: AppState::default() })
 }
 ```
 
-### 示例 3：带上下文的错误
+### 示例 2：保存配置
 
-[src/classification/database.rs:36-48](src/classification/database.rs#L36-L48):
+[src/context.rs](src/context.rs):
 ```rust
-for path in paths.iter() {
-    if !path.as_os_str().is_empty() && path.exists() {
-        let content = std::fs::read_to_string(path)?;  // 自动错误上下文
-        let db: AppCategoryDB = serde_yaml::from_str(&content)?;
-        return Ok(db);
+pub fn save_config(&mut self) -> anyhow::Result<()> {
+    self.config.last_modified = chrono::Utc::now();
+    self.config.save()
+}
+```
+
+### 示例 3：App 中的降级处理
+
+[src/app.rs](src/app.rs):
+```rust
+impl Default for MyApp {
+    fn default() -> Self {
+        let ctx = AppContext::new().unwrap_or_default();
+        Self { ctx, initialized: false }
     }
 }
 ```

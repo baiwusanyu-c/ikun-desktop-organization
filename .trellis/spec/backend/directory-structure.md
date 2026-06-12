@@ -1,19 +1,20 @@
 # Directory Structure
 
-> How backend code is organized in this project.
+> 项目代码组织方式（v2.0 架构）
 
 ---
 
 ## Overview
 
-本项目是一个 Rust 桌面应用，使用模块化架构设计。每个功能领域都有独立的模块，
-平台特定代码通过条件编译隔离。
+本项目使用模块化架构设计。每个功能领域都有独立的模块，平台特定代码通过条件编译隔离。
 
 **核心设计原则**：
-- **模块化分离**：每个功能领域独立模块
-- **Trait 统一接口**：跨平台功能通过 trait 定义统一接口
+- **AppContext 上下文注入**：所有模块通过 `AppContext` 共享状态
+- **平台抽象**：`platform/` 通过 trait 统一接口，各平台独立实现
+- **业务解耦**：`box_core/` 分类框业务逻辑与平台渲染完全分离
+- **插件化**：`plugin/` 功能模块作为插件注册
 - **条件编译隔离**：平台特定代码使用 `#[cfg(...)]` 隔离
-- **层次清晰**：UI 层 → 业务层 → 平台层，单向依赖
+- **层次清晰**：UI → AppContext → 业务/平台，单向依赖
 
 ---
 
@@ -21,115 +22,152 @@
 
 ```
 src/
-├── main.rs              # 应用入口，初始化 egui 窗口
-├── app.rs               # egui 应用主入口，实现 eframe::App trait
+├── main.rs                    # 入口：初始化日志、DPI 感知、启动 egui
+├── app.rs                     # eframe::App 控制面板（已接入 AppContext）
+├── context.rs                 # AppContext 核心上下文对象
 │
-├── desktop/             # 桌面系统集成（跨平台）
-│   ├── mod.rs           # DesktopManagerTrait trait 定义
-│   ├── icons.rs         # DesktopIcon 数据结构
-│   ├── windows.rs       # Windows 平台实现 #[cfg(windows)]
-│   └── macos.rs         # macOS 平台实现 #[cfg(target_os = "macos")]
+├── platform/                  # 平台抽象层
+│   ├── mod.rs                 #   DesktopManagerTrait + re-exports
+│   ├── types.rs               #   跨平台类型：DesktopIcon, IconInfo, ScreenInfo
+│   ├── windows/
+│   │   ├── mod.rs             #   Windows 平台入口
+│   │   ├── ffi_types.rs       #   Win32 FFI 类型/常量
+│   │   ├── ffi_imports.rs     #   Win32 extern "system" 声明
+│   │   ├── desktop_manager.rs #   桌面图标枚举（文件系统读取）
+│   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎
+│   │   ├── grid_window.rs     #   窗口创建/销毁 + wnd_proc 消息处理
+│   │   ├── shell_menu.rs      #   Shell 右键菜单：文件 + 桌面背景
+│   │   ├── icon_extract.rs    #   图标提取（SHGetFileInfoW + .lnk 解析）
+│   │   ├── icon_hider.rs      #   图标隐藏/恢复（SysListView32）
+│   │   └── sys_tray.rs        #   系统托盘（TODO 占位）
+│   └── macos/
+│       ├── mod.rs             #   macOS 平台入口
+│       └── desktop_manager.rs #   桌面图标枚举（返回模拟数据）
 │
-├── classification/      # 智能分类系统
-│   ├── mod.rs           # AppClassifier 入口，组合 database + matcher
-│   ├── database.rs      # AppCategoryDB 分类数据库（YAML 加载）
-│   └── matcher.rs       # AppMatcher 匹配算法
+├── box_core/                  # 分类框核心业务逻辑（平台无关）
+│   ├── mod.rs                 #   模块导出
+│   ├── box_model.rs           #   ClassificationBox 数据模型 + BoxItem
+│   ├── box_manager.rs         #   分类框管理器（CRUD + 持久化）
+│   ├── sort_engine.rs         #   排序引擎：8 种维度 × 升降序
+│   ├── view_engine.rs         #   视图引擎：8 种视图模式布局参数
+│   ├── group_engine.rs        #   分组引擎：按名称/类型/时间等
+│   ├── layout_calc.rs         #   网格布局计算 + 命中测试
+│   └── interaction.rs         #   交互状态：选中/hover/锁定/拖拽
 │
-├── ui/                  # egui UI 组件
-│   ├── mod.rs           # UI 模块导出
-│   ├── box_widget.rs    # ClassificationBoxWidget 分类框组件
-│   └── icon_widget.rs   # IconWidget 图标组件
+├── classification/            # 分类系统
+│   ├── mod.rs                 #   AppClassifier
+│   ├── database.rs            #   AppCategoryDB（YAML 兼容 + Default 内嵌规则）
+│   ├── matcher.rs             #   AppMatcher 通配符匹配算法
+│   └── ai_classifier.rs       #   AI 分类器（TODO：LLM API 调用）
 │
-├── config/              # 配置管理
-│   ├── mod.rs           # Config 模块导出
-│   ├── layout.rs        # DesktopLayout 布局持久化（JSON）
-│   └── settings.rs      # AppSettings 应用设置
+├── config/                    # 统一配置系统
+│   ├── mod.rs                 #   模块导出
+│   ├── app_config.rs          #   统一 JSON 配置结构（AppConfig）
+│   ├── layout.rs              #   DesktopLayout（旧版兼容，待合并）
+│   └── settings.rs            #   AppSettings（旧版兼容，待合并）
 │
-└── utils/               # 工具函数
-    ├── mod.rs           # Utils 模块导出
-    └── platform.rs      # 平台相关工具函数
+├── plugin/                    # 插件系统
+│   ├── mod.rs                 #   Plugin trait + PluginRegistry
+│   └── builtin/
+│       ├── mod.rs             #   register_builtin_plugins()
+│       ├── classification_plugin.rs  #   分类功能插件
+│       └── style_plugin.rs    #   样式设置插件
+│
+├── ui/                        # UI 层（egui 组件）
+│   ├── mod.rs                 #   模块导出
+│   ├── control_panel.rs       #   控制面板主界面
+│   ├── settings_panel.rs      #   设置面板（样式/AI/热键/调试）
+│   └── tray_menu.rs           #   托盘菜单逻辑
+│
+├── utils/                     # 工具层
+│   ├── mod.rs                 #   模块导出
+│   ├── logger.rs              #   日志初始化 + 自定义宏
+│   ├── platform.rs            #   跨平台工具（开机自启、配置目录）
+│   ├── dpi.rs                 #   DPI 缩放工具
+│   └── string_utils.rs        #   UTF-16 字符串转换
+│
+└── ipc/                       # 进程间通信（TODO 占位）
+    └── mod.rs                 #   热键唤醒、单实例检测
 ```
 
-**数据文件目录**：
+**非代码目录**：
 ```
-data/
-└── categories.yaml      # 分类规则数据库
+build/
+├── build.rs                   # 嵌入 manifest 到 Windows 可执行文件
+└── app.manifest               # Per-Monitor DPI V2 感知清单
 ```
 
 **配置存储位置**（用户目录）：
-- macOS/Linux: `~/.config/ikun-desktop-organization/`
-- Windows: `%APPDATA%/ikun-desktop-organization/`
+- Windows: `%APPDATA%/ikun-desktop-organization/config.json`
+- macOS/Linux: `~/.config/ikun-desktop-organization/config.json`
 
 ---
 
-## Module Organization
+## Module Organization Rules
 
 ### 新功能模块组织规则
 
 **步骤 1：确定模块层级**
-- **平台层**：涉及操作系统 API 的功能（放在 `desktop/`）
-- **业务层**：纯 Rust 业务逻辑（新建独立模块或放入现有模块）
-- **UI 层**：egui 组件（放在 `ui/`）
-- **配置层**：持久化配置（放在 `config/`）
+
+| 层级 | 模块 | 职责 |
+|------|------|------|
+| **上下文** | `context.rs` | 中心依赖注入，串联所有子系统 |
+| **平台层** | `platform/` | 操作系统 API：渲染、窗口、图标、托盘 |
+| **业务层** | `box_core/` | 分类框业务逻辑（排序/视图/分组/布局/交互） |
+| **分类层** | `classification/` | 分类规则匹配、AI 分类 |
+| **配置层** | `config/` | 统一 JSON 配置管理 |
+| **插件层** | `plugin/` | 功能插件注册和分发 |
+| **UI 层** | `ui/`, `app.rs` | egui 控制面板渲染 |
+| **工具层** | `utils/` | 通用辅助函数 |
 
 **步骤 2：创建模块结构**
+
 每个模块必须包含：
 - `mod.rs`：模块入口和导出
-- 具体实现文件（按功能拆分）
-
-**示例：添加新的统计功能**
-
-```rust
-// src/stats/mod.rs
-//! 统计模块
-//!
-//! 提供桌面图标使用统计功能
-
-mod collector;
-mod analyzer;
-
-pub use collector::StatsCollector;
-pub use analyzer::StatsAnalyzer;
-```
+- 具体实现文件（按功能拆分，单文件 ≤ 1000 行）
 
 ### 平台特定代码规则
 
 **规则 1：使用 Trait 定义统一接口**
+
 ```rust
-// src/desktop/mod.rs
+// src/platform/mod.rs
 pub trait DesktopManagerTrait {
     fn new() -> anyhow::Result<Self> where Self: Sized;
     fn get_desktop_icons(&self) -> Vec<DesktopIcon>;
+    fn watch_desktop(&self) -> anyhow::Result<()>;
 }
 ```
 
 **规则 2：条件编译隔离平台实现**
+
 ```rust
-// src/desktop/mod.rs
+// src/platform/mod.rs
 #[cfg(windows)]
-mod windows;
-
+pub mod windows;
 #[cfg(target_os = "macos")]
-mod macos;
+pub mod macos;
 
-// 平台特定的导出
 #[cfg(windows)]
 pub use windows::DesktopManager;
-
 #[cfg(target_os = "macos")]
 pub use macos::DesktopManager;
 ```
 
-**规则 3：平台实现文件中使用平台 API**
-```rust
-// src/desktop/windows.rs
-#[cfg(windows)]
-use windows::Win32::UI::Shell::*;
+**规则 3：Windows 平台实现放在 `platform/windows/` 子模块**
 
-#[cfg(windows)]
-impl DesktopManagerTrait for DesktopManager {
-    fn new() -> anyhow::Result<Self> { ... }
-}
+```
+platform/windows/
+├── mod.rs             # 入口 + re-exports
+├── ffi_types.rs       # FFI 类型定义
+├── ffi_imports.rs     # FFI 函数声明
+├── desktop_manager.rs # DesktopManagerTrait 实现
+├── d2d_render.rs      # D2D/DirectWrite 渲染
+├── grid_window.rs     # 窗口管理 + wnd_proc
+├── shell_menu.rs      # Shell 右键菜单
+├── icon_extract.rs    # 图标提取
+├── icon_hider.rs      # 图标隐藏
+└── sys_tray.rs        # 系统托盘
 ```
 
 ---
@@ -140,45 +178,50 @@ impl DesktopManagerTrait for DesktopManager {
 
 | 类型 | 规则 | 示例 |
 |------|------|------|
-| 模块入口 | `mod.rs` | `src/desktop/mod.rs` |
-| 业务实现 | 功能名称小写 | `matcher.rs`, `database.rs` |
-| UI 组件 | `<name>_widget.rs` | `box_widget.rs`, `icon_widget.rs` |
-| 平台实现 | 平台名称 | `windows.rs`, `macos.rs` |
+| 模块入口 | `mod.rs` | `platform/mod.rs` |
+| 业务实现 | 功能名称小写 | `sort_engine.rs`, `box_model.rs` |
+| UI 组件 | 功能名称 | `control_panel.rs`, `settings_panel.rs` |
+| 平台实现 | 功能名称 | `desktop_manager.rs`, `d2d_render.rs` |
+| FFI 定义 | `ffi_` 前缀 | `ffi_types.rs`, `ffi_imports.rs` |
+| 插件 | `_plugin` 后缀 | `classification_plugin.rs` |
 
 ### Rust 代码命名
 
 | 类型 | 规则 | 示例 |
 |------|------|------|
-| Trait | `<Name>Trait` | `DesktopManagerTrait` |
-| Struct | PascalCase | `DesktopIcon`, `AppCategory` |
+| Trait | `<Name>Trait` | `DesktopManagerTrait`, `Plugin` |
+| Struct | PascalCase | `AppContext`, `ClassificationBox` |
 | Function | snake_case | `get_desktop_icons`, `classify` |
-| Module | snake_case | `desktop`, `classification` |
-| 常量 | UPPER_CASE | `DEFAULT_LAYOUT_VERSION` |
+| Module | snake_case | `box_core`, `classification` |
+| 常量 | UPPER_CASE | `SM_CXSCREEN` |
+| 枚举 | PascalCase | `SortMode`, `ViewMode` |
 
 ---
 
-## Examples
+## Dependency Rules
 
-### 示例 1：模块入口文件
+**允许的依赖方向**：
 
-[src/desktop/mod.rs](src/desktop/mod.rs) - 完整的模块入口示例：
-- Trait 定义
-- 条件编译
-- 公开导出
+```
+main.rs → 所有模块
+app.rs → context, platform, ui
+context.rs → config, platform, classification, (plugin, box_core)
+ui/ → context (通过参数传递)
+plugin/ → context (通过参数传递)
+box_core/ → config (枚举类型)
+classification/ → platform (仅 DesktopIcon 类型)
+platform/ → (无内部依赖，仅外部 crate)
+utils/ → (无内部依赖)
+```
 
-### 示例 2：业务实现模块
+**禁止的依赖方向**：
 
-[src/classification/mod.rs](src/classification/mod.rs) - 业务模块示例：
-- 组合多个子模块
-- 提供统一接口
-- Default 实现
-
-### 示例 3：平台特定实现
-
-[src/desktop/macos.rs](src/desktop/macos.rs) - 平台实现示例：
-- 条件编译标记
-- Trait 实现
-- 平台 API 使用
+```
+❌ platform/ → ui/         (平台层不依赖 UI)
+❌ box_core/ → platform/   (业务层不直接调用平台 API)
+❌ config/ → context/       (配置层不依赖上下文)
+❌ classification/ → ui/   (分类层不依赖 UI)
+```
 
 ---
 
@@ -187,13 +230,9 @@ impl DesktopManagerTrait for DesktopManager {
 **❌ 不要在平台通用代码中硬编码平台特定逻辑**
 
 ```rust
-// ❌ 错误：直接在通用代码中判断平台
+// ❌ 错误
 pub fn get_icons() -> Vec<DesktopIcon> {
-    if cfg!(windows) {
-        // Windows 代码
-    } else {
-        // macOS 代码
-    }
+    if cfg!(windows) { /* Windows */ } else { /* macOS */ }
 }
 
 // ✅ 正确：通过 trait 抽象
@@ -206,28 +245,19 @@ pub fn get_icons(manager: &dyn DesktopManagerTrait) -> Vec<DesktopIcon> {
 
 ```rust
 // ❌ 错误：业务层直接依赖 UI
-use crate::ui::ClassificationBoxWidget;
+use crate::ui::control_panel;
 
-// ✅ 正确：UI 层依赖业务层
-// 在 ui/ 模块中：use crate::classification::AppClassifier;
+// ✅ 正确：UI 层通过 AppContext 与业务交互
 ```
-
----
-
-## Common Mistakes
-
-1. **忘记添加 `#[cfg(...)]` 标记** → 编译错误（找不到平台 API）
-2. **在 `mod.rs` 中忘记 `pub use`** → 外部无法访问模块内容
-3. **模块层级混乱** → UI 层直接调用平台 API，绕过业务层
-4. **文件命名不一致** → `desktop_icons.rs` 应改为 `icons.rs`（模块内文件不需要重复模块名）
 
 ---
 
 ## Quick Checklist for New Module
 
-- [ ] 确定模块层级（platform/business/ui/config）
+- [ ] 确定模块层级（platform/box_core/classification/config/plugin/ui/utils）
 - [ ] 创建 `mod.rs` 入口文件
 - [ ] 定义公开 API（struct/trait/function）
 - [ ] 添加必要的 `pub use` 导出
 - [ ] 如果跨平台，定义 Trait 并条件编译实现
 - [ ] 如果是新功能，更新 `src/main.rs` 的 `mod` 声明
+- [ ] 单文件不超过 1000 行

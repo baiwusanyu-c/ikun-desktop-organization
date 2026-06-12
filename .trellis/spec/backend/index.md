@@ -1,6 +1,6 @@
 # Backend Development Guidelines
 
-> 代码规范：指导 AI 如何编写符合项目标准的代码
+> 代码规范：指导 AI 如何编写符合项目标准的代码（v2.0 架构）
 
 ---
 
@@ -10,18 +10,23 @@
 
 **核心架构原则**：
 - **Rust + egui**：纯 Rust GUI，即时模式渲染
+- **AppContext 上下文注入**：所有模块通过中心上下文共享状态和配置
 - **Trait-based 设计**：跨平台功能通过 trait 统一接口
 - **条件编译**：平台特定代码使用 `#[cfg(...)]` 隔离
-- **文件持久化**：YAML/JSON 配置存储，使用 `serde` 序列化
-- **单向依赖**：UI → 业务 → 平台，禁止反向依赖
+- **插件化**：功能模块作为 Plugin 注册，灵活扩展
+- **统一配置**：单一 JSON 文件管理所有设置
+- **单向依赖**：UI → AppContext → 业务/平台，禁止反向依赖
 
 **架构层次**：
 ```
-UI 层 (ui/)           → egui 组件，用户交互
-  ↓
-业务层 (classification/, config/) → 业务逻辑，数据处理
-  ↓
-平台层 (desktop/)     → 平台 API，系统集成
+上下文层 (context.rs)           → AppContext 中心依赖注入对象
+  ├── 平台层 (platform/)        → 平台抽象 trait + Windows/macOS 实现
+  ├── 业务层 (box_core/)        → 分类框业务逻辑（平台无关）
+  ├── 分类层 (classification/)  → 分类规则 + AI 分类
+  ├── 配置层 (config/)          → 统一 JSON 配置（AppConfig）
+  └── 插件层 (plugin/)          → Plugin trait + Registry
+UI 层 (app.rs, ui/)             → egui 控制面板，通过 AppContext 交互
+工具层 (utils/)                 → 日志、DPI、字符串工具
 ```
 
 ---
@@ -31,7 +36,7 @@ UI 层 (ui/)           → egui 组件，用户交互
 | Guide | Description |
 |-------|-------------|
 | [Directory Structure](./directory-structure.md) | 模块组织、文件布局、命名规范 |
-| [Database Guidelines](./database-guidelines.md) | 数据持久化模式（YAML/JSON）、加载/保存策略 |
+| [Database Guidelines](./database-guidelines.md) | 统一 JSON 配置管理、加载/保存策略 |
 | [Error Handling](./error-handling.md) | 使用 anyhow::Result、优雅降级、错误日志 |
 | [Quality Guidelines](./quality-guidelines.md) | 禁止模式、必须模式、测试要求 |
 | [Logging Guidelines](./logging-guidelines.md) | 日志级别、中文日志、禁止高频日志 |
@@ -48,7 +53,7 @@ UI 层 (ui/)           → egui 组件，用户交互
 - [ ] 阅读 [Error Handling](./error-handling.md) 了解错误处理规范
 
 ### 数据持久化
-- [ ] 阅读 [Database Guidelines](./database-guidelines.md) 了解数据结构设计
+- [ ] 阅读 [Database Guidelines](./database-guidelines.md) 了解统一配置设计
 - [ ] 阅读 [Error Handling](./error-handling.md) 了解加载失败降级策略
 
 ### 跨平台功能
@@ -65,13 +70,15 @@ UI 层 (ui/)           → egui 组件，用户交互
 
 | Crate | 用途 |
 |-------|------|
-| `egui + eframe` | GUI 框架 |
+| `egui + eframe` | GUI 框架（控制面板窗口） |
 | `anyhow` | 错误处理（统一使用 `anyhow::Result`） |
 | `log + env_logger` | 日志系统 |
 | `serde + serde_json/yaml` | 数据序列化 |
 | `dirs` | 跨平台配置路径 |
-| `windows` (Windows) | Windows Shell API |
-| `cocoa/objc` (macOS) | macOS API |
+| `uuid` | 分类框 / 图标唯一 ID |
+| `chrono` | 时间处理 |
+| `windows` (Windows) | Windows Shell API、Direct2D/DirectWrite、GDI |
+| `cocoa/objc` (macOS) | macOS API（实验性） |
 
 ---
 
@@ -79,10 +86,12 @@ UI 层 (ui/)           → egui 组件，用户交互
 
 1. **安全优先**：避免 `unsafe`，不使用 `panic/unwrap/expect`
 2. **优雅降级**：关键功能失败时使用默认值，不阻塞应用
-3. **单向依赖**：UI → 业务 → 平台，禁止反向依赖
-4. **条件编译**：平台特定代码使用 `#[cfg(...)]` 隔离
-5. **文档完整**：所有公开 API 必须有文档注释
-6. **中文日志**：日志消息使用中文
+3. **上下文注入**：通过 AppContext 传递依赖，不散落全局变量
+4. **单向依赖**：UI → AppContext → 业务/平台，禁止反向依赖
+5. **条件编译**：平台特定代码使用 `#[cfg(...)]` 隔离
+6. **文档完整**：所有公开 API 必须有文档注释
+7. **中文日志**：日志消息使用中文
+8. **单文件 ≤ 1000 行**：严格控制代码规模
 
 ---
 

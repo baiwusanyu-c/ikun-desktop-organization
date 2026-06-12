@@ -1,40 +1,53 @@
 # Database Guidelines
 
-> Data persistence patterns in this project.
+> 数据持久化模式（v2.0 统一配置架构）
 
 ---
 
 ## Overview
 
-本项目不使用传统关系型数据库，而是使用**文件持久化**方式：
+本项目使用**统一 JSON 配置**进行数据持久化：
 
-- **配置数据**：YAML 格式（`data/categories.yaml`）
-- **用户布局**：JSON 格式（`~/.config/.../layout.json`）
-- **应用设置**：JSON 格式（未来扩展）
+- **统一配置**：单一 `config.json` 管理所有设置（`src/config/app_config.rs`）
+- **分类规则**：内嵌在配置的 `classification.categories` 字段中
+- **布局数据**：内嵌在配置的 `layout.boxes` 字段中
 
 **数据持久化原则**：
 - 使用 `serde` 进行序列化/反序列化
-- 配置文件优先级：用户配置 > 项目默认 > 系统默认
-- 失败时使用默认值，不阻塞应用启动
+- 配置文件不存在时使用 Default，不阻塞应用启动
+- 支持导入/导出（用户可分享配置）
 
 ---
 
-## Data Storage Locations
+## Data Storage
 
-| 数据类型 | 格式 | 存储位置 | 加载时机 |
-|---------|------|----------|----------|
-| 分类规则数据库 | YAML | `data/categories.yaml` | 启动时 |
-| 用户自定义分类 | YAML | `~/.config/.../categories.yaml` | 启动时 |
-| 桌面布局 | JSON | `~/.config/.../layout.json` | 启动时 |
-| 应用设置 | JSON | `~/.config/.../settings.json` | 启动时 |
+### 统一配置文件
 
-**配置目录路径获取**（使用 `dirs` crate）：
+| 配置段 | 内容 | 对应结构体 |
+|--------|------|-----------|
+| `general` | 开机自启、语言、单实例 | `GeneralConfig` |
+| `box_style` | 背景色/透明度、圆角、字号、图标大小 | `BoxStyleConfig` |
+| `ai` | enabled、base_url、api_key、model | `AiConfig` |
+| `hotkeys` | toggle_panel、toggle_icons、auto_classify | `HotkeyConfig` |
+| `tray` | enabled、show_on_start、double_click_action | `TrayConfig` |
+| `layout` | 分类框列表（位置/尺寸/锁定/排序/视图） | `LayoutConfig` |
+| `classification` | 分类规则（内嵌或引用外部） | `ClassificationConfig` |
+| `debug` | log_level、log_to_file、show_fps | `DebugConfig` |
+
+### 存储位置
+
+```
+Windows: %APPDATA%/ikun-desktop-organization/config.json
+macOS:   ~/.config/ikun-desktop-organization/config.json
+```
+
+获取路径：
 ```rust
-// macOS/Linux: ~/.config/ikun-desktop-organization/
-// Windows: %APPDATA%/ikun-desktop-organization/
-let config_dir = dirs::config_dir()
-    .map(|p| p.join("ikun-desktop-organization"))
-    .ok_or_else(|| anyhow::anyhow!("无法获取配置目录"))?;
+fn get_config_path() -> anyhow::Result<PathBuf> {
+    dirs::config_dir()
+        .map(|p| p.join("ikun-desktop-organization/config.json"))
+        .ok_or_else(|| anyhow::anyhow!("无法获取配置目录"))
+}
 ```
 
 ---
@@ -46,97 +59,99 @@ let config_dir = dirs::config_dir()
 **规则 1：使用 `serde` derive macros**
 
 ```rust
-use serde::{Serialize, Deserialize};
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DesktopLayout {
+pub struct AppConfig {
     pub version: String,
     pub last_modified: chrono::DateTime<chrono::Utc>,
-    pub boxes: Vec<BoxData>,
+    pub general: GeneralConfig,
+    pub box_style: BoxStyleConfig,
+    // ...
 }
 ```
 
 **规则 2：为所有数据结构提供 `Default` 实现**
 
 ```rust
-impl Default for DesktopLayout {
+impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            version: "1.0".to_string(),
+            version: "2.0".to_string(),
             last_modified: chrono::Utc::now(),
-            boxes: Vec::new(),
+            general: GeneralConfig::default(),
+            box_style: BoxStyleConfig::default(),
+            // ...
         }
     }
+}
+```
+
+**规则 3：枚举使用 `#[serde(rename_all = "snake_case")]`**
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SortMode {
+    Name, Type, ModifiedTime, Author,
+    CreatedTime, Size, Tag, Title,
 }
 ```
 
 ### 加载模式
 
-**优先级加载策略**：
-
 ```rust
 pub fn load() -> anyhow::Result<Self> {
-    // 尝试多个路径，按优先级排序
-    let paths: Vec<PathBuf> = vec![
-        PathBuf::from("data/categories.yaml"),           // 项目默认
-        dirs::config_dir()
-            .map(|p| p.join(".../categories.yaml"))      // 用户配置
-            .unwrap_or_else(|| PathBuf::from("")),
-    ];
-
-    for path in paths.iter() {
-        if !path.as_os_str().is_empty() && path.exists() {
-            let content = std::fs::read_to_string(path)?;
-            let data: Self = serde_yaml::from_str(&content)?;
-            log::info!("加载成功，路径: {}", path.display());
-            return Ok(data);
-        }
+    let path = Self::get_config_path()?;
+    if path.exists() {
+        let content = std::fs::read_to_string(&path)?;
+        let config: AppConfig = serde_json::from_str(&content)?;
+        log::info!("加载配置成功: {:?}", path);
+        Ok(config)
+    } else {
+        log::info!("配置文件不存在，使用默认配置");
+        Ok(Self::default())
     }
-
-    // 所有路径都失败，返回默认值
-    log::info!("使用默认数据");
-    Ok(Self::default())
 }
+```
+
+**调用者降级处理**：
+```rust
+// context.rs
+let config = AppConfig::load().unwrap_or_else(|e| {
+    log::warn!("加载配置失败: {}, 使用默认配置", e);
+    AppConfig::default()
+});
 ```
 
 ### 保存模式
 
-**原子写入策略**：
-
 ```rust
 pub fn save(&self) -> anyhow::Result<()> {
     let path = Self::get_config_path()?;
-
-    // 创建目录（如果不存在）
-    std::fs::create_dir_all(path.parent().unwrap())?;
-
-    // 序列化数据
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let content = serde_json::to_string_pretty(self)?;
-
-    // 写入文件
-    std::fs::write(path, content)?;
-
-    log::info!("保存成功，路径: {}", path.display());
+    std::fs::write(&path, content)?;
+    log::info!("保存配置成功: {:?}", path);
     Ok(())
 }
 ```
 
----
+### 导入/导出模式
 
-## Serialization Format Choice
+```rust
+pub fn export_to(&self, path: &Path) -> anyhow::Result<()> {
+    let content = serde_json::to_string_pretty(self)?;
+    std::fs::write(path, content)?;
+    Ok(())
+}
 
-| 格式 | 使用场景 | Rust crate |
-|------|----------|-----------|
-| **YAML** | 可读配置、用户可编辑 | `serde_yaml` |
-| **JSON** | 结构化数据、程序内部 | `serde_json` |
-
-**YAML 适用场景**：
-- 分类规则数据库（用户可手动调整）
-- 配置文件（需要注释和可读性）
-
-**JSON 适用场景**：
-- 布局数据（结构复杂，包含 UUID、时间戳）
-- 应用设置（机器生成，用户不直接编辑）
+pub fn import_from(path: &Path) -> anyhow::Result<Self> {
+    let content = std::fs::read_to_string(path)?;
+    let config: AppConfig = serde_json::from_str(&content)?;
+    Ok(config)
+}
+```
 
 ---
 
@@ -145,35 +160,16 @@ pub fn save(&self) -> anyhow::Result<()> {
 **规则：失败时使用默认值，不阻塞应用**
 
 ```rust
-// ✅ 正确：失败时使用默认值，记录警告
-let layout = DesktopLayout::load()
+// ✅ 正确：失败时使用默认值
+let config = AppConfig::load()
     .unwrap_or_else(|e| {
-        log::warn!("加载布局失败: {}, 使用默认布局", e);
-        DesktopLayout::default()
+        log::warn!("加载配置失败: {}, 使用默认配置", e);
+        AppConfig::default()
     });
 
 // ❌ 错误：失败时 panic
-let layout = DesktopLayout::load().expect("必须加载布局");
+let config = AppConfig::load().expect("必须加载配置");
 ```
-
----
-
-## Examples
-
-### 示例 1：YAML 数据结构
-
-[src/classification/database.rs](src/classification/database.rs):
-- `AppCategoryDB` 和 `AppCategory` 定义
-- `load()` 多路径优先级加载
-- `save()` 用户配置保存
-- `Default` 默认分类数据
-
-### 示例 2：JSON 数据结构
-
-[src/config/layout.rs](src/config/layout.rs):
-- `DesktopLayout` 和 `BoxData` 定义
-- 使用 `chrono::DateTime` 和 `uuid::Uuid`
-- `load()` 和 `save()` 实现
 
 ---
 
@@ -182,61 +178,37 @@ let layout = DesktopLayout::load().expect("必须加载布局");
 **❌ 不要硬编码配置路径**
 
 ```rust
-// ❌ 错误：硬编码路径
-let path = "/Users/username/.config/...";
+// ❌ 错误
+let path = "C:\\Users\\xxx\\config.json";
 
 // ✅ 正确：使用 dirs crate
 let path = dirs::config_dir()
-    .map(|p| p.join("ikun-desktop-organization/layout.json"))
+    .map(|p| p.join("ikun-desktop-organization/config.json"))
     .ok_or_else(|| anyhow::anyhow!("无法获取配置目录"))?;
 ```
 
 **❌ 不要在加载失败时阻塞应用**
 
 ```rust
-// ❌ 错误：返回错误，应用无法启动
+// ❌ 错误
 fn new() -> anyhow::Result<Self> {
-    let layout = DesktopLayout::load()?;  // 失败时直接返回错误
-    Ok(Self { layout })
+    let config = AppConfig::load()?;  // 失败时应用无法启动
+    Ok(Self { config })
 }
 
-// ✅ 正确：失败时使用默认值
+// ✅ 正确
 fn new() -> anyhow::Result<Self> {
-    let layout = DesktopLayout::load()
-        .unwrap_or_else(|e| {
-            log::warn!("加载失败: {}", e);
-            DesktopLayout::default()
-        });
-    Ok(Self { layout })
+    let config = AppConfig::load().unwrap_or_default();
+    Ok(Self { config })
 }
-```
-
-**❌ 不要混用序列化格式**
-
-```rust
-// ❌ 错误：YAML 数据用 JSON 加载
-let data: AppCategoryDB = serde_json::from_str(&content)?;
-
-// ✅ 正确：YAML 数据用 YAML 加载
-let data: AppCategoryDB = serde_yaml::from_str(&content)?;
 ```
 
 ---
 
-## Common Mistakes
+## Quick Checklist for New Config Field
 
-1. **忘记 `Serialize, Deserialize` derive** → 编译错误
-2. **忘记 `Default` 实现** → 加载失败时无法回退
-3. **路径优先级错误** → 用户配置被项目默认覆盖
-4. **忘记创建目录** → 保存失败（`create_dir_all` 缺失）
-
----
-
-## Quick Checklist for New Data Structure
-
-- [ ] 定义 struct 并添加 `Serialize, Deserialize`
-- [ ] 实现 `Default` trait（提供合理的默认值）
-- [ ] 实现 `load()` 方法（多路径优先级）
-- [ ] 实现 `save()` 方法（原子写入）
-- [ ] 选择合适的序列化格式（YAML vs JSON）
-- [ ] 在失败场景使用 `unwrap_or_else` 处理
+- [ ] 在 `AppConfig` 或子结构体中添加字段
+- [ ] 添加 `Serialize, Deserialize` derive
+- [ ] 在 `Default` 实现中提供合理默认值
+- [ ] 如果是枚举，添加 `#[serde(rename_all = "snake_case")]`
+- [ ] 验证 `cargo run` 能正常加载/保存
