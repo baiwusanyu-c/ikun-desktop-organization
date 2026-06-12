@@ -1,11 +1,13 @@
-//! 格子窗口 - 核心组件
+//! 格子窗口 - 核心组件（Direct2D/DirectWrite 渲染）
 //!
 //! 每个收纳格子是一个独立的 WS_POPUP 分层窗口。
-//! 内部嵌入 SysListView32 控件渲染图标，原生支持：
-//! - 双击打开文件
-//! - 右键上下文菜单
-//! - 框选多个图标
-//! - 键盘导航
+//! 使用 Direct2D + DirectWrite 渲染到 DIB，通过 UpdateLayeredWindow 提交。
+//!
+//! 核心优势（相比旧 GDI 方案）：
+//! - DirectWrite 原生 per-pixel alpha，文字边缘平滑无锯齿
+//! - Direct2D DrawBitmap 线性插值缩放，图标质量高
+//! - FillRoundedRectangle 硬件加速圆角矩形
+//! - GPU 加速渲染，resize 更流畅
 //!
 //! 拖动标题栏 = WM_NCHITTEST 返回 HTCAPTION，Windows 原生移动。
 //! 边缘缩放 = WM_NCHITTEST 返回 HTLEFT/HTRIGHT/...，Windows 原生缩放。
@@ -14,6 +16,27 @@ use anyhow::Result;
 use std::ffi::c_void;
 use std::sync::Mutex;
 
+// ===== Windows crate D2D/DW/WIC imports =====
+use windows::Win32::Graphics::Direct2D::{
+    Common::{D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_POINT_2F, D2D_RECT_F, D2D_SIZE_U},
+    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+    D2D1_BITMAP_PROPERTIES, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
+    D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT,
+};
+use windows::Win32::Graphics::DirectWrite::{
+    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, IDWriteTextLayout,
+    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+    DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+    DWRITE_PARAGRAPH_ALIGNMENT_NEAR, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING,
+    DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_WORD, DWRITE_WORD_WRAPPING_NO_WRAP,
+    DWRITE_WORD_WRAPPING_WRAP,
+};
+use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
+use windows::Win32::Graphics::Gdi::HDC as GdiHDC;
+use windows::Win32::Graphics::Imaging::{CLSID_WICImagingFactory, IWICImagingFactory};
+use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+
 // ===== Raw Win32 Types =====
 type HWND = *mut c_void;
 type HINSTANCE = *mut c_void;
@@ -21,7 +44,6 @@ type HDC = *mut c_void;
 type HBRUSH = *mut c_void;
 #[allow(dead_code)]
 type HPEN = *mut c_void;
-type HFONT = *mut c_void;
 type HGDIOBJ = *mut c_void;
 type HCURSOR = *mut c_void;
 type HBITMAP = *mut c_void;
@@ -39,12 +61,14 @@ struct RECT {
     right: i32,
     bottom: i32,
 }
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct POINT {
     x: i32,
     y: i32,
 }
+
 #[repr(C)]
 struct PAINTSTRUCT {
     hdc: HDC,
@@ -80,6 +104,26 @@ struct MINMAXINFO {
     pt_max_track_size: POINT,
 }
 
+/// GetIconInfo 用的 ICONINFO 结构体
+#[repr(C)]
+struct ICONINFO {
+    f_icon: i32,
+    x_hotspot: u32,
+    y_hotspot: u32,
+    hbm_mask: HBITMAP,
+    hbm_color: HBITMAP,
+}
+
+/// 32-bit ARGB pixel（用于 DIB Section）
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Pixel32 {
+    b: u8,
+    g: u8,
+    r: u8,
+    a: u8,
+}
+
 // ===== Window Styles =====
 const WS_POPUP: u32 = 0x80000000;
 const WS_VISIBLE: u32 = 0x10000000;
@@ -101,7 +145,13 @@ const WM_SIZE: u32 = 0x0005;
 const WM_NCHITTEST: u32 = 0x0084;
 const WM_SETCURSOR: u32 = 0x0020;
 const WM_GETMINMAXINFO: u32 = 0x0024;
-// WM_LBUTTONDOWN, WM_LBUTTONDBLCLK, WM_RBUTTONUP defined below
+const WM_DPICHANGED: u32 = 0x02E0;
+const WM_MOUSEMOVE: u32 = 0x0200;
+const WM_LBUTTONDOWN: u32 = 0x0201;
+#[allow(dead_code)]
+const WM_LBUTTONUP: u32 = 0x0202;
+const WM_LBUTTONDBLCLK: u32 = 0x0203;
+const WM_RBUTTONUP: u32 = 0x0205;
 
 // ===== Hit Test Constants =====
 const HTCLIENT: i32 = 1;
@@ -122,11 +172,7 @@ const IDC_SIZENESW_ID: u16 = 32643;
 const IDC_SIZEWE_ID: u16 = 32644;
 const IDC_SIZENS_ID: u16 = 32645;
 
-// ===== GDI Constants =====
-const TRANSPARENT_MODE: i32 = 1;
-const DT_LEFT: u32 = 0x00000000;
-const DT_VCENTER: u32 = 0x00000004;
-const DT_SINGLELINE: u32 = 0x00000020;
+// ===== Other Constants =====
 #[allow(dead_code)]
 const LWA_ALPHA: u32 = 0x00000002;
 #[allow(dead_code)]
@@ -134,48 +180,61 @@ const LWA_COLORKEY: u32 = 0x00000001;
 const SW_SHOW: i32 = 5;
 const SWP_NOZORDER: u32 = 0x0004;
 const GWLP_USERDATA: i32 = -21;
-
-// ===== DrawIconEx Flags =====
-const DI_NORMAL: u32 = 0x0003;
-
-// ===== StretchBlt Mode =====
-const HALFTONE: i32 = 4;
-
-// ===== Menu Constants =====
-const MF_STRING: u32 = 0x00000000;
-const MF_SEPARATOR: u32 = 0x00000800;
-const TPM_RETURNCMD: u32 = 0x0100;
-
-// ===== System Metrics =====
 const SM_CXSCREEN: i32 = 0;
 #[allow(dead_code)]
 const SM_CYSCREEN: i32 = 1;
-
-// ===== DPI Change =====
-const WM_DPICHANGED: u32 = 0x02E0;
-
-// ===== Font Quality =====
-/// 灰度抗锯齿（适合透明背景分层窗口，ClearType 在透明 DIB 上会产生错误的子像素颜色）
-const ANTIALIASED_QUALITY: i32 = 4;
 
 // ===== Alpha Blend Constants =====
 const AC_SRC_OVER: u8 = 0x00;
 const AC_SRC_ALPHA: u8 = 0x01;
 
-// ===== DrawText Format =====
-const DT_CENTER: u32 = 0x00000001;
-const DT_NOPREFIX: u32 = 0x00000800;
-const DT_END_ELLIPSIS: u32 = 0x00008000;
-
 // ===== Mouse Messages =====
-const WM_LBUTTONDOWN: u32 = 0x0201;
-#[allow(dead_code)]
-const WM_LBUTTONUP: u32 = 0x0202;
-const WM_LBUTTONDBLCLK: u32 = 0x0203;
-const WM_RBUTTONUP: u32 = 0x0205;
+const MF_STRING: u32 = 0x00000000;
+const MF_SEPARATOR: u32 = 0x00000800;
+const TPM_RETURNCMD: u32 = 0x0100;
+
+// ===== Tooltip Constants =====
+const TTS_ALWAYSTIP: u32 = 0x01;
+const TTS_NOPREFIX: u32 = 0x02;
+const TTF_SUBCLASS: u32 = 0x0010;
+const TTF_IDISHWND: u32 = 0x0001;
+const TTM_ADDTOOLW: u32 = 0x0432;
+const TTM_UPDATETIPTEXTW: u32 = 0x0439;
+const TTM_TRACKPOSITION: u32 = 0x0442;
+const TTM_TRACKACTIVATE: u32 = 0x0441;
+const TTM_SETMAXTIPWIDTH: u32 = 0x0418;
+const ICC_TAB_CLASSES: u32 = 0x00000008;
+static TOOLTIPS_CLASSW: &[u16] = &[
+    116, 111, 111, 108, 116, 105, 112, 115, 95, 99, 108, 97, 115, 115, 51, 50, 0,
+]; // "tooltips_class32"
+
+/// Tooltip 工具信息结构体
+#[repr(C)]
+#[allow(non_snake_case)]
+struct TOOLINFOW {
+    cbSize: u32,
+    uFlags: u32,
+    hwnd: HWND,
+    uId: usize,
+    rect: RECT,
+    hinst: HINSTANCE,
+    lpszText: *const u16,
+    lParam: LPARAM,
+    lpReserved: *mut c_void,
+}
+
+/// Common Controls 初始化结构体
+#[repr(C)]
+#[allow(non_snake_case)]
+struct INITCOMMONCONTROLSEX {
+    dwSize: u32,
+    dwICC: u32,
+}
+
+// ===== GDI DIB Constants =====
+const DIB_RGB_COLORS: u32 = 0;
 
 #[repr(C)]
-#[derive(Clone, Copy)]
 struct BLENDFUNCTION {
     blend_op: u8,
     blend_flags: u8,
@@ -198,20 +257,7 @@ struct BITMAPINFOHEADER {
     bi_clr_important: u32,
 }
 
-/// 32-bit ARGB pixel
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct Pixel32 {
-    b: u8,
-    g: u8,
-    r: u8,
-    a: u8,
-}
-
 // ===== Helpers =====
-fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
-    (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
-}
 fn get_x_lparam(lp: LPARAM) -> i32 {
     (lp & 0xFFFF) as i16 as i32
 }
@@ -222,7 +268,28 @@ fn scale_for_dpi(px: i32, dpi: u32) -> i32 {
     (px * dpi as i32) / 96
 }
 
-// ===== FFI Declarations =====
+/// 将 u8 RGBA 颜色转换为 D2D1_COLOR_F（浮点 premultiplied alpha）
+fn d2d_color(r: u8, g: u8, b: u8, a: u8) -> D2D1_COLOR_F {
+    let af = a as f32 / 255.0;
+    D2D1_COLOR_F {
+        r: (r as f32 / 255.0) * af,
+        g: (g as f32 / 255.0) * af,
+        b: (b as f32 / 255.0) * af,
+        a: af,
+    }
+}
+
+/// 创建 D2D 矩形
+fn d2d_rect(left: f32, top: f32, right: f32, bottom: f32) -> D2D_RECT_F {
+    D2D_RECT_F {
+        left,
+        top,
+        right,
+        bottom,
+    }
+}
+
+// ===== FFI Declarations (non-D2D Win32 APIs) =====
 #[allow(dead_code)]
 extern "system" {
     // Window management
@@ -285,24 +352,11 @@ extern "system" {
         pblend: *const BLENDFUNCTION,
         dwFlags: u32,
     ) -> i32;
-    fn DrawIconEx(
-        hdc: HDC,
-        xLeft: i32,
-        yTop: i32,
-        hIcon: HICON,
-        cxWidth: i32,
-        cyWidth: i32,
-        istepIfAniCur: u32,
-        hbrFlickerFreeDraw: HBRUSH,
-        diFlags: u32,
-    ) -> i32;
 
-    // GDI
-    fn SetStretchBltMode(hdc: HDC, iStretchMode: i32) -> i32;
+    // GDI (DIB management only - rendering now via D2D)
     fn BeginPaint(hWnd: HWND, lpPaint: *mut PAINTSTRUCT) -> HDC;
     fn EndPaint(hWnd: HWND, lpPaint: *const PAINTSTRUCT) -> i32;
     fn CreateCompatibleDC(hdc: HDC) -> HDC;
-    fn CreateCompatibleBitmap(hdc: HDC, cx: i32, cy: i32) -> HBITMAP;
     fn CreateDIBSection(
         hdc: HDC,
         lpbmi: *const c_void,
@@ -314,42 +368,18 @@ extern "system" {
     fn SelectObject(hdc: HDC, h: HGDIOBJ) -> HGDIOBJ;
     fn DeleteObject(ho: HGDIOBJ) -> i32;
     fn DeleteDC(hdc: HDC) -> i32;
-    fn BitBlt(
+
+    // GDI (icon extraction for D2D conversion)
+    fn GetIconInfo(hIcon: HICON, pIconInfo: *mut ICONINFO) -> i32;
+    fn GetDIBits(
         hdc: HDC,
-        x: i32,
-        y: i32,
-        cx: i32,
-        cy: i32,
-        hdcSrc: HDC,
-        x1: i32,
-        y1: i32,
-        rop: u32,
+        hbmp: HBITMAP,
+        uStartScan: u32,
+        cScanLines: u32,
+        lpvBits: *mut c_void,
+        lpbmi: *mut c_void,
+        usage: u32,
     ) -> i32;
-    fn FillRect(hDC: HDC, lprc: *const RECT, hbr: HBRUSH) -> i32;
-    fn CreateSolidBrush(color: COLORREF) -> HBRUSH;
-    fn CreatePen(iStyle: i32, cWidth: i32, color: COLORREF) -> HPEN;
-    fn GetStockObject(i: i32) -> HGDIOBJ;
-    fn RoundRect(hdc: HDC, left: i32, top: i32, right: i32, bottom: i32, w: i32, h: i32) -> i32;
-    fn SetBkMode(hdc: HDC, iBkMode: i32) -> i32;
-    fn SetTextColor(hdc: HDC, color: COLORREF) -> COLORREF;
-    fn CreateFontW(
-        cHeight: i32,
-        cWidth: i32,
-        cEscapement: i32,
-        cOrientation: i32,
-        cWeight: i32,
-        bItalic: i32,
-        bUnderline: i32,
-        bStrikeOut: i32,
-        iCharSet: i32,
-        iOutPrecision: i32,
-        iClipPrecision: i32,
-        iQuality: i32,
-        iPitchAndFamily: i32,
-        pszFaceName: *const u16,
-    ) -> HFONT;
-    fn DrawTextW(hdc: HDC, lpchText: *const u16, cchText: i32, lprc: *mut RECT, format: u32)
-        -> i32;
 
     // System
     fn GetSystemMetrics(nIndex: i32) -> i32;
@@ -377,6 +407,56 @@ extern "system" {
         prcRect: *const RECT,
     ) -> i32;
     fn DestroyMenu(hMenu: HMENU) -> i32;
+
+    // Tooltip / Common Controls
+    fn InitCommonControlsEx(lpInitCtrls: *const INITCOMMONCONTROLSEX) -> i32;
+}
+
+// Tooltip 窗口创建（避免与主 CreateWindowExW 签名冲突）
+#[link(name = "comctl32")]
+extern "system" {
+    #[link_name = "CreateWindowExW"]
+    fn CreateWindowExW_tooltip(
+        dwExStyle: u32,
+        lpClassName: *const u16,
+        lpWindowName: *const u16,
+        dwStyle: u32,
+        x: i32,
+        y: i32,
+        nWidth: i32,
+        nHeight: i32,
+        hWndParent: HWND,
+        hMenu: *mut c_void,
+        hInstance: HINSTANCE,
+        lpParam: *mut c_void,
+    ) -> HWND;
+}
+
+fn create_tooltip_window(parent: HWND) -> HWND {
+    let icc = INITCOMMONCONTROLSEX {
+        dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
+        dwICC: ICC_TAB_CLASSES,
+    };
+    unsafe { InitCommonControlsEx(&icc) };
+
+    let hinstance = unsafe { GetModuleHandleW(std::ptr::null()) };
+    let tooltip_style = TTS_ALWAYSTIP | TTS_NOPREFIX;
+    unsafe {
+        CreateWindowExW_tooltip(
+            0,
+            TOOLTIPS_CLASSW.as_ptr(),
+            std::ptr::null(),
+            tooltip_style,
+            -0x8000, // CW_USEDEFAULT
+            -0x8000,
+            -0x8000,
+            -0x8000,
+            parent,
+            std::ptr::null_mut(),
+            hinstance,
+            std::ptr::null_mut(),
+        )
+    }
 }
 
 // ===== 公共数据结构 =====
@@ -421,6 +501,16 @@ struct GridWindowData {
     icon_size: i32,
     /// 当前选中项索引（-1 = 无选中）
     selected_item: i32,
+    /// 当前 hover 项索引（-1 = 无 hover）
+    hovered_item: i32,
+    /// Tooltip 窗口句柄
+    tooltip_hwnd: HWND,
+
+    // ===== D2D/DirectWrite 设备缓存（窗口级） =====
+    d2d_factory: Option<ID2D1Factory>,
+    dw_factory: Option<IDWriteFactory>,
+    wic_factory: Option<IWICImagingFactory>,
+    d2d_target: Option<ID2D1DCRenderTarget>,
 }
 
 unsafe impl Send for GridWindowData {}
@@ -477,6 +567,76 @@ pub fn get_screen_resolution() -> (i32, i32) {
     (w, h)
 }
 
+/// 初始化 D2D/DirectWrite/WIC 设备（首次渲染时调用）
+fn init_d2d_devices(data: &mut GridWindowData) {
+    // D2D Factory
+    if data.d2d_factory.is_none() {
+        match unsafe { D2D1CreateFactory::<ID2D1Factory>(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) }
+        {
+            Ok(f) => data.d2d_factory = Some(f),
+            Err(e) => {
+                log::error!("创建 D2D Factory 失败: {:?}", e);
+                return;
+            }
+        }
+    }
+
+    // DirectWrite Factory
+    if data.dw_factory.is_none() {
+        match unsafe { DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED) } {
+            Ok(f) => data.dw_factory = Some(f),
+            Err(e) => {
+                log::error!("创建 DirectWrite Factory 失败: {:?}", e);
+                return;
+            }
+        }
+    }
+
+    // WIC Imaging Factory
+    if data.wic_factory.is_none() {
+        match unsafe {
+            CoCreateInstance::<_, IWICImagingFactory>(
+                &CLSID_WICImagingFactory,
+                None,
+                CLSCTX_INPROC_SERVER,
+            )
+        } {
+            Ok(f) => data.wic_factory = Some(f),
+            Err(e) => {
+                log::error!("创建 WIC Factory 失败: {:?}", e);
+                return;
+            }
+        }
+    }
+
+    // DC Render Target（创建一次，每次渲染时 BindDC 到新 DC）
+    if data.d2d_target.is_none() {
+        if let Some(ref factory) = data.d2d_factory {
+            let props = D2D1_RENDER_TARGET_PROPERTIES {
+                r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
+                pixelFormat: D2D1_PIXEL_FORMAT {
+                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    alphaMode:
+                    windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED,
+                },
+                dpiX: 0.0,
+                dpiY: 0.0,
+                usage: D2D1_RENDER_TARGET_USAGE_NONE,
+                minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
+            };
+            match unsafe { factory.CreateDCRenderTarget(&props) } {
+                Ok(rt) => {
+                    data.d2d_target = Some(rt);
+                    log::info!("D2D DC RenderTarget 已创建");
+                }
+                Err(e) => {
+                    log::error!("创建 D2D DC RenderTarget 失败: {:?}", e);
+                }
+            }
+        }
+    }
+}
+
 /// 创建一个格子窗口
 pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
     let hinstance = ensure_class_registered();
@@ -521,9 +681,9 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
     let icon_size = scale_for_dpi(48, dpi);
 
     // 计算网格布局参数
-    let icon_label_h = scale_for_dpi(20, dpi);
+    let icon_label_h = scale_for_dpi(36, dpi); // 2 行文字高度（支持换行）
     let cell_spacing = scale_for_dpi(16, dpi);
-    let cell_w = icon_size + cell_spacing;
+    let cell_w = icon_size + scale_for_dpi(32, dpi); // 文字区域需要更多宽度（类似原生桌面 ~80px）
     let cell_h = icon_size + icon_label_h + cell_spacing;
     let body_w = scaled_w - scale_for_dpi(16, dpi); // 左右各 8px 内边距
     let cols = (body_w / cell_w).max(1);
@@ -552,10 +712,7 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         );
     }
 
-    // 不再使用 SetLayeredWindowAttributes — 改用 UpdateLayeredWindow 逐像素 alpha
-    // 这样可以实现背景半透明但文字/图标完全不透明
-
-    // 2. 存储窗口数据
+    // 2. 存储窗口数据（含 D2D/DW 设备缓存）
     let data = Box::new(GridWindowData {
         title: params.title,
         items: params.items,
@@ -566,6 +723,12 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         cols,
         icon_size,
         selected_item: -1,
+        hovered_item: -1,
+        tooltip_hwnd: std::ptr::null_mut(),
+        d2d_factory: None,
+        dw_factory: None,
+        wic_factory: None,
+        d2d_target: None,
     });
     let data_ptr = Box::into_raw(data);
     unsafe {
@@ -576,7 +739,48 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         ShowWindow(hwnd, SW_SHOW);
     }
 
-    // 3. 首次渲染（使用 UpdateLayeredWindow 设置分层窗口内容）
+    // 创建 tooltip 窗口（仅在有选中项时显示）
+    let tooltip_hwnd = create_tooltip_window(hwnd);
+    if !tooltip_hwnd.is_null() {
+        // 设置最大宽度（防止 tooltip 过宽）
+        unsafe {
+            SendMessageW(tooltip_hwnd, TTM_SETMAXTIPWIDTH, 0, 400);
+        }
+        // 注册 tooltip 工具（tracking 模式）
+        let empty_text: Vec<u16> = "\0".encode_utf16().collect();
+        let mut ti = TOOLINFOW {
+            cbSize: std::mem::size_of::<TOOLINFOW>() as u32,
+            uFlags: TTF_SUBCLASS | TTF_IDISHWND,
+            hwnd,
+            uId: 0,
+            rect: RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            },
+            hinst: std::ptr::null_mut(),
+            lpszText: empty_text.as_ptr(),
+            lParam: 0,
+            lpReserved: std::ptr::null_mut(),
+        };
+        unsafe {
+            SendMessageW(
+                tooltip_hwnd,
+                TTM_ADDTOOLW,
+                0,
+                &mut ti as *mut TOOLINFOW as LPARAM,
+            );
+        }
+    }
+
+    // 更新 tooltip_hwnd 到 data
+    unsafe {
+        let data_ref = &mut *data_ptr;
+        data_ref.tooltip_hwnd = tooltip_hwnd;
+    }
+
+    // 3. 首次渲染（使用 Direct2D + UpdateLayeredWindow）
     render_layered_window(hwnd);
 
     // 4. 注册到全局列表
@@ -597,15 +801,14 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
     Ok(hwnd)
 }
 
-/// 渲染分层窗口内容（使用 UpdateLayeredWindow 实现逐像素 alpha）
+/// 渲染分层窗口内容（Direct2D/DirectWrite → DIB → UpdateLayeredWindow）
 ///
 /// 背景 rgba(1,1,1,0.15) = alpha 38/255 ≈ 15% 不透明
-/// 标题文字和图标以完全不透明（alpha=255）绘制，不受背景透明度影响
+/// 标题文字和图标以完全不透明（alpha=255）绘制
 ///
 /// 重要：使用 GetWindowRect（而非 GetClientRect）获取尺寸。
 /// 对 WS_POPUP|WS_THICKFRAME 分层窗口，UpdateLayeredWindow 的 psize 参数
-/// 会直接设置窗口尺寸。如果 DIB 使用 GetClientRect（可能小于窗口尺寸），
-/// 每次渲染都会让窗口缩小一个 sizing border 宽度，导致持续缩小的反馈循环。
+/// 会直接设置窗口尺寸。
 fn render_layered_window(hwnd: HWND) {
     // 递归保护：防止 UpdateLayeredWindow 触发 WM_SIZE → 再次进入本函数
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -624,8 +827,21 @@ fn render_layered_window(hwnd: HWND) {
         }
     };
 
-    // 使用 GetWindowRect 获取完整窗口尺寸（含 sizing border）
-    // 对 WS_POPUP 分层窗口，这就是 UpdateLayeredWindow 需要的正确尺寸
+    // 确保 D2D/DW/WIC 设备已初始化
+    init_d2d_devices(data);
+
+    let (Some(ref _d2d_factory), Some(ref dw_factory), Some(ref wic_factory), Some(ref target)) = (
+        &data.d2d_factory,
+        &data.dw_factory,
+        &data.wic_factory,
+        &data.d2d_target,
+    ) else {
+        log::warn!("D2D 设备未初始化，跳过渲染");
+        RENDERING.store(false, Ordering::SeqCst);
+        return;
+    };
+
+    // 使用 GetWindowRect 获取完整窗口尺寸
     let mut wr = RECT {
         left: 0,
         top: 0,
@@ -640,14 +856,10 @@ fn render_layered_window(hwnd: HWND) {
         return;
     }
 
-    log::debug!(
-        "渲染分层窗口: window_rect={}x{}, title_h={}",
-        w,
-        h,
-        data.title_h
-    );
+    let ww = w as f32;
+    let hh = h as f32;
 
-    // 创建 32 位 ARGB DIB Section（用于逐像素 alpha 控制）
+    // 创建 32 位 ARGB DIB Section（D2D 渲染后端）
     let screen_dc = unsafe { GetDC(std::ptr::null_mut()) };
     let mem_dc = unsafe { CreateCompatibleDC(screen_dc) };
 
@@ -670,7 +882,7 @@ fn render_layered_window(hwnd: HWND) {
         CreateDIBSection(
             mem_dc,
             &bi as *const BITMAPINFOHEADER as *const c_void,
-            0,
+            DIB_RGB_COLORS,
             &mut bits as *mut *mut Pixel32 as *mut *mut c_void,
             std::ptr::null_mut(),
             0,
@@ -687,146 +899,175 @@ fn render_layered_window(hwnd: HWND) {
 
     let old_bmp = unsafe { SelectObject(mem_dc, dib as HGDIOBJ) };
 
-    // 清空为全透明
-    let total_pixels = (w as usize) * (h as usize);
-    let pixel_slice = unsafe { std::slice::from_raw_parts_mut(bits, total_pixels) };
-    for p in pixel_slice.iter_mut() {
-        *p = Pixel32 {
-            r: 0,
-            g: 0,
-            b: 0,
-            a: 0,
-        };
+    // 绑定 D2D render target 到 memory DC
+    let bind_rect = windows::Win32::Foundation::RECT {
+        left: 0,
+        top: 0,
+        right: w,
+        bottom: h,
+    };
+    if unsafe { target.BindDC(GdiHDC(mem_dc), &bind_rect) }.is_err() {
+        log::error!("BindDC 失败");
+        unsafe {
+            SelectObject(mem_dc, old_bmp);
+            DeleteObject(dib as HGDIOBJ);
+            DeleteDC(mem_dc);
+            ReleaseDC(std::ptr::null_mut(), screen_dc);
+        }
+        RENDERING.store(false, Ordering::SeqCst);
+        return;
     }
 
+    // ===== D2D 渲染开始 =====
+    unsafe { target.BeginDraw() };
+
+    // 清空为全透明（premultiplied alpha: 所有通道为 0）
+    let transparent = D2D1_COLOR_F {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 0.0,
+    };
+    unsafe { target.Clear(Some(&transparent)) };
+
     // ===== 绘制圆角背景（整体，四角圆角）=====
-    let bg_alpha: u8 = 38; // rgba(1,1,1,0.15)
-    let corner_radius = 16i32;
-    fill_rounded_rect_alpha(
-        bits,
-        w,
-        h,
-        0,
-        0,
-        w,
-        h,
-        corner_radius,
-        1,
-        1,
-        1,
-        bg_alpha,
-        0b1111, // 四个角全部圆角
-    );
+    let bg_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(1, 1, 1, 38), None) };
+    if let Ok(ref brush) = bg_brush {
+        let corner_radius = 16.0_f32;
+        let rounded_rect = D2D1_ROUNDED_RECT {
+            rect: d2d_rect(0.0, 0.0, ww, hh),
+            radiusX: corner_radius,
+            radiusY: corner_radius,
+        };
+        unsafe { target.FillRoundedRectangle(&rounded_rect, brush) };
+    }
 
-    // ===== 绘制标题栏与主体的分隔线（灰色半透明）=====
+    // ===== 绘制标题栏与主体的分隔线 =====
     let title_h = data.title_h;
-    fill_rect_alpha(bits, w, h, 0, title_h - 1, w, 1, 100, 100, 100, 100);
+    let sep_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(100, 100, 100, 100), None) };
+    if let Ok(ref brush) = sep_brush {
+        let sep_rect = d2d_rect(0.0, (title_h - 1) as f32, ww, title_h as f32);
+        unsafe { target.FillRectangle(&sep_rect, brush) };
+    }
 
-    // 标题文字（alpha 合成渲染，解决 GDI 在透明 DIB 上的锯齿问题）
+    // ===== 获取 DPI =====
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     let dpi = if dpi > 0 { dpi } else { 96 };
-    let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
-    let font_size = scale_for_dpi(18, dpi);
-    let title_font = unsafe {
-        CreateFontW(
-            font_size,
-            0,
-            0,
-            0,
-            700,
-            0,
-            0,
-            0,
-            1,
-            0,
-            0,
-            ANTIALIASED_QUALITY,
-            0,
-            font_name.as_ptr(),
+
+    // ===== 创建文字画刷（复用于标题和标签）=====
+    let white_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(255, 255, 255, 255), None) };
+    let shadow_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(0, 0, 0, 200), None) };
+    let label_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(250, 250, 255, 255), None) };
+
+    // ===== 标题文字（DirectWrite 渲染）=====
+    let title_font_size = scale_for_dpi(18, dpi) as f32;
+    let title_format = unsafe {
+        let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
+        let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
+        dw_factory.CreateTextFormat::<_, _, _>(
+            windows::core::PCWSTR(font_name.as_ptr()),
+            None,
+            DWRITE_FONT_WEIGHT_BOLD,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            title_font_size,
+            windows::core::PCWSTR(locale.as_ptr()),
         )
     };
 
-    let title_text: Vec<u16> = format!("📁 {} ({})\0", data.title, data.items.len())
-        .encode_utf16()
-        .collect();
-    // 阴影描边（模拟原生桌面图标文字效果，提升可读性）
-    let shadow_offset = scale_for_dpi(1, dpi);
-    for &(dx, dy) in &[
-        (shadow_offset, 0),
-        (-shadow_offset, 0),
-        (0, shadow_offset),
-        (0, -shadow_offset),
-    ] {
-        draw_text_alpha(
-            bits,
-            w,
-            h,
-            10 + dx,
-            dy,
-            w - 20,
-            title_h,
-            &title_text,
-            title_font,
-            0,
-            0,
-            0,
-            DT_LEFT | DT_VCENTER | DT_SINGLELINE,
-        );
-    }
-    // 主文字（白色）
-    draw_text_alpha(
-        bits,
-        w,
-        h,
-        10,
-        0,
-        w - 20,
-        title_h,
-        &title_text,
-        title_font,
-        255,
-        255,
-        255,
-        DT_LEFT | DT_VCENTER | DT_SINGLELINE,
-    );
+    if let Ok(ref tf) = title_format {
+        let _ = unsafe { tf.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP) };
+        let title_text: Vec<u16> = format!("📁 {} ({})", data.title, data.items.len())
+            .encode_utf16()
+            .collect();
 
-    unsafe {
-        DeleteObject(title_font as HGDIOBJ);
+        // 创建 TextLayout
+        let layout = unsafe {
+            target_inner_create_text_layout(
+                dw_factory,
+                &title_text,
+                tf,
+                (w - 20) as f32,
+                title_h as f32,
+                DWRITE_TEXT_ALIGNMENT_LEADING,
+                DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+            )
+        };
+
+        if let Some(ref layout) = layout {
+            // 阴影描边
+            let shadow_offset = scale_for_dpi(1, dpi) as f32;
+            if let Ok(ref sb) = shadow_brush {
+                for &(dx, dy) in &[
+                    (shadow_offset, 0.0),
+                    (-shadow_offset, 0.0),
+                    (0.0, shadow_offset),
+                    (0.0, -shadow_offset),
+                ] {
+                    let origin = D2D_POINT_2F {
+                        x: 10.0 + dx,
+                        y: dy,
+                    };
+                    unsafe {
+                        target.DrawTextLayout(origin, layout, sb, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                    }
+                }
+            }
+            // 主文字（白色）
+            if let Ok(ref wb) = white_brush {
+                let origin = D2D_POINT_2F { x: 10.0, y: 0.0 };
+                unsafe {
+                    target.DrawTextLayout(origin, layout, wb, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                }
+            }
+        }
     }
 
     // ===== 绘制图标网格 =====
-    // 设置高质量缩放模式（HALFTONE），改善图标在不同 DPI 下的缩放质量
-    unsafe { SetStretchBltMode(mem_dc, HALFTONE) };
-
     let icon_size = data.icon_size;
     let cell_w = data.cell_w;
     let cell_h = data.cell_h;
     let cols = data.cols;
-    let grid_left = (w - cols * cell_w) / 2; // 居中排列
+    let grid_left = (w - cols * cell_w) / 2;
     let grid_top = title_h + scale_for_dpi(8, dpi);
-    let icon_label_h = scale_for_dpi(20, dpi);
+    let icon_label_h = scale_for_dpi(36, dpi); // 2 行文字高度（支持换行）
 
-    // 图标标签字体（alpha 合成渲染）
-    let label_font_size = scale_for_dpi(13, dpi);
-    let label_font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
-    let label_font = unsafe {
-        CreateFontW(
+    // 图标标签字体
+    let label_font_size = scale_for_dpi(13, dpi) as f32;
+    let label_format = unsafe {
+        let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
+        let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
+        dw_factory.CreateTextFormat::<_, _, _>(
+            windows::core::PCWSTR(font_name.as_ptr()),
+            None,
+            DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
             label_font_size,
-            0,
-            0,
-            0,
-            400,
-            0,
-            0,
-            0,
-            1,
-            0,
-            0,
-            ANTIALIASED_QUALITY,
-            0,
-            label_font_name.as_ptr(),
+            windows::core::PCWSTR(locale.as_ptr()),
         )
     };
+
+    // 设置标签文字对齐方式
+    if let Ok(ref lf) = label_format {
+        let _ = unsafe { lf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER) };
+        let _ = unsafe { lf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER) };
+        let _ = unsafe { lf.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP) };
+    }
+
+    // 创建省略号裁剪标志（line-clamp 效果：最多 2 行 + "..."）
+    let ellipsis_sign = if let Ok(ref lf) = label_format {
+        unsafe { dw_factory.CreateEllipsisTrimmingSign(lf).ok() }
+    } else {
+        None
+    };
+
+    // 选中项高亮画刷
+    let highlight_brush =
+        unsafe { target.CreateSolidColorBrush(&d2d_color(60, 80, 120, 120), None) };
+    // Hover 高亮画刷（比选中色浅）
+    let hover_brush =
+        unsafe { target.CreateSolidColorBrush(&d2d_color(70, 90, 130, 70), None) };
 
     for (i, item) in data.items.iter().enumerate() {
         let col = (i as i32) % cols;
@@ -834,80 +1075,122 @@ fn render_layered_window(hwnd: HWND) {
 
         let cell_x = grid_left + col * cell_w;
         let cell_y = grid_top + row * cell_h;
+        let is_selected = i as i32 == data.selected_item;
+        let is_hovered = i as i32 == data.hovered_item;
 
-        // 选中项高亮背景
-        if i as i32 == data.selected_item {
-            fill_rect_alpha(bits, w, h, cell_x, cell_y, cell_w, cell_h, 60, 80, 120, 120);
-        }
-
-        // 绘制图标（DrawIconEx 正确处理 alpha + mask + 缩放）
-        let icon_x = cell_x + (cell_w - icon_size) / 2;
-        let icon_y = cell_y + 4;
-        if !item.icon_handle.is_null() {
-            unsafe {
-                DrawIconEx(
-                    mem_dc,
-                    icon_x,
-                    icon_y,
-                    item.icon_handle,
-                    icon_size,
-                    icon_size,
-                    0,
-                    std::ptr::null_mut(),
-                    DI_NORMAL,
+        // Hover 背景（比选中浅，仅非选中项显示）
+        if is_hovered && !is_selected {
+            if let Ok(ref hb) = hover_brush {
+                let hl_rect = d2d_rect(
+                    cell_x as f32,
+                    cell_y as f32,
+                    (cell_x + cell_w) as f32,
+                    (cell_y + cell_h) as f32,
                 );
+                unsafe { target.FillRectangle(&hl_rect, hb) };
             }
         }
 
-        // 绘制图标标签文字（阴影描边 + alpha 合成，模拟原生桌面效果）
-        let label: Vec<u16> = item
-            .display_name
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
-        let label_x = cell_x + 2;
-        let label_y = icon_y + icon_size + 2;
-        let label_w = cell_w - 4;
-        let label_fmt = DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX;
-        // 阴影描边
-        let lsh = scale_for_dpi(1, dpi);
-        for &(dx, dy) in &[(lsh, 0), (-lsh, 0), (0, lsh), (0, -lsh)] {
-            draw_text_alpha(
-                bits,
-                w,
-                h,
-                label_x + dx,
-                label_y + dy,
-                label_w,
-                icon_label_h,
-                &label,
-                label_font,
-                0,
-                0,
-                0,
-                label_fmt,
+        // 选中项高亮背景
+        if is_selected {
+            if let Ok(ref hb) = highlight_brush {
+                let hl_rect = d2d_rect(
+                    cell_x as f32,
+                    cell_y as f32,
+                    (cell_x + cell_w) as f32,
+                    (cell_y + cell_h) as f32,
+                );
+                unsafe { target.FillRectangle(&hl_rect, hb) };
+            }
+        }
+
+        // 绘制图标（HICON → GetDIBits → D2D Bitmap → DrawBitmap）
+        let icon_x = cell_x + (cell_w - icon_size) / 2;
+        let icon_y = cell_y + 4;
+        if !item.icon_handle.is_null() {
+            draw_icon_d2d(
+                target,
+                wic_factory,
+                item.icon_handle,
+                icon_x,
+                icon_y,
+                icon_size,
             );
         }
-        // 主文字（浅灰白色）
-        draw_text_alpha(
-            bits,
-            w,
-            h,
-            label_x,
-            label_y,
-            label_w,
-            icon_label_h,
-            &label,
-            label_font,
-            230,
-            230,
-            230,
-            label_fmt,
-        );
+
+        // 绘制图标标签文字（DirectWrite）
+        if let Ok(ref lf) = label_format {
+            let label: Vec<u16> = item.display_name.encode_utf16().collect();
+            let label_x = cell_x + 2;
+            let label_y = icon_y + icon_size + 2;
+            let label_w = (cell_w - 4) as f32;
+
+            // 选中项：足够高度显示完整名称；未选中：2 行裁剪
+            // 两种状态都使用 NEAR（顶部对齐），确保单行文本与图标间距一致
+            let (label_h, para_align) = if is_selected {
+                let max_h = scale_for_dpi(36 * 3, dpi);
+                (max_h as f32, DWRITE_PARAGRAPH_ALIGNMENT_NEAR)
+            } else {
+                (icon_label_h as f32, DWRITE_PARAGRAPH_ALIGNMENT_NEAR)
+            };
+
+            let layout = unsafe {
+                target_inner_create_text_layout(
+                    dw_factory,
+                    &label,
+                    lf,
+                    label_w,
+                    label_h,
+                    DWRITE_TEXT_ALIGNMENT_CENTER,
+                    para_align,
+                )
+            };
+
+            if let Some(ref layout) = layout {
+                // 未选中：应用 line-clamp（2 行 + 省略号）
+                if !is_selected {
+                    if let Some(ref sign) = ellipsis_sign {
+                        let trimming = DWRITE_TRIMMING {
+                            granularity: DWRITE_TRIMMING_GRANULARITY_WORD,
+                            delimiter: 0,
+                            delimiterCount: 0,
+                        };
+                        let _ = unsafe { layout.SetTrimming(&trimming, sign) };
+                    }
+                }
+
+                // 阴影描边
+                let lsh = scale_for_dpi(1, dpi) as f32;
+                if let Ok(ref sb) = shadow_brush {
+                    for &(dx, dy) in &[(lsh, 0.0), (-lsh, 0.0), (0.0, lsh), (0.0, -lsh)] {
+                        let origin = D2D_POINT_2F {
+                            x: label_x as f32 + dx,
+                            y: label_y as f32 + dy,
+                        };
+                        unsafe {
+                            target.DrawTextLayout(origin, layout, sb, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                        }
+                    }
+                }
+                // 主文字（浅灰白色）
+                if let Ok(ref lb) = label_brush {
+                    let origin = D2D_POINT_2F {
+                        x: label_x as f32,
+                        y: label_y as f32,
+                    };
+                    unsafe {
+                        target.DrawTextLayout(origin, layout, lb, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                    }
+                }
+            }
+        }
     }
 
-    unsafe {
-        DeleteObject(label_font as HGDIOBJ);
+    // ===== D2D 渲染结束 =====
+    let mut tag1: u64 = 0;
+    let mut tag2: u64 = 0;
+    if let Err(e) = unsafe { target.EndDraw(Some(&mut tag1), Some(&mut tag2)) } {
+        log::error!("D2D EndDraw 失败: {:?}", e);
     }
 
     // ===== 调用 UpdateLayeredWindow 提交渲染结果 =====
@@ -934,7 +1217,7 @@ fn render_layered_window(hwnd: HWND) {
         );
     }
 
-    // 清理 GDI 资源
+    // 清理 GDI 资源（D2D target 保留复用）
     unsafe {
         SelectObject(mem_dc, old_bmp);
         DeleteObject(dib as HGDIOBJ);
@@ -945,42 +1228,67 @@ fn render_layered_window(hwnd: HWND) {
     RENDERING.store(false, Ordering::SeqCst);
 }
 
-/// 高质量文字渲染到半透明分层窗口 DIB
+/// 辅助：创建 DirectWrite TextLayout
 ///
-/// GDI 在 32 位 ARGB DIB 上做抗锯齿时，边缘像素 alpha 被强制设为 255，
-/// 导致在半透明背景上产生硬边缘锯齿。本函数通过以下方法解决：
+/// 封装 TextLayout 创建 + 对齐设置，返回 Option 便于错误处理。
+/// 文字换行模式从 TextFormat 继承（标题 = NO_WRAP，标签 = WRAP）。
+unsafe fn target_inner_create_text_layout(
+    dw_factory: &IDWriteFactory,
+    text: &[u16],
+    format: &IDWriteTextFormat,
+    max_width: f32,
+    max_height: f32,
+    text_align: windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_ALIGNMENT,
+    para_align: windows::Win32::Graphics::DirectWrite::DWRITE_PARAGRAPH_ALIGNMENT,
+) -> Option<IDWriteTextLayout> {
+    let layout = dw_factory
+        .CreateTextLayout(text, format, max_width, max_height)
+        .ok()?;
+    let _ = layout.SetTextAlignment(text_align);
+    let _ = layout.SetParagraphAlignment(para_align);
+    Some(layout)
+}
+
+/// 使用 Direct2D 绘制图标（HICON → GetDIBits → premultiplied D2D Bitmap → DrawBitmap）
 ///
-/// 1. 在临时 DC 上用纯黑背景渲染白色文字（GDI 在纯色背景上能正确抗锯齿）
-/// 2. 读取每个像素的红色通道作为文字覆盖强度（0=无文字, 255=完全覆盖）
-/// 3. 用覆盖强度作为混合因子，将文字颜色合成到主 DIB 的半透明背景上
-///
-/// 这样抗锯齿边缘像素会获得正确的中间色值，实现平滑过渡。
-#[allow(clippy::too_many_arguments)]
-fn draw_text_alpha(
-    main_pixels: *mut Pixel32,
-    bmp_w: i32,
-    bmp_h: i32,
+/// 绕过 WIC，直接从 HICON 的颜色位图读取原始 BGRA 像素，
+/// 手动转换为 premultiplied alpha 后创建 D2D bitmap，确保边缘透明过渡正确。
+fn draw_icon_d2d(
+    target: &ID2D1DCRenderTarget,
+    _wic_factory: &IWICImagingFactory,
+    hicon: HICON,
     x: i32,
     y: i32,
-    w: i32,
-    h: i32,
-    text: &[u16],
-    font: HFONT,
-    text_r: u8,
-    text_g: u8,
-    text_b: u8,
-    format: u32,
+    size: i32,
 ) {
-    let screen_dc = unsafe { GetDC(std::ptr::null_mut()) };
-    let text_dc = unsafe { CreateCompatibleDC(screen_dc) };
+    // 1. 从 HICON 提取颜色位图
+    let mut icon_info = ICONINFO {
+        f_icon: 0,
+        x_hotspot: 0,
+        y_hotspot: 0,
+        hbm_mask: std::ptr::null_mut(),
+        hbm_color: std::ptr::null_mut(),
+    };
+    if unsafe { GetIconInfo(hicon, &mut icon_info) } == 0 {
+        return;
+    }
 
-    // 创建纯黑 DIB（用于获取正确的抗锯齿覆盖值）
-    let bi = BITMAPINFOHEADER {
+    // 必须有颜色位图（32-bit ARGB）；monochrome mask 无法正确渲染
+    if icon_info.hbm_color.is_null() {
+        if !icon_info.hbm_mask.is_null() {
+            unsafe { DeleteObject(icon_info.hbm_mask as HGDIOBJ) };
+        }
+        return;
+    }
+
+    // 2. 用 GetDIBits 读取原始 BGRA 像素
+    //    第一次查询：bi_bit_count 必须为 0，让系统返回实际格式
+    let mut bi = BITMAPINFOHEADER {
         bi_size: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-        bi_width: w,
-        bi_height: -h,
-        bi_planes: 1,
-        bi_bit_count: 32,
+        bi_width: 0,
+        bi_height: 0,
+        bi_planes: 0,
+        bi_bit_count: 0, // 关键：查询时必须为 0
         bi_compression: 0,
         bi_size_image: 0,
         bi_x_pels_per_meter: 0,
@@ -988,227 +1296,161 @@ fn draw_text_alpha(
         bi_clr_used: 0,
         bi_clr_important: 0,
     };
-    let mut text_bits: *mut Pixel32 = std::ptr::null_mut();
-    let text_dib = unsafe {
-        CreateDIBSection(
-            text_dc,
-            &bi as *const BITMAPINFOHEADER as *const c_void,
+
+    let screen_dc = unsafe { GetDC(std::ptr::null_mut()) };
+
+    // 第一次调用获取位图尺寸和格式
+    if unsafe {
+        GetDIBits(
+            screen_dc,
+            icon_info.hbm_color,
             0,
-            &mut text_bits as *mut *mut Pixel32 as *mut *mut c_void,
+            0,
             std::ptr::null_mut(),
-            0,
+            &mut bi as *mut BITMAPINFOHEADER as *mut c_void,
+            DIB_RGB_COLORS,
         )
-    };
-    if text_dib.is_null() || text_bits.is_null() {
+    } == 0
+    {
+        log::warn!("GetDIBits 查询失败");
         unsafe {
-            DeleteDC(text_dc);
             ReleaseDC(std::ptr::null_mut(), screen_dc);
+            DeleteObject(icon_info.hbm_color as HGDIOBJ);
+            DeleteObject(icon_info.hbm_mask as HGDIOBJ);
         }
         return;
     }
 
-    let old_bmp = unsafe { SelectObject(text_dc, text_dib as HGDIOBJ) };
-    let old_font = unsafe { SelectObject(text_dc, font) };
+    let bmp_w = bi.bi_width;
+    let bmp_h = bi.bi_height.abs(); // 可能是负值（top-down DIB）
 
-    // 填充纯黑背景
-    let total = (w as usize) * (h as usize);
-    let text_slice = unsafe { std::slice::from_raw_parts_mut(text_bits, total) };
-    for p in text_slice.iter_mut() {
-        *p = Pixel32 {
+    if bmp_w <= 0 || bmp_h <= 0 || bi.bi_bit_count != 32 {
+        log::debug!(
+            "图标位图格式不支持: {}x{} {}bpp",
+            bmp_w,
+            bmp_h,
+            bi.bi_bit_count
+        );
+        unsafe {
+            ReleaseDC(std::ptr::null_mut(), screen_dc);
+            DeleteObject(icon_info.hbm_color as HGDIOBJ);
+            DeleteObject(icon_info.hbm_mask as HGDIOBJ);
+        }
+        return;
+    }
+
+    // 分配像素缓冲区
+    let pixel_count = (bmp_w as usize) * (bmp_h as usize);
+    let mut pixels = vec![
+        Pixel32 {
             b: 0,
             g: 0,
             r: 0,
-            a: 255,
+            a: 0
         };
+        pixel_count
+    ];
+
+    // 设置 bi_height 为负值以请求 top-down 输出，确保 bi_bit_count = 32
+    bi.bi_height = -bmp_h;
+    bi.bi_bit_count = 32;
+    bi.bi_compression = 0;
+
+    // 第二次调用读取像素数据
+    if unsafe {
+        GetDIBits(
+            screen_dc,
+            icon_info.hbm_color,
+            0,
+            bmp_h as u32,
+            pixels.as_mut_ptr() as *mut c_void,
+            &mut bi as *mut BITMAPINFOHEADER as *mut c_void,
+            DIB_RGB_COLORS,
+        )
+    } == 0
+    {
+        unsafe {
+            ReleaseDC(std::ptr::null_mut(), screen_dc);
+            DeleteObject(icon_info.hbm_color as HGDIOBJ);
+            DeleteObject(icon_info.hbm_mask as HGDIOBJ);
+        }
+        return;
     }
 
-    // 渲染白色文字到黑色背景（GDI 能正确产生抗锯齿灰度边缘）
-    unsafe {
-        SetBkMode(text_dc, TRANSPARENT_MODE);
-        SetTextColor(text_dc, rgb(255, 255, 255));
+    unsafe { ReleaseDC(std::ptr::null_mut(), screen_dc) };
+
+    // 3. 将 straight alpha (BGRA) 转换为 premultiplied alpha
+    //    HBITMAP 像素是 straight alpha: RGB 是原始颜色，A 是透明度
+    //    D2D 需要 premultiplied: RGB' = RGB * A/255
+    for p in pixels.iter_mut() {
+        let a = p.a as u16;
+        p.b = ((p.b as u16 * a) / 255) as u8;
+        p.g = ((p.g as u16 * a) / 255) as u8;
+        p.r = ((p.r as u16 * a) / 255) as u8;
     }
-    let mut text_rect = RECT {
-        left: 0,
-        top: 0,
-        right: w,
-        bottom: h,
+
+    // 4. 创建 D2D bitmap（显式 premultiplied alpha 格式）
+    let bitmap_props = D2D1_BITMAP_PROPERTIES {
+        pixelFormat: D2D1_PIXEL_FORMAT {
+            format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            alphaMode: windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED,
+        },
+        dpiX: 96.0,
+        dpiY: 96.0,
     };
-    unsafe {
-        DrawTextW(text_dc, text.as_ptr(), -1, &mut text_rect, format);
-    }
 
-    // 合成：将文字覆盖值应用到主 DIB
-    let bmp_w_usize = bmp_w as usize;
-    for py in 0..h {
-        let abs_y = y + py;
-        if abs_y < 0 || abs_y >= bmp_h {
-            continue;
-        }
-        for px in 0..w {
-            let abs_x = x + px;
-            if abs_x < 0 || abs_x >= bmp_w {
-                continue;
-            }
-            let src_idx = (py as usize) * (w as usize) + (px as usize);
-            // 红色通道值 = 文字覆盖强度（0=纯黑无文字, 255=纯白完全覆盖）
-            let coverage = unsafe { (*text_bits.add(src_idx)).r };
-            if coverage == 0 {
-                continue;
-            }
+    let d2d_bitmap = unsafe {
+        target.CreateBitmap(
+            D2D_SIZE_U {
+                width: bmp_w as u32,
+                height: bmp_h as u32,
+            },
+            Some(pixels.as_ptr() as *const c_void),
+            (bmp_w as u32) * 4, // pitch = width * bytes_per_pixel
+            &bitmap_props,
+        )
+    };
 
-            let dst_idx = abs_y as usize * bmp_w_usize + abs_x as usize;
-            let dst = unsafe { &mut *main_pixels.add(dst_idx) };
-
-            if coverage == 255 {
-                // 完全覆盖：直接写入文字颜色，保持目标 alpha
-                dst.r = text_r;
-                dst.g = text_g;
-                dst.b = text_b;
-            } else {
-                // 部分覆盖：混合文字颜色和当前像素颜色
-                let inv = 255u16 - coverage as u16;
-                let cov = coverage as u16;
-                dst.r = ((text_r as u16 * cov + dst.r as u16 * inv) / 255) as u8;
-                dst.g = ((text_g as u16 * cov + dst.g as u16 * inv) / 255) as u8;
-                dst.b = ((text_b as u16 * cov + dst.b as u16 * inv) / 255) as u8;
-                // alpha 保持不变（背景透明度不受文字影响）
-            }
+    if let Ok(ref bmp) = d2d_bitmap {
+        let dest_rect = d2d_rect(x as f32, y as f32, (x + size) as f32, (y + size) as f32);
+        unsafe {
+            target.DrawBitmap(
+                bmp,
+                Some(&dest_rect),
+                1.0,
+                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                None,
+            );
         }
     }
 
-    unsafe {
-        SelectObject(text_dc, old_font);
-        SelectObject(text_dc, old_bmp);
-        DeleteObject(text_dib as HGDIOBJ);
-        DeleteDC(text_dc);
-        ReleaseDC(std::ptr::null_mut(), screen_dc);
+    // 5. 清理 GDI 位图资源
+    if !icon_info.hbm_color.is_null() {
+        unsafe { DeleteObject(icon_info.hbm_color as HGDIOBJ) };
     }
-}
-
-/// 填充矩形区域（逐像素 alpha）
-#[allow(clippy::too_many_arguments)]
-fn fill_rect_alpha(
-    pixels: *mut Pixel32,
-    bmp_w: i32,
-    bmp_h: i32,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-) {
-    let color = Pixel32 { r, g, b, a };
-    let x_start = x.max(0);
-    let y_start = y.max(0);
-    let x_end = (x + w).min(bmp_w);
-    let y_end = (y + h).min(bmp_h);
-
-    for py in y_start..y_end {
-        let row_offset = (py as usize) * (bmp_w as usize);
-        for px in x_start..x_end {
-            let idx = row_offset + (px as usize);
-            unsafe {
-                *pixels.add(idx) = color;
-            }
-        }
-    }
-}
-
-/// 绘制圆角矩形填充（高效扫描线算法）
-///
-/// `corner_flags`: 位掩码控制哪些角为圆角
-/// - bit 0 (1): 左上角
-/// - bit 1 (2): 右上角
-/// - bit 2 (4): 左下角
-/// - bit 3 (8): 右下角
-#[allow(clippy::too_many_arguments)]
-fn fill_rounded_rect_alpha(
-    pixels: *mut Pixel32,
-    bmp_w: i32,
-    bmp_h: i32,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    radius: i32,
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-    corner_flags: u8,
-) {
-    let color = Pixel32 { r, g, b, a };
-    let r = radius.min(w / 2).min(h / 2);
-    let y_start = y.max(0);
-    let y_end = (y + h).min(bmp_h);
-    let bmp_w_usize = bmp_w as usize;
-
-    for py in y_start..y_end {
-        let ly = py - y;
-        let row_offset = (py as usize) * bmp_w_usize;
-
-        // 计算当前行的左右内缩量（仅在角落行需要内缩）
-        let mut left_inset = 0i32;
-        let mut right_inset = 0i32;
-
-        // 上半部分角落（左上/右上）
-        if ly < r {
-            let dy = r - ly;
-            let dx = r - ((r * r - dy * dy) as f64).sqrt() as i32;
-            if corner_flags & 1 != 0 {
-                left_inset = left_inset.max(dx);
-            }
-            if corner_flags & 2 != 0 {
-                right_inset = right_inset.max(dx);
-            }
-        }
-
-        // 下半部分角落（左下/右下）
-        if ly >= h - r {
-            let dy = ly - (h - r - 1);
-            let dx = r - ((r * r - dy * dy) as f64).sqrt() as i32;
-            if corner_flags & 4 != 0 {
-                left_inset = left_inset.max(dx);
-            }
-            if corner_flags & 8 != 0 {
-                right_inset = right_inset.max(dx);
-            }
-        }
-
-        let fill_x_start = (x + left_inset).max(0);
-        let fill_x_end = (x + w - right_inset).min(bmp_w);
-
-        for px in fill_x_start..fill_x_end {
-            unsafe {
-                *pixels.add(row_offset + (px as usize)) = color;
-            }
-        }
+    if !icon_info.hbm_mask.is_null() {
+        unsafe { DeleteObject(icon_info.hbm_mask as HGDIOBJ) };
     }
 }
 
 /// 根据当前窗口尺寸和 DPI 重新计算网格布局参数
-///
-/// 在 WM_SIZE 和 WM_DPICHANGED 时调用，确保跨显示器 DPI 变化时布局正确
 fn recalculate_layout(data: &mut GridWindowData, width: i32, height: i32, dpi: u32) {
     data.title_h = scale_for_dpi(40, dpi);
     data.icon_size = scale_for_dpi(48, dpi);
-    let icon_label_h = scale_for_dpi(20, dpi);
+    let icon_label_h = scale_for_dpi(36, dpi); // 2 行文字高度（支持换行）
     let cell_spacing = scale_for_dpi(16, dpi);
-    data.cell_w = data.icon_size + cell_spacing;
+    data.cell_w = data.icon_size + scale_for_dpi(32, dpi); // 文字区域需要更多宽度
     data.cell_h = data.icon_size + icon_label_h + cell_spacing;
     let body_w = width - scale_for_dpi(16, dpi);
     data.cols = (body_w / data.cell_w).max(1);
-    let _ = height; // height 当前未使用，保留用于未来行数限制
+    let _ = height;
 }
 
 /// 命中测试：根据鼠标位置获取网格项索引
 fn grid_hit_test(data: &GridWindowData, w: i32, click_x: i32, click_y: i32) -> i32 {
     let cols = data.cols;
     let grid_left = (w - cols * data.cell_w) / 2;
-    let grid_top = data.title_h + scale_for_dpi(8, 96); // 使用与渲染一致的偏移
+    let grid_top = data.title_h + scale_for_dpi(8, 96);
 
     if click_y < grid_top || click_x < grid_left {
         return -1;
@@ -1265,17 +1507,15 @@ unsafe extern "system" fn grid_wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
-        // ===== WM_PAINT（分层窗口使用 UpdateLayeredWindow，此处仅验证绘制） =====
+        // ===== WM_PAINT（分层窗口使用 UpdateLayeredWindow，此处仅验证绘制）=====
         WM_PAINT => {
             let mut ps: PAINTSTRUCT = std::mem::zeroed();
             let _hdc = BeginPaint(hwnd, &mut ps);
-            // 分层窗口内容由 render_layered_window + UpdateLayeredWindow 提供
-            // WM_PAINT 仅用于验证无效区域，防止消息循环
             EndPaint(hwnd, &ps);
             0
         }
 
-        // ===== Hit Test：标题栏拖拽 + 边缘缩放（让 Windows 自动处理） =====
+        // ===== Hit Test：标题栏拖拽 + 边缘缩放 =====
         WM_NCHITTEST => {
             let screen_x = get_x_lparam(lparam);
             let screen_y = get_y_lparam(lparam);
@@ -1301,7 +1541,7 @@ unsafe extern "system" fn grid_wnd_proc(
             let on_right = dx > win_w - edge && dx <= win_w;
             let on_bottom = dy > win_h - edge && dy <= win_h;
 
-            // 主体区域边缘检测（不含顶部：顶部 resize 由 header 接管）
+            // 主体区域边缘检测
             if dy >= title_h {
                 if on_left && on_bottom {
                     return HTBOTTOMLEFT as LRESULT;
@@ -1320,7 +1560,7 @@ unsafe extern "system" fn grid_wnd_proc(
                 }
             }
 
-            // 标题栏区域：边缘可缩放（阈值更小），其余区域拖拽移动
+            // 标题栏区域
             if dy >= 0 && dy < title_h {
                 let h_edge = scale_for_dpi(8, dpi);
                 let on_h_left = dx >= 0 && dx < h_edge;
@@ -1362,13 +1602,12 @@ unsafe extern "system" fn grid_wnd_proc(
             };
             let cursor = LoadCursorW(std::ptr::null_mut(), cursor_id as *const u16);
             SetCursor(cursor);
-            1 // 已处理
+            1
         }
 
         // ===== 窗口缩放 → 重新计算布局并渲染 =====
         WM_SIZE => {
             if wparam != 0 {
-                // SIZE_MINIMIZED = 1，最小化时跳过渲染
                 let dpi = unsafe { GetDpiForWindow(hwnd) };
                 let dpi = if dpi > 0 { dpi } else { 96 };
                 let mut wr = RECT {
@@ -1389,7 +1628,7 @@ unsafe extern "system" fn grid_wnd_proc(
             0
         }
 
-        // ===== DPI 变化（跨显示器移动）→ 先更新布局参数，再调整窗口尺寸 =====
+        // ===== DPI 变化（跨显示器移动）=====
         WM_DPICHANGED => {
             let new_dpi = (wparam & 0xFFFF) as u32;
             log::info!("DPI 变化: {} → 重新计算布局", new_dpi);
@@ -1398,13 +1637,10 @@ unsafe extern "system" fn grid_wnd_proc(
             let new_w = unsafe { (*suggested_rect).right - (*suggested_rect).left };
             let new_h = unsafe { (*suggested_rect).bottom - (*suggested_rect).top };
 
-            // 关键：先更新布局参数（title_h 等），再调用 SetWindowPos
-            // 因为 SetWindowPos 会同步触发 WM_SIZE → render，需要新参数已就位
             if let Some(data) = get_data(hwnd) {
                 recalculate_layout(data, new_w, new_h, new_dpi);
             }
 
-            // 应用系统建议的新窗口位置和尺寸
             unsafe {
                 SetWindowPos(
                     hwnd,
@@ -1421,7 +1657,7 @@ unsafe extern "system" fn grid_wnd_proc(
             0
         }
 
-        // ===== 最小/最大窗口尺寸（DPI 感知）=====
+        // ===== 最小/最大窗口尺寸 =====
         WM_GETMINMAXINFO => {
             let dpi = unsafe { GetDpiForWindow(hwnd) };
             let dpi = if dpi > 0 { dpi } else { 96 };
@@ -1431,12 +1667,130 @@ unsafe extern "system" fn grid_wnd_proc(
             let mmi = &mut *(lparam as *mut MINMAXINFO);
             mmi.pt_min_track_size = POINT {
                 x: scale_for_dpi(200, dpi),
-                y: title_h + scale_for_dpi(100, dpi), // 标题栏 + 至少 100px 内容区
+                y: title_h + scale_for_dpi(100, dpi),
             };
             mmi.pt_max_track_size = POINT {
                 x: scale_for_dpi(3000, dpi),
                 y: scale_for_dpi(3000, dpi),
             };
+            0
+        }
+
+        // ===== 鼠标移动：hover 效果 + tooltip =====
+        WM_MOUSEMOVE => {
+            let mx = get_x_lparam(lparam);
+            let my = get_y_lparam(lparam);
+
+            let mut need_rerender = false;
+            let mut show_tooltip = false;
+            let mut tooltip_text = String::new();
+            let mut tooltip_x: i32 = 0;
+            let mut tooltip_y: i32 = 0;
+
+            if let Some(data) = get_data(hwnd) {
+                let mut client = RECT {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                };
+                unsafe { GetClientRect(hwnd, &mut client) };
+                let w = client.right;
+                let hit = grid_hit_test(data, w, mx, my);
+
+                // 更新 hover 状态
+                if hit != data.hovered_item {
+                    data.hovered_item = hit;
+                    need_rerender = true;
+                }
+
+                // 仅在分类框有选中项时显示 tooltip
+                if hit >= 0
+                    && data.selected_item >= 0
+                    && (hit as usize) < data.items.len()
+                    && !data.tooltip_hwnd.is_null()
+                {
+                    tooltip_text = data.items[hit as usize].display_name.clone();
+                    show_tooltip = true;
+                    // tooltip 位置：鼠标下方偏移（屏幕坐标）
+                    let mut pt = POINT { x: 0, y: 0 };
+                    unsafe { GetCursorPos(&mut pt) };
+                    tooltip_x = pt.x + 16;
+                    tooltip_y = pt.y + 16;
+                }
+            }
+
+            if need_rerender {
+                render_layered_window(hwnd);
+            }
+
+            // 更新 tooltip（在 render 之后，避免 data 借用冲突）
+            if let Some(data) = get_data(hwnd) {
+                let tt = data.tooltip_hwnd;
+                if !tt.is_null() {
+                    if show_tooltip {
+                        let text_wide: Vec<u16> = tooltip_text.encode_utf16().collect();
+                        let mut ti = TOOLINFOW {
+                            cbSize: std::mem::size_of::<TOOLINFOW>() as u32,
+                            uFlags: TTF_SUBCLASS | TTF_IDISHWND,
+                            hwnd,
+                            uId: 0,
+                            rect: RECT {
+                                left: 0,
+                                top: 0,
+                                right: 0,
+                                bottom: 0,
+                            },
+                            hinst: std::ptr::null_mut(),
+                            lpszText: text_wide.as_ptr(),
+                            lParam: 0,
+                            lpReserved: std::ptr::null_mut(),
+                        };
+                        unsafe {
+                            SendMessageW(
+                                tt,
+                                TTM_UPDATETIPTEXTW,
+                                0,
+                                &mut ti as *mut TOOLINFOW as LPARAM,
+                            );
+                            SendMessageW(
+                                tt,
+                                TTM_TRACKPOSITION,
+                                0,
+                                ((tooltip_x as u32 as LPARAM) & 0xFFFF)
+                                    | (((tooltip_y as u32 as LPARAM) & 0xFFFF) << 16),
+                            );
+                            SendMessageW(tt, TTM_TRACKACTIVATE, 1, &mut ti as *mut TOOLINFOW as LPARAM);
+                        }
+                    } else {
+                        // 隐藏 tooltip
+                        let mut ti = TOOLINFOW {
+                            cbSize: std::mem::size_of::<TOOLINFOW>() as u32,
+                            uFlags: TTF_SUBCLASS | TTF_IDISHWND,
+                            hwnd,
+                            uId: 0,
+                            rect: RECT {
+                                left: 0,
+                                top: 0,
+                                right: 0,
+                                bottom: 0,
+                            },
+                            hinst: std::ptr::null_mut(),
+                            lpszText: std::ptr::null(),
+                            lParam: 0,
+                            lpReserved: std::ptr::null_mut(),
+                        };
+                        unsafe {
+                            SendMessageW(
+                                tt,
+                                TTM_TRACKACTIVATE,
+                                0,
+                                &mut ti as *mut TOOLINFOW as LPARAM,
+                            );
+                        }
+                    }
+                }
+            }
             0
         }
 
@@ -1511,7 +1865,6 @@ unsafe extern "system" fn grid_wnd_proc(
             let click_x = get_x_lparam(lparam);
             let click_y = get_y_lparam(lparam);
 
-            // 先选中右键点击的项
             let mut selected_idx = -1i32;
             if let Some(data) = get_data(hwnd) {
                 let mut client = RECT {
@@ -1531,7 +1884,6 @@ unsafe extern "system" fn grid_wnd_proc(
             }
 
             if selected_idx >= 0 {
-                // 获取数据中选中项的信息（需要重新获取因为 get_data 借用规则）
                 let file_path;
                 let _display_name;
                 if let Some(data) = get_data(hwnd) {
@@ -1546,11 +1898,9 @@ unsafe extern "system" fn grid_wnd_proc(
                     return 0;
                 }
 
-                // 获取光标位置（屏幕坐标）
                 let mut pt = POINT { x: 0, y: 0 };
                 GetCursorPos(&mut pt);
 
-                // 创建弹出菜单
                 let menu = CreatePopupMenu();
                 let open_text: Vec<u16> = "打开(O)\0".encode_utf16().collect();
                 let open_dir_text: Vec<u16> = "打开文件所在位置(I)\0".encode_utf16().collect();
@@ -1621,7 +1971,14 @@ unsafe extern "system" fn grid_wnd_proc(
                     }
                 }
 
+                // D2D/DW/WIC 资源通过 Drop 自动释放（windows crate COM 包装器）
+                drop(data.d2d_target);
+                drop(data.d2d_factory);
+                drop(data.dw_factory);
+                drop(data.wic_factory);
+
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                log::info!("格子窗口 D2D/DW 资源已释放");
             }
             0
         }

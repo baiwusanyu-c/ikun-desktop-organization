@@ -38,6 +38,24 @@ windows = { version = "0.58", features = [
     "Win32_System_Diagnostics_Debug", # PROCESS_VM_* 权限常量
     "Win32_UI_Controls",           # LVM_* 常量、LVITEM 结构体
     "Win32_System_LibraryLoader",  # GetModuleHandleW
+
+    # Direct2D（2D 图形渲染 - 替代 GDI）
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
+
+    # DirectWrite（高质量文字渲染）
+    "Win32_Graphics_DirectWrite",
+
+    # DXGI（D2D 依赖）
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+
+    # WIC（图标 HICON → D2D bitmap 转换）
+    "Win32_Graphics_Imaging",
+    "Win32_Graphics_Imaging_D2D",
+
+    # Foundation Numerics（D2D brush 颜色类型依赖）
+    "Foundation_Numerics",
 ]}
 
 # ===== macOS API =====

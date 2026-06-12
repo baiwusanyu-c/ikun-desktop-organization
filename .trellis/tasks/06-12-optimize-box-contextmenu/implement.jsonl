@@ -1,0 +1,4 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "代码质量规范：禁止unwrap、错误处理模式"}
+{"file": "src/desktop/grid_window.rs", "reason": "核心修改文件：格子窗口渲染和右键菜单逻辑"}
