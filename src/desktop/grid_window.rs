@@ -761,7 +761,7 @@ fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> bool {
                                 fMask: 0,
                                 hwnd: windows::Win32::Foundation::HWND(hwnd),
                                 lpVerb: windows::core::PCSTR(
-                                    (cmd as usize) as *const u8,
+                                    ((cmd as u32 - FCIDM_SHVIEWFIRST) as usize) as *const u8,
                                 ),
                                 lpParameters: windows::core::PCSTR(std::ptr::null()),
                                 lpDirectory: windows::core::PCSTR(std::ptr::null()),
@@ -883,8 +883,109 @@ fn show_shell_fallback_menu(hwnd: HWND, file_path: &str) {
     }
 }
 
-/// 显示桌面背景右键菜单（ShellExecuteW 实现）
+/// 显示桌面背景右键菜单（使用 IShellView::GetItemObject(SVGIO_BACKGROUND) 获取真实桌面菜单）
+///
+/// 桌面背景右键菜单由 shell 视图 (defview) 提供，而非 IShellFolder 直接提供。
+/// 正确路径：IShellFolder → CreateViewObject::<IShellView> → GetItemObject::<IContextMenu>(SVGIO_BACKGROUND)
+/// 这会返回与桌面右键完全一致的菜单：查看、排序方式、刷新、新建、显示设置、个性化等。
 fn show_desktop_context_menu(hwnd: HWND) {
+    use windows::Win32::UI::Shell::{
+        IContextMenu, IShellFolder, IShellView, SHGetDesktopFolder, SVGIO_BACKGROUND,
+    };
+
+    unsafe {
+        // 1. 获取桌面 IShellFolder
+        let desktop: Result<IShellFolder, _> = SHGetDesktopFolder();
+        let desktop = match desktop {
+            Ok(f) => f,
+            Err(e) => {
+                log::warn!("桌面菜单: SHGetDesktopFolder 失败: {:?}", e);
+                show_desktop_fallback_menu(hwnd);
+                return;
+            }
+        };
+
+        // 2. 创建 shell 视图 (IShellView)
+        //    CreateViewObject 在桌面文件夹上创建的是 Explorer 视图对象，
+        //    它包含了桌面背景菜单所需的所有 shell 扩展。
+        let view: Result<IShellView, _> =
+            desktop.CreateViewObject(windows::Win32::Foundation::HWND(hwnd));
+        let view = match view {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!("桌面菜单: CreateViewObject(IShellView) 失败: {:?}", e);
+                show_desktop_fallback_menu(hwnd);
+                return;
+            }
+        };
+
+        // 3. 从 shell 视图获取背景区域的 IContextMenu
+        //    SVGIO_BACKGROUND 表示请求的是文件夹空白区域的上下文菜单，
+        //    这正是用户在桌面空白处右键看到的菜单。
+        let result: Result<IContextMenu, _> = view.GetItemObject(SVGIO_BACKGROUND);
+        match result {
+            Ok(cm) => {
+                log::debug!("桌面菜单: GetItemObject(SVGIO_BACKGROUND) 成功");
+                let mut pt = POINT { x: 0, y: 0 };
+                GetCursorPos(&mut pt);
+                let menu = CreatePopupMenu();
+                let flags = CMF_NORMAL | CMF_EXPLORE | CMF_CANRENAME;
+                let hmenu = windows::Win32::UI::WindowsAndMessaging::HMENU(menu);
+
+                match cm.QueryContextMenu(hmenu, 0, FCIDM_SHVIEWFIRST, MENU_CMD_ID_LAST, flags) {
+                    Ok(()) => {
+                        log::debug!("桌面菜单: QueryContextMenu 成功");
+                        let cmd = TrackPopupMenu(
+                            menu,
+                            TPM_RETURNCMD,
+                            pt.x,
+                            pt.y,
+                            0,
+                            hwnd,
+                            std::ptr::null(),
+                        );
+                        if cmd > 0 {
+                            let invoke_info = windows::Win32::UI::Shell::CMINVOKECOMMANDINFO {
+                                cbSize: std::mem::size_of::<
+                                    windows::Win32::UI::Shell::CMINVOKECOMMANDINFO,
+                                >()
+                                    as u32,
+                                fMask: 0,
+                                hwnd: windows::Win32::Foundation::HWND(hwnd),
+                                lpVerb: windows::core::PCSTR(
+                                    ((cmd as u32 - FCIDM_SHVIEWFIRST) as usize) as *const u8,
+                                ),
+                                lpParameters: windows::core::PCSTR(std::ptr::null()),
+                                lpDirectory: windows::core::PCSTR(std::ptr::null()),
+                                nShow: SW_SHOW,
+                                dwHotKey: 0,
+                                hIcon: windows::Win32::Foundation::HANDLE(std::ptr::null_mut()),
+                            };
+                            if let Err(e) = cm.InvokeCommand(&invoke_info) {
+                                log::warn!("桌面菜单: InvokeCommand 失败: {:?}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("桌面菜单: QueryContextMenu 失败: {:?}", e);
+                    }
+                }
+                DestroyMenu(menu);
+                drop(cm);
+            }
+            Err(e) => {
+                log::warn!(
+                    "桌面菜单: GetItemObject(SVGIO_BACKGROUND) 失败: {:?}",
+                    e
+                );
+                show_desktop_fallback_menu(hwnd);
+            }
+        }
+    }
+}
+
+/// 桌面背景右键菜单回退方案（ShellExecuteW 自定义菜单）
+fn show_desktop_fallback_menu(hwnd: HWND) {
     unsafe {
         let mut pt = POINT { x: 0, y: 0 };
         GetCursorPos(&mut pt);

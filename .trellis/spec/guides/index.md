@@ -23,6 +23,7 @@ These guides help you **ask the right questions before coding**.
 |-------|---------|-------------|
 | [Code Reuse Thinking Guide](./code-reuse-thinking-guide.md) | Identify patterns and reduce duplication | When you notice repeated patterns |
 | [Cross-Layer Thinking Guide](./cross-layer-thinking-guide.md) | Think through data flow across layers | Features spanning multiple layers |
+| [Windows Shell API Guide](./windows-shell-api-guide.md) | Correct Shell/COM API call patterns | Working with IShellFolder, IContextMenu, PIDLs |
 
 ---
 
@@ -46,6 +47,15 @@ These guides help you **ask the right questions before coding**.
 - [ ] **You're creating a new utility/helper function** ← Search first!
 
 → Read [Code Reuse Thinking Guide](./code-reuse-thinking-guide.md)
+
+### When to Think About Windows Shell / COM APIs
+
+- [ ] Calling any Shell API (IShellFolder, IContextMenu, IShellView)
+- [ ] Working with PIDLs (absolute vs relative)
+- [ ] Creating context menus (file vs background vs selection)
+- [ ] Defining COM interfaces or vtable structs
+
+→ Read [Windows Shell API Guide](./windows-shell-api-guide.md)
 
 ---
 

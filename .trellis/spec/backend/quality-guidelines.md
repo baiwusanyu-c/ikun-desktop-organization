@@ -132,6 +132,40 @@ fn update(&mut self) {
 }
 ```
 
+### 6. 禁止手动定义 COM vtable 和混合 FFI 类型
+
+```rust
+// ❌ 错误：手动定义 COM vtable（ABI 不匹配风险）
+#[repr(C)]
+struct IContextMenuVtbl {
+    QueryInterface: unsafe extern "system" fn(...) -> HRESULT,
+    AddRef: unsafe extern "system" fn(...) -> u32,
+    // ...
+}
+let raw = cm.as_raw() as *mut MyVtable;
+((*(*raw).lpVtbl).QueryContextMenu)(...);  // 💥 STATUS_ACCESS_VIOLATION
+
+// ✅ 正确：使用 windows crate 的安全方法
+cm.QueryContextMenu(hmenu, 0, first, last, flags)?;
+cm.InvokeCommand(&invoke_info)?;
+```
+
+**原因**：`windows` crate 自动生成的 vtable 经过验证，手动定义容易出现参数类型不匹配和对齐问题。
+
+→ 详见 [Windows Shell API Guide](../guides/windows-shell-api-guide.md)
+
+### 7. 禁止混合手动 FFI 和 windows crate 类型
+
+```rust
+// ❌ 错误：手动结构体传给 crate 方法
+let info: MyCMINVOKECOMMANDINFO = ...;
+cm.InvokeCommand(&info as *const _ as *const CMINVOKECOMMANDINFO);
+
+// ✅ 正确：全部使用 windows crate 类型
+let info: windows::Win32::UI::Shell::CMINVOKECOMMANDINFO = ...;
+cm.InvokeCommand(&info)?;
+```
+
 ---
 
 ## Required Patterns

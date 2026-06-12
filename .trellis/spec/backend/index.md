@@ -55,6 +55,10 @@ UI 层 (ui/)           → egui 组件，用户交互
 - [ ] 阅读 [Directory Structure](./directory-structure.md) 了解平台特定代码规则
 - [ ] 阅读 [Quality Guidelines](./quality-guidelines.md) 了解条件编译模式
 
+### Windows Shell / COM API
+- [ ] 阅读 [Windows Shell API Guide](../guides/windows-shell-api-guide.md) 了解正确的 Shell API 调用模式
+- [ ] 确认 PIDL 类型（绝对 vs 相对）、菜单层级（文件夹 vs 背景）、verb 偏移
+
 ---
 
 ## Core Dependencies
@@ -95,6 +99,8 @@ UI 层 (ui/)           → egui 组件，用户交互
 - ❌ 跨层级反向依赖
 - ❌ 不必要的克隆
 - ❌ 高频路径日志
+- ❌ 手动定义 COM vtable（使用 `windows` crate 安全方法）
+- ❌ 混合手动 FFI 和 `windows` crate 类型
 
 **必须模式**：
 - ✅ 所有公开 API 有文档注释
