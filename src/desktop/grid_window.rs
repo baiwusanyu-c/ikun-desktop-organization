@@ -617,7 +617,7 @@ fn init_d2d_devices(data: &mut GridWindowData) {
                 pixelFormat: D2D1_PIXEL_FORMAT {
                     format: DXGI_FORMAT_B8G8R8A8_UNORM,
                     alphaMode:
-                    windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED,
+                        windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED,
                 },
                 dpiX: 0.0,
                 dpiY: 0.0,
@@ -960,7 +960,7 @@ fn render_layered_window(hwnd: HWND) {
     let label_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(250, 250, 255, 255), None) };
 
     // ===== 标题文字（DirectWrite 渲染）=====
-    let title_font_size = scale_for_dpi(18, dpi) as f32;
+    let title_font_size = scale_for_dpi(15, dpi) as f32;
     let title_format = unsafe {
         let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
         let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
@@ -1066,8 +1066,7 @@ fn render_layered_window(hwnd: HWND) {
     let highlight_brush =
         unsafe { target.CreateSolidColorBrush(&d2d_color(60, 80, 120, 120), None) };
     // Hover 高亮画刷（比选中色浅）
-    let hover_brush =
-        unsafe { target.CreateSolidColorBrush(&d2d_color(70, 90, 130, 70), None) };
+    let hover_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(70, 90, 130, 70), None) };
 
     for (i, item) in data.items.iter().enumerate() {
         let col = (i as i32) % cols;
@@ -1122,7 +1121,7 @@ fn render_layered_window(hwnd: HWND) {
         if let Ok(ref lf) = label_format {
             let label: Vec<u16> = item.display_name.encode_utf16().collect();
             let label_x = cell_x + 2;
-            let label_y = icon_y + icon_size + 2;
+            let label_y = icon_y + icon_size + scale_for_dpi(6, dpi);
             let label_w = (cell_w - 4) as f32;
 
             // 选中项：足够高度显示完整名称；未选中：2 行裁剪
@@ -1760,7 +1759,12 @@ unsafe extern "system" fn grid_wnd_proc(
                                 ((tooltip_x as u32 as LPARAM) & 0xFFFF)
                                     | (((tooltip_y as u32 as LPARAM) & 0xFFFF) << 16),
                             );
-                            SendMessageW(tt, TTM_TRACKACTIVATE, 1, &mut ti as *mut TOOLINFOW as LPARAM);
+                            SendMessageW(
+                                tt,
+                                TTM_TRACKACTIVATE,
+                                1,
+                                &mut ti as *mut TOOLINFOW as LPARAM,
+                            );
                         }
                     } else {
                         // 隐藏 tooltip
