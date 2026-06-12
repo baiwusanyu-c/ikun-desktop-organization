@@ -677,7 +677,7 @@ fn show_shell_context_menu(hwnd: HWND, file_path: &str) {
 fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> bool {
     use windows::core::PCWSTR;
     use windows::Win32::UI::Shell::{
-        IContextMenu, IShellFolder, ILFree, SHBindToParent, SHParseDisplayName,
+        IContextMenu, ILFree, IShellFolder, SHBindToParent, SHParseDisplayName,
     };
 
     unsafe {
@@ -697,8 +697,7 @@ fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> bool {
         //    但 GetUIObjectOf 期望的是相对 PIDL（父文件夹的子项）。
         //    对于深层嵌套路径，这会导致 GetUIObjectOf 返回损坏的 IContextMenu，
         //    后续 QueryContextMenu 调用时崩溃 (STATUS_ACCESS_VIOLATION)。
-        let mut rel_pidl: *mut windows::Win32::UI::Shell::Common::ITEMIDLIST =
-            std::ptr::null_mut();
+        let mut rel_pidl: *mut windows::Win32::UI::Shell::Common::ITEMIDLIST = std::ptr::null_mut();
         let parent: Result<IShellFolder, _> =
             SHBindToParent(full_pidl as *const _, Some(&mut rel_pidl));
         let parent = match parent {
@@ -737,8 +736,7 @@ fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> bool {
                 let flags =
                     CMF_NORMAL | CMF_EXPLORE | CMF_CANRENAME | CMF_EXTENDED_VERBS | CMF_ITEMMENU;
 
-                let hmenu =
-                    windows::Win32::UI::WindowsAndMessaging::HMENU(menu);
+                let hmenu = windows::Win32::UI::WindowsAndMessaging::HMENU(menu);
                 match cm.QueryContextMenu(hmenu, 0, FCIDM_SHVIEWFIRST, MENU_CMD_ID_LAST, flags) {
                     Ok(()) => {
                         log::debug!("windows crate: QueryContextMenu 成功");
@@ -756,8 +754,7 @@ fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> bool {
                             let invoke_info = windows::Win32::UI::Shell::CMINVOKECOMMANDINFO {
                                 cbSize: std::mem::size_of::<
                                     windows::Win32::UI::Shell::CMINVOKECOMMANDINFO,
-                                >()
-                                    as u32,
+                                >() as u32,
                                 fMask: 0,
                                 hwnd: windows::Win32::Foundation::HWND(hwnd),
                                 lpVerb: windows::core::PCSTR(
@@ -767,9 +764,7 @@ fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> bool {
                                 lpDirectory: windows::core::PCSTR(std::ptr::null()),
                                 nShow: SW_SHOW,
                                 dwHotKey: 0,
-                                hIcon: windows::Win32::Foundation::HANDLE(
-                                    std::ptr::null_mut(),
-                                ),
+                                hIcon: windows::Win32::Foundation::HANDLE(std::ptr::null_mut()),
                             };
                             if let Err(e) = cm.InvokeCommand(&invoke_info) {
                                 log::warn!("windows crate: InvokeCommand 失败: {:?}", e);
@@ -948,8 +943,7 @@ fn show_desktop_context_menu(hwnd: HWND) {
                             let invoke_info = windows::Win32::UI::Shell::CMINVOKECOMMANDINFO {
                                 cbSize: std::mem::size_of::<
                                     windows::Win32::UI::Shell::CMINVOKECOMMANDINFO,
-                                >()
-                                    as u32,
+                                >() as u32,
                                 fMask: 0,
                                 hwnd: windows::Win32::Foundation::HWND(hwnd),
                                 lpVerb: windows::core::PCSTR(
@@ -974,10 +968,7 @@ fn show_desktop_context_menu(hwnd: HWND) {
                 drop(cm);
             }
             Err(e) => {
-                log::warn!(
-                    "桌面菜单: GetItemObject(SVGIO_BACKGROUND) 失败: {:?}",
-                    e
-                );
+                log::warn!("桌面菜单: GetItemObject(SVGIO_BACKGROUND) 失败: {:?}", e);
                 show_desktop_fallback_menu(hwnd);
             }
         }
