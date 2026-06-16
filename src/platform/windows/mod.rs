@@ -26,8 +26,8 @@ mod sys_tray;
 // Re-export key items
 pub use desktop_manager::DesktopManager;
 pub use grid_window::{
-    create_grid_window, destroy_all_grid_windows, get_grid_count, get_screen_resolution,
-    GridCreateParams, GridFileItem,
+    collect_grid_layout, create_grid_window, destroy_all_grid_windows, get_grid_count,
+    get_screen_resolution, GridCreateParams, GridFileItem,
 };
 pub use icon_extract::extract_file_icon;
 pub use icon_hider::{hide_native_icons, restore_native_icons};

@@ -150,9 +150,15 @@ log::warn!("加载失败");  // 缺少具体错误信息
 [src/context.rs](src/context.rs):
 ```rust
 pub fn new() -> anyhow::Result<Self> {
-    let config = AppConfig::load()?;  // 失败时调用者降级
-    let desktop_manager = DesktopManager::new().unwrap_or_default();
-    let classifier = AppClassifier::new().unwrap_or_default();
+    let config = AppConfig::load().unwrap_or_else(|e| {
+        log::warn!("加载配置失败: {}，使用默认配置", e);
+        AppConfig::default()
+    });
+    let classifier = AppClassifier::from_config(&config.classification);
+    let desktop_manager = DesktopManager::new().unwrap_or_else(|e| {
+        log::warn!("初始化桌面管理器失败: {}，使用默认值", e);
+        DesktopManager
+    });
     Ok(Self { config, desktop_manager, classifier, state: AppState::default() })
 }
 ```

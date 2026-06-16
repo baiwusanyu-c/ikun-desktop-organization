@@ -2,11 +2,10 @@
 //!
 //! 通过 `AppContext` 统一管理配置、平台服务和分类器。
 
-use crate::config::app_config::ViewMode;
 use crate::context::AppContext;
 use crate::platform::{
-    create_grid_window, destroy_all_grid_windows, extract_file_icon, get_grid_count,
-    get_screen_resolution, hide_native_icons, restore_native_icons, DesktopIcon,
+    collect_grid_layout, create_grid_window, destroy_all_grid_windows, extract_file_icon,
+    get_grid_count, get_screen_resolution, hide_native_icons, restore_native_icons, DesktopIcon,
     DesktopManagerTrait, GridCreateParams, GridFileItem,
 };
 use eframe::egui;
@@ -15,6 +14,7 @@ use eframe::egui;
 pub struct MyApp {
     /// 应用上下文（统一管理所有状态）
     ctx: AppContext,
+    /// 是否已完成首次初始化（恢复布局等）
     initialized: bool,
 }
 
@@ -31,6 +31,105 @@ impl Default for MyApp {
 impl MyApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         Self::default()
+    }
+
+    /// 根据配置文件恢复分类框布局
+    ///
+    /// 读取 `config.layout.boxes`，为每个 BoxLayoutData 创建格子窗口。
+    /// 仅在 `config.general.restore_layout_on_start` 为 true 时执行。
+    fn restore_layout(&mut self) {
+        if !self.ctx.config.general.restore_layout_on_start {
+            log::info!("配置 disable 了启动恢复布局，跳过");
+            return;
+        }
+
+        let boxes = &self.ctx.config.layout.boxes;
+        if boxes.is_empty() {
+            log::info!("配置中无布局数据，跳过恢复");
+            return;
+        }
+
+        log::info!("开始恢复布局: {} 个分类框", boxes.len());
+
+        // 先隐藏原生图标
+        if !self.ctx.state.icons_hidden {
+            if let Err(e) = hide_native_icons() {
+                self.ctx.set_status(format!("隐藏图标失败: {}", e));
+                log::error!("{}", self.ctx.state.status_message);
+                return;
+            }
+            self.ctx.state.icons_hidden = true;
+        }
+
+        // 销毁已有格子（防止重复创建）
+        destroy_all_grid_windows();
+
+        // 逐个恢复分类框
+        let mut created_count = 0;
+        for (i, box_data) in boxes.iter().enumerate() {
+            let mut items: Vec<GridFileItem> = Vec::new();
+
+            for file_path in &box_data.icon_names {
+                let display_name = std::path::Path::new(file_path)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(file_path)
+                    .to_string();
+
+                let hicon = extract_file_icon(file_path)
+                    .map(|fi| fi.hicon)
+                    .unwrap_or(std::ptr::null_mut());
+
+                items.push(GridFileItem {
+                    file_path: file_path.clone(),
+                    display_name,
+                    icon_handle: hicon,
+                });
+            }
+
+            if items.is_empty() {
+                log::info!("分类框 '{}' 无有效文件，跳过", box_data.name);
+                continue;
+            }
+
+            let params = GridCreateParams {
+                id: i,
+                title: box_data.name.clone(),
+                x: box_data.position[0] as i32,
+                y: box_data.position[1] as i32,
+                width: box_data.size[0] as i32,
+                height: box_data.size[1] as i32,
+                items,
+                view_mode: box_data.view_mode.clone(),
+            };
+
+            if let Err(e) = create_grid_window(params) {
+                log::error!("恢复分类框 '{}' 失败: {}", box_data.name, e);
+            } else {
+                created_count += 1;
+            }
+        }
+
+        self.ctx
+            .set_status(format!("布局恢复完成：恢复了 {} 个分类框", created_count));
+        log::info!("{}", self.ctx.state.status_message);
+    }
+
+    /// 保存当前布局到配置并写入文件
+    fn save_layout_and_config(&mut self) {
+        // 1. 从运行中的格子窗口收集布局数据
+        let layout = collect_grid_layout();
+        self.ctx.config.layout.boxes = layout;
+
+        // 2. 保存配置到 ~/.ikun_organizer.json
+        if let Err(e) = self.ctx.save_config() {
+            log::error!("保存配置失败: {}", e);
+            self.ctx.set_status(format!("保存失败: {}", e));
+        } else {
+            let box_count = self.ctx.config.layout.boxes.len();
+            self.ctx
+                .set_status(format!("配置已保存（含 {} 个分类框布局）", box_count));
+        }
     }
 
     /// 一键分类：隐藏原生图标 → 固定 3 个分类框（游戏/开发工具/办公）
@@ -88,8 +187,8 @@ impl MyApp {
         log::info!("屏幕分辨率: {}x{}", screen_w, screen_h);
 
         let num_categories: i32 = 3;
-        let box_w: i32 = 680;
-        let box_h: i32 = 800;
+        let box_w: i32 = self.ctx.config.box_defaults.default_width;
+        let box_h: i32 = self.ctx.config.box_defaults.default_height;
         let padding: i32 = 20;
         let total_w = num_categories * box_w + (num_categories - 1) * padding;
         let start_x: i32 = ((screen_w - total_w) / 2).max(10);
@@ -136,7 +235,7 @@ impl MyApp {
                 width: box_w,
                 height: box_h,
                 items,
-                view_mode: ViewMode::default(), // 默认 Medium，后续从 BoxLayoutData 读取
+                view_mode: self.ctx.config.box_defaults.view_mode.clone(),
             };
 
             if let Err(e) = create_grid_window(params) {
@@ -156,6 +255,11 @@ impl MyApp {
 
     /// 清除所有格子，恢复原生图标
     fn clear_and_restore(&mut self) {
+        // 先收集当前布局保存到配置（保留最后一次布局记录）
+        let layout = collect_grid_layout();
+        self.ctx.config.layout.boxes = layout;
+        let _ = self.ctx.save_config();
+
         destroy_all_grid_windows();
 
         if self.ctx.state.icons_hidden {
@@ -173,7 +277,11 @@ impl MyApp {
 
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.initialized = true;
+        // 首次渲染时恢复布局
+        if !self.initialized {
+            self.initialized = true;
+            self.restore_layout();
+        }
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("📦 Desktop Organizer");
@@ -188,12 +296,7 @@ impl eframe::App for MyApp {
                     self.clear_and_restore();
                 }
                 if ui.button("💾 保存配置").clicked() {
-                    if let Err(e) = self.ctx.save_config() {
-                        log::error!("保存失败: {}", e);
-                        self.ctx.set_status(format!("保存失败: {}", e));
-                    } else {
-                        self.ctx.set_status("配置已保存");
-                    }
+                    self.save_layout_and_config();
                 }
             });
 
@@ -220,6 +323,7 @@ impl eframe::App for MyApp {
             ui.label("• 拖动格子边缘 → 调整大小");
             ui.label("• 双击格子内图标 → 打开应用");
             ui.label("• 右键格子内图标 → 弹出菜单");
+            ui.label("• 点击「保存配置」→ 保存当前布局到 ~/.ikun_organizer.json");
             ui.label("• 点击「清除 & 恢复」→ 恢复原始桌面");
         });
 
@@ -229,6 +333,14 @@ impl eframe::App for MyApp {
 
 impl Drop for MyApp {
     fn drop(&mut self) {
+        // 退出前自动保存布局
+        let layout = collect_grid_layout();
+        if !layout.is_empty() {
+            self.ctx.config.layout.boxes = layout;
+            let _ = self.ctx.save_config();
+            log::info!("退出前自动保存布局");
+        }
+
         destroy_all_grid_windows();
         if self.ctx.state.icons_hidden {
             let _ = restore_native_icons();

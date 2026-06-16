@@ -27,8 +27,9 @@ pub use windows::DesktopManager;
 // Re-export platform-specific functions that app.rs uses
 #[cfg(windows)]
 pub use windows::{
-    create_grid_window, destroy_all_grid_windows, extract_file_icon, get_grid_count,
-    get_screen_resolution, hide_native_icons, restore_native_icons, GridCreateParams, GridFileItem,
+    collect_grid_layout, create_grid_window, destroy_all_grid_windows, extract_file_icon,
+    get_grid_count, get_screen_resolution, hide_native_icons, restore_native_icons,
+    GridCreateParams, GridFileItem,
 };
 
 /// 桌面管理器 trait（跨平台）

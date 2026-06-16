@@ -8,9 +8,9 @@
 
 本项目使用**统一 JSON 配置**进行数据持久化：
 
-- **统一配置**：单一 `config.json` 管理所有设置（`src/config/app_config.rs`）
-- **分类规则**：内嵌在配置的 `classification.categories` 字段中
-- **布局数据**：内嵌在配置的 `layout.boxes` 字段中
+- **统一配置**：单一 `~/.ikun_organizer.json` 管理所有设置（`src/config/app_config.rs`）
+- **分类规则**：`classification` 字段，`Vec<CategoryRule>`（AI 失败时的兜底规则）
+- **布局数据**：`layout.boxes` 字段，`Vec<BoxLayoutData>`（分类框位置/尺寸/内容）
 
 **数据持久化原则**：
 - 使用 `serde` 进行序列化/反序列化
@@ -25,28 +25,27 @@
 
 | 配置段 | 内容 | 对应结构体 |
 |--------|------|-----------|
-| `general` | 开机自启、语言、单实例 | `GeneralConfig` |
+| `general` | 开机自启、语言、单实例、启动恢复 | `GeneralConfig` |
+| `hotkeys` | toggle_panel、auto_classify | `HotkeyConfig` |
 | `box_style` | 背景色/透明度、圆角、字号、图标大小 | `BoxStyleConfig` |
-| `ai` | enabled、base_url、api_key、model | `AiConfig` |
-| `hotkeys` | toggle_panel、toggle_icons、auto_classify | `HotkeyConfig` |
-| `tray` | enabled、show_on_start、double_click_action | `TrayConfig` |
-| `layout` | 分类框列表（位置/尺寸/锁定/排序/视图） | `LayoutConfig` |
-| `classification` | 分类规则（内嵌或引用外部） | `ClassificationConfig` |
+| `box_defaults` | 新建分类框默认视图/排序/分组/尺寸 | `BoxDefaultsConfig` |
+| `ai` | enabled、base_url、api_key、model、timeout | `AiConfig` |
+| `classification` | 分类规则列表（兜底规则） | `Vec<CategoryRule>` |
+| `layout` | 分类框布局（位置/尺寸/锁定/排序/视图） | `LayoutConfig` |
 | `debug` | log_level、log_to_file、show_fps | `DebugConfig` |
 
 ### 存储位置
 
 ```
-Windows: %APPDATA%/ikun-desktop-organization/config.json
-macOS:   ~/.config/ikun-desktop-organization/config.json
+所有平台: ~/.ikun_organizer.json（用户主目录）
 ```
 
 获取路径：
 ```rust
 fn get_config_path() -> anyhow::Result<PathBuf> {
-    dirs::config_dir()
-        .map(|p| p.join("ikun-desktop-organization/config.json"))
-        .ok_or_else(|| anyhow::anyhow!("无法获取配置目录"))
+    dirs::home_dir()
+        .map(|p| p.join(".ikun_organizer.json"))
+        .ok_or_else(|| anyhow::anyhow!("无法获取用户主目录"))
 }
 ```
 

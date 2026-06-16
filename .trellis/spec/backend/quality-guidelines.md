@@ -81,9 +81,9 @@ let layout = DesktopLayout::load()
 let path = "/Users/username/.config/...";
 
 // ✅ 正确：使用 dirs crate
-let path = dirs::config_dir()
-    .map(|p| p.join("ikun-desktop-organization/layout.json"))
-    .ok_or_else(|| anyhow::anyhow!("无法获取配置目录"))?;
+let path = dirs::home_dir()
+    .map(|p| p.join(".ikun_organizer.json"))
+    .ok_or_else(|| anyhow::anyhow!("无法获取用户主目录"))?;
 ```
 
 ### 3. 禁止跨层级反向依赖

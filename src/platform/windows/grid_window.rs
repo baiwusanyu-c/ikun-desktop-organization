@@ -210,6 +210,8 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
 
     let scaled_w = scale_for_dpi(params.width, dpi);
     let scaled_h = scale_for_dpi(params.height, dpi);
+    let scaled_x = scale_for_dpi(params.x, dpi);
+    let scaled_y = scale_for_dpi(params.y, dpi);
     let title_h = scale_for_dpi(40, dpi);
 
     // 通过 view_engine 获取视图参数（参数化，支持 8 种视图模式）
@@ -222,22 +224,24 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
     let cell_w = grid_layout.cell_w;
     let cell_h = grid_layout.cell_h;
 
-    // 如果 DPI 不是 96，调整窗口尺寸
+    // 如果 DPI 不是 96，调整窗口位置和尺寸（逻辑像素 → 物理像素）
     if dpi != initial_dpi {
         unsafe {
             SetWindowPos(
                 hwnd,
                 std::ptr::null_mut(),
-                params.x,
-                params.y,
+                scaled_x,
+                scaled_y,
                 scaled_w,
                 scaled_h,
                 SWP_NOZORDER,
             );
         }
         log::info!(
-            "DPI 自适应: {} -> 窗口尺寸 {}x{}, title_h={}, icon_size={}, cols={}",
+            "DPI 自适应: {} -> 位置 ({},{}), 尺寸 {}x{}, title_h={}, icon_size={}, cols={}",
             dpi,
+            scaled_x,
+            scaled_y,
             scaled_w,
             scaled_h,
             title_h,
@@ -388,6 +392,76 @@ pub fn destroy_all_grid_windows() {
 /// 获取格子数量
 pub fn get_grid_count() -> usize {
     GRID_WINDOWS.lock().map(|g| g.len()).unwrap_or(0)
+}
+
+/// 收集所有格子窗口的当前布局数据
+///
+/// 读取每个窗口的实时位置、尺寸、标题、文件列表等信息，
+/// 返回 `BoxLayoutData` 列表用于持久化到配置文件。
+///
+/// **注意**：存储的是逻辑像素（DPI 96 基准），恢复时 `create_grid_window` 会重新缩放。
+pub fn collect_grid_layout() -> Vec<crate::config::BoxLayoutData> {
+    use crate::config::BoxLayoutData;
+    use uuid::Uuid;
+
+    let grids = match GRID_WINDOWS.lock() {
+        Ok(g) => g,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut layouts = Vec::new();
+
+    for grid in grids.iter() {
+        // 获取窗口 DPI
+        let dpi = unsafe { GetDpiForWindow(grid.hwnd) };
+        let dpi = if dpi > 0 { dpi } else { 96 };
+
+        // 读取窗口当前位置和尺寸（物理像素）
+        let mut wr = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        unsafe { GetWindowRect(grid.hwnd, &mut wr) };
+
+        // 物理像素 → 逻辑像素（DPI 96 基准），避免恢复时双重缩放
+        let x = (wr.left as f32 * 96.0) / dpi as f32;
+        let y = (wr.top as f32 * 96.0) / dpi as f32;
+        let w = ((wr.right - wr.left) as f32 * 96.0) / dpi as f32;
+        let h = ((wr.bottom - wr.top) as f32 * 96.0) / dpi as f32;
+
+        // 读取窗口内部数据（标题、文件列表、视图模式）
+        let data_ptr =
+            unsafe { GetWindowLongPtrW(grid.hwnd, GWLP_USERDATA) } as *mut GridWindowData;
+        if data_ptr.is_null() {
+            continue;
+        }
+
+        let data = unsafe { &*data_ptr };
+        let icon_names: Vec<String> = data
+            .items
+            .iter()
+            .map(|item| item.file_path.clone())
+            .collect();
+
+        layouts.push(BoxLayoutData {
+            id: Uuid::new_v4(), // TODO: 创建时分配固定 ID，此处暂用新生成
+            name: data.title.clone(),
+            position: [x, y],
+            size: [w, h],
+            locked: false, // TODO: 从窗口数据读取锁定状态
+            sort_mode: crate::config::SortMode::Name,
+            sort_ascending: true,
+            view_mode: data.view_mode.clone(),
+            group_by: crate::config::GroupBy::None,
+            icon_names,
+            style_overrides: None,
+        });
+    }
+
+    log::info!("收集布局数据: {} 个分类框", layouts.len());
+    layouts
 }
 
 // ===== 窗口过程 =====

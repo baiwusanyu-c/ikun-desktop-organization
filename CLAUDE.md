@@ -58,7 +58,7 @@ cargo watch -x check             # 自动检查（需 cargo install cargo-watch�
 - **业务分离**：`box_core/` 分类框业务逻辑与平台渲染完全解耦
 - **上下文注入**：所有模块通过 `AppContext` 共享状态，替代全局变量
 - **插件化**：`plugin/` 功能模块作为插件注册，灵活扩展
-- **统一配置**：单一 `config.json` 管理所有设置，支持导入/导出
+- **统一配置**：单一 `~/.ikun_organizer.json` 管理所有设置，支持导入/导出
 - **单文件 ≤ 1000 行**：严格控制代码规模
 
 ### 项目目录结构
@@ -98,16 +98,14 @@ src/
 │   └── interaction.rs         #   交互状态：选中/hover/锁定/拖拽
 │
 ├── classification/            # 分类系统
-│   ├── mod.rs                 #   AppClassifier
-│   ├── database.rs            #   AppCategoryDB（YAML 兼容 + Default 内嵌规则）
+│   ├── mod.rs                 #   AppClassifier（from_config 从配置创建）
+│   ├── database.rs            #   AppCategoryDB（从配置 CategoryRule 构建）
 │   ├── matcher.rs             #   AppMatcher 通配符匹配算法
 │   └── ai_classifier.rs       #   AI 分类器（TODO：LLM API 调用）
 │
 ├── config/                    # 统一配置系统
 │   ├── mod.rs                 #   模块导出
-│   ├── app_config.rs          #   统一 JSON 配置结构（AppConfig）（369 行）
-│   ├── layout.rs              #   DesktopLayout（旧版兼容，待合并）
-│   └── settings.rs            #   AppSettings（旧版兼容，待合并）
+│   └── app_config.rs          #   统一 JSON 配置结构（AppConfig）+ 单元测试
 │
 ├── plugin/                    # 插件系统
 │   ├── mod.rs                 #   Plugin trait + PluginRegistry
@@ -189,22 +187,34 @@ pub trait Plugin: Send {
 
 #### 4. 统一 JSON 配置
 
-`config.json` 管理所有设置，支持导入/导出：
+`~/.ikun_organizer.json` 管理所有设置，支持导入/导出：
 
 | 配置段 | 内容 |
 |--------|------|
-| `general` | 开机自启、语言、单实例 |
-| `box_style` | 背景色/透明度、圆角、字号、图标大小、高亮色 |
-| `ai` | enabled、base_url、api_key、model、temperature |
-| `hotkeys` | toggle_panel、toggle_icons、auto_classify |
-| `tray` | enabled、show_on_start、double_click_action |
-| `layout` | 分类框列表（位置/尺寸/锁定/排序/视图/分组） |
-| `classification` | 分类规则（内嵌或引用外部文件） |
+| `general` | 开机自启、语言、单实例、启动恢复布局、启动自动分类 |
+| `hotkeys` | toggle_panel、auto_classify |
+| `box_style` | 背景色/透明度、圆角、字号、图标大小、标题栏、锁定/关闭按钮 |
+| `box_defaults` | 新建分类框默认视图/排序/分组/尺寸 |
+| `ai` | enabled、base_url、api_key、model、temperature、timeout、retries |
+| `classification` | 分类规则列表（AI 失败时的兜底规则） |
+| `layout` | 分类框列表（位置/尺寸/锁定/排序/视图/分组/文件列表/样式覆盖） |
 | `debug` | log_level、log_to_file、show_fps、render_wireframe |
 
-**存储位置**：
-- Windows: `%APPDATA%/ikun-desktop-organization/config.json`
-- macOS: `~/.config/ikun-desktop-organization/config.json`
+**存储位置**：`~/.ikun_organizer.json`（用户主目录）
+
+**布局持久化流程**：
+```
+保存: collect_grid_layout() → config.layout.boxes → save() → ~/.ikun_organizer.json
+恢复: load() → config.layout.boxes → restore_layout() → create_grid_window()
+```
+
+**DPI 处理**：配置存储逻辑像素（DPI 96 基准），创建/恢复时 `create_grid_window` 按实际 DPI 缩放，`collect_grid_layout` 反向转换回逻辑像素。
+
+**固定行为（代码硬编码，不可配置）**：
+- 始终显示系统托盘，任务栏不显示
+- 始终记忆窗口位置和尺寸
+- 托盘双击 = 呼出控制面板
+- 托盘右键 = 固定菜单（打开控制面板 / 创建分类框 / 一键AI分类 / 退出）
 
 ### 依赖关系
 
@@ -275,15 +285,15 @@ main.rs
 ## 功能需求（待实现）
 
 ### 分类框功能
-- [ ] 拖拽移动 + 位置记忆
-- [ ] 边缘拖拽修改尺寸 + 尺寸记忆
+- [x] 拖拽移动 + 位置记忆（通过 collect_grid_layout + restore_layout）
+- [x] 边缘拖拽修改尺寸 + 尺寸记忆（同上）
 - [ ] 锁定按钮 + 锁定记忆（锁定后不可拖拽/缩放）
 - [ ] 分类框名称修改
-- [ ] 排序方式：名称、类型、修改时间、作者、创建时间、大小、标记、标题 × 递增/递减
-- [ ] 查看方式：超大、大、中、小、列表、详细信息、平铺、内容
-- [ ] 分组展示：按名称、类型、修改时间、作者、创建时间、大小、标记、标题
+- [x] 排序方式：名称、类型、修改时间、作者、创建时间、大小、标记、标题 × 递增/递减（引擎已实现）
+- [x] 查看方式：超大、大、中、小、列表、详细信息、平铺、内容（引擎已实现）
+- [x] 分组展示：按名称、类型、修改时间、作者、创建时间、大小、标记、标题（引擎已实现）
 - [ ] 拖拽快捷方式到外部桌面 / 外部桌面快捷方式拖入分类框
-- [ ] 右键功能与原生快捷方式一致
+- [x] 右键功能与原生快捷方式一致（Shell 上下文菜单已实现）
 - [ ] 分类框删除
 
 ### 桌面右键菜单
@@ -293,10 +303,11 @@ main.rs
 
 ### 控制台（控制面板）
 - [ ] 键盘快捷键呼出
-- [ ] 不在任务栏显示
-- [ ] 仅系统托盘图标，点击显示
-- [ ] 分类框风格设置（背景色、圆角、图标大小、文本大小）
-- [ ] AI BaseUrl / API Key 设置
+- [x] 不在任务栏显示（WS_EX_TOOLWINDOW）
+- [x] 仅系统托盘图标（右键菜单：打开面板/创建分类框/AI分类/退出）
+- [x] 分类框风格设置（背景色、圆角、图标大小、文本大小）
+- [x] AI BaseUrl / API Key 设置
+- [x] 统一配置持久化（~/.ikun_organizer.json）
 
 ---
 

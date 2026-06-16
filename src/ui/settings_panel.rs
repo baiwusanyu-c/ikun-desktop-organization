@@ -77,11 +77,6 @@ pub fn render_settings_panel(ctx: &mut AppContext, ui: &mut egui::Ui) {
         });
 
         ui.horizontal(|ui| {
-            ui.label("显示/隐藏图标:");
-            ui.text_edit_singleline(&mut hotkeys.toggle_icons);
-        });
-
-        ui.horizontal(|ui| {
             ui.label("一键分类:");
             ui.text_edit_singleline(&mut hotkeys.auto_classify);
         });

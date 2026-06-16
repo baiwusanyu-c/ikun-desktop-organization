@@ -1,6 +1,7 @@
 //! 应用分类模块
 //!
-//! 负责智能分类桌面图标
+//! 负责智能分类桌面图标。
+//! 分类规则来自配置 `classification` 段（AI 失败时的兜底规则）。
 
 pub mod ai_classifier;
 mod database;
@@ -9,6 +10,7 @@ mod matcher;
 pub use database::{AppCategory, AppCategoryDB};
 pub use matcher::AppMatcher;
 
+use crate::config::CategoryRule;
 use crate::platform::DesktopIcon;
 
 /// 应用分类器
@@ -28,11 +30,13 @@ impl Default for AppClassifier {
 }
 
 impl AppClassifier {
-    pub fn new() -> anyhow::Result<Self> {
-        let db = AppCategoryDB::load()?;
+    /// 从配置的分类规则创建分类器
+    ///
+    /// 使用 `AppConfig.classification`（`Vec<CategoryRule>`）作为兜底分类规则。
+    pub fn from_config(categories: &[CategoryRule]) -> Self {
+        let db = AppCategoryDB::from_category_rules(categories);
         let matcher = AppMatcher::new(db.clone());
-
-        Ok(Self { db, matcher })
+        Self { db, matcher }
     }
 
     /// 分类单个图标

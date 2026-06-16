@@ -62,9 +62,7 @@ src/
 │
 ├── config/                    # 统一配置系统
 │   ├── mod.rs                 #   模块导出
-│   ├── app_config.rs          #   统一 JSON 配置结构（AppConfig）
-│   ├── layout.rs              #   DesktopLayout（旧版兼容，待合并）
-│   └── settings.rs            #   AppSettings（旧版兼容，待合并）
+│   └── app_config.rs          #   统一 JSON 配置结构（AppConfig）+ 单元测试
 │
 ├── plugin/                    # 插件系统
 │   ├── mod.rs                 #   Plugin trait + PluginRegistry
@@ -97,9 +95,8 @@ build/
 └── app.manifest               # Per-Monitor DPI V2 感知清单
 ```
 
-**配置存储位置**（用户目录）：
-- Windows: `%APPDATA%/ikun-desktop-organization/config.json`
-- macOS/Linux: `~/.config/ikun-desktop-organization/config.json`
+**配置存储位置**（用户主目录）：
+- 所有平台: `~/.ikun_organizer.json`
 
 ---
 
