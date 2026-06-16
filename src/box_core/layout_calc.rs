@@ -20,6 +20,10 @@ pub struct GridLayout {
 }
 
 /// 计算网格布局
+///
+/// 自动换行逻辑：
+/// - 当窗口宽度不足以容纳一个完整 cell 时，强制 cols=1 并将 cell_w clamp 到可用宽度
+/// - 保证图标始终可见，不会被"挤到看不到"
 pub fn calculate_grid(
     window_width: i32,
     title_bar_height: i32,
@@ -27,22 +31,30 @@ pub fn calculate_grid(
     _dpi: u32,
 ) -> GridLayout {
     let padding = 8; // 左右各 8px
-    let body_w = window_width - padding * 2;
+    let body_w = (window_width - padding * 2).max(1);
 
+    // 列数：自动计算或固定
     let cols = if let Some(fixed) = params.fixed_cols {
-        fixed
+        fixed.max(1)
     } else {
         (body_w / params.cell_w).max(1)
     };
 
-    let grid_left = (window_width - cols * params.cell_w) / 2;
+    // 关键：当单列 cell 宽度超出可用宽度时，clamp 到 body_w（防止图标超出可视区域）
+    let effective_cell_w = if cols == 1 && params.cell_w > body_w {
+        body_w
+    } else {
+        params.cell_w
+    };
+
+    let grid_left = (window_width - cols * effective_cell_w) / 2;
     let grid_top = title_bar_height + 8;
 
     GridLayout {
         cols,
         grid_left,
         grid_top,
-        cell_w: params.cell_w,
+        cell_w: effective_cell_w,
         cell_h: params.cell_h,
     }
 }

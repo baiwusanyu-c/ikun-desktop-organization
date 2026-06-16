@@ -2,6 +2,7 @@
 //!
 //! 通过 `AppContext` 统一管理配置、平台服务和分类器。
 
+use crate::config::app_config::ViewMode;
 use crate::context::AppContext;
 use crate::platform::{
     create_grid_window, destroy_all_grid_windows, extract_file_icon, get_grid_count,
@@ -135,6 +136,7 @@ impl MyApp {
                 width: box_w,
                 height: box_h,
                 items,
+                view_mode: ViewMode::default(), // 默认 Medium，后续从 BoxLayoutData 读取
             };
 
             if let Err(e) = create_grid_window(params) {

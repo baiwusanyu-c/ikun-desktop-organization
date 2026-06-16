@@ -2,6 +2,19 @@
 //!
 //! 本模块包含使用 Direct2D 和 DirectWrite 渲染格子窗口内容的所有代码。
 //! 包括设备初始化、分层窗口渲染和图标绘制。
+//!
+//! # 图标渲染架构
+//!
+//! `render_icon_grid` 是独立的图标渲染方法，通过参数驱动：
+//! - `GridLayout`：布局位置（cols/cell_w/cell_h/grid_left/grid_top）
+//! - `ViewParams`：视图模式参数（icon_size/show_label 等）
+//!
+//! 支持 4 种图标模式（ExtraLarge/Large/Medium/Small），未来扩展列表/详细信息/平铺/内容。
+
+use crate::box_core::layout_calc::{calculate_grid, GridLayout};
+use crate::box_core::view_engine::{get_view_params, ViewParams};
+
+use super::grid_window::GridFileItem;
 
 use std::ffi::c_void;
 
@@ -251,10 +264,9 @@ pub fn render_layered_window(hwnd: HWND) {
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     let dpi = if dpi > 0 { dpi } else { 96 };
 
-    // ===== 创建文字画刷（复用于标题和标签）=====
+    // ===== 创建文字画刷（标题专用，图标标签画刷在 render_icon_grid 内创建）=====
     let white_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(255, 255, 255, 255), None) };
     let shadow_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(0, 0, 0, 200), None) };
-    let label_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(250, 250, 255, 255), None) };
 
     // ===== 标题文字（DirectWrite 渲染）=====
     let title_font_size = scale_for_dpi(15, dpi) as f32;
@@ -320,167 +332,22 @@ pub fn render_layered_window(hwnd: HWND) {
         }
     }
 
-    // ===== 绘制图标网格 =====
-    let icon_size = data.icon_size;
-    let cell_w = data.cell_w;
-    let cell_h = data.cell_h;
-    let cols = data.cols;
-    let grid_left = (w - cols * cell_w) / 2;
-    let grid_top = title_h + scale_for_dpi(8, dpi);
-    let icon_label_h = scale_for_dpi(36, dpi); // 2 行文字高度（支持换行）
+    // ===== 绘制图标网格（独立方法，参数化设计）=====
+    // 通过 view_engine 获取视图参数，layout_calc 计算网格布局
+    let view_params = get_view_params(&data.view_mode, dpi);
+    let grid_layout = calculate_grid(w, title_h, &view_params, dpi);
 
-    // 图标标签字体
-    let label_font_size = scale_for_dpi(13, dpi) as f32;
-    let label_format = unsafe {
-        let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
-        let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
-        dw_factory.CreateTextFormat::<_, _, _>(
-            windows::core::PCWSTR(font_name.as_ptr()),
-            None,
-            DWRITE_FONT_WEIGHT_NORMAL,
-            DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL,
-            label_font_size,
-            windows::core::PCWSTR(locale.as_ptr()),
-        )
-    };
-
-    // 设置标签文字对齐方式
-    if let Ok(ref lf) = label_format {
-        let _ = unsafe { lf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER) };
-        let _ = unsafe { lf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER) };
-        let _ = unsafe { lf.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP) };
-    }
-
-    // 创建省略号裁剪标志（line-clamp 效果：最多 2 行 + "..."）
-    let ellipsis_sign = if let Ok(ref lf) = label_format {
-        unsafe { dw_factory.CreateEllipsisTrimmingSign(lf).ok() }
-    } else {
-        None
-    };
-
-    // 选中项高亮画刷
-    let highlight_brush =
-        unsafe { target.CreateSolidColorBrush(&d2d_color(60, 80, 120, 120), None) };
-    // Hover 高亮画刷（比选中色浅）
-    let hover_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(70, 90, 130, 70), None) };
-
-    for (i, item) in data.items.iter().enumerate() {
-        let col = (i as i32) % cols;
-        let row = (i as i32) / cols;
-
-        let cell_x = grid_left + col * cell_w;
-        let cell_y = grid_top + row * cell_h;
-        let is_selected = i as i32 == data.selected_item;
-        let is_hovered = i as i32 == data.hovered_item;
-
-        // Hover 背景（比选中浅，仅非选中项显示）
-        if is_hovered && !is_selected {
-            if let Ok(ref hb) = hover_brush {
-                let hl_rect = d2d_rect(
-                    cell_x as f32,
-                    cell_y as f32,
-                    (cell_x + cell_w) as f32,
-                    (cell_y + cell_h) as f32,
-                );
-                unsafe { target.FillRectangle(&hl_rect, hb) };
-            }
-        }
-
-        // 选中项高亮背景
-        if is_selected {
-            if let Ok(ref hb) = highlight_brush {
-                let hl_rect = d2d_rect(
-                    cell_x as f32,
-                    cell_y as f32,
-                    (cell_x + cell_w) as f32,
-                    (cell_y + cell_h) as f32,
-                );
-                unsafe { target.FillRectangle(&hl_rect, hb) };
-            }
-        }
-
-        // 绘制图标（HICON → GetDIBits → D2D Bitmap → DrawBitmap）
-        let icon_x = cell_x + (cell_w - icon_size) / 2;
-        let icon_y = cell_y + 4;
-        if !item.icon_handle.is_null() {
-            draw_icon_d2d(
-                target,
-                wic_factory,
-                item.icon_handle,
-                icon_x,
-                icon_y,
-                icon_size,
-            );
-        }
-
-        // 绘制图标标签文字（DirectWrite）
-        if let Ok(ref lf) = label_format {
-            let label: Vec<u16> = item.display_name.encode_utf16().collect();
-            let label_x = cell_x + 2;
-            let label_y = icon_y + icon_size + scale_for_dpi(6, dpi);
-            let label_w = (cell_w - 4) as f32;
-
-            // 选中项：足够高度显示完整名称；未选中：2 行裁剪
-            // 两种状态都使用 NEAR（顶部对齐），确保单行文本与图标间距一致
-            let (label_h, para_align) = if is_selected {
-                let max_h = scale_for_dpi(36 * 3, dpi);
-                (max_h as f32, DWRITE_PARAGRAPH_ALIGNMENT_NEAR)
-            } else {
-                (icon_label_h as f32, DWRITE_PARAGRAPH_ALIGNMENT_NEAR)
-            };
-
-            let layout = unsafe {
-                target_inner_create_text_layout(
-                    dw_factory,
-                    &label,
-                    lf,
-                    label_w,
-                    label_h,
-                    DWRITE_TEXT_ALIGNMENT_CENTER,
-                    para_align,
-                )
-            };
-
-            if let Some(ref layout) = layout {
-                // 未选中：应用 line-clamp（2 行 + 省略号）
-                if !is_selected {
-                    if let Some(ref sign) = ellipsis_sign {
-                        let trimming = DWRITE_TRIMMING {
-                            granularity: DWRITE_TRIMMING_GRANULARITY_WORD,
-                            delimiter: 0,
-                            delimiterCount: 0,
-                        };
-                        let _ = unsafe { layout.SetTrimming(&trimming, sign) };
-                    }
-                }
-
-                // 阴影描边
-                let lsh = scale_for_dpi(1, dpi) as f32;
-                if let Ok(ref sb) = shadow_brush {
-                    for &(dx, dy) in &[(lsh, 0.0), (-lsh, 0.0), (0.0, lsh), (0.0, -lsh)] {
-                        let origin = D2D_POINT_2F {
-                            x: label_x as f32 + dx,
-                            y: label_y as f32 + dy,
-                        };
-                        unsafe {
-                            target.DrawTextLayout(origin, layout, sb, D2D1_DRAW_TEXT_OPTIONS_NONE);
-                        }
-                    }
-                }
-                // 主文字（浅灰白色）
-                if let Ok(ref lb) = label_brush {
-                    let origin = D2D_POINT_2F {
-                        x: label_x as f32,
-                        y: label_y as f32,
-                    };
-                    unsafe {
-                        target.DrawTextLayout(origin, layout, lb, D2D1_DRAW_TEXT_OPTIONS_NONE);
-                    }
-                }
-            }
-        }
-    }
+    render_icon_grid(
+        target,
+        dw_factory,
+        wic_factory,
+        &data.items,
+        &grid_layout,
+        &view_params,
+        data.selected_item,
+        data.hovered_item,
+        dpi,
+    );
 
     // ===== D2D 渲染结束 =====
     let mut tag1: u64 = 0;
@@ -522,6 +389,213 @@ pub fn render_layered_window(hwnd: HWND) {
     }
 
     RENDERING.store(false, Ordering::SeqCst);
+}
+
+/// 渲染图标网格（独立方法，参数化设计）
+///
+/// 通过 `GridLayout` 确定位置（cols/cell_w/cell_h/grid_left/grid_top），
+/// 通过 `ViewParams` 控制视图模式（icon_size/show_label 等）。
+///
+/// # 支持的视图模式
+///
+/// | 模式 | icon_size | 说明 |
+/// |------|-----------|------|
+/// | ExtraLarge | 96px | 超大图标 |
+/// | Large | 64px | 大图标 |
+/// | Medium | 48px | 中等图标（默认） |
+/// | Small | 32px | 小图标 |
+///
+/// # 自动换行逻辑
+///
+/// `GridLayout` 已处理窄窗口边界：当窗口宽度不足以容纳一个完整 cell 时，
+/// `cell_w` 被 clamp 到可用宽度，`cols` 强制为 1，保证图标始终可见。
+///
+/// # 参数
+///
+/// - `target`：D2D render target（已 BindDC）
+/// - `dw_factory`：DirectWrite 工厂（用于创建文字格式）
+/// - `wic_factory`：WIC 工厂（用于图标位图转换，保留扩展）
+/// - `items`：要渲染的文件项列表
+/// - `layout`：网格布局（由 `layout_calc::calculate_grid` 计算）
+/// - `view_params`：视图参数（由 `view_engine::get_view_params` 获取）
+/// - `selected_item`：当前选中项索引（-1 = 无选中）
+/// - `hovered_item`：当前 hover 项索引（-1 = 无 hover）
+/// - `dpi`：窗口 DPI（用于缩放字体和间距）
+pub fn render_icon_grid(
+    target: &ID2D1DCRenderTarget,
+    dw_factory: &IDWriteFactory,
+    _wic_factory: &IWICImagingFactory,
+    items: &[GridFileItem],
+    layout: &GridLayout,
+    view_params: &ViewParams,
+    selected_item: i32,
+    hovered_item: i32,
+    dpi: u32,
+) {
+    let icon_size = view_params.icon_size;
+    let cell_w = layout.cell_w;
+    let cell_h = layout.cell_h;
+    let cols = layout.cols;
+    let grid_left = layout.grid_left;
+    let grid_top = layout.grid_top;
+    let icon_label_h = scale_for_dpi(36, dpi); // 2 行文字高度（支持换行）
+
+    // 创建文字画刷（阴影 + 标签）
+    let shadow_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(0, 0, 0, 200), None) };
+    let label_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(250, 250, 255, 255), None) };
+
+    // 图标标签字体（根据视图模式动态调整）
+    let label_font_size = scale_for_dpi(13, dpi) as f32;
+    let label_format = unsafe {
+        let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
+        let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
+        dw_factory.CreateTextFormat::<_, _, _>(
+            windows::core::PCWSTR(font_name.as_ptr()),
+            None,
+            DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            label_font_size,
+            windows::core::PCWSTR(locale.as_ptr()),
+        )
+    };
+
+    if let Ok(ref lf) = label_format {
+        let _ = unsafe { lf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER) };
+        let _ = unsafe { lf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER) };
+        let _ = unsafe { lf.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP) };
+    }
+
+    // 省略号裁剪标志（line-clamp：最多 2 行 + "..."）
+    let ellipsis_sign = if let Ok(ref lf) = label_format {
+        unsafe { dw_factory.CreateEllipsisTrimmingSign(lf).ok() }
+    } else {
+        None
+    };
+
+    // 选中项高亮画刷
+    let highlight_brush =
+        unsafe { target.CreateSolidColorBrush(&d2d_color(60, 80, 120, 120), None) };
+    // Hover 高亮画刷（比选中色浅）
+    let hover_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(70, 90, 130, 70), None) };
+
+    for (i, item) in items.iter().enumerate() {
+        let col = (i as i32) % cols;
+        let row = (i as i32) / cols;
+
+        let cell_x = grid_left + col * cell_w;
+        let cell_y = grid_top + row * cell_h;
+        let is_selected = i as i32 == selected_item;
+        let is_hovered = i as i32 == hovered_item;
+
+        // Hover 背景（比选中浅，仅非选中项显示）
+        if is_hovered && !is_selected {
+            if let Ok(ref hb) = hover_brush {
+                let hl_rect = d2d_rect(
+                    cell_x as f32,
+                    cell_y as f32,
+                    (cell_x + cell_w) as f32,
+                    (cell_y + cell_h) as f32,
+                );
+                unsafe { target.FillRectangle(&hl_rect, hb) };
+            }
+        }
+
+        // 选中项高亮背景
+        if is_selected {
+            if let Ok(ref hb) = highlight_brush {
+                let hl_rect = d2d_rect(
+                    cell_x as f32,
+                    cell_y as f32,
+                    (cell_x + cell_w) as f32,
+                    (cell_y + cell_h) as f32,
+                );
+                unsafe { target.FillRectangle(&hl_rect, hb) };
+            }
+        }
+
+        // 绘制图标（HICON → GetDIBits → D2D Bitmap → DrawBitmap）
+        let icon_x = cell_x + (cell_w - icon_size) / 2;
+        let icon_y = cell_y + 4;
+        if !item.icon_handle.is_null() {
+            draw_icon_d2d(
+                target,
+                _wic_factory,
+                item.icon_handle,
+                icon_x,
+                icon_y,
+                icon_size,
+            );
+        }
+
+        // 绘制图标标签文字（DirectWrite）
+        if view_params.show_label {
+            if let Ok(ref lf) = label_format {
+                let label: Vec<u16> = item.display_name.encode_utf16().collect();
+                let label_x = cell_x + 2;
+                let label_y = icon_y + icon_size + scale_for_dpi(6, dpi);
+                let label_w = (cell_w - 4) as f32;
+
+                // 选中项：足够高度显示完整名称；未选中：2 行裁剪
+                let (label_h, para_align) = if is_selected {
+                    let max_h = scale_for_dpi(36 * 3, dpi);
+                    (max_h as f32, DWRITE_PARAGRAPH_ALIGNMENT_NEAR)
+                } else {
+                    (icon_label_h as f32, DWRITE_PARAGRAPH_ALIGNMENT_NEAR)
+                };
+
+                let text_layout = unsafe {
+                    target_inner_create_text_layout(
+                        dw_factory,
+                        &label,
+                        lf,
+                        label_w,
+                        label_h,
+                        DWRITE_TEXT_ALIGNMENT_CENTER,
+                        para_align,
+                    )
+                };
+
+                if let Some(ref tl) = text_layout {
+                    // 未选中：应用 line-clamp（2 行 + 省略号）
+                    if !is_selected {
+                        if let Some(ref sign) = ellipsis_sign {
+                            let trimming = DWRITE_TRIMMING {
+                                granularity: DWRITE_TRIMMING_GRANULARITY_WORD,
+                                delimiter: 0,
+                                delimiterCount: 0,
+                            };
+                            let _ = unsafe { tl.SetTrimming(&trimming, sign) };
+                        }
+                    }
+
+                    // 阴影描边
+                    let lsh = scale_for_dpi(1, dpi) as f32;
+                    if let Ok(ref sb) = shadow_brush {
+                        for &(dx, dy) in &[(lsh, 0.0), (-lsh, 0.0), (0.0, lsh), (0.0, -lsh)] {
+                            let origin = D2D_POINT_2F {
+                                x: label_x as f32 + dx,
+                                y: label_y as f32 + dy,
+                            };
+                            unsafe {
+                                target.DrawTextLayout(origin, tl, sb, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                            }
+                        }
+                    }
+                    // 主文字（浅灰白色）
+                    if let Ok(ref lb) = label_brush {
+                        let origin = D2D_POINT_2F {
+                            x: label_x as f32,
+                            y: label_y as f32,
+                        };
+                        unsafe {
+                            target.DrawTextLayout(origin, tl, lb, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// 使用 Direct2D 绘制图标（HICON → GetDIBits → premultiplied D2D Bitmap → DrawBitmap）

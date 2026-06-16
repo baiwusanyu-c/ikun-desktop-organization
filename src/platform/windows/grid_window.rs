@@ -20,6 +20,11 @@ use windows::Win32::Graphics::Direct2D::{ID2D1DCRenderTarget, ID2D1Factory};
 use windows::Win32::Graphics::DirectWrite::IDWriteFactory;
 use windows::Win32::Graphics::Imaging::IWICImagingFactory;
 
+// ===== 业务层导入 =====
+use crate::box_core::layout_calc::{calculate_grid, hit_test as layout_hit_test};
+use crate::box_core::view_engine::get_view_params;
+use crate::config::app_config::ViewMode;
+
 // ===== Import shared types and functions from new modules =====
 use super::d2d_render::render_layered_window;
 use super::ffi_imports::*;
@@ -49,6 +54,8 @@ pub struct GridCreateParams {
     pub width: i32,
     pub height: i32,
     pub items: Vec<GridFileItem>,
+    /// 视图模式（决定图标大小和布局，默认 Medium）
+    pub view_mode: ViewMode,
 }
 
 /// 格子窗口内部数据（存储在 GWLP_USERDATA）
@@ -72,6 +79,8 @@ pub(crate) struct GridWindowData {
     pub(crate) hovered_item: i32,
     /// Tooltip 窗口句柄
     pub(crate) tooltip_hwnd: HWND,
+    /// 视图模式（决定图标大小、布局参数）
+    pub(crate) view_mode: ViewMode,
 
     // ===== D2D/DirectWrite 设备缓存（窗口级） =====
     pub(crate) d2d_factory: Option<ID2D1Factory>,
@@ -202,15 +211,16 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
     let scaled_w = scale_for_dpi(params.width, dpi);
     let scaled_h = scale_for_dpi(params.height, dpi);
     let title_h = scale_for_dpi(40, dpi);
-    let icon_size = scale_for_dpi(48, dpi);
 
-    // 计算网格布局参数
-    let icon_label_h = scale_for_dpi(36, dpi); // 2 行文字高度（支持换行）
-    let cell_spacing = scale_for_dpi(16, dpi);
-    let cell_w = icon_size + scale_for_dpi(32, dpi); // 文字区域需要更多宽度（类似原生桌面 ~80px）
-    let cell_h = icon_size + icon_label_h + cell_spacing;
-    let body_w = scaled_w - scale_for_dpi(16, dpi); // 左右各 8px 内边距
-    let cols = (body_w / cell_w).max(1);
+    // 通过 view_engine 获取视图参数（参数化，支持 8 种视图模式）
+    let view_params = get_view_params(&params.view_mode, dpi);
+    let icon_size = view_params.icon_size;
+
+    // 通过 layout_calc 计算网格布局（自动换行，窄窗口 clamp 保护）
+    let grid_layout = calculate_grid(scaled_w, title_h, &view_params, dpi);
+    let cols = grid_layout.cols;
+    let cell_w = grid_layout.cell_w;
+    let cell_h = grid_layout.cell_h;
 
     // 如果 DPI 不是 96，调整窗口尺寸
     if dpi != initial_dpi {
@@ -249,6 +259,7 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         selected_item: -1,
         hovered_item: -1,
         tooltip_hwnd: std::ptr::null_mut(),
+        view_mode: params.view_mode,
         d2d_factory: None,
         dw_factory: None,
         wic_factory: None,
@@ -326,41 +337,40 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
 }
 
 /// 根据当前窗口尺寸和 DPI 重新计算网格布局参数
-fn recalculate_layout(data: &mut GridWindowData, width: i32, height: i32, dpi: u32) {
+///
+/// 使用 view_engine 获取视图参数，layout_calc 计算网格布局。
+/// 窗口拖拽缩放时自动调用，保证图标始终可见并自动换行。
+fn recalculate_layout(data: &mut GridWindowData, width: i32, _height: i32, dpi: u32) {
     data.title_h = scale_for_dpi(40, dpi);
-    data.icon_size = scale_for_dpi(48, dpi);
-    let icon_label_h = scale_for_dpi(36, dpi); // 2 行文字高度（支持换行）
-    let cell_spacing = scale_for_dpi(16, dpi);
-    data.cell_w = data.icon_size + scale_for_dpi(32, dpi); // 文字区域需要更多宽度
-    data.cell_h = data.icon_size + icon_label_h + cell_spacing;
-    let body_w = width - scale_for_dpi(16, dpi);
-    data.cols = (body_w / data.cell_w).max(1);
-    let _ = height;
+
+    // 通过 view_engine 获取当前视图模式的参数（支持 ExtraLarge/Large/Medium/Small 等）
+    let view_params = get_view_params(&data.view_mode, dpi);
+    data.icon_size = view_params.icon_size;
+
+    // 通过 layout_calc 计算网格（自动 clamp：窄窗口时 cell_w 缩小到 body_w，保证图标不超出可视区域）
+    let grid_layout = calculate_grid(width, data.title_h, &view_params, dpi);
+    data.cols = grid_layout.cols;
+    data.cell_w = grid_layout.cell_w;
+    data.cell_h = grid_layout.cell_h;
 }
 
 /// 命中测试：根据鼠标位置获取网格项索引
-fn grid_hit_test(data: &GridWindowData, w: i32, click_x: i32, click_y: i32) -> i32 {
-    let cols = data.cols;
-    let grid_left = (w - cols * data.cell_w) / 2;
-    let grid_top = data.title_h + scale_for_dpi(8, 96);
+///
+/// 委托给 `layout_calc::hit_test`，保证与渲染使用完全相同的布局计算公式，
+/// 消除 hover/选中/双击/右键的目标偏移问题。
+fn grid_hit_test(
+    data: &GridWindowData,
+    window_width: i32,
+    click_x: i32,
+    click_y: i32,
+    dpi: u32,
+) -> i32 {
+    let view_params = get_view_params(&data.view_mode, dpi);
+    let layout = calculate_grid(window_width, data.title_h, &view_params, dpi);
 
-    if click_y < grid_top || click_x < grid_left {
-        return -1;
-    }
-
-    let col = (click_x - grid_left) / data.cell_w;
-    let row = (click_y - grid_top) / data.cell_h;
-
-    if col < 0 || col >= cols {
-        return -1;
-    }
-
-    let idx = row * cols + col;
-    if idx >= 0 && (idx as usize) < data.items.len() {
-        idx
-    } else {
-        -1
-    }
+    layout_hit_test(&layout, data.items.len(), click_x, click_y)
+        .map(|i| i as i32)
+        .unwrap_or(-1)
 }
 
 /// 销毁所有格子窗口
@@ -580,15 +590,17 @@ unsafe extern "system" fn grid_wnd_proc(
             let mut tooltip_y: i32 = 0;
 
             if let Some(data) = get_data(hwnd) {
-                let mut client = RECT {
+                let mut wr = RECT {
                     left: 0,
                     top: 0,
                     right: 0,
                     bottom: 0,
                 };
-                unsafe { GetClientRect(hwnd, &mut client) };
-                let w = client.right;
-                let hit = grid_hit_test(data, w, mx, my);
+                unsafe { GetWindowRect(hwnd, &mut wr) };
+                let w = wr.right - wr.left;
+                let dpi = unsafe { GetDpiForWindow(hwnd) };
+                let dpi = if dpi > 0 { dpi } else { 96 };
+                let hit = grid_hit_test(data, w, mx, my, dpi);
 
                 // 更新 hover 状态
                 if hit != data.hovered_item {
@@ -698,15 +710,17 @@ unsafe extern "system" fn grid_wnd_proc(
             let mut need_rerender = false;
 
             if let Some(data) = get_data(hwnd) {
-                let mut client = RECT {
+                let mut wr = RECT {
                     left: 0,
                     top: 0,
                     right: 0,
                     bottom: 0,
                 };
-                GetClientRect(hwnd, &mut client);
-                let w = client.right;
-                let hit = grid_hit_test(data, w, click_x, click_y);
+                unsafe { GetWindowRect(hwnd, &mut wr) };
+                let w = wr.right - wr.left;
+                let dpi = unsafe { GetDpiForWindow(hwnd) };
+                let dpi = if dpi > 0 { dpi } else { 96 };
+                let hit = grid_hit_test(data, w, click_x, click_y, dpi);
                 if hit != data.selected_item {
                     data.selected_item = hit;
                     need_rerender = true;
@@ -725,15 +739,17 @@ unsafe extern "system" fn grid_wnd_proc(
             let click_y = get_y_lparam(lparam);
 
             if let Some(data) = get_data(hwnd) {
-                let mut client = RECT {
+                let mut wr = RECT {
                     left: 0,
                     top: 0,
                     right: 0,
                     bottom: 0,
                 };
-                GetClientRect(hwnd, &mut client);
-                let w = client.right;
-                let idx = grid_hit_test(data, w, click_x, click_y);
+                unsafe { GetWindowRect(hwnd, &mut wr) };
+                let w = wr.right - wr.left;
+                let dpi = unsafe { GetDpiForWindow(hwnd) };
+                let dpi = if dpi > 0 { dpi } else { 96 };
+                let idx = grid_hit_test(data, w, click_x, click_y, dpi);
 
                 if idx >= 0 && (idx as usize) < data.items.len() {
                     let item = &data.items[idx as usize];
@@ -764,15 +780,17 @@ unsafe extern "system" fn grid_wnd_proc(
 
             let mut file_path: Option<String> = None;
             if let Some(data) = get_data(hwnd) {
-                let mut client = RECT {
+                let mut wr = RECT {
                     left: 0,
                     top: 0,
                     right: 0,
                     bottom: 0,
                 };
-                GetClientRect(hwnd, &mut client);
-                let w = client.right;
-                let hit = grid_hit_test(data, w, click_x, click_y);
+                unsafe { GetWindowRect(hwnd, &mut wr) };
+                let w = wr.right - wr.left;
+                let dpi = unsafe { GetDpiForWindow(hwnd) };
+                let dpi = if dpi > 0 { dpi } else { 96 };
+                let hit = grid_hit_test(data, w, click_x, click_y, dpi);
                 if hit >= 0 {
                     data.selected_item = hit;
                     if (hit as usize) < data.items.len() {
