@@ -119,6 +119,14 @@ extern "system" {
     // Menu
     pub fn CreatePopupMenu() -> HMENU;
     pub fn AppendMenuW(hMenu: HMENU, uFlags: u32, uIDNewItem: usize, lpNewItem: *const u16) -> i32;
+    /// InsertMenuW — 在指定位置插入菜单项（MF_BYPOSITION 时 uPosition 为索引）
+    pub fn InsertMenuW(
+        hMenu: HMENU,
+        uPosition: usize,
+        uFlags: u32,
+        uIDNewItem: usize,
+        lpNewItem: *const u16,
+    ) -> i32;
     pub fn TrackPopupMenu(
         hMenu: HMENU,
         uFlags: u32,
@@ -129,6 +137,72 @@ extern "system" {
         prcRect: *const RECT,
     ) -> i32;
     pub fn DestroyMenu(hMenu: HMENU) -> i32;
+
+    // Window management (additional)
+    pub fn SetForegroundWindow(hWnd: HWND) -> i32;
+    pub fn EnableWindow(hWnd: HWND, bEnable: i32) -> i32;
+    pub fn GetParent(hWnd: HWND) -> HWND;
+    pub fn GetClassNameW(hWnd: HWND, lpClassName: *mut u16, nMaxCount: i32) -> i32;
+    pub fn WindowFromPoint(pt: POINT) -> HWND;
+    pub fn PostMessageW(hWnd: HWND, Msg: u32, wParam: WPARAM, lParam: LPARAM) -> i32;
+    pub fn PostThreadMessageW(idThread: u32, Msg: u32, wParam: WPARAM, lParam: LPARAM) -> i32;
+
+    // Message pump
+    pub fn GetMessageW(lpMsg: *mut MSG, hWnd: HWND, wMsgFilterMin: u32, wMsgFilterMax: u32) -> i32;
+    pub fn TranslateMessage(lpMsg: *const MSG) -> i32;
+    pub fn DispatchMessageW(lpMsg: *const MSG) -> LRESULT;
+
+    // Hooks
+    pub fn SetWindowsHookExW(
+        idHook: i32,
+        lpfn: HOOKPROC,
+        hmod: HINSTANCE,
+        dwThreadId: u32,
+    ) -> HHOOK;
+    pub fn UnhookWindowsHookEx(hhk: HHOOK) -> i32;
+    pub fn CallNextHookEx(hhk: HHOOK, nCode: i32, wParam: WPARAM, lParam: LPARAM) -> LRESULT;
+
+    // Common Controls (InitCommonControlsEx already declared above)
+
+    // Registry
+    pub fn RegCreateKeyExW(
+        hKey: isize,
+        lpSubKey: *const u16,
+        Reserved: u32,
+        lpClass: *const u16,
+        dwOptions: u32,
+        samDesired: u32,
+        lpSecurityAttributes: *mut c_void,
+        phkResult: *mut isize,
+        lpdwDisposition: *mut u32,
+    ) -> i32;
+    pub fn RegSetValueExW(
+        hKey: isize,
+        lpValueName: *const u16,
+        Reserved: u32,
+        dwType: u32,
+        lpData: *const u8,
+        cbData: u32,
+    ) -> i32;
+    pub fn RegCloseKey(hKey: isize) -> i32;
+
+    // GDI - Font
+    pub fn CreateFontW(
+        cHeight: i32,
+        cWidth: i32,
+        cEscapement: i32,
+        cOrientation: i32,
+        cWeight: i32,
+        bItalic: i32,
+        bUnderline: i32,
+        bStrikeOut: i32,
+        iCharSet: i32,
+        iOutPrecision: i32,
+        iClipPrecision: i32,
+        iQuality: i32,
+        iPitchAndFamily: i32,
+        pszFaceName: *const u16,
+    ) -> HGDIOBJ;
 
     // Window
     pub fn GetDesktopWindow() -> HWND;
@@ -333,7 +407,8 @@ extern "system" {
     pub fn CoUninitialize();
 }
 
-pub const FCIDM_SHVIEWFIRST: u32 = 0x0000;
+/// Shell 菜单命令 ID 起始值（预留 1–99 给自定义菜单项，0 为 TrackPopupMenu "无选择" 返回值）
+pub const FCIDM_SHVIEWFIRST: u32 = 0x0064; // 100
 pub const MENU_CMD_ID_LAST: u32 = FCIDM_SHVIEWFIRST + 0x7FFF;
 pub const CMF_NORMAL: u32 = 0x00000000;
 pub const CMF_EXPLORE: u32 = 0x00000004;

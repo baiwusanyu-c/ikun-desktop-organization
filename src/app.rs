@@ -1,21 +1,53 @@
 //! 控制面板 - egui 主窗口
 //!
 //! 通过 `AppContext` 统一管理配置、平台服务和分类器。
+//! 创建分类框使用独立的 egui viewport（独立窗口，非控制面板内弹窗）。
 
 use crate::context::AppContext;
 use crate::platform::{
     collect_grid_layout, create_grid_window, destroy_all_grid_windows, extract_file_icon,
-    get_grid_count, get_screen_resolution, hide_native_icons, restore_native_icons, DesktopIcon,
-    DesktopManagerTrait, GridCreateParams, GridFileItem,
+    get_grid_count, get_screen_resolution, hide_native_icons, restore_native_icons,
+    setup_desktop_registry, take_pending_create_box, DesktopIcon, DesktopManagerTrait,
+    GridCreateParams, GridFileItem,
 };
 use eframe::egui;
+use std::sync::{Arc, Mutex};
+
+/// 新建分类框名称最大长度（字符数）
+const BOX_NAME_MAX_LEN: usize = 16;
+
+/// 信号文件路径（--create-box 写入，运行实例轮询消费）
+fn signal_file_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("ikun_create_box.signal")
+}
+
+/// 创建分类框对话框的共享状态（主窗口 ↔ 独立 viewport 通信）
+struct DialogState {
+    name: String,
+    open: bool,
+    /// 用户点击了确定（viewport 设置，主窗口读取后创建分类框）
+    confirmed: bool,
+    /// 用户点击了取消或关闭窗口
+    cancelled: bool,
+}
+
+impl Default for DialogState {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            open: false,
+            confirmed: false,
+            cancelled: false,
+        }
+    }
+}
 
 /// 主应用
 pub struct MyApp {
-    /// 应用上下文（统一管理所有状态）
     ctx: AppContext,
-    /// 是否已完成首次初始化（恢复布局等）
     initialized: bool,
+    /// 创建分类框对话框状态（Arc<Mutex> 用于跨 viewport 共享）
+    dialog: Arc<Mutex<DialogState>>,
 }
 
 impl Default for MyApp {
@@ -24,6 +56,7 @@ impl Default for MyApp {
         Self {
             ctx,
             initialized: false,
+            dialog: Arc::new(Mutex::new(DialogState::default())),
         }
     }
 }
@@ -33,65 +66,144 @@ impl MyApp {
         Self::default()
     }
 
-    /// 根据配置文件恢复分类框布局
-    ///
-    /// 读取 `config.layout.boxes`，为每个 BoxLayoutData 创建格子窗口。
-    /// 仅在 `config.general.restore_layout_on_start` 为 true 时执行。
+    /// 打开创建分类框的独立 egui viewport
+    fn open_create_box_dialog(&self, egui_ctx: &egui::Context) {
+        // 重置状态
+        if let Ok(mut s) = self.dialog.lock() {
+            s.name.clear();
+            s.open = true;
+            s.confirmed = false;
+            s.cancelled = false;
+        }
+
+        let dialog = self.dialog.clone();
+
+        // 计算屏幕居中位置
+        let (screen_w, screen_h) = get_screen_resolution();
+        let dlg_w = 360.0_f32;
+        let dlg_h = 180.0_f32;
+        let x = (screen_w as f32 - dlg_w) / 2.0;
+        let y = (screen_h as f32 - dlg_h) / 3.0;
+
+        egui_ctx.show_viewport_deferred(
+            egui::ViewportId::from_hash_of("create_box_dialog"),
+            egui::ViewportBuilder::default()
+                .with_title("创建分类框")
+                .with_inner_size([dlg_w, dlg_h])
+                .with_position(egui::pos2(x, y))
+                .with_decorations(true)
+                .with_resizable(false)
+                .with_always_on_top(),
+            move |ctx, _class| {
+                let mut close = false;
+
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.add_space(8.0);
+                    ui.heading("创建分类框");
+                    ui.add_space(4.0);
+
+                    let mut state = dialog.lock().unwrap();
+
+                    ui.horizontal(|ui| {
+                        ui.label("名称：");
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut state.name)
+                                .desired_width(220.0)
+                                .hint_text("必填，最多16字符"),
+                        );
+                        if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            close = true;
+                            state.confirmed = true;
+                        }
+                    });
+
+                    let cc = state.name.chars().count();
+                    let valid = !state.name.trim().is_empty() && cc <= BOX_NAME_MAX_LEN;
+                    ui.horizontal(|ui| {
+                        if cc > BOX_NAME_MAX_LEN {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(255, 80, 80),
+                                format!("⚠ 最多 {} 字符（当前 {}）", BOX_NAME_MAX_LEN, cc),
+                            );
+                        } else if state.name.trim().is_empty() {
+                            ui.colored_label(egui::Color32::GRAY, "名称不能为空");
+                        } else {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(100, 200, 100),
+                                format!("✓ {}/{}", cc, BOX_NAME_MAX_LEN),
+                            );
+                        }
+                    });
+
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(valid, egui::Button::new("✓ 确定")).clicked() {
+                            close = true;
+                            state.confirmed = true;
+                        }
+                        if ui.button("✗ 取消").clicked() {
+                            close = true;
+                            state.cancelled = true;
+                        }
+                    });
+
+                    // ESC 取消
+                    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        close = true;
+                        state.cancelled = true;
+                    }
+                });
+
+                if close {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    if let Ok(mut s) = dialog.lock() {
+                        s.open = false;
+                    }
+                }
+            },
+        );
+    }
+
     fn restore_layout(&mut self) {
         if !self.ctx.config.general.restore_layout_on_start {
-            log::info!("配置 disable 了启动恢复布局，跳过");
             return;
         }
-
         let boxes = &self.ctx.config.layout.boxes;
         if boxes.is_empty() {
-            log::info!("配置中无布局数据，跳过恢复");
             return;
         }
-
         log::info!("开始恢复布局: {} 个分类框", boxes.len());
 
-        // 先隐藏原生图标
         if !self.ctx.state.icons_hidden {
             if let Err(e) = hide_native_icons() {
                 self.ctx.set_status(format!("隐藏图标失败: {}", e));
-                log::error!("{}", self.ctx.state.status_message);
                 return;
             }
             self.ctx.state.icons_hidden = true;
         }
-
-        // 销毁已有格子（防止重复创建）
         destroy_all_grid_windows();
 
-        // 逐个恢复分类框
         let mut created_count = 0;
         for (i, box_data) in boxes.iter().enumerate() {
             let mut items: Vec<GridFileItem> = Vec::new();
-
             for file_path in &box_data.icon_names {
                 let display_name = std::path::Path::new(file_path)
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or(file_path)
                     .to_string();
-
                 let hicon = extract_file_icon(file_path)
                     .map(|fi| fi.hicon)
                     .unwrap_or(std::ptr::null_mut());
-
                 items.push(GridFileItem {
                     file_path: file_path.clone(),
                     display_name,
                     icon_handle: hicon,
                 });
             }
-
-            if items.is_empty() {
-                log::info!("分类框 '{}' 无有效文件，跳过", box_data.name);
-                continue;
-            }
-
             let params = GridCreateParams {
                 id: i,
                 title: box_data.name.clone(),
@@ -102,62 +214,43 @@ impl MyApp {
                 items,
                 view_mode: box_data.view_mode.clone(),
             };
-
-            if let Err(e) = create_grid_window(params) {
-                log::error!("恢复分类框 '{}' 失败: {}", box_data.name, e);
-            } else {
+            if create_grid_window(params).is_ok() {
                 created_count += 1;
             }
         }
-
         self.ctx
-            .set_status(format!("布局恢复完成：恢复了 {} 个分类框", created_count));
-        log::info!("{}", self.ctx.state.status_message);
+            .set_status(format!("恢复了 {} 个分类框", created_count));
     }
 
-    /// 保存当前布局到配置并写入文件
     fn save_layout_and_config(&mut self) {
-        // 1. 从运行中的格子窗口收集布局数据
         let layout = collect_grid_layout();
         self.ctx.config.layout.boxes = layout;
-
-        // 2. 保存配置到 ~/.ikun_organizer.json
         if let Err(e) = self.ctx.save_config() {
-            log::error!("保存配置失败: {}", e);
             self.ctx.set_status(format!("保存失败: {}", e));
         } else {
-            let box_count = self.ctx.config.layout.boxes.len();
-            self.ctx
-                .set_status(format!("配置已保存（含 {} 个分类框布局）", box_count));
+            self.ctx.set_status(format!(
+                "已保存 {} 个分类框",
+                self.ctx.config.layout.boxes.len()
+            ));
         }
     }
 
-    /// 一键分类：隐藏原生图标 → 固定 3 个分类框（游戏/开发工具/办公）
     fn perform_auto_classify(&mut self) {
-        log::info!("=== 一键分类开始 ===");
-
-        // 1. 隐藏原生图标
         if !self.ctx.state.icons_hidden {
             if let Err(e) = hide_native_icons() {
                 self.ctx.set_status(format!("隐藏图标失败: {}", e));
-                log::error!("{}", self.ctx.state.status_message);
                 return;
             }
             self.ctx.state.icons_hidden = true;
         }
-
-        // 2. 获取桌面图标
         let icons = self.ctx.desktop_manager.get_desktop_icons();
         if icons.is_empty() {
             self.ctx.set_status("未找到桌面图标");
             return;
         }
-
-        // 3. 固定分为 3 类：游戏、开发工具、办公（剩余全部归入办公）
         let mut games: Vec<DesktopIcon> = Vec::new();
         let mut dev_tools: Vec<DesktopIcon> = Vec::new();
         let mut office: Vec<DesktopIcon> = Vec::new();
-
         for icon in &icons {
             match self.ctx.classifier.classify(icon) {
                 Some(cat) if cat.id == "games" => games.push(icon.clone()),
@@ -165,129 +258,161 @@ impl MyApp {
                 _ => office.push(icon.clone()),
             }
         }
-
-        log::info!(
-            "分类结果: 游戏={}, 开发工具={}, 办公={}",
-            games.len(),
-            dev_tools.len(),
-            office.len()
-        );
-
-        // 4. 销毁旧格子
         destroy_all_grid_windows();
-
-        // 5. 创建固定 3 个格子窗口
         let categories: Vec<(&str, &Vec<DesktopIcon>)> = vec![
             ("游戏", &games),
             ("开发工具", &dev_tools),
             ("办公", &office),
         ];
-
         let (screen_w, screen_h) = get_screen_resolution();
-        log::info!("屏幕分辨率: {}x{}", screen_w, screen_h);
-
-        let num_categories: i32 = 3;
-        let box_w: i32 = self.ctx.config.box_defaults.default_width;
-        let box_h: i32 = self.ctx.config.box_defaults.default_height;
-        let padding: i32 = 20;
-        let total_w = num_categories * box_w + (num_categories - 1) * padding;
-        let start_x: i32 = ((screen_w - total_w) / 2).max(10);
-        let start_y: i32 = (screen_h as f32 * 0.08) as i32;
-
-        log::info!(
-            "框尺寸: {}x{}, padding={}, start=({}, {})",
-            box_w,
-            box_h,
-            padding,
-            start_x,
-            start_y
-        );
-
+        let box_w = self.ctx.config.box_defaults.default_width;
+        let box_h = self.ctx.config.box_defaults.default_height;
+        let padding = 20i32;
+        let total_w = 3 * box_w + 2 * padding;
+        let start_x = ((screen_w - total_w) / 2).max(10);
+        let start_y = (screen_h as f32 * 0.08) as i32;
         let mut created_count = 0;
         for (i, (title, icon_list)) in categories.iter().enumerate() {
             if icon_list.is_empty() {
-                log::info!("分类 '{}' 为空，跳过", title);
                 continue;
             }
-
             let x = start_x + created_count * (box_w + padding);
-            let y = start_y;
-
             let mut items: Vec<GridFileItem> = Vec::new();
             for icon in icon_list.iter() {
                 let path_str = icon.path.to_string_lossy().to_string();
                 let hicon = extract_file_icon(&path_str)
                     .map(|fi| fi.hicon)
                     .unwrap_or(std::ptr::null_mut());
-
                 items.push(GridFileItem {
                     file_path: path_str,
                     display_name: icon.display_name.clone(),
                     icon_handle: hicon,
                 });
             }
-
             let params = GridCreateParams {
                 id: i,
                 title: title.to_string(),
                 x,
-                y,
+                y: start_y,
                 width: box_w,
                 height: box_h,
                 items,
                 view_mode: self.ctx.config.box_defaults.view_mode.clone(),
             };
-
-            if let Err(e) = create_grid_window(params) {
-                log::error!("创建格子窗口失败: {}", e);
-            } else {
+            if create_grid_window(params).is_ok() {
                 created_count += 1;
             }
         }
-
         self.ctx.set_status(format!(
-            "分类完成！隐藏了 {} 个图标，创建了 {} 个格子",
+            "分类完成！{} 个图标 → {} 个分类框",
             icons.len(),
-            get_grid_count()
+            created_count
         ));
-        log::info!("{}", self.ctx.state.status_message);
     }
 
-    /// 清除所有格子，恢复原生图标
     fn clear_and_restore(&mut self) {
-        // 先收集当前布局保存到配置（保留最后一次布局记录）
         let layout = collect_grid_layout();
         self.ctx.config.layout.boxes = layout;
         let _ = self.ctx.save_config();
-
         destroy_all_grid_windows();
-
         if self.ctx.state.icons_hidden {
-            if let Err(e) = restore_native_icons() {
-                self.ctx.set_status(format!("恢复图标失败: {}", e));
-                return;
-            }
+            let _ = restore_native_icons();
             self.ctx.state.icons_hidden = false;
         }
+        self.ctx.set_status("已清除，桌面图标已恢复");
+    }
 
-        self.ctx.set_status("已清除所有格子，桌面图标已恢复");
-        log::info!("{}", self.ctx.state.status_message);
+    fn create_empty_box(&mut self, name: String) {
+        log::info!("创建分类框: '{}'", name);
+        if !self.ctx.state.icons_hidden {
+            if let Err(e) = hide_native_icons() {
+                self.ctx.set_status(format!("隐藏图标失败: {}", e));
+                return;
+            }
+            self.ctx.state.icons_hidden = true;
+        }
+        let (screen_w, screen_h) = get_screen_resolution();
+        let box_w = self.ctx.config.box_defaults.default_width;
+        let box_h = self.ctx.config.box_defaults.default_height;
+        let existing = get_grid_count();
+        let x = ((screen_w - box_w) / 2 + (existing as i32 * 40) % 200).max(10);
+        let y = ((screen_h as f32 * 0.1) as i32 + (existing as i32 * 30) % 150).max(10);
+        let params = GridCreateParams {
+            id: existing,
+            title: name.clone(),
+            x,
+            y,
+            width: box_w,
+            height: box_h,
+            items: Vec::new(),
+            view_mode: self.ctx.config.box_defaults.view_mode.clone(),
+        };
+        match create_grid_window(params) {
+            Ok(_) => {
+                let layout = collect_grid_layout();
+                self.ctx.config.layout.boxes = layout;
+                if let Err(e) = self.ctx.save_config() {
+                    self.ctx.set_status(format!("创建成功但保存失败: {}", e));
+                } else {
+                    self.ctx.set_status(format!("已创建分类框「{}」", name));
+                }
+            }
+            Err(e) => self.ctx.set_status(format!("创建失败: {}", e)),
+        }
     }
 }
 
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // 首次渲染时恢复布局
         if !self.initialized {
             self.initialized = true;
             self.restore_layout();
+            setup_desktop_registry();
         }
 
+        // 信号文件（--create-box 从注册表菜单写入）→ 打开独立对话框
+        let signal_path = signal_file_path();
+        if signal_path.exists() {
+            let _ = std::fs::remove_file(&signal_path);
+            self.open_create_box_dialog(ctx);
+            // 将控制面板带到前台
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+
+        // 格子窗口右键菜单 → 打开独立对话框
+        if take_pending_create_box() {
+            self.open_create_box_dialog(ctx);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+
+        // 检查对话框结果
+        let confirmed_name = if let Ok(mut state) = self.dialog.lock() {
+            if state.confirmed {
+                let name = state.name.trim().to_string();
+                state.confirmed = false;
+                if !name.is_empty() && name.chars().count() <= BOX_NAME_MAX_LEN {
+                    Some(name)
+                } else {
+                    None
+                }
+            } else {
+                if state.cancelled {
+                    state.cancelled = false;
+                }
+                None
+            }
+        } else {
+            None
+        };
+        // 锁已释放，可以安全调用 create_empty_box
+        if let Some(name) = confirmed_name {
+            self.create_empty_box(name);
+        }
+
+        // ===== 控制面板主界面 =====
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("📦 Desktop Organizer");
             ui.separator();
-
-            // 操作按钮
             ui.horizontal(|ui| {
                 if ui.button("🔄 一键分类").clicked() {
                     self.perform_auto_classify();
@@ -298,49 +423,38 @@ impl eframe::App for MyApp {
                 if ui.button("💾 保存配置").clicked() {
                     self.save_layout_and_config();
                 }
+                if ui.button("➕ 创建分类框").clicked() {
+                    self.open_create_box_dialog(ctx);
+                }
             });
-
             ui.separator();
-
-            // 状态
             if !self.ctx.state.status_message.is_empty() {
                 ui.colored_label(
                     egui::Color32::from_rgb(0, 200, 0),
                     &self.ctx.state.status_message,
                 );
             }
-
             if self.ctx.state.icons_hidden {
                 ui.colored_label(egui::Color32::YELLOW, "⚠ 原生图标已隐藏");
             }
-
             ui.label(format!("当前格子数: {}", get_grid_count()));
-
             ui.separator();
-            ui.label("操作说明:");
-            ui.label("• 点击「一键分类」→ 自动隐藏桌面图标 + 创建 3 个分类格子");
-            ui.label("• 拖动格子标题栏 → 整体移动");
-            ui.label("• 拖动格子边缘 → 调整大小");
-            ui.label("• 双击格子内图标 → 打开应用");
-            ui.label("• 右键格子内图标 → 弹出菜单");
-            ui.label("• 点击「保存配置」→ 保存当前布局到 ~/.ikun_organizer.json");
-            ui.label("• 点击「清除 & 恢复」→ 恢复原始桌面");
+            ui.label("• 右键桌面空白 → 原生菜单含「创建分类框」");
+            ui.label("• 右键格子空白处 → 桌面菜单 + 创建分类框");
+            ui.label("• 双击图标 → 打开 / 拖动标题栏 → 移动");
         });
 
-        ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        ctx.request_repaint_after(std::time::Duration::from_millis(300));
     }
 }
 
 impl Drop for MyApp {
     fn drop(&mut self) {
-        // 退出前自动保存布局
         let layout = collect_grid_layout();
         if !layout.is_empty() {
             self.ctx.config.layout.boxes = layout;
             let _ = self.ctx.save_config();
-            log::info!("退出前自动保存布局");
         }
-
         destroy_all_grid_windows();
         if self.ctx.state.icons_hidden {
             let _ = restore_native_icons();

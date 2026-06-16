@@ -29,7 +29,7 @@ pub use windows::DesktopManager;
 pub use windows::{
     collect_grid_layout, create_grid_window, destroy_all_grid_windows, extract_file_icon,
     get_grid_count, get_screen_resolution, hide_native_icons, restore_native_icons,
-    GridCreateParams, GridFileItem,
+    setup_desktop_registry, take_pending_create_box, GridCreateParams, GridFileItem,
 };
 
 /// 桌面管理器 trait（跨平台）

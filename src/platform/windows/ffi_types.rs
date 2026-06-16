@@ -25,6 +25,9 @@ pub type HCURSOR = *mut c_void;
 pub type HBITMAP = *mut c_void;
 pub type HICON = *mut c_void;
 pub type HMENU = *mut c_void;
+pub type HHOOK = *mut c_void;
+pub type HOOKPROC =
+    unsafe extern "system" fn(nCode: i32, wParam: WPARAM, lParam: LPARAM) -> LRESULT;
 pub type LPARAM = isize;
 pub type WPARAM = usize;
 pub type LRESULT = isize;
@@ -103,6 +106,7 @@ pub struct Pixel32 {
 // ===== Window Styles =====
 pub const WS_POPUP: u32 = 0x80000000;
 pub const WS_VISIBLE: u32 = 0x10000000;
+pub const WS_CHILD: u32 = 0x40000000;
 pub const WS_THICKFRAME: u32 = 0x00040000;
 pub const WS_EX_LAYERED: u32 = 0x00080000;
 pub const WS_EX_TOOLWINDOW: u32 = 0x00000080;
@@ -164,10 +168,54 @@ pub const SM_CYSCREEN: i32 = 1;
 pub const AC_SRC_OVER: u8 = 0x00;
 pub const AC_SRC_ALPHA: u8 = 0x01;
 
-// ===== Mouse Messages =====
+// ===== Menu / Popup Constants =====
 pub const MF_STRING: u32 = 0x00000000;
 pub const MF_SEPARATOR: u32 = 0x00000800;
+pub const MF_BYPOSITION: u32 = 0x00000400;
 pub const TPM_RETURNCMD: u32 = 0x0100;
+
+// ===== Hook / Message Constants =====
+pub const WH_MOUSE_LL: i32 = 14;
+pub const HC_ACTION: i32 = 0;
+pub const WM_APP: u32 = 0x8000;
+pub const WM_USER_SHOW_DESKTOP_MENU: u32 = WM_APP + 1;
+pub const WM_QUIT: u32 = 0x0012;
+pub const WM_COMMAND: u32 = 0x0111;
+pub const WM_CREATE: u32 = 0x0001;
+pub const WM_CLOSE: u32 = 0x0010;
+pub const HWND_MESSAGE: HWND = -3isize as *mut c_void;
+pub const WS_OVERLAPPEDWINDOW: u32 = 0x00CF0000;
+
+// ===== Registry Constants =====
+pub const HKEY_CURRENT_USER: isize = 0x80000001u32 as isize;
+pub const KEY_WRITE: u32 = 0x20006;
+pub const REG_SZ: u32 = 1;
+pub const REG_OPTION_NON_VOLATILE: u32 = 0;
+
+// ===== Common Controls =====
+pub const ICC_STANDARD_CLASSES: u32 = 0x4000;
+pub const ICC_WIN95_CLASSES: u32 = 0x00FF;
+
+/// Win32 MSG 结构体（消息泵使用）
+#[repr(C)]
+pub struct MSG {
+    pub hwnd: HWND,
+    pub message: u32,
+    pub wParam: WPARAM,
+    pub lParam: LPARAM,
+    pub time: u32,
+    pub pt: POINT,
+}
+
+/// Win32 低级鼠标钩子结构体
+#[repr(C)]
+pub struct MSLLHOOKSTRUCT {
+    pub pt: POINT,
+    pub mouseData: u32,
+    pub flags: u32,
+    pub time: u32,
+    pub dwExtraInfo: usize,
+}
 
 // ===== Tooltip Constants =====
 pub const TTS_ALWAYSTIP: u32 = 0x01;

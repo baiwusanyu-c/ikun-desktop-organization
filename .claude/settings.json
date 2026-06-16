@@ -18,7 +18,12 @@
       "PowerShell(Copy-Item \"src\\\\desktop\\\\macos.rs\" \"src\\\\platform\\\\macos\\\\desktop_manager.rs\")",
       "PowerShell(git -C \"d:\\\\github-project\\\\ikun-desktop-organization\" status --short 2>&1)",
       "PowerShell(git -C \"d:\\\\github-project\\\\ikun-desktop-organization\" branch --show-current 2>&1)",
-      "PowerShell($archiveDir = \"d:\\\\github-project\\\\ikun-desktop-organization\\\\.trellis\\\\tasks\\\\archive\\\\2026-06\"; if \\(!\\(Test-Path $archiveDir\\)\\) { New-Item -ItemType Directory -Path $archiveDir -Force | Out-Null }; Move-Item -Path \"d:\\\\github-project\\\\ikun-desktop-organization\\\\.trellis\\\\tasks\\\\06-11-gdi-to-direct2d-migration\" -Destination \"$archiveDir\\\\06-11-gdi-to-direct2d-migration\" -Force; Write-Host \"Archived successfully\")"
+      "PowerShell($archiveDir = \"d:\\\\github-project\\\\ikun-desktop-organization\\\\.trellis\\\\tasks\\\\archive\\\\2026-06\"; if \\(!\\(Test-Path $archiveDir\\)\\) { New-Item -ItemType Directory -Path $archiveDir -Force | Out-Null }; Move-Item -Path \"d:\\\\github-project\\\\ikun-desktop-organization\\\\.trellis\\\\tasks\\\\06-11-gdi-to-direct2d-migration\" -Destination \"$archiveDir\\\\06-11-gdi-to-direct2d-migration\" -Force; Write-Host \"Archived successfully\")",
+      "PowerShell(git add CLAUDE.md)",
+      "PowerShell(git add .trellis/spec/)",
+      "PowerShell(Get-ChildItem d:\\\\github-project\\\\ikun_organizer\\\\src\\\\platform\\\\windows\\\\d2d_render.rs, d:\\\\github-project\\\\ikun_organizer\\\\src\\\\platform\\\\windows\\\\grid_window.rs | ForEach-Object { \"$\\($_.Name\\): $\\(\\(Get-Content $_.FullName\\).Count\\) lines\" })",
+      "PowerShell(python3 ./.trellis/scripts/task.py archive \"06-16-config-system-refactor\")",
+      "PowerShell(git add src/config/app_config.rs src/config/mod.rs src/config/layout.rs src/config/settings.rs src/context.rs src/app.rs src/classification/mod.rs src/classification/database.rs src/platform/mod.rs src/platform/windows/mod.rs src/platform/windows/grid_window.rs src/ui/settings_panel.rs src/utils/platform.rs CLAUDE.md .trellis/spec/backend/database-guidelines.md .trellis/spec/backend/directory-structure.md .trellis/spec/backend/error-handling.md .trellis/spec/backend/quality-guidelines.md todo/desktop-prd.md)"
     ]
   },
   "hooks": {

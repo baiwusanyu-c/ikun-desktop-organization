@@ -14,6 +14,7 @@
 //! - `sys_tray`: 系统托盘（TODO）
 
 mod d2d_render;
+pub mod desktop_hook;
 pub mod desktop_manager;
 pub mod ffi_imports;
 pub mod ffi_types;
@@ -24,6 +25,7 @@ pub mod shell_menu;
 mod sys_tray;
 
 // Re-export key items
+pub use desktop_hook::{setup_desktop_registry, show_create_box_dialog};
 pub use desktop_manager::DesktopManager;
 pub use grid_window::{
     collect_grid_layout, create_grid_window, destroy_all_grid_windows, get_grid_count,
@@ -31,3 +33,4 @@ pub use grid_window::{
 };
 pub use icon_extract::extract_file_icon;
 pub use icon_hider::{hide_native_icons, restore_native_icons};
+pub use shell_menu::take_pending_create_box;

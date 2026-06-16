@@ -3,12 +3,26 @@
 //! 提供文件右键菜单和桌面背景右键菜单的实现。
 //! 使用 Windows Shell COM API 获取真实的系统上下文菜单，
 //! 并在 COM 调用失败时回退到 ShellExecuteW 自定义菜单。
+//!
+//! 桌面背景菜单额外附加"创建分类框"选项，通过原子标志与应用层通信。
 
 #![allow(clippy::let_unit_value)]
 
 use super::ffi_imports::*;
 use super::ffi_types::*;
 use anyhow::Result;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// 自定义菜单命令 ID（必须 < FCIDM_SHVIEWFIRST，避免与 Shell 命令冲突）
+const CMD_CREATE_BOX: usize = 1;
+
+/// 用户点击"创建分类框"后设置的原子标志，由应用层轮询并消费
+static PENDING_CREATE_BOX: AtomicBool = AtomicBool::new(false);
+
+/// 查询是否有待处理的"创建分类框"请求（消费标志，读取后自动清除）
+pub fn take_pending_create_box() -> bool {
+    PENDING_CREATE_BOX.swap(false, Ordering::SeqCst)
+}
 
 /// 显示文件的 Shell 右键菜单（尝试 windows crate 高级绑定 → ShellExecuteW 回退）
 pub fn show_shell_context_menu(hwnd: HWND, file_path: &str) {
@@ -235,6 +249,9 @@ fn show_shell_fallback_menu(hwnd: HWND, file_path: &str) {
 /// 桌面背景右键菜单由 shell 视图 (defview) 提供，而非 IShellFolder 直接提供。
 /// 正确路径：IShellFolder → CreateViewObject::<IShellView> → GetItemObject::<IContextMenu>(SVGIO_BACKGROUND)
 /// 这会返回与桌面右键完全一致的菜单：查看、排序方式、刷新、新建、显示设置、个性化等。
+///
+/// 「创建分类框」选项通过 Windows 注册表添加到原生菜单中（见 `setup_desktop_registry`），
+/// 此处不再手动添加，避免重复。
 pub fn show_desktop_context_menu(hwnd: HWND) {
     use windows::Win32::UI::Shell::{
         IContextMenu, IShellFolder, IShellView, SHGetDesktopFolder, SVGIO_BACKGROUND,
@@ -253,8 +270,6 @@ pub fn show_desktop_context_menu(hwnd: HWND) {
         };
 
         // 2. 创建 shell 视图 (IShellView)
-        //    CreateViewObject 在桌面文件夹上创建的是 Explorer 视图对象，
-        //    它包含了桌面背景菜单所需的所有 shell 扩展。
         let view: Result<IShellView, _> =
             desktop.CreateViewObject(windows::Win32::Foundation::HWND(hwnd));
         let view = match view {
@@ -267,8 +282,8 @@ pub fn show_desktop_context_menu(hwnd: HWND) {
         };
 
         // 3. 从 shell 视图获取背景区域的 IContextMenu
-        //    SVGIO_BACKGROUND 表示请求的是文件夹空白区域的上下文菜单，
-        //    这正是用户在桌面空白处右键看到的菜单。
+        //    注册表项 `HKCU\...\Directory\Background\shell\IkunCreateBox` 会被
+        //    Shell 自动合并到此菜单中，无需手动添加。
         let result: Result<IContextMenu, _> = view.GetItemObject(SVGIO_BACKGROUND);
         match result {
             Ok(cm) => {
@@ -282,6 +297,7 @@ pub fn show_desktop_context_menu(hwnd: HWND) {
                 match cm.QueryContextMenu(hmenu, 0, FCIDM_SHVIEWFIRST, MENU_CMD_ID_LAST, flags) {
                     Ok(()) => {
                         log::debug!("桌面菜单: QueryContextMenu 成功");
+
                         let cmd = TrackPopupMenu(
                             menu,
                             TPM_RETURNCMD,
@@ -291,7 +307,7 @@ pub fn show_desktop_context_menu(hwnd: HWND) {
                             hwnd,
                             std::ptr::null(),
                         );
-                        if cmd > 0 {
+                        if cmd > 0 && cmd as u32 >= FCIDM_SHVIEWFIRST {
                             let invoke_info = windows::Win32::UI::Shell::CMINVOKECOMMANDINFO {
                                 cbSize: std::mem::size_of::<
                                     windows::Win32::UI::Shell::CMINVOKECOMMANDINFO,
@@ -329,15 +345,26 @@ pub fn show_desktop_context_menu(hwnd: HWND) {
 
 /// 桌面背景右键菜单回退方案（ShellExecuteW 自定义菜单）
 fn show_desktop_fallback_menu(hwnd: HWND) {
+    /// 回退菜单中"创建分类框"的命令 ID（不与 CMD_CREATE_BOX 共享作用域）
+    const FALLBACK_CMD_CREATE_BOX: i32 = 4;
+
     unsafe {
         let mut pt = POINT { x: 0, y: 0 };
         GetCursorPos(&mut pt);
         let menu = CreatePopupMenu();
 
+        let create_box: Vec<u16> = "➕ 创建分类框(&N)\0".encode_utf16().collect();
         let open_desktop: Vec<u16> = "打开桌面文件夹(&O)\0".encode_utf16().collect();
         let display: Vec<u16> = "显示设置(&D)\0".encode_utf16().collect();
         let personalize: Vec<u16> = "个性化(&P)\0".encode_utf16().collect();
 
+        AppendMenuW(
+            menu,
+            MF_STRING,
+            FALLBACK_CMD_CREATE_BOX as usize,
+            create_box.as_ptr(),
+        );
+        AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
         AppendMenuW(menu, MF_STRING, 1, open_desktop.as_ptr());
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
         AppendMenuW(menu, MF_STRING, 2, display.as_ptr());
@@ -345,6 +372,10 @@ fn show_desktop_fallback_menu(hwnd: HWND) {
 
         let cmd = TrackPopupMenu(menu, TPM_RETURNCMD, pt.x, pt.y, 0, hwnd, std::ptr::null());
         match cmd {
+            c if c == FALLBACK_CMD_CREATE_BOX => {
+                log::info!("桌面菜单（回退）: 用户点击「创建分类框」");
+                PENDING_CREATE_BOX.store(true, Ordering::SeqCst);
+            }
             1 => {
                 // 打开桌面文件夹
                 let desktop_path = dirs::desktop_dir().unwrap_or_default();

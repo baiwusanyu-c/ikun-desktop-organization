@@ -1,5 +1,7 @@
 //! Desktop Organizer - 入口
 
+#![windows_subsystem = "windows"]
+
 mod app;
 mod box_core;
 mod classification;
@@ -25,6 +27,15 @@ fn main() -> eframe::Result<()> {
     #[cfg(target_os = "windows")]
     {
         set_per_monitor_dpi_v2();
+    }
+
+    // --create-box: 桌面右键菜单注册表项触发
+    // 写入信号文件后立即退出，运行中的实例检测到信号后打开 egui 对话框
+    if std::env::args().any(|a| a == "--create-box") {
+        let signal = std::env::temp_dir().join("ikun_create_box.signal");
+        let _ = std::fs::write(&signal, "1");
+        log::info!("已写入信号文件: {:?}", signal);
+        return Ok(());
     }
 
     let options = eframe::NativeOptions {

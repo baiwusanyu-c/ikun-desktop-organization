@@ -878,6 +878,8 @@ unsafe extern "system" fn grid_wnd_proc(
                 show_shell_context_menu(hwnd, path);
             } else {
                 show_desktop_context_menu(hwnd);
+                // shell_menu.rs 会在用户点击「创建分类框」时设置 PENDING_CREATE_BOX 标志，
+                // app.rs 的 update 循环会轮询该标志并打开 egui viewport 对话框。
             }
             0
         }
