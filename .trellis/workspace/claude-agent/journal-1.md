@@ -71,3 +71,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: 图标渲染参数化 + 交互命中偏移修复
+
+**Date**: 2026-06-16
+**Task**: 图标渲染参数化 + 交互命中偏移修复
+**Branch**: `master`
+
+### Summary
+
+提取独立 render_icon_grid 方法（GridLayout + ViewParams 参数化），接入 view_engine 支持 4 种视图模式，修复窄窗口图标消失和 hover/选中/双击/右键目标偏移 bug
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `81af7ef` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
