@@ -1,0 +1,9 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "配置系统核心规范：JSON配置加载/保存模式"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "配置加载失败时的优雅降级"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "代码质量标准"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据流：config → context → app"}
+{"file": "src/config/app_config.rs", "reason": "主要修改文件：配置结构重设计"}
+{"file": "src/context.rs", "reason": "主要修改文件：AppContext初始化"}
+{"file": "src/config/mod.rs", "reason": "清理旧模块导出"}
