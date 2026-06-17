@@ -1,10 +1,9 @@
 //! 日志工具函数
 //!
-//! 提供统一的日志输出格式和便捷函数
+//! 提供统一的日志输出格式和便捷函数。
+//! 日志写入文件 `~/.ikun_organizer.log`（无控制台输出）。
 
-use log::{debug, error, info, warn};
-
-/// 初始化日志系统
+/// 初始化日志系统（写入文件）
 ///
 /// 日志级别通过环境变量 RUST_LOG 控制：
 /// - `RUST_LOG=debug` - 显示所有日志
@@ -12,19 +11,48 @@ use log::{debug, error, info, warn};
 /// - `RUST_LOG=warn` - 只显示 warn/error
 /// - `RUST_LOG=error` - 只显示 error
 ///
+/// 日志文件位置：`~/.ikun_organizer.log`
+///
 /// # 示例
 ///
 /// ```bash
-/// # 显示所有日志
-/// RUST_LOG=debug cargo run
-///
-/// # 只显示模块特定日志
-/// RUST_LOG=ikun_organizer=debug cargo run
+/// # PowerShell 设置日志级别
+/// $env:RUST_LOG="debug"; cargo run
 /// ```
 pub fn init_logger() {
-    // env_logger::init() 会读取 RUST_LOG 环境变量
-    // 如果没有设置，默认只显示 error 级别
-    env_logger::init();
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
+    let log_path = dirs::home_dir()
+        .map(|h| h.join(".ikun_organizer.log"))
+        .unwrap_or_else(|| std::env::temp_dir().join("ikun_organizer.log"));
+
+    let target = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path);
+
+    match target {
+        Ok(file) => {
+            env_logger::Builder::from_default_env()
+                .target(env_logger::Target::Pipe(Box::new(file)))
+                .format(|buf, record| {
+                    writeln!(
+                        buf,
+                        "[{} {} {}] {}",
+                        chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+                        record.level(),
+                        record.target(),
+                        record.args()
+                    )
+                })
+                .init();
+        }
+        Err(_) => {
+            // 文件打开失败，回退到默认（可能无输出）
+            env_logger::init();
+        }
+    }
 }
 
 /// 打印调试信息（仅在 debug 模式下显示）
@@ -63,14 +91,14 @@ macro_rules! log_error {
 
 /// 打印带时间戳的性能日志
 pub fn log_perf(operation: &str, elapsed_ms: u128) {
-    info!("[性能] {} 耗时: {}ms", operation, elapsed_ms);
+    log::info!("[性能] {} 耗时: {}ms", operation, elapsed_ms);
 }
 
 /// 打印分隔线（用于调试时区分不同阶段）
 pub fn log_separator(title: &str) {
-    debug!("{}", "=".repeat(50));
-    debug!("  {}", title);
-    debug!("{}", "=".repeat(50));
+    log::debug!("{}", "=".repeat(50));
+    log::debug!("  {}", title);
+    log::debug!("{}", "=".repeat(50));
 }
 
 #[cfg(test)]

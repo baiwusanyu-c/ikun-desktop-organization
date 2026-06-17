@@ -1,7 +1,7 @@
 //! Desktop Organizer - 入口
 
-// 发布构建使用 windows 子系统（无控制台窗口），调试构建保留控制台用于日志
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// 使用 windows 子系统（无控制台窗口），日志写入文件
+#![windows_subsystem = "windows"]
 
 mod app;
 mod box_core;
@@ -31,22 +31,8 @@ fn main() -> eframe::Result<()> {
     }
 
     // --create-box: 桌面右键菜单注册表项触发
-    // 立即隐藏并释放控制台窗口（避免黑框闪烁），写入信号文件后退出
+    // 写入信号文件后立即退出，运行中的实例检测到信号后打开 egui 对话框
     if std::env::args().any(|a| a == "--create-box") {
-        #[cfg(target_os = "windows")]
-        unsafe {
-            extern "system" {
-                fn FreeConsole() -> i32;
-                fn GetConsoleWindow() -> *mut std::ffi::c_void;
-                fn ShowWindow(hWnd: *mut std::ffi::c_void, nCmdShow: i32) -> i32;
-            }
-            // 先隐藏窗口（立即不可见），再释放控制台
-            let console_hwnd = GetConsoleWindow();
-            if !console_hwnd.is_null() {
-                ShowWindow(console_hwnd, 0); // SW_HIDE = 0
-            }
-            FreeConsole();
-        }
         let signal = std::env::temp_dir().join("ikun_create_box.signal");
         let _ = std::fs::write(&signal, "1");
         return Ok(());
