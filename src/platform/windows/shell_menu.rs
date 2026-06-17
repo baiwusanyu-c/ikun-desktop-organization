@@ -4,7 +4,9 @@
 //! 使用 Windows Shell COM API 获取真实的系统上下文菜单，
 //! 并在 COM 调用失败时回退到 ShellExecuteW 自定义菜单。
 //!
-//! 桌面背景菜单额外附加"创建分类框"选项，通过原子标志与应用层通信。
+//! "创建分类框"选项通过注册表注入（`desktop_hook.rs`），
+//! QueryContextMenu 会自动合并注册表项，覆盖初始菜单和"显示更多选项"legacy 菜单。
+//! 程序退出时清理注册表，确保不运行时无残留。
 
 #![allow(clippy::let_unit_value)]
 
@@ -13,10 +15,8 @@ use super::ffi_types::*;
 use anyhow::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// 自定义菜单命令 ID（必须 < FCIDM_SHVIEWFIRST，避免与 Shell 命令冲突）
-const CMD_CREATE_BOX: usize = 1;
-
 /// 用户点击"创建分类框"后设置的原子标志，由应用层轮询并消费
+/// （仅在 COM 失败的回退菜单路径中使用）
 static PENDING_CREATE_BOX: AtomicBool = AtomicBool::new(false);
 
 /// 查询是否有待处理的"创建分类框"请求（消费标志，读取后自动清除）
@@ -250,8 +250,8 @@ fn show_shell_fallback_menu(hwnd: HWND, file_path: &str) {
 /// 正确路径：IShellFolder → CreateViewObject::<IShellView> → GetItemObject::<IContextMenu>(SVGIO_BACKGROUND)
 /// 这会返回与桌面右键完全一致的菜单：查看、排序方式、刷新、新建、显示设置、个性化等。
 ///
-/// 「创建分类框」选项通过 Windows 注册表添加到原生菜单中（见 `setup_desktop_registry`），
-/// 此处不再手动添加，避免重复。
+/// 「创建分类框」选项通过注册表注入（`desktop_hook.rs`），Shell 会自动将其合并到此菜单中，
+/// 同时覆盖初始菜单和"显示更多选项"legacy 菜单。程序退出时清理注册表，确保无残留。
 pub fn show_desktop_context_menu(hwnd: HWND) {
     use windows::Win32::UI::Shell::{
         IContextMenu, IShellFolder, IShellView, SHGetDesktopFolder, SVGIO_BACKGROUND,
@@ -282,8 +282,7 @@ pub fn show_desktop_context_menu(hwnd: HWND) {
         };
 
         // 3. 从 shell 视图获取背景区域的 IContextMenu
-        //    注册表项 `HKCU\...\Directory\Background\shell\IkunCreateBox` 会被
-        //    Shell 自动合并到此菜单中，无需手动添加。
+        //    QueryContextMenu 填充原生菜单后，通过 InsertMenuW 编程式追加「创建分类框」。
         let result: Result<IContextMenu, _> = view.GetItemObject(SVGIO_BACKGROUND);
         match result {
             Ok(cm) => {
@@ -291,12 +290,16 @@ pub fn show_desktop_context_menu(hwnd: HWND) {
                 let mut pt = POINT { x: 0, y: 0 };
                 GetCursorPos(&mut pt);
                 let menu = CreatePopupMenu();
-                let flags = CMF_NORMAL | CMF_EXPLORE | CMF_CANRENAME;
+                let flags = CMF_NORMAL | CMF_EXPLORE | CMF_CANRENAME | CMF_EXTENDED_VERBS;
                 let hmenu = windows::Win32::UI::WindowsAndMessaging::HMENU(menu);
 
                 match cm.QueryContextMenu(hmenu, 0, FCIDM_SHVIEWFIRST, MENU_CMD_ID_LAST, flags) {
                     Ok(()) => {
                         log::debug!("桌面菜单: QueryContextMenu 成功");
+
+                        // 注：注册表项 IkunCreateBox 会被 Shell 自动合并到 QueryContextMenu 结果中，
+                        // 覆盖初始菜单和"显示更多选项"legacy 菜单，无需编程式追加。
+                        // 程序退出时 cleanup_desktop_registry() 清理注册表，确保不运行时无残留。
 
                         let cmd = TrackPopupMenu(
                             menu,
@@ -423,5 +426,126 @@ fn show_desktop_fallback_menu(hwnd: HWND) {
             _ => {}
         }
         DestroyMenu(menu);
+    }
+}
+
+// ===== 注册表管理 =====
+
+/// 注册桌面右键菜单项（通过 Windows 注册表）
+///
+/// 在 `HKCU\Software\Classes\Directory\Background\shell\IkunCreateBox` 写入注册表项，
+/// 使 Windows 原生桌面右键菜单（包括"显示更多选项"legacy 菜单）显示「创建分类框」选项。
+/// Shell 会自动将注册表项合并到 `QueryContextMenu` 返回的菜单中。
+///
+/// **必须在程序退出时调用 `cleanup_desktop_registry()` 清理**。
+pub fn setup_desktop_registry() {
+    let exe_path = match std::env::current_exe() {
+        Ok(p) => p.to_string_lossy().to_string(),
+        Err(e) => {
+            log::error!("注册表设置失败: 无法获取可执行文件路径: {}", e);
+            return;
+        }
+    };
+
+    let key_path: Vec<u16> = "Software\\Classes\\Directory\\Background\\shell\\IkunCreateBox\0"
+        .encode_utf16()
+        .collect();
+    let cmd_key_path: Vec<u16> =
+        "Software\\Classes\\Directory\\Background\\shell\\IkunCreateBox\\command\0"
+            .encode_utf16()
+            .collect();
+
+    let menu_text: Vec<u16> = "创建分类框(&N)\0".encode_utf16().collect();
+    let command: Vec<u16> = format!("\"{}\" --create-box\0", exe_path)
+        .encode_utf16()
+        .collect();
+
+    unsafe {
+        // 1. 创建菜单项键
+        let mut hkey: isize = 0;
+        let ret = RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            key_path.as_ptr(),
+            0,
+            std::ptr::null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_WRITE,
+            std::ptr::null_mut(),
+            &mut hkey,
+            std::ptr::null_mut(),
+        );
+        if ret != 0 {
+            log::error!("注册表: RegCreateKeyExW 失败, 错误码={}", ret);
+            return;
+        }
+
+        RegSetValueExW(
+            hkey,
+            std::ptr::null(),
+            0,
+            REG_SZ,
+            menu_text.as_ptr() as *const u8,
+            (menu_text.len() * 2) as u32,
+        );
+        RegCloseKey(hkey);
+
+        // 2. 创建 command 子键
+        let mut cmd_hkey: isize = 0;
+        let ret = RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            cmd_key_path.as_ptr(),
+            0,
+            std::ptr::null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_WRITE,
+            std::ptr::null_mut(),
+            &mut cmd_hkey,
+            std::ptr::null_mut(),
+        );
+        if ret != 0 {
+            log::error!("注册表: command 子键创建失败, 错误码={}", ret);
+            return;
+        }
+
+        RegSetValueExW(
+            cmd_hkey,
+            std::ptr::null(),
+            0,
+            REG_SZ,
+            command.as_ptr() as *const u8,
+            (command.len() * 2) as u32,
+        );
+        RegCloseKey(cmd_hkey);
+
+        log::info!("注册表: 桌面右键菜单已注册 ({})", exe_path);
+    }
+}
+
+/// 清理桌面右键菜单注册表项
+///
+/// 删除 `HKCU\Software\Classes\Directory\Background\shell\IkunCreateBox`（含 command 子键）。
+/// 键不存在时静默忽略，不阻塞启动。
+///
+/// 调用时机：
+/// - 程序启动时（清理上次崩溃残留）
+/// - 程序退出时（确保不运行时无残留）
+pub fn cleanup_desktop_registry() {
+    let cmd_key: Vec<u16> =
+        "Software\\Classes\\Directory\\Background\\shell\\IkunCreateBox\\command\0"
+            .encode_utf16()
+            .collect();
+    let key: Vec<u16> = "Software\\Classes\\Directory\\Background\\shell\\IkunCreateBox\0"
+        .encode_utf16()
+        .collect();
+
+    unsafe {
+        let ret1 = RegDeleteKeyW(HKEY_CURRENT_USER, cmd_key.as_ptr());
+        let ret2 = RegDeleteKeyW(HKEY_CURRENT_USER, key.as_ptr());
+
+        if ret1 == 0 || ret2 == 0 {
+            log::info!("已清理注册表项 IkunCreateBox");
+        } else {
+            log::debug!("注册表清理: 无注册表项（正常）");
+        }
     }
 }

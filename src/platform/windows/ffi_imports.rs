@@ -137,6 +137,7 @@ extern "system" {
         prcRect: *const RECT,
     ) -> i32;
     pub fn DestroyMenu(hMenu: HMENU) -> i32;
+    pub fn GetMenuItemCount(hMenu: HMENU) -> i32;
 
     // Window management (additional)
     pub fn SetForegroundWindow(hWnd: HWND) -> i32;
@@ -185,6 +186,7 @@ extern "system" {
         cbData: u32,
     ) -> i32;
     pub fn RegCloseKey(hKey: isize) -> i32;
+    pub fn RegDeleteKeyW(hKey: isize, lpSubKey: *const u16) -> i32;
 
     // GDI - Font
     pub fn CreateFontW(

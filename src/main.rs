@@ -1,6 +1,7 @@
 //! Desktop Organizer - 入口
 
-#![windows_subsystem = "windows"]
+// TODO: 发布时启用，开发时注释掉以保留控制台日志输出
+// #![windows_subsystem = "windows"]
 
 mod app;
 mod box_core;
@@ -30,11 +31,17 @@ fn main() -> eframe::Result<()> {
     }
 
     // --create-box: 桌面右键菜单注册表项触发
-    // 写入信号文件后立即退出，运行中的实例检测到信号后打开 egui 对话框
+    // 立即释放控制台窗口（避免黑框闪烁），写入信号文件后退出
     if std::env::args().any(|a| a == "--create-box") {
+        #[cfg(target_os = "windows")]
+        {
+            extern "system" {
+                fn FreeConsole() -> i32;
+            }
+            unsafe { FreeConsole(); }
+        }
         let signal = std::env::temp_dir().join("ikun_create_box.signal");
         let _ = std::fs::write(&signal, "1");
-        log::info!("已写入信号文件: {:?}", signal);
         return Ok(());
     }
 

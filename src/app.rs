@@ -2,13 +2,17 @@
 //!
 //! 通过 `AppContext` 统一管理配置、平台服务和分类器。
 //! 创建分类框使用独立的 egui viewport（独立窗口，非控制面板内弹窗）。
+//!
+//! 右键菜单触发方式：
+//! - 分类框空白区域右键 → IContextMenu 编程式注入 → PENDING_CREATE_BOX 原子标志
+//! - 桌面空白区域右键 → 注册表注入（程序退出时自动清理）→ --create-box → 信号文件
 
 use crate::context::AppContext;
 use crate::platform::{
-    collect_grid_layout, create_grid_window, destroy_all_grid_windows, extract_file_icon,
-    get_grid_count, get_screen_resolution, hide_native_icons, restore_native_icons,
-    setup_desktop_registry, take_pending_create_box, DesktopIcon, DesktopManagerTrait,
-    GridCreateParams, GridFileItem,
+    cleanup_desktop_registry, collect_grid_layout, create_grid_window, destroy_all_grid_windows,
+    extract_file_icon, get_grid_count, get_screen_resolution, hide_native_icons,
+    restore_native_icons, setup_desktop_registry, take_pending_create_box, DesktopIcon,
+    DesktopManagerTrait, GridCreateParams, GridFileItem,
 };
 use eframe::egui;
 use std::sync::{Arc, Mutex};
@@ -16,12 +20,13 @@ use std::sync::{Arc, Mutex};
 /// 新建分类框名称最大长度（字符数）
 const BOX_NAME_MAX_LEN: usize = 16;
 
-/// 信号文件路径（--create-box 写入，运行实例轮询消费）
+/// 信号文件路径（--create-box 从注册表菜单写入，运行实例轮询消费）
 fn signal_file_path() -> std::path::PathBuf {
     std::env::temp_dir().join("ikun_create_box.signal")
 }
 
 /// 创建分类框对话框的共享状态（主窗口 ↔ 独立 viewport 通信）
+#[derive(Default)]
 struct DialogState {
     name: String,
     open: bool,
@@ -29,17 +34,6 @@ struct DialogState {
     confirmed: bool,
     /// 用户点击了取消或关闭窗口
     cancelled: bool,
-}
-
-impl Default for DialogState {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            open: false,
-            confirmed: false,
-            cancelled: false,
-        }
-    }
 }
 
 /// 主应用
@@ -66,14 +60,24 @@ impl MyApp {
         Self::default()
     }
 
-    /// 打开创建分类框的独立 egui viewport
-    fn open_create_box_dialog(&self, egui_ctx: &egui::Context) {
-        // 重置状态
+    /// 初始化创建分类框对话框状态（设置 open=true，viewport 由 render_create_box_dialog 每帧渲染）
+    fn open_create_box_dialog(&self) {
         if let Ok(mut s) = self.dialog.lock() {
             s.name.clear();
             s.open = true;
             s.confirmed = false;
             s.cancelled = false;
+        }
+    }
+
+    /// 每帧调用：如果对话框处于打开状态，渲染 egui viewport
+    ///
+    /// egui 的 `show_viewport_deferred` 必须在每一帧都调用，
+    /// 否则下一帧 egui 认为不再需要该 viewport 会自动关闭。
+    fn render_create_box_dialog(&self, egui_ctx: &egui::Context) {
+        let is_open = self.dialog.lock().map(|s| s.open).unwrap_or(false);
+        if !is_open {
+            return;
         }
 
         let dialog = self.dialog.clone();
@@ -367,23 +371,27 @@ impl eframe::App for MyApp {
         if !self.initialized {
             self.initialized = true;
             self.restore_layout();
+            // 先清理旧版残留，再注册新版（退出时清理，保证无残留）
+            cleanup_desktop_registry();
             setup_desktop_registry();
         }
 
-        // 信号文件（--create-box 从注册表菜单写入）→ 打开独立对话框
+        // 信号文件（--create-box 从注册表菜单写入）→ 打开对话框
         let signal_path = signal_file_path();
         if signal_path.exists() {
             let _ = std::fs::remove_file(&signal_path);
-            self.open_create_box_dialog(ctx);
-            // 将控制面板带到前台
+            self.open_create_box_dialog();
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         }
 
-        // 格子窗口右键菜单 → 打开独立对话框
+        // 格子窗口右键菜单 → 打开对话框
         if take_pending_create_box() {
-            self.open_create_box_dialog(ctx);
+            self.open_create_box_dialog();
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         }
+
+        // 每帧渲染对话框 viewport（egui 要求每帧调用 show_viewport_deferred 才能保持打开）
+        self.render_create_box_dialog(ctx);
 
         // 检查对话框结果
         let confirmed_name = if let Ok(mut state) = self.dialog.lock() {
@@ -424,7 +432,7 @@ impl eframe::App for MyApp {
                     self.save_layout_and_config();
                 }
                 if ui.button("➕ 创建分类框").clicked() {
-                    self.open_create_box_dialog(ctx);
+                    self.open_create_box_dialog();
                 }
             });
             ui.separator();
@@ -439,8 +447,7 @@ impl eframe::App for MyApp {
             }
             ui.label(format!("当前格子数: {}", get_grid_count()));
             ui.separator();
-            ui.label("• 右键桌面空白 → 原生菜单含「创建分类框」");
-            ui.label("• 右键格子空白处 → 桌面菜单 + 创建分类框");
+            ui.label("• 右键分类框空白处 → 桌面菜单 + 创建分类框");
             ui.label("• 双击图标 → 打开 / 拖动标题栏 → 移动");
         });
 
@@ -459,5 +466,7 @@ impl Drop for MyApp {
         if self.ctx.state.icons_hidden {
             let _ = restore_native_icons();
         }
+        // 程序退出时清理注册表，确保不运行时桌面菜单完全原生
+        cleanup_desktop_registry();
     }
 }
