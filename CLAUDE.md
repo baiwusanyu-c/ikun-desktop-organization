@@ -31,7 +31,7 @@ cargo watch -x check             # 自动检查（需 cargo install cargo-watch�
 
 **日志级别**：通过 `RUST_LOG` 环境变量控制（`trace` / `debug` / `info` / `warn` / `error`）
 
-**控制台窗口**：发布构建通过 `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]` 禁用控制台，避免 `--create-box` 二级进程黑框闪烁
+**控制台窗口**：所有构建均通过 `#![windows_subsystem = "windows"]` 禁用控制台，日志写入 `~/.ikun_organizer.log` 文件
 
 ---
 
@@ -125,7 +125,7 @@ src/
 │
 ├── utils/                     # 工具层
 │   ├── mod.rs                 #   模块导出
-│   ├── logger.rs              #   日志初始化 + 自定义宏
+│   ├── logger.rs              #   日志初始化（文件输出）+ 自定义宏
 │   ├── platform.rs            #   跨平台工具（开机自启、配置目录）
 │   ├── dpi.rs                 #   DPI 缩放工具
 │   └── string_utils.rs        #   UTF-16 字符串转换
@@ -257,7 +257,7 @@ main.rs
 
 **Shell 右键菜单**：`IShellFolder` + `IContextMenu` + `IShellView::GetItemObject(SVGIO_BACKGROUND)` 获取真实桌面菜单，回退方案用 `ShellExecuteW`
 
-**桌面右键创建分类框**：通过 Windows 注册表 (`HKCU\...\Directory\Background\shell\IkunCreateBox`) 注入菜单项，Shell 自动合并到 `QueryContextMenu` 结果（覆盖初始菜单和"显示更多选项"legacy 菜单）。程序启动时注册，退出时清理（`Drop` trait），确保不运行时无残留。用户点击时通过 `--create-box` 参数 → 信号文件 IPC → 运行实例检测 → egui viewport 对话框。
+**桌面右键创建分类框**：通过 Windows 注册表 (`HKCU\...\Directory\Background\shell\IkunCreateBox`) 注入菜单项，Shell 自动合并到 `QueryContextMenu` 结果（覆盖初始菜单和"显示更多选项"legacy 菜单）。程序启动时注册，退出时清理（`Drop` trait），确保不运行时无残留。用户点击时通过 `--create-box` 参数 → 信号文件 IPC → 运行实例检测 → egui viewport 对话框（immediate 模式）。多屏定位通过 Win32 `FindWindowW` + `SetWindowPos` 物理像素坐标实现（绕过 egui `with_position` 在高 DPI 多屏下的坐标转换缺陷）。
 
 **图标提取**：`SHDefExtractIconW` 提取 128×128 高清图标，`.lnk` 先通过 `IShellLink` + `IPersistFile` 解析目标
 
@@ -283,6 +283,8 @@ main.rs
 
 ### 日志
 - 使用 `log::{debug, info, warn, error}`
+- 日志写入 `~/.ikun_organizer.log` 文件（无控制台输出）
+- 日志级别通过 `RUST_LOG` 环境变量控制
 - 自定义宏：`log_debug!`、`log_info!`、`log_warn!`、`log_error!`（自动附加文件/模块信息）
 
 ---

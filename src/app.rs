@@ -617,6 +617,76 @@ mod tests {
             .unwrap_or(DialogOpenState::Closed);
         assert_eq!(state, DialogOpenState::Closed);
     }
+
+    // ===== 三态状态机转换 =====
+
+    #[test]
+    fn test_dialog_state_machine_closed_to_open() {
+        let app = MyApp::default();
+        assert_eq!(
+            app.dialog.lock().unwrap().open_state,
+            DialogOpenState::Closed
+        );
+        app.open_create_box_dialog();
+        assert_eq!(
+            app.dialog.lock().unwrap().open_state,
+            DialogOpenState::Open
+        );
+    }
+
+    #[test]
+    fn test_dialog_state_machine_open_to_closing() {
+        let app = MyApp::default();
+        app.open_create_box_dialog();
+
+        // 模拟用户点击取消
+        {
+            let mut s = app.dialog.lock().unwrap();
+            s.open_state = DialogOpenState::Closing;
+            s.cancelled = true;
+        }
+
+        let s = app.dialog.lock().unwrap();
+        assert_eq!(s.open_state, DialogOpenState::Closing);
+        assert!(s.cancelled);
+    }
+
+    #[test]
+    fn test_dialog_open_stores_target_pos() {
+        let app = MyApp::default();
+        app.open_create_box_dialog();
+        let s = app.dialog.lock().unwrap();
+        // target_pos 应被设置（具体值取决于鼠标位置，只验证非 None）
+        assert!(s.target_pos.is_some());
+    }
+
+    // ===== 名称验证边界 =====
+
+    #[test]
+    fn test_box_name_valid_exactly_max_len() {
+        // 恰好 BOX_NAME_MAX_LEN (16) 个字符
+        let name = "1234567890ABCDEF"; // 16 ASCII chars
+        assert_eq!(name.chars().count(), BOX_NAME_MAX_LEN);
+        assert!(is_box_name_valid(name));
+    }
+
+    #[test]
+    fn test_box_name_valid_unicode_counts_as_chars() {
+        // Unicode 字符按 chars().count() 计算，不是字节数
+        let name = "分类框测试用名称一二三四"; // 12 Chinese chars
+        assert!(name.chars().count() <= BOX_NAME_MAX_LEN);
+        assert!(is_box_name_valid(name));
+
+        let long_name = "分类框测试用名称一二三四五六七八九"; // 17 Chinese chars
+        assert!(!is_box_name_valid(long_name));
+    }
+
+    #[test]
+    fn test_box_name_valid_single_char() {
+        assert!(is_box_name_valid("A"));
+        assert!(is_box_name_valid("中"));
+        assert!(is_box_name_valid("1"));
+    }
 }
 
 /// 验证分类框名称是否有效（非空且不超过 BOX_NAME_MAX_LEN 字符）

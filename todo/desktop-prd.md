@@ -37,7 +37,5 @@
 
 符合架构？
 真的 egui ？
-多次创建就不显示了
-闪烁的 terminal
 单元测试
 更新 spec 和 claude

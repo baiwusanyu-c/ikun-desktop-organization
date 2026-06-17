@@ -22,7 +22,7 @@
 
 ```
 src/
-├── main.rs                    # 入口：初始化日志、DPI 感知、启动 egui
+├── main.rs                    # 入口：初始化日志（文件）、DPI 感知、启动 egui
 ├── app.rs                     # eframe::App 控制面板（已接入 AppContext）
 ├── context.rs                 # AppContext 核心上下文对象
 │
@@ -79,7 +79,7 @@ src/
 │
 ├── utils/                     # 工具层
 │   ├── mod.rs                 #   模块导出
-│   ├── logger.rs              #   日志初始化 + 自定义宏
+│   ├── logger.rs              #   日志初始化（文件输出）+ 自定义宏
 │   ├── platform.rs            #   跨平台工具（开机自启、配置目录）
 │   ├── dpi.rs                 #   DPI 缩放工具
 │   └── string_utils.rs        #   UTF-16 字符串转换

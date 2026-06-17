@@ -4,7 +4,7 @@
 //! 使用 Windows Shell COM API 获取真实的系统上下文菜单，
 //! 并在 COM 调用失败时回退到 ShellExecuteW 自定义菜单。
 //!
-//! "创建分类框"选项通过注册表注入（`desktop_hook.rs`），
+//! "创建分类框"选项通过注册表注入（本模块 `setup_desktop_registry`），
 //! QueryContextMenu 会自动合并注册表项，覆盖初始菜单和"显示更多选项"legacy 菜单。
 //! 程序退出时清理注册表，确保不运行时无残留。
 

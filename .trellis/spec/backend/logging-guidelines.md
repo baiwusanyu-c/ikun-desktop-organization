@@ -7,12 +7,14 @@
 ## Overview
 
 本项目使用 `log` crate（ facade）+ `env_logger`（实现）进行日志记录。
+日志写入 `~/.ikun_organizer.log` 文件（无控制台输出，所有构建均使用 `windows_subsystem = "windows"`）。
 
 **日志原则**：
 - **信息丰富**：包含操作详情、路径、错误信息
 - **级别合理**：根据重要性选择正确的日志级别
 - **中文友好**：日志消息使用中文（本项目用户为中文用户）
 - **性能优先**：关键路径避免频繁日志
+- **文件输出**：日志写入文件，不使用控制台
 
 ---
 
@@ -60,15 +62,12 @@ log_separator("开始处理桌面图标");
 
 **运行时控制日志级别**：
 
-```bash
-# 显示所有日志
-RUST_LOG=debug cargo run
+```powershell
+# PowerShell 设置日志级别
+$env:RUST_LOG="debug"; cargo run
 
-# 只显示 warn 和 error
-RUST_LOG=warn cargo run
-
-# 特定模块日志
-RUST_LOG=ikun_desktop_organization::classification=debug cargo run
+# 查看日志文件
+Get-Content ~\.ikun_organizer.log -Tail 50
 ```
 
 ---
