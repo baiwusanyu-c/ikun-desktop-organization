@@ -28,9 +28,9 @@ pub use windows::DesktopManager;
 #[cfg(windows)]
 pub use windows::{
     cleanup_desktop_registry, collect_grid_layout, create_grid_window, destroy_all_grid_windows,
-    extract_file_icon, get_cursor_monitor_work_area, get_grid_count, get_screen_resolution,
-    hide_native_icons, restore_native_icons, setup_desktop_registry, take_pending_create_box,
-    GridCreateParams, GridFileItem,
+    extract_file_icon, get_cursor_monitor_work_area_phys, get_grid_count, get_screen_resolution,
+    hide_native_icons, reposition_window_by_title, restore_native_icons, setup_desktop_registry,
+    take_pending_create_box, GridCreateParams, GridFileItem,
 };
 
 /// 桌面管理器 trait（跨平台）

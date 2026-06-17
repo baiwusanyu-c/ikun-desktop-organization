@@ -147,6 +147,7 @@ extern "system" {
     pub fn WindowFromPoint(pt: POINT) -> HWND;
     pub fn PostMessageW(hWnd: HWND, Msg: u32, wParam: WPARAM, lParam: LPARAM) -> i32;
     pub fn PostThreadMessageW(idThread: u32, Msg: u32, wParam: WPARAM, lParam: LPARAM) -> i32;
+    pub fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> HWND;
 
     // Message pump
     pub fn GetMessageW(lpMsg: *mut MSG, hWnd: HWND, wMsgFilterMin: u32, wMsgFilterMax: u32) -> i32;
@@ -212,6 +213,7 @@ extern "system" {
     // Multi-monitor
     pub fn MonitorFromPoint(pt: POINT, dwFlags: u32) -> HMONITOR;
     pub fn GetMonitorInfoW(hMonitor: HMONITOR, lpmi: *mut MONITORINFO) -> i32;
+    pub fn GetDpiForMonitor(hMonitor: HMONITOR, dpiType: u32, dpiX: *mut u32, dpiY: *mut u32) -> i32;
 
     // Tooltip / Common Controls
     pub fn InitCommonControlsEx(lpInitCtrls: *const INITCOMMONCONTROLSEX) -> i32;

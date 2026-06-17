@@ -10,9 +10,9 @@
 use crate::context::AppContext;
 use crate::platform::{
     cleanup_desktop_registry, collect_grid_layout, create_grid_window, destroy_all_grid_windows,
-    extract_file_icon, get_cursor_monitor_work_area, get_grid_count, get_screen_resolution,
-    hide_native_icons, restore_native_icons, setup_desktop_registry, take_pending_create_box,
-    DesktopIcon, DesktopManagerTrait, GridCreateParams, GridFileItem,
+    extract_file_icon, get_cursor_monitor_work_area_phys, get_grid_count, get_screen_resolution,
+    hide_native_icons, reposition_window_by_title, restore_native_icons, setup_desktop_registry,
+    take_pending_create_box, DesktopIcon, DesktopManagerTrait, GridCreateParams, GridFileItem,
 };
 use eframe::egui;
 use std::sync::{Arc, Mutex};
@@ -25,15 +25,36 @@ fn signal_file_path() -> std::path::PathBuf {
     std::env::temp_dir().join("ikun_create_box.signal")
 }
 
+/// 创建分类框对话框状态机
+///
+/// - `Closed`：对话框未打开，不渲染 viewport
+/// - `Open`：对话框正在显示，每帧渲染 viewport
+/// - `Closing`：用户关闭了对话框，需要发送 ViewportCommand::Close 并停止渲染
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum DialogOpenState {
+    Closed,
+    Open,
+    Closing,
+}
+
+impl Default for DialogOpenState {
+    fn default() -> Self {
+        DialogOpenState::Closed
+    }
+}
+
 /// 创建分类框对话框的共享状态（主窗口 ↔ 独立 viewport 通信）
 #[derive(Default)]
 struct DialogState {
     name: String,
-    open: bool,
+    /// 对话框状态机（由主窗口管理，viewport 回调只设置 confirmed/cancelled）
+    open_state: DialogOpenState,
     /// 用户点击了确定（viewport 设置，主窗口读取后创建分类框）
     confirmed: bool,
     /// 用户点击了取消或关闭窗口
     cancelled: bool,
+    /// Win32 目标位置（物理像素虚拟桌面坐标），打开时计算一次
+    target_pos: Option<(i32, i32)>,
 }
 
 /// 主应用
@@ -60,50 +81,78 @@ impl MyApp {
         Self::default()
     }
 
-    /// 初始化创建分类框对话框状态（设置 open=true，viewport 由 render_create_box_dialog 每帧渲染）
+    /// 初始化创建分类框对话框状态（设置 Open，计算 Win32 目标位置）
     fn open_create_box_dialog(&self) {
+        // 获取鼠标所在显示器的工作区域（物理像素虚拟桌面坐标）
+        let (work_x, work_y, work_w, work_h) = get_cursor_monitor_work_area_phys();
+        let dlg_w = 360i32;
+        let dlg_h = 200i32; // 含标题栏的估算物理像素高度
+        let x = work_x + (work_w - dlg_w) / 2;
+        let y = work_y + (work_h - dlg_h) / 3;
+        log::info!(
+            "对话框: 目标位置 物理({}, {}) 工作区({},{},{}x{})",
+            x, y, work_x, work_y, work_w, work_h
+        );
+
         if let Ok(mut s) = self.dialog.lock() {
             s.name.clear();
-            s.open = true;
+            s.open_state = DialogOpenState::Open;
             s.confirmed = false;
             s.cancelled = false;
+            s.target_pos = Some((x, y));
         }
+        log::info!("对话框: state=Open");
     }
 
-    /// 每帧调用：如果对话框处于打开状态，渲染 egui viewport
+    /// 每帧调用：根据状态机渲染或关闭 egui viewport
     ///
-    /// egui 的 `show_viewport_deferred` 必须在每一帧都调用，
-    /// 否则下一帧 egui 认为不再需要该 viewport 会自动关闭。
+    /// 使用 `show_viewport_immediate`（同步模式）代替 `show_viewport_deferred`，
+    /// 在多屏 + DPI 缩放下位置更可靠。
     fn render_create_box_dialog(&self, egui_ctx: &egui::Context) {
-        let is_open = self.dialog.lock().map(|s| s.open).unwrap_or(false);
-        if !is_open {
-            return;
+        let state = self.dialog.lock().map(|s| s.open_state).unwrap_or(DialogOpenState::Closed);
+
+        match state {
+            DialogOpenState::Closed => return,
+            DialogOpenState::Closing => {
+                // 不再渲染 viewport → egui 自动销毁
+                log::info!("对话框: Closing → 停止渲染以销毁 viewport");
+                if let Ok(mut s) = self.dialog.lock() {
+                    s.open_state = DialogOpenState::Closed;
+                }
+                log::info!("对话框: state=Closed");
+                return;
+            }
+            DialogOpenState::Open => {} // 正常渲染
         }
 
         let dialog = self.dialog.clone();
 
-        // 获取当前鼠标所在显示器的工作区域（多屏居中）
-        let (work_x, work_y, work_w, work_h) = get_cursor_monitor_work_area();
+        // 读取 Win32 目标位置（打开时计算的物理像素坐标）
+        let target_pos = self
+            .dialog
+            .lock()
+            .map(|s| s.target_pos)
+            .unwrap_or(None);
         let dlg_w = 360.0_f32;
         let dlg_h = 180.0_f32;
-        let x = work_x as f32 + (work_w as f32 - dlg_w) / 2.0;
-        let y = work_y as f32 + (work_h as f32 - dlg_h) / 3.0;
 
-        egui_ctx.show_viewport_deferred(
+        egui_ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of("create_box_dialog"),
             egui::ViewportBuilder::default()
                 .with_title("创建分类框")
                 .with_inner_size([dlg_w, dlg_h])
-                .with_position(egui::pos2(x, y))
                 .with_decorations(true)
                 .with_resizable(false)
                 .with_always_on_top(),
             move |ctx, _class| {
                 let mut close = false;
+                let mut close_reason = "";
 
                 // 检测 X 按钮（OS 关闭请求）→ 等同取消
-                if ctx.input(|i| i.viewport().close_requested()) {
+                let x_clicked = ctx.input(|i| i.viewport().close_requested());
+                if x_clicked {
                     close = true;
+                    close_reason = "X按钮";
                     if let Ok(mut s) = dialog.lock() {
                         s.cancelled = true;
                     }
@@ -125,6 +174,7 @@ impl MyApp {
                         );
                         if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                             close = true;
+                            close_reason = "Enter";
                             state.confirmed = true;
                         }
                     });
@@ -154,10 +204,12 @@ impl MyApp {
                     ui.horizontal(|ui| {
                         if ui.add_enabled(valid, egui::Button::new("✓ 确定")).clicked() {
                             close = true;
+                            close_reason = "确定按钮";
                             state.confirmed = true;
                         }
                         if ui.button("✗ 取消").clicked() {
                             close = true;
+                            close_reason = "取消按钮";
                             state.cancelled = true;
                         }
                     });
@@ -165,18 +217,24 @@ impl MyApp {
                     // ESC 取消
                     if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                         close = true;
+                        close_reason = "ESC";
                         state.cancelled = true;
                     }
                 });
 
                 if close {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    log::info!("对话框关闭: reason={}", close_reason);
                     if let Ok(mut s) = dialog.lock() {
-                        s.open = false;
+                        s.open_state = DialogOpenState::Closing;
                     }
                 }
             },
         );
+
+        // Win32 重新定位：修正 egui 在多屏 + DPI 缩放下的定位错误
+        if let Some((tx, ty)) = target_pos {
+            reposition_window_by_title("创建分类框", tx, ty);
+        }
     }
 
     fn restore_layout(&mut self) {
@@ -525,7 +583,7 @@ mod tests {
     fn test_dialog_state_default() {
         let state = DialogState::default();
         assert!(state.name.is_empty());
-        assert!(!state.open);
+        assert_eq!(state.open_state, DialogOpenState::Closed);
         assert!(!state.confirmed);
         assert!(!state.cancelled);
     }
@@ -543,7 +601,7 @@ mod tests {
         // open_create_box_dialog 应重置所有字段
         app.open_create_box_dialog();
         let s = app.dialog.lock().unwrap();
-        assert!(s.open);
+        assert_eq!(s.open_state, DialogOpenState::Open);
         assert!(s.name.is_empty());
         assert!(!s.confirmed);
         assert!(!s.cancelled);
@@ -552,8 +610,12 @@ mod tests {
     #[test]
     fn test_dialog_state_not_open_initially() {
         let app = MyApp::default();
-        let is_open = app.dialog.lock().map(|s| s.open).unwrap_or(false);
-        assert!(!is_open);
+        let state = app
+            .dialog
+            .lock()
+            .map(|s| s.open_state)
+            .unwrap_or(DialogOpenState::Closed);
+        assert_eq!(state, DialogOpenState::Closed);
     }
 }
 

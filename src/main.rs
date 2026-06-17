@@ -31,14 +31,21 @@ fn main() -> eframe::Result<()> {
     }
 
     // --create-box: 桌面右键菜单注册表项触发
-    // 立即释放控制台窗口（避免黑框闪烁），写入信号文件后退出
+    // 立即隐藏并释放控制台窗口（避免黑框闪烁），写入信号文件后退出
     if std::env::args().any(|a| a == "--create-box") {
         #[cfg(target_os = "windows")]
-        {
+        unsafe {
             extern "system" {
                 fn FreeConsole() -> i32;
+                fn GetConsoleWindow() -> *mut std::ffi::c_void;
+                fn ShowWindow(hWnd: *mut std::ffi::c_void, nCmdShow: i32) -> i32;
             }
-            unsafe { FreeConsole(); }
+            // 先隐藏窗口（立即不可见），再释放控制台
+            let console_hwnd = GetConsoleWindow();
+            if !console_hwnd.is_null() {
+                ShowWindow(console_hwnd, 0); // SW_HIDE = 0
+            }
+            FreeConsole();
         }
         let signal = std::env::temp_dir().join("ikun_create_box.signal");
         let _ = std::fs::write(&signal, "1");

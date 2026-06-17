@@ -143,11 +143,11 @@ pub fn get_screen_resolution() -> (i32, i32) {
     (w, h)
 }
 
-/// 获取当前鼠标所在显示器的工作区域（物理像素坐标）
+/// 获取当前鼠标所在显示器的工作区域（物理像素虚拟桌面坐标）
 ///
-/// 用于多显示器环境下将对话框居中到用户正在操作的屏幕上。
-/// 回退到主屏幕全屏范围。
-pub fn get_cursor_monitor_work_area() -> (i32, i32, i32, i32) {
+/// 返回值不做 DPI 转换，直接返回 Windows API 的原始物理像素坐标。
+/// 用于 Win32 `SetWindowPos` 定位窗口到指定显示器。
+pub fn get_cursor_monitor_work_area_phys() -> (i32, i32, i32, i32) {
     unsafe {
         let mut pt = POINT { x: 0, y: 0 };
         if GetCursorPos(&mut pt) == 0 {
@@ -161,27 +161,52 @@ pub fn get_cursor_monitor_work_area() -> (i32, i32, i32, i32) {
 
         let mut mi = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            rcMonitor: RECT {
-                left: 0,
-                top: 0,
-                right: 0,
-                bottom: 0,
-            },
-            rcWork: RECT {
-                left: 0,
-                top: 0,
-                right: 0,
-                bottom: 0,
-            },
+            rcMonitor: RECT { left: 0, top: 0, right: 0, bottom: 0 },
+            rcWork: RECT { left: 0, top: 0, right: 0, bottom: 0 },
             dwFlags: 0,
         };
 
         if GetMonitorInfoW(hmon, &mut mi) != 0 {
-            let work = &mi.rcWork;
-            (work.left, work.top, work.right - work.left, work.bottom - work.top)
+            let w = &mi.rcWork;
+            (w.left, w.top, w.right - w.left, w.bottom - w.top)
         } else {
             fallback_work_area()
         }
+    }
+}
+
+/// 通过 Win32 `SetWindowPos` 将指定标题的窗口移动到目标物理像素位置
+///
+/// 用于修正 egui viewport 在多屏 + DPI 缩放下的定位错误。
+pub fn reposition_window_by_title(title: &str, target_x: i32, target_y: i32) -> bool {
+    unsafe {
+        let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+        let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
+        if hwnd.is_null() {
+            log::debug!("reposition: 未找到窗口 '{}'", title);
+            return false;
+        }
+
+        let mut rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        GetWindowRect(hwnd, &mut rect);
+        let w = rect.right - rect.left;
+        let h = rect.bottom - rect.top;
+
+        // SWP_NOSIZE=1, SWP_NOZORDER=4, SWP_NOACTIVATE=16
+        SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            target_x,
+            target_y,
+            w,
+            h,
+            1 | 4 | 16,
+        );
+        log::info!(
+            "reposition: '{}' → ({}, {}) 尺寸 {}x{}",
+            title, target_x, target_y, w, h
+        );
+        true
     }
 }
 
