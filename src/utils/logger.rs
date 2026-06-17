@@ -27,10 +27,7 @@ pub fn init_logger() {
         .map(|h| h.join(".ikun_organizer.log"))
         .unwrap_or_else(|| std::env::temp_dir().join("ikun_organizer.log"));
 
-    let target = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path);
+    let target = OpenOptions::new().create(true).append(true).open(&log_path);
 
     match target {
         Ok(file) => {

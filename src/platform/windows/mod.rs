@@ -32,6 +32,4 @@ pub use grid_window::{
 };
 pub use icon_extract::extract_file_icon;
 pub use icon_hider::{hide_native_icons, restore_native_icons};
-pub use shell_menu::{
-    cleanup_desktop_registry, setup_desktop_registry, take_pending_create_box,
-};
+pub use shell_menu::{cleanup_desktop_registry, setup_desktop_registry, take_pending_create_box};

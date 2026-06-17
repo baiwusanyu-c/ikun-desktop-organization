@@ -213,7 +213,12 @@ extern "system" {
     // Multi-monitor
     pub fn MonitorFromPoint(pt: POINT, dwFlags: u32) -> HMONITOR;
     pub fn GetMonitorInfoW(hMonitor: HMONITOR, lpmi: *mut MONITORINFO) -> i32;
-    pub fn GetDpiForMonitor(hMonitor: HMONITOR, dpiType: u32, dpiX: *mut u32, dpiY: *mut u32) -> i32;
+    pub fn GetDpiForMonitor(
+        hMonitor: HMONITOR,
+        dpiType: u32,
+        dpiX: *mut u32,
+        dpiY: *mut u32,
+    ) -> i32;
 
     // Tooltip / Common Controls
     pub fn InitCommonControlsEx(lpInitCtrls: *const INITCOMMONCONTROLSEX) -> i32;

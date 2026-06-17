@@ -161,8 +161,18 @@ pub fn get_cursor_monitor_work_area_phys() -> (i32, i32, i32, i32) {
 
         let mut mi = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            rcMonitor: RECT { left: 0, top: 0, right: 0, bottom: 0 },
-            rcWork: RECT { left: 0, top: 0, right: 0, bottom: 0 },
+            rcMonitor: RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            },
+            rcWork: RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            },
             dwFlags: 0,
         };
 
@@ -187,7 +197,12 @@ pub fn reposition_window_by_title(title: &str, target_x: i32, target_y: i32) -> 
             return false;
         }
 
-        let mut rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
         GetWindowRect(hwnd, &mut rect);
         let w = rect.right - rect.left;
         let h = rect.bottom - rect.top;
@@ -204,7 +219,11 @@ pub fn reposition_window_by_title(title: &str, target_x: i32, target_y: i32) -> 
         );
         log::info!(
             "reposition: '{}' → ({}, {}) 尺寸 {}x{}",
-            title, target_x, target_y, w, h
+            title,
+            target_x,
+            target_y,
+            w,
+            h
         );
         true
     }

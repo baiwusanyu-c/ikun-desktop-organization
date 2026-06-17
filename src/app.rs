@@ -91,7 +91,12 @@ impl MyApp {
         let y = work_y + (work_h - dlg_h) / 3;
         log::info!(
             "对话框: 目标位置 物理({}, {}) 工作区({},{},{}x{})",
-            x, y, work_x, work_y, work_w, work_h
+            x,
+            y,
+            work_x,
+            work_y,
+            work_w,
+            work_h
         );
 
         if let Ok(mut s) = self.dialog.lock() {
@@ -109,7 +114,11 @@ impl MyApp {
     /// 使用 `show_viewport_immediate`（同步模式）代替 `show_viewport_deferred`，
     /// 在多屏 + DPI 缩放下位置更可靠。
     fn render_create_box_dialog(&self, egui_ctx: &egui::Context) {
-        let state = self.dialog.lock().map(|s| s.open_state).unwrap_or(DialogOpenState::Closed);
+        let state = self
+            .dialog
+            .lock()
+            .map(|s| s.open_state)
+            .unwrap_or(DialogOpenState::Closed);
 
         match state {
             DialogOpenState::Closed => return,
@@ -128,11 +137,7 @@ impl MyApp {
         let dialog = self.dialog.clone();
 
         // 读取 Win32 目标位置（打开时计算的物理像素坐标）
-        let target_pos = self
-            .dialog
-            .lock()
-            .map(|s| s.target_pos)
-            .unwrap_or(None);
+        let target_pos = self.dialog.lock().map(|s| s.target_pos).unwrap_or(None);
         let dlg_w = 360.0_f32;
         let dlg_h = 180.0_f32;
 
@@ -628,10 +633,7 @@ mod tests {
             DialogOpenState::Closed
         );
         app.open_create_box_dialog();
-        assert_eq!(
-            app.dialog.lock().unwrap().open_state,
-            DialogOpenState::Open
-        );
+        assert_eq!(app.dialog.lock().unwrap().open_state, DialogOpenState::Open);
     }
 
     #[test]
