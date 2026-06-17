@@ -26,6 +26,7 @@ pub type HBITMAP = *mut c_void;
 pub type HICON = *mut c_void;
 pub type HMENU = *mut c_void;
 pub type HHOOK = *mut c_void;
+pub type HMONITOR = *mut c_void;
 pub type HOOKPROC =
     unsafe extern "system" fn(nCode: i32, wParam: WPARAM, lParam: LPARAM) -> LRESULT;
 pub type LPARAM = isize;
@@ -257,6 +258,18 @@ pub struct INITCOMMONCONTROLSEX {
 
 // ===== GDI DIB Constants =====
 pub const DIB_RGB_COLORS: u32 = 0;
+
+// ===== Monitor Constants =====
+pub const MONITOR_DEFAULTTONEAREST: u32 = 0x00000002;
+
+/// Win32 MONITORINFO 结构体
+#[repr(C)]
+pub struct MONITORINFO {
+    pub cbSize: u32,
+    pub rcMonitor: RECT,
+    pub rcWork: RECT,
+    pub dwFlags: u32,
+}
 
 #[repr(C)]
 pub struct BLENDFUNCTION {

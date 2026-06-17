@@ -143,6 +143,54 @@ pub fn get_screen_resolution() -> (i32, i32) {
     (w, h)
 }
 
+/// 获取当前鼠标所在显示器的工作区域（物理像素坐标）
+///
+/// 用于多显示器环境下将对话框居中到用户正在操作的屏幕上。
+/// 回退到主屏幕全屏范围。
+pub fn get_cursor_monitor_work_area() -> (i32, i32, i32, i32) {
+    unsafe {
+        let mut pt = POINT { x: 0, y: 0 };
+        if GetCursorPos(&mut pt) == 0 {
+            return fallback_work_area();
+        }
+
+        let hmon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+        if hmon.is_null() {
+            return fallback_work_area();
+        }
+
+        let mut mi = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            rcMonitor: RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            },
+            rcWork: RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            },
+            dwFlags: 0,
+        };
+
+        if GetMonitorInfoW(hmon, &mut mi) != 0 {
+            let work = &mi.rcWork;
+            (work.left, work.top, work.right - work.left, work.bottom - work.top)
+        } else {
+            fallback_work_area()
+        }
+    }
+}
+
+/// 回退：主屏幕全屏范围
+fn fallback_work_area() -> (i32, i32, i32, i32) {
+    let (w, h) = get_screen_resolution();
+    (0, 0, w, h)
+}
+
 fn create_tooltip_window(parent: HWND) -> HWND {
     let icc = INITCOMMONCONTROLSEX {
         dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,

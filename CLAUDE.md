@@ -19,8 +19,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 构建和运行
 
 ```bash
-cargo run                        # 开发模式运行
+cargo run                        # 开发模式运行（保留控制台窗口）
 RUST_LOG=debug cargo run         # 带调试日志运行（推荐）
+cargo build --release            # 发布构建（无控制台窗口，windows_subsystem="windows"）
 cargo check                      # 快速编译检查
 cargo fmt                        # 格式化
 cargo clippy                     # Lint 检查
@@ -29,6 +30,8 @@ cargo watch -x check             # 自动检查（需 cargo install cargo-watch�
 ```
 
 **日志级别**：通过 `RUST_LOG` 环境变量控制（`trace` / `debug` / `info` / `warn` / `error`）
+
+**控制台窗口**：发布构建通过 `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]` 禁用控制台，避免 `--create-box` 二级进程黑框闪烁
 
 ---
 
@@ -79,7 +82,7 @@ src/
 │   │   ├── desktop_manager.rs #   桌面图标枚举（文件系统读取）
 │   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎（625 行）
 │   │   ├── grid_window.rs     #   窗口创建/销毁 + wnd_proc 消息处理（701 行）
-│   │   ├── shell_menu.rs      #   Shell 右键菜单：文件 + 桌面背景（349 行）
+│   │   ├── shell_menu.rs      #   Shell 右键菜单 + 注册表管理（创建分类框）
 │   │   ├── icon_extract.rs    #   图标提取（SHGetFileInfoW + .lnk 解析）
 │   │   ├── icon_hider.rs      #   图标隐藏/恢复（SysListView32）
 │   │   └── sys_tray.rs        #   系统托盘（TODO 占位）
@@ -254,6 +257,8 @@ main.rs
 
 **Shell 右键菜单**：`IShellFolder` + `IContextMenu` + `IShellView::GetItemObject(SVGIO_BACKGROUND)` 获取真实桌面菜单，回退方案用 `ShellExecuteW`
 
+**桌面右键创建分类框**：通过 Windows 注册表 (`HKCU\...\Directory\Background\shell\IkunCreateBox`) 注入菜单项，Shell 自动合并到 `QueryContextMenu` 结果（覆盖初始菜单和"显示更多选项"legacy 菜单）。程序启动时注册，退出时清理（`Drop` trait），确保不运行时无残留。用户点击时通过 `--create-box` 参数 → 信号文件 IPC → 运行实例检测 → egui viewport 对话框。
+
 **图标提取**：`SHDefExtractIconW` 提取 128×128 高清图标，`.lnk` 先通过 `IShellLink` + `IPersistFile` 解析目标
 
 **DPI 适配**：manifest + 运行时 `SetProcessDpiAwarenessContext(PER_MONITOR_V2)`，`GetDpiForWindow` + `WM_DPICHANGED` 动态响应
@@ -297,7 +302,7 @@ main.rs
 - [ ] 分类框删除
 
 ### 桌面右键菜单
-- [ ] 创建桌面分类框
+- [x] 创建桌面分类框（注册表注入 + 信号文件 IPC + egui viewport 对话框）
 - [ ] 一键 AI 桌面分类
 - [ ] 退出桌面分类
 

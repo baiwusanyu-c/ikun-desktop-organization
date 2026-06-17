@@ -549,3 +549,42 @@ pub fn cleanup_desktop_registry() {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_take_pending_create_box_default_is_false() {
+        // 确保初始状态为 false
+        // 注意：如果其他测试设置了标志，此测试可能不可靠
+        // 但 take 是消费性的（读后清零），所以连续两次调用第二次一定为 false
+        let _ = take_pending_create_box(); // 先消费掉可能的残留
+        assert!(!take_pending_create_box());
+    }
+
+    #[test]
+    fn test_pending_create_box_set_then_take() {
+        // 先清零
+        let _ = take_pending_create_box();
+
+        // 设置标志
+        PENDING_CREATE_BOX.store(true, Ordering::SeqCst);
+
+        // 第一次 take 应返回 true
+        assert!(take_pending_create_box());
+
+        // 第二次 take 应返回 false（已被消费）
+        assert!(!take_pending_create_box());
+    }
+
+    #[test]
+    fn test_pending_create_box_take_is_idempotent() {
+        let _ = take_pending_create_box(); // 清零
+
+        // 多次 take 不会出错
+        assert!(!take_pending_create_box());
+        assert!(!take_pending_create_box());
+        assert!(!take_pending_create_box());
+    }
+}

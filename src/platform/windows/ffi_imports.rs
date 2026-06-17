@@ -209,6 +209,10 @@ extern "system" {
     // Window
     pub fn GetDesktopWindow() -> HWND;
 
+    // Multi-monitor
+    pub fn MonitorFromPoint(pt: POINT, dwFlags: u32) -> HMONITOR;
+    pub fn GetMonitorInfoW(hMonitor: HMONITOR, lpmi: *mut MONITORINFO) -> i32;
+
     // Tooltip / Common Controls
     pub fn InitCommonControlsEx(lpInitCtrls: *const INITCOMMONCONTROLSEX) -> i32;
 }

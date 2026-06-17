@@ -10,9 +10,9 @@
 use crate::context::AppContext;
 use crate::platform::{
     cleanup_desktop_registry, collect_grid_layout, create_grid_window, destroy_all_grid_windows,
-    extract_file_icon, get_grid_count, get_screen_resolution, hide_native_icons,
-    restore_native_icons, setup_desktop_registry, take_pending_create_box, DesktopIcon,
-    DesktopManagerTrait, GridCreateParams, GridFileItem,
+    extract_file_icon, get_cursor_monitor_work_area, get_grid_count, get_screen_resolution,
+    hide_native_icons, restore_native_icons, setup_desktop_registry, take_pending_create_box,
+    DesktopIcon, DesktopManagerTrait, GridCreateParams, GridFileItem,
 };
 use eframe::egui;
 use std::sync::{Arc, Mutex};
@@ -82,12 +82,12 @@ impl MyApp {
 
         let dialog = self.dialog.clone();
 
-        // 计算屏幕居中位置
-        let (screen_w, screen_h) = get_screen_resolution();
+        // 获取当前鼠标所在显示器的工作区域（多屏居中）
+        let (work_x, work_y, work_w, work_h) = get_cursor_monitor_work_area();
         let dlg_w = 360.0_f32;
         let dlg_h = 180.0_f32;
-        let x = (screen_w as f32 - dlg_w) / 2.0;
-        let y = (screen_h as f32 - dlg_h) / 3.0;
+        let x = work_x as f32 + (work_w as f32 - dlg_w) / 2.0;
+        let y = work_y as f32 + (work_h as f32 - dlg_h) / 3.0;
 
         egui_ctx.show_viewport_deferred(
             egui::ViewportId::from_hash_of("create_box_dialog"),
@@ -100,6 +100,14 @@ impl MyApp {
                 .with_always_on_top(),
             move |ctx, _class| {
                 let mut close = false;
+
+                // 检测 X 按钮（OS 关闭请求）→ 等同取消
+                if ctx.input(|i| i.viewport().close_requested()) {
+                    close = true;
+                    if let Ok(mut s) = dialog.lock() {
+                        s.cancelled = true;
+                    }
+                }
 
                 egui::CentralPanel::default().show(ctx, |ui| {
                     ui.add_space(8.0);
@@ -469,4 +477,88 @@ impl Drop for MyApp {
         // 程序退出时清理注册表，确保不运行时桌面菜单完全原生
         cleanup_desktop_registry();
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ===== 信号文件路径 =====
+
+    #[test]
+    fn test_signal_file_path_is_in_temp_dir() {
+        let path = signal_file_path();
+        let temp = std::env::temp_dir();
+        assert_eq!(path.parent().unwrap(), temp.as_path());
+        assert_eq!(path.file_name().unwrap(), "ikun_create_box.signal");
+    }
+
+    // ===== 分类框名称验证 =====
+
+    #[test]
+    fn test_box_name_valid_empty_is_invalid() {
+        let name = "";
+        assert!(!is_box_name_valid(name));
+    }
+
+    #[test]
+    fn test_box_name_valid_whitespace_is_invalid() {
+        assert!(!is_box_name_valid("   "));
+    }
+
+    #[test]
+    fn test_box_name_valid_within_limit() {
+        assert!(is_box_name_valid("测试框"));
+        assert!(is_box_name_valid("a"));
+        assert!(is_box_name_valid("1234567890123456")); // 恰好 16 字符
+    }
+
+    #[test]
+    fn test_box_name_valid_exceeds_limit() {
+        assert!(!is_box_name_valid("12345678901234567")); // 17 字符
+        assert!(!is_box_name_valid("这是一个超过十六个字符的名称测试用例")); // 19 字符
+    }
+
+    // ===== DialogState =====
+
+    #[test]
+    fn test_dialog_state_default() {
+        let state = DialogState::default();
+        assert!(state.name.is_empty());
+        assert!(!state.open);
+        assert!(!state.confirmed);
+        assert!(!state.cancelled);
+    }
+
+    #[test]
+    fn test_dialog_state_open_resets_fields() {
+        let app = MyApp::default();
+        // 先设置一些脏值
+        {
+            let mut s = app.dialog.lock().unwrap();
+            s.name = "脏数据".to_string();
+            s.confirmed = true;
+            s.cancelled = true;
+        }
+        // open_create_box_dialog 应重置所有字段
+        app.open_create_box_dialog();
+        let s = app.dialog.lock().unwrap();
+        assert!(s.open);
+        assert!(s.name.is_empty());
+        assert!(!s.confirmed);
+        assert!(!s.cancelled);
+    }
+
+    #[test]
+    fn test_dialog_state_not_open_initially() {
+        let app = MyApp::default();
+        let is_open = app.dialog.lock().map(|s| s.open).unwrap_or(false);
+        assert!(!is_open);
+    }
+}
+
+/// 验证分类框名称是否有效（非空且不超过 BOX_NAME_MAX_LEN 字符）
+fn is_box_name_valid(name: &str) -> bool {
+    let trimmed = name.trim();
+    !trimmed.is_empty() && trimmed.chars().count() <= BOX_NAME_MAX_LEN
 }

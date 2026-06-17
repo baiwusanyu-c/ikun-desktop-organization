@@ -1,7 +1,7 @@
 //! Desktop Organizer - 入口
 
-// TODO: 发布时启用，开发时注释掉以保留控制台日志输出
-// #![windows_subsystem = "windows"]
+// 发布构建使用 windows 子系统（无控制台窗口），调试构建保留控制台用于日志
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
 mod box_core;
