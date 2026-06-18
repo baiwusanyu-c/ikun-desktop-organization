@@ -270,3 +270,108 @@ fn handle_menu_command(pd: &mut super::grid_window::GridWindowData, cmd: i32) {
         log::info!("查看: {:?}", pd.view_mode);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_to_wide_null_terminated() {
+        let wide = to_wide("测试");
+        assert_eq!(*wide.last().unwrap(), 0u16);
+        assert_eq!(wide.len(), 3); // 2 chars + null
+    }
+
+    #[test]
+    fn test_to_wide_empty() {
+        let wide = to_wide("");
+        assert_eq!(wide.len(), 1); // just null terminator
+        assert_eq!(wide[0], 0u16);
+    }
+
+    #[test]
+    fn test_to_wide_ascii() {
+        let wide = to_wide("AB");
+        assert_eq!(wide, vec![65u16, 66u16, 0u16]);
+    }
+
+    #[test]
+    fn test_command_id_ranges_no_overlap() {
+        // 验证命令 ID 范围不重叠
+        assert!(CMD_DELETE < CMD_SORT_BASE);
+        assert!(CMD_SORT_BASE + 8 <= CMD_SORT_ASC);
+        assert!(CMD_SORT_ASC < CMD_SORT_DESC);
+        assert!(CMD_SORT_DESC < CMD_GROUP_BASE);
+        assert!(CMD_GROUP_BASE + 8 <= CMD_VIEW_BASE);
+        assert!(CMD_VIEW_BASE + 8 < 1000); // 安全上限
+    }
+
+    #[test]
+    fn test_command_id_coverage() {
+        // 排序维度 8 个
+        for i in 0..8u32 {
+            let cmd = CMD_SORT_BASE + i;
+            assert!(cmd >= CMD_SORT_BASE && cmd < CMD_SORT_BASE + 8);
+        }
+        // 分组维度 8 个
+        for i in 0..8u32 {
+            let cmd = CMD_GROUP_BASE + i;
+            assert!(cmd >= CMD_GROUP_BASE && cmd < CMD_GROUP_BASE + 8);
+        }
+        // 查看模式 8 个
+        for i in 0..8u32 {
+            let cmd = CMD_VIEW_BASE + i;
+            assert!(cmd >= CMD_VIEW_BASE && cmd < CMD_VIEW_BASE + 8);
+        }
+    }
+
+    #[test]
+    fn test_handle_menu_command_sort() {
+        let mut data = super::super::grid_window::GridWindowData::test_default();
+        // 排序维度切换
+        handle_menu_command(&mut data, CMD_SORT_BASE as i32); // Name
+        assert_eq!(data.sort_mode, SortMode::Name);
+        handle_menu_command(&mut data, (CMD_SORT_BASE + 1) as i32); // Type
+        assert_eq!(data.sort_mode, SortMode::Type);
+        handle_menu_command(&mut data, (CMD_SORT_BASE + 5) as i32); // Size
+        assert_eq!(data.sort_mode, SortMode::Size);
+
+        // 排序方向
+        handle_menu_command(&mut data, CMD_SORT_ASC as i32);
+        assert!(data.sort_ascending);
+        handle_menu_command(&mut data, CMD_SORT_DESC as i32);
+        assert!(!data.sort_ascending);
+    }
+
+    #[test]
+    fn test_handle_menu_command_group() {
+        let mut data = super::super::grid_window::GridWindowData::test_default();
+        handle_menu_command(&mut data, CMD_GROUP_BASE as i32); // Name
+        assert_eq!(data.group_by, GroupBy::Name);
+        handle_menu_command(&mut data, (CMD_GROUP_BASE + 3) as i32); // Author
+        assert_eq!(data.group_by, GroupBy::Author);
+    }
+
+    #[test]
+    fn test_handle_menu_command_view() {
+        let mut data = super::super::grid_window::GridWindowData::test_default();
+        handle_menu_command(&mut data, CMD_VIEW_BASE as i32); // ExtraLarge
+        assert_eq!(data.view_mode, ViewMode::ExtraLarge);
+        handle_menu_command(&mut data, (CMD_VIEW_BASE + 5) as i32); // Detail
+        assert_eq!(data.view_mode, ViewMode::Detail);
+    }
+
+    #[test]
+    fn test_handle_menu_command_unknown_id() {
+        let mut data = super::super::grid_window::GridWindowData::test_default();
+        let original_sort = data.sort_mode.clone();
+        let original_group = data.group_by.clone();
+        let original_view = data.view_mode.clone();
+
+        // 未知命令不应改变状态
+        handle_menu_command(&mut data, 999);
+        assert_eq!(data.sort_mode, original_sort);
+        assert_eq!(data.group_by, original_group);
+        assert_eq!(data.view_mode, original_view);
+    }
+}

@@ -458,3 +458,57 @@ pub const fn colorref(r: u8, g: u8, b: u8) -> u32 {
     (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_colorref_black() {
+        assert_eq!(colorref(0, 0, 0), 0x000000);
+    }
+
+    #[test]
+    fn test_colorref_white() {
+        assert_eq!(colorref(255, 255, 255), 0x00FFFFFF);
+    }
+
+    #[test]
+    fn test_colorref_red() {
+        assert_eq!(colorref(255, 0, 0), 0x000000FF); // BGR: R is lowest byte
+    }
+
+    #[test]
+    fn test_colorref_green() {
+        assert_eq!(colorref(0, 255, 0), 0x0000FF00);
+    }
+
+    #[test]
+    fn test_colorref_blue() {
+        assert_eq!(colorref(0, 0, 255), 0x00FF0000); // BGR: B is highest byte
+    }
+
+    #[test]
+    fn test_colorref_mixed() {
+        // rgb(100, 210, 255) → BGR: 255<<16 | 210<<8 | 100
+        assert_eq!(colorref(100, 210, 255), 0x00FFD264);
+    }
+
+    #[test]
+    fn test_colorref_is_const() {
+        // 验证可以在 const 上下文中使用
+        const C: u32 = colorref(10, 20, 30);
+        assert_eq!(C, 0x001E140A);
+    }
+
+    #[test]
+    fn test_menu_command_constants() {
+        // 验证 owner-draw 相关常量值正确
+        assert_eq!(MIIM_FTYPE, 0x00000100);
+        assert_eq!(MFT_OWNERDRAW, 0x00000100);
+        assert_eq!(MFT_SEPARATOR, 0x00000800);
+        assert_eq!(ODT_MENU, 1);
+        assert_eq!(ODS_SELECTED, 0x0001);
+        assert_eq!(TRANSPARENT, 1);
+    }
+}
+

@@ -37,6 +37,7 @@ src/
 │   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎
 │   │   ├── grid_window.rs     #   窗口创建/销毁/布局收集
 │   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc
+│   │   ├── menu_window.rs     #   深色主题 Owner-Draw 弹出菜单
 │   │   ├── shell_menu.rs      #   Shell 右键菜单 + 注册表管理（创建分类框）
 │   │   ├── icon_extract.rs    #   图标提取（SHGetFileInfoW + .lnk 解析）
 │   │   ├── icon_hider.rs      #   图标隐藏/恢复（SysListView32）
@@ -161,8 +162,10 @@ platform/windows/
 ├── ffi_imports.rs     # FFI 函数声明
 ├── desktop_manager.rs # DesktopManagerTrait 实现
 ├── d2d_render.rs      # D2D/DirectWrite 渲染
-├── grid_window.rs     # 窗口管理 + wnd_proc
-├── shell_menu.rs      # Shell 右键菜单 + 注册表管理（创建分类框）
+├── grid_window.rs     # 窗口管理
+├── wnd_proc.rs        # 窗口消息处理
+├── menu_window.rs     # 深色主题弹出菜单（Owner-Draw）
+├── shell_menu.rs      # Shell 右键菜单 + 注册表管理
 ├── icon_extract.rs    # 图标提取
 ├── icon_hider.rs      # 图标隐藏
 └── sys_tray.rs        # 系统托盘

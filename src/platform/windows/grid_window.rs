@@ -151,6 +151,43 @@ pub(crate) struct GridWindowData {
 
 unsafe impl Send for GridWindowData {}
 
+#[cfg(test)]
+impl GridWindowData {
+    /// 创建测试用的默认实例（所有字段为初始值）
+    pub(crate) fn test_default() -> Self {
+        Self {
+            title: "测试分类框".to_string(),
+            items: Vec::new(),
+            grid_id: 0,
+            title_h: 40,
+            cell_w: 80,
+            cell_h: 100,
+            cols: 4,
+            icon_size: 48,
+            selected_item: -1,
+            hovered_item: -1,
+            tooltip_hwnd: std::ptr::null_mut(),
+            view_mode: ViewMode::Medium,
+            locked: false,
+            lock_hovered: false,
+            hover_edge: 0,
+            more_hovered: false,
+            menu: MenuState::default(),
+            sort_mode: SortMode::Name,
+            sort_ascending: true,
+            group_by: GroupBy::None,
+            base_window_x: 100,
+            base_window_y: 100,
+            base_window_w: 400,
+            base_window_h: 600,
+            d2d_factory: None,
+            dw_factory: None,
+            wic_factory: None,
+            d2d_target: None,
+        }
+    }
+}
+
 /// 格子窗口句柄包装
 pub struct GridWindow {
     pub hwnd: HWND,

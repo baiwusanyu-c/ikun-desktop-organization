@@ -77,13 +77,14 @@ src/
 │   ├── types.rs               #   跨平台类型：DesktopIcon, IconInfo, ScreenInfo
 │   ├── windows/
 │   │   ├── mod.rs             #   Windows 平台入口
-│   │   ├── ffi_types.rs       #   Win32 FFI 类型/常量（351 行）
-│   │   ├── ffi_imports.rs     #   Win32 extern "system" 声明（493 行）
+│   │   ├── ffi_types.rs       #   Win32 FFI 类型/常量（447 行）
+│   │   ├── ffi_imports.rs     #   Win32 extern "system" 声明（517 行）
 │   │   ├── desktop_manager.rs #   桌面图标枚举（文件系统读取）
-│   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎（847 行）
-│   │   ├── grid_window.rs     #   窗口创建/销毁/布局收集（693 行）
-│   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc（580 行）
-│   │   ├── shell_menu.rs      #   Shell 右键菜单 + 注册表管理（创建分类框）
+│   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎（995 行）
+│   │   ├── grid_window.rs     #   窗口创建/销毁/布局收集（830 行）
+│   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc（758 行）
+│   │   ├── menu_window.rs     #   深色主题 Owner-Draw 弹出菜单（260 行）
+│   │   ├── shell_menu.rs      #   Shell 右键菜单 + 注册表管理（590 行）
 │   │   ├── icon_extract.rs    #   图标提取（SHGetFileInfoW + .lnk 解析）
 │   │   ├── icon_hider.rs      #   图标隐藏/恢复（SysListView32）
 │   │   └── sys_tray.rs        #   系统托盘（TODO 占位）
@@ -251,7 +252,9 @@ main.rs
 
 **窗口类型**：`WS_POPUP | WS_EX_LAYERED | WS_EX_TOOLWINDOW`，标题栏拖拽通过 `WM_NCHITTEST → HTCAPTION`，边缘缩放通过 `HTLEFT/HTRIGHT/...`
 
-**标题栏布局**：左侧纯文本名称（无图标、无数量），右侧 🔒/🔓 锁定按钮（`Segoe UI Emoji` 字体）。锁定时整个窗口返回 `HTCLIENT`（禁止拖拽和缩放），未锁定时正常边缘缩放（`hover_edge` 驱动蓝色指示条反馈）。锁定按钮 hover 时显示手型光标 + 半透明背景高亮。
+**标题栏布局**：左侧纯文本名称（无图标、无数量），右侧 🔒/🔓 锁定按钮 + ⋮ "更多"按钮（`Segoe UI Emoji` / `Segoe UI Symbol` 字体）。锁定时整个窗口返回 `HTCLIENT`（禁止拖拽和缩放），未锁定时正常边缘缩放（`hover_edge` 驱动蓝色指示条反馈）。按钮 hover 时显示手型光标 + 半透明背景高亮。
+
+**更多下拉菜单**：点击 ⋮ 按钮弹出深色主题 Owner-Draw 菜单（`MF_OWNERDRAW` + `WM_MEASUREITEM`/`WM_DRAWITEM`），包含删除、排序（8维度+递增/递减）、分组（8维度）、查看（8模式）四个功能组，子菜单自动定位。菜单打开期间分类框自动锁定。使用 Win32 原生 `TrackPopupMenu` 保留系统菜单行为（键盘导航、子菜单展开、点击外部关闭）。
 
 **锁定状态持久化**：`GridWindowData.locked` ↔ `BoxLayoutData.locked` ↔ `~/.ikun_organizer.json`，保存时 `collect_grid_layout()` 读取实际状态，恢复时 `restore_layout()` 传入 `locked` 参数。
 
@@ -300,10 +303,11 @@ main.rs
 - [x] 拖拽移动 + 位置记忆（通过 collect_grid_layout + restore_layout）
 - [x] 边缘拖拽修改尺寸 + 尺寸记忆（同上）
 - [x] 锁定按钮 + 锁定记忆（锁定后不可拖拽/缩放，hover 反馈，状态持久化）
+- [x] "更多"下拉菜单（排序/分组/查看/删除，深色主题 Owner-Draw）
 - [ ] 分类框名称修改
-- [x] 排序方式：名称、类型、修改时间、作者、创建时间、大小、标记、标题 × 递增/递减（引擎已实现）
-- [x] 查看方式：超大、大、中、小、列表、详细信息、平铺、内容（引擎已实现）
-- [x] 分组展示：按名称、类型、修改时间、作者、创建时间、大小、标记、标题（引擎已实现）
+- [x] 排序方式：名称、类型、修改时间、作者、创建时间、大小、标记、标题 × 递增/递减（引擎已实现，菜单可选）
+- [x] 查看方式：超大、大、中、小、列表、详细信息、平铺、内容（引擎已实现，菜单可选）
+- [x] 分组展示：按名称、类型、修改时间、作者、创建时间、大小、标记、标题（引擎已实现，菜单可选）
 - [ ] 拖拽快捷方式到外部桌面 / 外部桌面快捷方式拖入分类框
 - [x] 右键功能与原生快捷方式一致（Shell 上下文菜单已实现）
 - [ ] 分类框删除
