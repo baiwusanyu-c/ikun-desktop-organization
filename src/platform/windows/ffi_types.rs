@@ -135,6 +135,7 @@ pub const WM_LBUTTONDBLCLK: u32 = 0x0203;
 pub const WM_RBUTTONUP: u32 = 0x0205;
 pub const WM_MOUSELEAVE: u32 = 0x02A3;
 pub const WM_TIMER: u32 = 0x0113;
+pub const WM_ACTIVATE: u32 = 0x0006;
 
 // ===== Hit Test Constants =====
 pub const HTCLIENT: i32 = 1;
@@ -176,7 +177,17 @@ pub const AC_SRC_ALPHA: u8 = 0x01;
 pub const MF_STRING: u32 = 0x00000000;
 pub const MF_SEPARATOR: u32 = 0x00000800;
 pub const MF_BYPOSITION: u32 = 0x00000400;
+pub const MF_POPUP: u32 = 0x00000010;
+pub const MF_CHECKED: u32 = 0x00000008;
+pub const MF_UNCHECKED: u32 = 0x00000000;
+pub const MF_RADIOCHECK: u32 = 0x00000200;
+
+// ===== TrackPopupMenu Flags =====
 pub const TPM_RETURNCMD: u32 = 0x0100;
+pub const TPM_LEFTALIGN: u32 = 0x0000;
+pub const TPM_RIGHTALIGN: u32 = 0x0008;
+pub const TPM_TOPALIGN: u32 = 0x0000;
+pub const TPM_LEFTBUTTON: u32 = 0x0000;
 
 // ===== Hook / Message Constants =====
 pub const WH_MOUSE_LL: i32 = 14;

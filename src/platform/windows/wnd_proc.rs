@@ -17,7 +17,7 @@ use super::ffi_types::*;
 use super::grid_window::{
     get_data, grid_hit_test, lock_btn_rect, more_btn_rect, recalculate_layout, GridWindowData,
 };
-use super::menu_window::{hide_menu_window, is_menu_visible, show_menu_window};
+use super::menu_window::show_menu_window;
 use super::shell_menu::{show_desktop_context_menu, show_shell_context_menu};
 
 /// 格子窗口消息处理过程
@@ -488,17 +488,9 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                     need_rerender = true;
                 }
             } else if more_clicked {
-                // 切换菜单弹出窗口
-                if is_menu_visible() {
-                    hide_menu_window();
-                } else {
-                    show_menu_window(hwnd);
-                }
+                // 显示原生弹出菜单（TrackPopupMenu 阻塞直到用户选择或取消）
+                show_menu_window(hwnd);
             } else if let Some(data) = get_data(hwnd) {
-                // 菜单打开时点击分类框 → 关闭菜单
-                if data.menu.open {
-                    hide_menu_window();
-                }
                 // 普通点击选中网格项
                 let hit = grid_hit_test(data, win_w, click_x, click_y, dpi);
                 if hit != data.selected_item {
