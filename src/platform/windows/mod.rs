@@ -20,6 +20,7 @@ pub mod ffi_types;
 pub mod grid_window;
 pub mod icon_extract;
 pub mod icon_hider;
+mod menu_window;
 pub mod shell_menu;
 mod sys_tray;
 mod wnd_proc;

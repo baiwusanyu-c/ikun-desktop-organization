@@ -15,9 +15,9 @@ use super::d2d_render::render_layered_window;
 use super::ffi_imports::*;
 use super::ffi_types::*;
 use super::grid_window::{
-    get_data, grid_hit_test, lock_btn_rect, main_menu_rect, menu_extra_height, menu_row_h,
-    more_btn_rect, recalculate_layout, sub_menu_rect, submenu_width, GridWindowData,
+    get_data, grid_hit_test, lock_btn_rect, more_btn_rect, recalculate_layout, GridWindowData,
 };
+use super::menu_window::{hide_menu_window, is_menu_visible, show_menu_window};
 use super::shell_menu::{show_desktop_context_menu, show_shell_context_menu};
 
 /// 格子窗口消息处理过程
@@ -62,21 +62,8 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             let dpi = unsafe { GetDpiForWindow(hwnd) };
             let dpi = if dpi > 0 { dpi } else { 96 };
 
-            // 计算内容偏移
-            let (ox, cw) = if let Some(ref d) = data_opt {
-                if d.menu.open && d.menu.sub_on_left {
-                    let oxi = submenu_width(dpi) + scale_for_dpi(8, dpi);
-                    (oxi, win_w - oxi)
-                } else {
-                    (0, win_w)
-                }
-            } else {
-                (0, win_w)
-            };
-
             // 锁定按钮区域（标题栏右侧）→ 始终返回 HTCLIENT（可点击，不触发拖拽）
-            let (btn_x0, btn_y, btn_size) = lock_btn_rect(cw, title_h, dpi);
-            let btn_x = btn_x0 + ox;
+            let (btn_x, btn_y, btn_size) = lock_btn_rect(win_w, title_h, dpi);
             if dy >= btn_y && dy < btn_y + btn_size && dx >= btn_x && dx < btn_x + btn_size {
                 if let Some(data) = get_data(hwnd) {
                     if data.hover_edge != 0 {
@@ -88,8 +75,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             }
 
             // "更多"按钮区域 → 始终返回 HTCLIENT
-            let (mbtn_x0, mbtn_y, mbtn_size) = more_btn_rect(cw, title_h, dpi);
-            let mbtn_x = mbtn_x0 + ox;
+            let (mbtn_x, mbtn_y, mbtn_size) = more_btn_rect(win_w, title_h, dpi);
             if dy >= mbtn_y
                 && dy < mbtn_y + mbtn_size
                 && dx >= mbtn_x
@@ -104,28 +90,10 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 return HTCLIENT as LRESULT;
             }
 
-            // 菜单打开时，菜单区域也返回 HTCLIENT
-            if let Some(data) = get_data(hwnd) {
-                if data.menu.open {
-                    let (mmx0, mmy, mmw, mmh) = main_menu_rect(cw, title_h, dpi);
-                    let mmx = mmx0 + ox;
-                    if dx >= mmx && dx < mmx + mmw && dy >= mmy && dy < mmy + mmh {
-                        return HTCLIENT as LRESULT;
-                    }
-                    // 子菜单区域
-                    if data.menu.expanded_item >= 1 && data.menu.expanded_item <= 3 {
-                        let sub_count = if data.menu.expanded_item == 1 {
-                            11 // 8 dims + sep + asc + desc
-                        } else {
-                            8
-                        };
-                        let (smx0, smy, smw, smh) =
-                            sub_menu_rect(cw, title_h, dpi, sub_count, data.menu.sub_on_left);
-                        let smx = smx0 + ox;
-                        if dx >= smx && dx < smx + smw && dy >= smy && dy < smy + smh {
-                            return HTCLIENT as LRESULT;
-                        }
-                    }
+            // 菜单打开时，分类框已锁定，全部返回 HTCLIENT
+            if let Some(ref d) = data_opt {
+                if d.menu.open {
+                    return HTCLIENT as LRESULT;
                 }
             }
 
@@ -256,14 +224,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 let win_h = wr.bottom - wr.top;
 
                 if let Some(data) = get_data(hwnd) {
-                    // 菜单打开时始终使用原始窗口宽度计算网格布局
-                    // 避免窗口扩展导致网格重新排列（闪动）
-                    let layout_w = if data.menu.open {
-                        data.base_window_w
-                    } else {
-                        win_w
-                    };
-                    recalculate_layout(data, layout_w, win_h, dpi);
+                    recalculate_layout(data, win_w, win_h, dpi);
                 }
             }
             render_layered_window(hwnd);
@@ -353,17 +314,8 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 let dpi = unsafe { GetDpiForWindow(hwnd) };
                 let dpi = if dpi > 0 { dpi } else { 96 };
 
-                // 计算内容偏移
-                let (ox, cw) = if data.menu.open && data.menu.sub_on_left {
-                    let oxi = submenu_width(dpi) + scale_for_dpi(8, dpi);
-                    (oxi, w - oxi)
-                } else {
-                    (0, w)
-                };
-
-                // 锁定按钮 hover 检测（使用内容宽度 + 偏移）
-                let (btn_x0, btn_y, btn_size) = lock_btn_rect(cw, data.title_h, dpi);
-                let btn_x = btn_x0 + ox;
+                // 锁定按钮 hover 检测
+                let (btn_x, btn_y, btn_size) = lock_btn_rect(w, data.title_h, dpi);
                 let over_lock =
                     mx >= btn_x && mx < btn_x + btn_size && my >= btn_y && my < btn_y + btn_size;
                 if over_lock != data.lock_hovered {
@@ -372,8 +324,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 }
 
                 // "更多"按钮 hover 检测
-                let (mbtn_x0, mbtn_y, mbtn_size) = more_btn_rect(cw, data.title_h, dpi);
-                let mbtn_x = mbtn_x0 + ox;
+                let (mbtn_x, mbtn_y, mbtn_size) = more_btn_rect(w, data.title_h, dpi);
                 let over_more = mx >= mbtn_x
                     && mx < mbtn_x + mbtn_size
                     && my >= mbtn_y
@@ -383,105 +334,10 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                     need_rerender = true;
                 }
 
-                // 菜单 hover 检测（主菜单项 + 子菜单项）
-                if data.menu.open {
-                    let (mmx0, mmy, mmw, mmh) = main_menu_rect(cw, data.title_h, dpi);
-                    let mmx = mmx0 + ox;
-                    let rh = menu_row_h(dpi);
-                    let padding = scale_for_dpi(4, dpi);
-
-                    // ===== 第一步：检测子菜单 hover =====
-                    let mut mouse_over_submenu = false;
-                    if data.menu.expanded_item >= 1 && data.menu.expanded_item <= 3 {
-                        let sub_idx = data.menu.expanded_item;
-                        let sub_count = if sub_idx == 1 { 11 } else { 8 };
-                        let (smx0, smy, smw, smh) =
-                            sub_menu_rect(cw, data.title_h, dpi, sub_count, data.menu.sub_on_left);
-                        let smx = smx0 + ox;
-                        if mx >= smx && mx < smx + smw && my >= smy && my < smy + smh {
-                            mouse_over_submenu = true;
-                            let rel_y = my - smy - padding;
-                            let new_sub = if rel_y >= 0 {
-                                let idx = rel_y / rh;
-                                if idx >= 0 && idx < sub_count {
-                                    idx
-                                } else {
-                                    -1
-                                }
-                            } else {
-                                -1
-                            };
-                            if new_sub != data.menu.sub_hovered {
-                                data.menu.sub_hovered = new_sub;
-                                need_rerender = true;
-                            }
-                        } else {
-                            // 鼠标不在子菜单区域
-                            if data.menu.sub_hovered != -1 {
-                                data.menu.sub_hovered = -1;
-                                need_rerender = true;
-                            }
-                        }
-                    }
-
-                    // ===== 第二步：检测主菜单 hover =====
-                    let mut new_main_hovered: i32 = -1;
-                    if mx >= mmx && mx < mmx + mmw && my >= mmy && my < mmy + mmh {
-                        let rel_y = my - mmy - padding;
-                        if rel_y >= 0 {
-                            let mut item_y = 0;
-                            for i in 0..4i32 {
-                                if rel_y >= item_y && rel_y < item_y + rh {
-                                    new_main_hovered = i;
-                                    break;
-                                }
-                                item_y += rh;
-                                if i == 0 {
-                                    item_y += scale_for_dpi(1, dpi); // 分隔线
-                                }
-                            }
-                        }
-                    }
-
-                    // ===== 第三步：更新状态（定时器延迟收起）=====
-                    if new_main_hovered != data.menu.hovered_item {
-                        data.menu.hovered_item = new_main_hovered;
-                        need_rerender = true;
-
-                        if new_main_hovered >= 1 && new_main_hovered <= 3 {
-                            // hover 到有子菜单的项 → 取消定时器，立即展开/切换
-                            if data.menu.collapse_timer_id != 0 {
-                                unsafe { KillTimer(hwnd, data.menu.collapse_timer_id) };
-                                data.menu.collapse_timer_id = 0;
-                            }
-                            if data.menu.expanded_item != new_main_hovered {
-                                data.menu.expanded_item = new_main_hovered;
-                                data.menu.sub_hovered = -1;
-                            }
-                        } else if new_main_hovered == 0 || new_main_hovered == -1 {
-                            // hover 到无子菜单项或离开主菜单 → 启动延迟收起定时器
-                            if data.menu.expanded_item >= 1
-                                && data.menu.collapse_timer_id == 0
-                            {
-                                let timer_id = unsafe {
-                                    SetTimer(hwnd, 9999, 300, std::ptr::null_mut())
-                                };
-                                data.menu.collapse_timer_id = timer_id;
-                            }
-                        }
-                    }
-
-                    // 鼠标进入子菜单区域 → 取消收起定时器
-                    if mouse_over_submenu && data.menu.collapse_timer_id != 0 {
-                        unsafe { KillTimer(hwnd, data.menu.collapse_timer_id) };
-                        data.menu.collapse_timer_id = 0;
-                    }
-                }
-
                 // 边缘 resize hover 已由 WM_NCHITTEST 更新 hover_edge
 
                 // 图标网格 hit test（tooltip + hover 高亮）
-                let hit = grid_hit_test(data, cw, mx - ox, my, dpi);
+                let hit = grid_hit_test(data, w, mx, my, dpi);
                 if hit != data.hovered_item {
                     data.hovered_item = hit;
                     need_rerender = true;
@@ -580,7 +436,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             0
         }
 
-        // ===== 鼠标左键：锁定按钮 + "更多"按钮 + 菜单项 + 选中项 =====
+        // ===== 鼠标左键：锁定按钮 + "更多"按钮 + 图标选中 =====
         WM_LBUTTONDOWN => {
             let click_x = get_x_lparam(lparam);
             let click_y = get_y_lparam(lparam);
@@ -595,26 +451,12 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             };
             unsafe { GetWindowRect(hwnd, &mut wr) };
             let win_w = wr.right - wr.left;
-            let win_h = wr.bottom - wr.top;
             let dpi = unsafe { GetDpiForWindow(hwnd) };
             let dpi = if dpi > 0 { dpi } else { 96 };
 
-            // 计算内容偏移（菜单打开且子菜单在左侧时）
-            let (ox, cw) = if let Some(data) = get_data(hwnd) {
-                if data.menu.open && data.menu.sub_on_left {
-                    let oxi = submenu_width(dpi) + scale_for_dpi(8, dpi);
-                    (oxi, win_w - oxi)
-                } else {
-                    (0, win_w)
-                }
-            } else {
-                (0, win_w)
-            };
-
-            // --- 检查是否点击了锁定按钮（使用内容宽度 + 偏移）---
+            // 检查是否点击了锁定按钮
             let lock_clicked = if let Some(data) = get_data(hwnd) {
-                let (btn_x0, btn_y, btn_size) = lock_btn_rect(cw, data.title_h, dpi);
-                let btn_x = btn_x0 + ox;
+                let (btn_x, btn_y, btn_size) = lock_btn_rect(win_w, data.title_h, dpi);
                 click_x >= btn_x
                     && click_x < btn_x + btn_size
                     && click_y >= btn_y
@@ -623,10 +465,9 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 false
             };
 
-            // --- 检查是否点击了"更多"按钮（使用内容宽度 + 偏移）---
+            // 检查是否点击了"更多"按钮
             let more_clicked = if let Some(data) = get_data(hwnd) {
-                let (mbtn_x0, mbtn_y, mbtn_size) = more_btn_rect(cw, data.title_h, dpi);
-                let mbtn_x = mbtn_x0 + ox;
+                let (mbtn_x, mbtn_y, mbtn_size) = more_btn_rect(win_w, data.title_h, dpi);
                 click_x >= mbtn_x
                     && click_x < mbtn_x + mbtn_size
                     && click_y >= mbtn_y
@@ -647,196 +488,22 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                     need_rerender = true;
                 }
             } else if more_clicked {
-                // 切换菜单开关
-                if let Some(data) = get_data(hwnd) {
-                    if data.menu.open {
-                        // 关闭菜单：恢复窗口尺寸
-                        let mut cur_rect = RECT {
-                            left: 0,
-                            top: 0,
-                            right: 0,
-                            bottom: 0,
-                        };
-                        unsafe { GetWindowRect(hwnd, &mut cur_rect) };
-                        close_menu(
-                            hwnd,
-                            data.base_window_x,
-                            data.base_window_y,
-                            data.base_window_w,
-                            data.base_window_h,
-                        );
-                        data.menu.open = false;
-                        data.menu.hovered_item = -1;
-                        data.menu.expanded_item = -1;
-                        data.menu.sub_hovered = -1;
-                        if data.menu.collapse_timer_id != 0 {
-                            unsafe { KillTimer(hwnd, data.menu.collapse_timer_id) };
-                            data.menu.collapse_timer_id = 0;
-                        }
-                    } else {
-                        // 打开菜单：根据窗口在屏幕上的位置决定子菜单方向
-                        let mut cur_rect = RECT {
-                            left: 0,
-                            top: 0,
-                            right: 0,
-                            bottom: 0,
-                        };
-                        unsafe { GetWindowRect(hwnd, &mut cur_rect) };
-                        let screen_w = unsafe { GetSystemMetrics(0) }; // SM_CXSCREEN
-                        let window_center_x = cur_rect.left + win_w / 2;
-                        // 窗口在屏幕右半侧 → 子菜单在左侧；否则在右侧
-                        data.menu.sub_on_left = window_center_x > screen_w / 2;
-
-                        data.base_window_h = win_h;
-                        data.base_window_w = win_w;
-                        data.base_window_x = cur_rect.left;
-                        data.base_window_y = cur_rect.top;
-
-                        let extra_h = menu_extra_height(dpi);
-                        let sub_w = submenu_width(dpi) + scale_for_dpi(8, dpi);
-                        let new_h = win_h + extra_h;
-                        let new_w = win_w + sub_w;
-
-                        // 子菜单在左侧时，窗口向左偏移以保持内容位置不变
-                        let new_x = if data.menu.sub_on_left {
-                            cur_rect.left - sub_w
-                        } else {
-                            cur_rect.left
-                        };
-
-                        unsafe {
-                            SetWindowPos(
-                                hwnd,
-                                std::ptr::null_mut(),
-                                new_x,
-                                cur_rect.top,
-                                new_w,
-                                new_h,
-                                SWP_NOZORDER,
-                            );
-                        }
-                        data.menu.open = true;
-                    }
-                    need_rerender = true;
+                // 切换菜单弹出窗口
+                if is_menu_visible() {
+                    hide_menu_window();
+                } else {
+                    show_menu_window(hwnd);
                 }
             } else if let Some(data) = get_data(hwnd) {
+                // 菜单打开时点击分类框 → 关闭菜单
                 if data.menu.open {
-                    // 菜单已打开：检查点击了哪个菜单项
-                    let rh = menu_row_h(dpi);
-                    let padding = scale_for_dpi(4, dpi);
-                    let (mmx0, mmy, mmw, mmh) = main_menu_rect(cw, data.title_h, dpi);
-                    let mmx = mmx0 + ox;
-
-                    let mut action_taken = false;
-
-                    // --- 检查子菜单点击 ---
-                    if data.menu.expanded_item >= 1 && data.menu.expanded_item <= 3 {
-                        let sub_idx = data.menu.expanded_item;
-                        let sub_count = if sub_idx == 1 { 11 } else { 8 };
-                        let (smx0, smy, smw, smh) =
-                            sub_menu_rect(cw, data.title_h, dpi, sub_count, data.menu.sub_on_left);
-                        let smx = smx0 + ox;
-                        if click_x >= smx
-                            && click_x < smx + smw
-                            && click_y >= smy
-                            && click_y < smy + smh
-                        {
-                            let rel_y = click_y - smy - padding;
-                            if rel_y >= 0 {
-                                let idx = rel_y / rh;
-                                let dim_count = if sub_idx == 1 { 8 } else { 8 };
-                                if idx >= 0 && idx < dim_count {
-                                    // 维度项点击
-                                    handle_menu_dimension_click(
-                                        data, sub_idx, idx as usize,
-                                    );
-                                    action_taken = true;
-                                } else if sub_idx == 1 && idx == dim_count + 1 {
-                                    // 递增
-                                    data.sort_ascending = true;
-                                    log::info!("排序方式切换为: 递增");
-                                    action_taken = true;
-                                } else if sub_idx == 1 && idx == dim_count + 2 {
-                                    // 递减
-                                    data.sort_ascending = false;
-                                    log::info!("排序方式切换为: 递减");
-                                    action_taken = true;
-                                }
-                            }
-                        }
-                    }
-
-                    // --- 检查主菜单点击 ---
-                    if !action_taken
-                        && click_x >= mmx
-                        && click_x < mmx + mmw
-                        && click_y >= mmy
-                        && click_y < mmy + mmh
-                    {
-                        let rel_y = click_y - mmy - padding;
-                        if rel_y >= 0 {
-                            let mut item_y = 0;
-                            for i in 0..4i32 {
-                                if rel_y >= item_y && rel_y < item_y + rh {
-                                    if i == 0 {
-                                        // 删除 → 执行操作并关闭菜单
-                                        log::info!("[预留] 分类框删除功能被点击: {}", data.title);
-                                        action_taken = true;
-                                    } else {
-                                        // 排序/分组/查看 → 展开子菜单，不关闭菜单
-                                        if data.menu.expanded_item != i {
-                                            data.menu.expanded_item = i;
-                                            data.menu.sub_hovered = -1;
-                                        }
-                                        // 不设置 action_taken，但也不关闭菜单
-                                        need_rerender = true;
-                                    }
-                                    break;
-                                }
-                                item_y += rh;
-                                if i == 0 {
-                                    item_y += scale_for_dpi(1, dpi);
-                                }
-                            }
-                        }
-                    }
-
-                    // 判断是否应该关闭菜单
-                    // 关闭条件：执行了操作（删除/子菜单项）或点击在菜单区域外
-                    // 不关闭：点击主菜单的排序/分组/查看项（仅展开子菜单）
-                    let in_main_menu = click_x >= mmx
-                        && click_x < mmx + mmw
-                        && click_y >= mmy
-                        && click_y < mmy + mmh;
-                    let in_sub_menu = data.menu.expanded_item >= 1 && {
-                        let sub_count = if data.menu.expanded_item == 1 { 11 } else { 8 };
-                        let (smx0, smy, smw, smh) =
-                            sub_menu_rect(cw, data.title_h, dpi, sub_count, data.menu.sub_on_left);
-                        let smx = smx0 + ox;
-                        click_x >= smx && click_x < smx + smw && click_y >= smy && click_y < smy + smh
-                    };
-
-                    let should_close = action_taken || (!in_main_menu && !in_sub_menu);
-
-                    if should_close {
-                        close_menu(hwnd, data.base_window_x, data.base_window_y, data.base_window_w, data.base_window_h);
-                        data.menu.open = false;
-                        data.menu.hovered_item = -1;
-                        data.menu.expanded_item = -1;
-                        data.menu.sub_hovered = -1;
-                        if data.menu.collapse_timer_id != 0 {
-                            unsafe { KillTimer(hwnd, data.menu.collapse_timer_id) };
-                            data.menu.collapse_timer_id = 0;
-                        }
-                        need_rerender = true;
-                    }
-                } else {
-                    // 菜单未打开：普通点击选中网格项
-                    let hit = grid_hit_test(data, cw, click_x - ox, click_y, dpi);
-                    if hit != data.selected_item {
-                        data.selected_item = hit;
-                        need_rerender = true;
-                    }
+                    hide_menu_window();
+                }
+                // 普通点击选中网格项
+                let hit = grid_hit_test(data, win_w, click_x, click_y, dpi);
+                if hit != data.selected_item {
+                    data.selected_item = hit;
+                    need_rerender = true;
                 }
             }
 
@@ -943,38 +610,9 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                     data.hover_edge = 0;
                     need_rerender = true;
                 }
-                // 菜单打开时鼠标离开 → 取消定时器并立即收起子菜单
-                if data.menu.open {
-                    if data.menu.collapse_timer_id != 0 {
-                        unsafe { KillTimer(hwnd, data.menu.collapse_timer_id) };
-                        data.menu.collapse_timer_id = 0;
-                    }
-                    data.menu.hovered_item = -1;
-                    data.menu.expanded_item = -1;
-                    data.menu.sub_hovered = -1;
-                    need_rerender = true;
-                }
             }
             if need_rerender {
                 render_layered_window(hwnd);
-            }
-            0
-        }
-
-        // ===== 定时器：子菜单延迟收起 =====
-        WM_TIMER => {
-            if let Some(data) = get_data(hwnd) {
-                if data.menu.collapse_timer_id != 0 {
-                    // 取消定时器
-                    unsafe { KillTimer(hwnd, data.menu.collapse_timer_id) };
-                    data.menu.collapse_timer_id = 0;
-                    // 收起子菜单
-                    if data.menu.expanded_item >= 1 {
-                        data.menu.expanded_item = -1;
-                        data.menu.sub_hovered = -1;
-                        render_layered_window(hwnd);
-                    }
-                }
             }
             0
         }
@@ -1006,75 +644,5 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
 
         // ===== 默认处理 =====
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
-    }
-}
-
-/// 关闭菜单：恢复窗口位置和尺寸
-fn close_menu(hwnd: HWND, x: i32, y: i32, w: i32, h: i32) {
-    unsafe {
-        SetWindowPos(hwnd, std::ptr::null_mut(), x, y, w, h, SWP_NOZORDER);
-    }
-}
-
-/// 处理菜单维度项点击（排序/分组/查看）
-///
-/// - `menu_idx`: 1=排序, 2=分组, 3=查看
-/// - `dim_idx`: 维度索引 0-7
-fn handle_menu_dimension_click(data: &mut GridWindowData, menu_idx: i32, dim_idx: usize) {
-    use crate::config::app_config::{GroupBy, SortMode, ViewMode};
-
-    match menu_idx {
-        1 => {
-            // 排序维度
-            let modes = [
-                SortMode::Name,
-                SortMode::Type,
-                SortMode::ModifiedTime,
-                SortMode::Author,
-                SortMode::CreatedTime,
-                SortMode::Size,
-                SortMode::Tag,
-                SortMode::Title,
-            ];
-            if dim_idx < modes.len() {
-                data.sort_mode = modes[dim_idx].clone();
-                log::info!("排序方式切换为: {:?}", data.sort_mode);
-            }
-        }
-        2 => {
-            // 分组维度
-            let modes = [
-                GroupBy::Name,
-                GroupBy::Type,
-                GroupBy::ModifiedTime,
-                GroupBy::Author,
-                GroupBy::CreatedTime,
-                GroupBy::Size,
-                GroupBy::Tag,
-                GroupBy::Title,
-            ];
-            if dim_idx < modes.len() {
-                data.group_by = modes[dim_idx].clone();
-                log::info!("分组方式切换为: {:?}", data.group_by);
-            }
-        }
-        3 => {
-            // 查看模式
-            let modes = [
-                ViewMode::ExtraLarge,
-                ViewMode::Large,
-                ViewMode::Medium,
-                ViewMode::Small,
-                ViewMode::List,
-                ViewMode::Detail,
-                ViewMode::Tiles,
-                ViewMode::Content,
-            ];
-            if dim_idx < modes.len() {
-                data.view_mode = modes[dim_idx].clone();
-                log::info!("查看模式切换为: {:?}", data.view_mode);
-            }
-        }
-        _ => {}
     }
 }
