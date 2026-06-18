@@ -76,11 +76,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
 
             // "更多"按钮区域 → 始终返回 HTCLIENT
             let (mbtn_x, mbtn_y, mbtn_size) = more_btn_rect(win_w, title_h, dpi);
-            if dy >= mbtn_y
-                && dy < mbtn_y + mbtn_size
-                && dx >= mbtn_x
-                && dx < mbtn_x + mbtn_size
-            {
+            if dy >= mbtn_y && dy < mbtn_y + mbtn_size && dx >= mbtn_x && dx < mbtn_x + mbtn_size {
                 if let Some(data) = get_data(hwnd) {
                     if data.hover_edge != 0 {
                         data.hover_edge = 0;
@@ -482,7 +478,11 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                     data.locked = !data.locked;
                     log::info!(
                         "锁定状态切换: {} → {}",
-                        if data.locked { "已锁定" } else { "已解锁" },
+                        if data.locked {
+                            "已锁定"
+                        } else {
+                            "已解锁"
+                        },
                         data.title
                     );
                     need_rerender = true;
@@ -627,7 +627,18 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                         let hfont = unsafe {
                             CreateFontW(
                                 scale_for_dpi(14, unsafe { GetDpiForWindow(hwnd) }),
-                                0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 0, 0,
+                                0,
+                                0,
+                                0,
+                                400,
+                                0,
+                                0,
+                                0,
+                                1,
+                                0,
+                                0,
+                                0,
+                                0,
                                 font_name.as_ptr(),
                             )
                         };
@@ -648,7 +659,8 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                         let padding = scale_for_dpi(16, unsafe { GetDpiForWindow(hwnd) });
                         unsafe {
                             (*mis).item_width = (sz.cx + check_w + padding) as u32;
-                            (*mis).item_height = scale_for_dpi(30, unsafe { GetDpiForWindow(hwnd) }) as u32;
+                            (*mis).item_height =
+                                scale_for_dpi(30, unsafe { GetDpiForWindow(hwnd) }) as u32;
                         }
                     }
                 }
@@ -696,18 +708,32 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                         // 设置文字
                         unsafe {
                             SetBkMode(hdc, TRANSPARENT);
-                            SetTextColor(hdc, if is_selected {
-                                colorref(255, 255, 255)
-                            } else {
-                                colorref(220, 220, 230)
-                            });
+                            SetTextColor(
+                                hdc,
+                                if is_selected {
+                                    colorref(255, 255, 255)
+                                } else {
+                                    colorref(220, 220, 230)
+                                },
+                            );
                         }
 
                         let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
                         let hfont = unsafe {
                             CreateFontW(
                                 scale_for_dpi(14, dpi),
-                                0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 0, 0,
+                                0,
+                                0,
+                                0,
+                                400,
+                                0,
+                                0,
+                                0,
+                                1,
+                                0,
+                                0,
+                                0,
+                                0,
                                 font_name.as_ptr(),
                             )
                         };
@@ -727,11 +753,14 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                                     check_wide.as_ptr(),
                                     check_wide.len() as i32,
                                 );
-                                SetTextColor(hdc, if is_selected {
-                                    colorref(255, 255, 255)
-                                } else {
-                                    colorref(220, 220, 230)
-                                });
+                                SetTextColor(
+                                    hdc,
+                                    if is_selected {
+                                        colorref(255, 255, 255)
+                                    } else {
+                                        colorref(220, 220, 230)
+                                    },
+                                );
                             }
                         }
 

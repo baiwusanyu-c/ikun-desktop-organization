@@ -153,12 +153,7 @@ extern "system" {
     pub fn FillRect(hdc: HDC, lprc: *const RECT, hbr: HBRUSH) -> i32;
     pub fn CreateSolidBrush(color: u32) -> HBRUSH;
     pub fn TextOutW(hdc: HDC, x: i32, y: i32, lpString: *const u16, c: i32) -> i32;
-    pub fn GetTextExtentPoint32W(
-        hdc: HDC,
-        lpString: *const u16,
-        c: i32,
-        psizl: *mut SIZE,
-    ) -> i32;
+    pub fn GetTextExtentPoint32W(hdc: HDC, lpString: *const u16, c: i32, psizl: *mut SIZE) -> i32;
 
     // Window management (additional)
     pub fn SetForegroundWindow(hWnd: HWND) -> i32;

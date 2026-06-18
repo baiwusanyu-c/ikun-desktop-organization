@@ -35,7 +35,12 @@ pub fn show_menu_window(parent_hwnd: HWND) {
     let (btn_x, btn_y, btn_size) =
         super::grid_window::more_btn_rect(parent_data.base_window_w, parent_data.title_h, dpi);
 
-    let mut parent_rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    let mut parent_rect = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
     unsafe { GetWindowRect(parent_hwnd, &mut parent_rect) };
 
     let screen_x = parent_rect.left + btn_x;
@@ -79,7 +84,10 @@ pub fn show_menu_window(parent_hwnd: HWND) {
     // draw_data 在此 drop，释放所有 owner-draw 数据
 }
 
-pub fn is_menu_visible() -> bool { false }
+pub fn is_menu_visible() -> bool {
+    false
+}
+#[allow(dead_code)]
 pub fn hide_menu_window() {}
 
 // ===== 内部实现 =====
@@ -111,8 +119,15 @@ fn append_owner_draw_item(
 
     let mii = MENUITEMINFOW {
         cb_size: std::mem::size_of::<MENUITEMINFOW>() as u32,
-        f_mask: MIIM_FTYPE | MIIM_ID | MIIM_DATA | if !sub_menu.is_null() { MIIM_SUBMENU } else { 0 },
-        f_type: if is_separator { MFT_SEPARATOR | MFT_OWNERDRAW } else { MFT_OWNERDRAW },
+        f_mask: MIIM_FTYPE
+            | MIIM_ID
+            | MIIM_DATA
+            | if !sub_menu.is_null() { MIIM_SUBMENU } else { 0 },
+        f_type: if is_separator {
+            MFT_SEPARATOR | MFT_OWNERDRAW
+        } else {
+            MFT_OWNERDRAW
+        },
         f_state: if is_checked { MFS_CHECKED } else { 0 },
         w_id: id,
         h_submenu: sub_menu,
@@ -142,88 +157,151 @@ fn build_and_show_menu(
     // 排序子菜单
     let sort_menu = unsafe { CreatePopupMenu() };
     let sort_items = [
-        ("名称", SortMode::Name), ("类型", SortMode::Type),
-        ("修改时间", SortMode::ModifiedTime), ("作者", SortMode::Author),
-        ("创建时间", SortMode::CreatedTime), ("大小", SortMode::Size),
-        ("标记", SortMode::Tag), ("标题", SortMode::Title),
+        ("名称", SortMode::Name),
+        ("类型", SortMode::Type),
+        ("修改时间", SortMode::ModifiedTime),
+        ("作者", SortMode::Author),
+        ("创建时间", SortMode::CreatedTime),
+        ("大小", SortMode::Size),
+        ("标记", SortMode::Tag),
+        ("标题", SortMode::Title),
     ];
     for (i, (label, mode)) in sort_items.iter().enumerate() {
         append_owner_draw_item(
-            sort_menu, CMD_SORT_BASE + i as u32, label, false,
-            *mode == *current_sort, false, std::ptr::null_mut(), draw_data,
+            sort_menu,
+            CMD_SORT_BASE + i as u32,
+            label,
+            false,
+            *mode == *current_sort,
+            false,
+            std::ptr::null_mut(),
+            draw_data,
         );
     }
     // 分隔线
     append_owner_draw_item(
-        sort_menu, 0, "", true, false, false, std::ptr::null_mut(), draw_data,
+        sort_menu,
+        0,
+        "",
+        true,
+        false,
+        false,
+        std::ptr::null_mut(),
+        draw_data,
     );
     // 递增/递减
     append_owner_draw_item(
-        sort_menu, CMD_SORT_ASC, "递增", false,
-        current_asc, true, std::ptr::null_mut(), draw_data,
+        sort_menu,
+        CMD_SORT_ASC,
+        "递增",
+        false,
+        current_asc,
+        true,
+        std::ptr::null_mut(),
+        draw_data,
     );
     append_owner_draw_item(
-        sort_menu, CMD_SORT_DESC, "递减", false,
-        !current_asc, true, std::ptr::null_mut(), draw_data,
+        sort_menu,
+        CMD_SORT_DESC,
+        "递减",
+        false,
+        !current_asc,
+        true,
+        std::ptr::null_mut(),
+        draw_data,
     );
 
     // 分组子菜单
     let group_menu = unsafe { CreatePopupMenu() };
     let group_items = [
-        ("名称", GroupBy::Name), ("类型", GroupBy::Type),
-        ("修改时间", GroupBy::ModifiedTime), ("作者", GroupBy::Author),
-        ("创建时间", GroupBy::CreatedTime), ("大小", GroupBy::Size),
-        ("标记", GroupBy::Tag), ("标题", GroupBy::Title),
+        ("名称", GroupBy::Name),
+        ("类型", GroupBy::Type),
+        ("修改时间", GroupBy::ModifiedTime),
+        ("作者", GroupBy::Author),
+        ("创建时间", GroupBy::CreatedTime),
+        ("大小", GroupBy::Size),
+        ("标记", GroupBy::Tag),
+        ("标题", GroupBy::Title),
     ];
     for (i, (label, mode)) in group_items.iter().enumerate() {
         append_owner_draw_item(
-            group_menu, CMD_GROUP_BASE + i as u32, label, false,
-            *mode == *current_group, false, std::ptr::null_mut(), draw_data,
+            group_menu,
+            CMD_GROUP_BASE + i as u32,
+            label,
+            false,
+            *mode == *current_group,
+            false,
+            std::ptr::null_mut(),
+            draw_data,
         );
     }
 
     // 查看子菜单
     let view_menu = unsafe { CreatePopupMenu() };
     let view_items = [
-        ("超大图标", ViewMode::ExtraLarge), ("大图标", ViewMode::Large),
-        ("中图标", ViewMode::Medium), ("小图标", ViewMode::Small),
-        ("列表", ViewMode::List), ("详细信息", ViewMode::Detail),
-        ("平铺", ViewMode::Tiles), ("内容", ViewMode::Content),
+        ("超大图标", ViewMode::ExtraLarge),
+        ("大图标", ViewMode::Large),
+        ("中图标", ViewMode::Medium),
+        ("小图标", ViewMode::Small),
+        ("列表", ViewMode::List),
+        ("详细信息", ViewMode::Detail),
+        ("平铺", ViewMode::Tiles),
+        ("内容", ViewMode::Content),
     ];
     for (i, (label, mode)) in view_items.iter().enumerate() {
         append_owner_draw_item(
-            view_menu, CMD_VIEW_BASE + i as u32, label, false,
-            *mode == *current_view, false, std::ptr::null_mut(), draw_data,
+            view_menu,
+            CMD_VIEW_BASE + i as u32,
+            label,
+            false,
+            *mode == *current_view,
+            false,
+            std::ptr::null_mut(),
+            draw_data,
         );
     }
 
     // 主菜单
     let main_menu = unsafe { CreatePopupMenu() };
     append_owner_draw_item(
-        main_menu, CMD_DELETE, "删除", false,
-        false, false, std::ptr::null_mut(), draw_data,
+        main_menu,
+        CMD_DELETE,
+        "删除",
+        false,
+        false,
+        false,
+        std::ptr::null_mut(),
+        draw_data,
     );
     append_owner_draw_item(
-        main_menu, 0, "", true, false, false, std::ptr::null_mut(), draw_data,
+        main_menu,
+        0,
+        "",
+        true,
+        false,
+        false,
+        std::ptr::null_mut(),
+        draw_data,
     );
     append_owner_draw_item(
-        main_menu, 0, "排序", false,
-        false, false, sort_menu, draw_data,
+        main_menu, 0, "排序", false, false, false, sort_menu, draw_data,
     );
     append_owner_draw_item(
-        main_menu, 0, "分组", false,
-        false, false, group_menu, draw_data,
+        main_menu, 0, "分组", false, false, false, group_menu, draw_data,
     );
     append_owner_draw_item(
-        main_menu, 0, "查看", false,
-        false, false, view_menu, draw_data,
+        main_menu, 0, "查看", false, false, false, view_menu, draw_data,
     );
 
     let cmd = unsafe {
         TrackPopupMenu(
             main_menu,
             TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON,
-            x, y, 0, hwnd, std::ptr::null(),
+            x,
+            y,
+            0,
+            hwnd,
+            std::ptr::null(),
         )
     };
 
@@ -243,8 +321,14 @@ fn handle_menu_command(pd: &mut super::grid_window::GridWindowData, cmd: i32) {
         log::info!("[预留] 分类框删除: {}", pd.title);
     } else if cmd >= CMD_SORT_BASE && cmd < CMD_SORT_BASE + 8 {
         let modes = [
-            SortMode::Name, SortMode::Type, SortMode::ModifiedTime, SortMode::Author,
-            SortMode::CreatedTime, SortMode::Size, SortMode::Tag, SortMode::Title,
+            SortMode::Name,
+            SortMode::Type,
+            SortMode::ModifiedTime,
+            SortMode::Author,
+            SortMode::CreatedTime,
+            SortMode::Size,
+            SortMode::Tag,
+            SortMode::Title,
         ];
         pd.sort_mode = modes[(cmd - CMD_SORT_BASE) as usize].clone();
         log::info!("排序: {:?}", pd.sort_mode);
@@ -256,15 +340,27 @@ fn handle_menu_command(pd: &mut super::grid_window::GridWindowData, cmd: i32) {
         log::info!("排序: 递减");
     } else if cmd >= CMD_GROUP_BASE && cmd < CMD_GROUP_BASE + 8 {
         let modes = [
-            GroupBy::Name, GroupBy::Type, GroupBy::ModifiedTime, GroupBy::Author,
-            GroupBy::CreatedTime, GroupBy::Size, GroupBy::Tag, GroupBy::Title,
+            GroupBy::Name,
+            GroupBy::Type,
+            GroupBy::ModifiedTime,
+            GroupBy::Author,
+            GroupBy::CreatedTime,
+            GroupBy::Size,
+            GroupBy::Tag,
+            GroupBy::Title,
         ];
         pd.group_by = modes[(cmd - CMD_GROUP_BASE) as usize].clone();
         log::info!("分组: {:?}", pd.group_by);
     } else if cmd >= CMD_VIEW_BASE && cmd < CMD_VIEW_BASE + 8 {
         let modes = [
-            ViewMode::ExtraLarge, ViewMode::Large, ViewMode::Medium, ViewMode::Small,
-            ViewMode::List, ViewMode::Detail, ViewMode::Tiles, ViewMode::Content,
+            ViewMode::ExtraLarge,
+            ViewMode::Large,
+            ViewMode::Medium,
+            ViewMode::Small,
+            ViewMode::List,
+            ViewMode::Detail,
+            ViewMode::Tiles,
+            ViewMode::Content,
         ];
         pd.view_mode = modes[(cmd - CMD_VIEW_BASE) as usize].clone();
         log::info!("查看: {:?}", pd.view_mode);

@@ -511,4 +511,3 @@ mod tests {
         assert_eq!(TRANSPARENT, 1);
     }
 }
-

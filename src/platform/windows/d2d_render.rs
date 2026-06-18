@@ -1,4 +1,4 @@
-﻿//! Direct2D/DirectWrite 渲染代码
+//! Direct2D/DirectWrite 渲染代码
 //!
 //! 本模块包含使用 Direct2D 和 DirectWrite 渲染格子窗口内容的所有代码。
 //! 包括设备初始化、分层窗口渲染和图标绘制。
@@ -427,8 +427,7 @@ pub fn render_layered_window(hwnd: HWND) {
 
     // ===== 绘制"更多"按钮（⋮，锁定按钮右侧）=====
     {
-        let (mbtn_x, mbtn_y, mbtn_size) =
-            super::grid_window::more_btn_rect(w, title_h, dpi);
+        let (mbtn_x, mbtn_y, mbtn_size) = super::grid_window::more_btn_rect(w, title_h, dpi);
         let more_icon = "\u{22EE}"; // ⋮ 三个竖点
         let more_font_size = scale_for_dpi(16, dpi) as f32;
         let more_format = unsafe {
@@ -540,10 +539,10 @@ pub fn render_layered_window(hwnd: HWND) {
         if let Ok(ref eb) = edge_brush {
             let border_w = scale_for_dpi(3, dpi) as f32;
             let edge_rect = match data.hover_edge {
-                1 => d2d_rect(0.0, 0.0, border_w, hh),              // 左边缘
-                2 => d2d_rect(ww - border_w, 0.0, ww, hh),          // 右边缘
-                3 => d2d_rect(0.0, 0.0, ww, border_w),              // 上边缘
-                4 => d2d_rect(0.0, hh - border_w, ww, hh),          // 下边缘
+                1 => d2d_rect(0.0, 0.0, border_w, hh),     // 左边缘
+                2 => d2d_rect(ww - border_w, 0.0, ww, hh), // 右边缘
+                3 => d2d_rect(0.0, 0.0, ww, border_w),     // 上边缘
+                4 => d2d_rect(0.0, hh - border_w, ww, hh), // 下边缘
                 _ => d2d_rect(0.0, 0.0, 0.0, 0.0),
             };
             unsafe { target.FillRectangle(&edge_rect, eb) };
@@ -982,7 +981,6 @@ fn draw_icon_d2d(
         unsafe { DeleteObject(icon_info.hbm_mask as HGDIOBJ) };
     }
 }
-
 
 /// 从 HWND 获取 GridWindowData 引用（d2d_render 内部使用）
 unsafe fn get_data<'a>(hwnd: HWND) -> Option<&'a mut GridWindowData> {
