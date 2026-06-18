@@ -256,10 +256,10 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 let win_h = wr.bottom - wr.top;
 
                 if let Some(data) = get_data(hwnd) {
-                    // 菜单打开时使用内容宽度（不含子菜单区域）
-                    let layout_w = if data.menu.open && data.menu.sub_on_left {
-                        let sub_w = submenu_width(dpi) + scale_for_dpi(8, dpi);
-                        win_w - sub_w
+                    // 菜单打开时始终使用原始窗口宽度计算网格布局
+                    // 避免窗口扩展导致网格重新排列（闪动）
+                    let layout_w = if data.menu.open {
+                        data.base_window_w
                     } else {
                         win_w
                     };
@@ -779,11 +779,18 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                             for i in 0..4i32 {
                                 if rel_y >= item_y && rel_y < item_y + rh {
                                     if i == 0 {
-                                        // 删除
+                                        // 删除 → 执行操作并关闭菜单
                                         log::info!("[预留] 分类框删除功能被点击: {}", data.title);
                                         action_taken = true;
+                                    } else {
+                                        // 排序/分组/查看 → 展开子菜单，不关闭菜单
+                                        if data.menu.expanded_item != i {
+                                            data.menu.expanded_item = i;
+                                            data.menu.sub_hovered = -1;
+                                        }
+                                        // 不设置 action_taken，但也不关闭菜单
+                                        need_rerender = true;
                                     }
-                                    // 排序/分组/查看的点击由 hover 展开处理，不需要点击
                                     break;
                                 }
                                 item_y += rh;
@@ -794,21 +801,34 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                         }
                     }
 
-                    // 关闭菜单
-                    close_menu(hwnd, data.base_window_x, data.base_window_y, data.base_window_w, data.base_window_h);
-                    data.menu.open = false;
-                    data.menu.hovered_item = -1;
-                    data.menu.expanded_item = -1;
-                    data.menu.sub_hovered = -1;
-                    if data.menu.collapse_timer_id != 0 {
-                        unsafe { KillTimer(hwnd, data.menu.collapse_timer_id) };
-                        data.menu.collapse_timer_id = 0;
-                    }
-                    need_rerender = true;
+                    // 判断是否应该关闭菜单
+                    // 关闭条件：执行了操作（删除/子菜单项）或点击在菜单区域外
+                    // 不关闭：点击主菜单的排序/分组/查看项（仅展开子菜单）
+                    let in_main_menu = click_x >= mmx
+                        && click_x < mmx + mmw
+                        && click_y >= mmy
+                        && click_y < mmy + mmh;
+                    let in_sub_menu = data.menu.expanded_item >= 1 && {
+                        let sub_count = if data.menu.expanded_item == 1 { 11 } else { 8 };
+                        let (smx0, smy, smw, smh) =
+                            sub_menu_rect(cw, data.title_h, dpi, sub_count, data.menu.sub_on_left);
+                        let smx = smx0 + ox;
+                        click_x >= smx && click_x < smx + smw && click_y >= smy && click_y < smy + smh
+                    };
 
-                    // 如果点击在菜单外（不在主菜单也不在子菜单区域），仅关闭菜单
-                    if !action_taken {
-                        log::debug!("点击菜单外区域，关闭菜单");
+                    let should_close = action_taken || (!in_main_menu && !in_sub_menu);
+
+                    if should_close {
+                        close_menu(hwnd, data.base_window_x, data.base_window_y, data.base_window_w, data.base_window_h);
+                        data.menu.open = false;
+                        data.menu.hovered_item = -1;
+                        data.menu.expanded_item = -1;
+                        data.menu.sub_hovered = -1;
+                        if data.menu.collapse_timer_id != 0 {
+                            unsafe { KillTimer(hwnd, data.menu.collapse_timer_id) };
+                            data.menu.collapse_timer_id = 0;
+                        }
+                        need_rerender = true;
                     }
                 } else {
                     // 菜单未打开：普通点击选中网格项

@@ -1469,7 +1469,29 @@ fn render_dropdown_menu(
                     )
                 };
                 if let Some(ref tl) = text_layout {
-                    if let Ok(ref tb) = item_text_brush {
+                    // 选中项使用醒目的亮蓝色，未选中项使用普通白色
+                    if is_checked {
+                        let checked_brush = unsafe {
+                            target.CreateSolidColorBrush(
+                                &d2d_color(100, 210, 255, 255),
+                                None,
+                            )
+                        };
+                        if let Ok(ref cb) = checked_brush {
+                            let origin = D2D_POINT_2F {
+                                x: (sx + scale_for_dpi(12, dpi)) as f32,
+                                y: item_y as f32,
+                            };
+                            unsafe {
+                                target.DrawTextLayout(
+                                    origin,
+                                    tl,
+                                    cb,
+                                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                                );
+                            }
+                        }
+                    } else if let Ok(ref tb) = item_text_brush {
                         let origin = D2D_POINT_2F {
                             x: (sx + scale_for_dpi(12, dpi)) as f32,
                             y: item_y as f32,
