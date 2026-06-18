@@ -172,6 +172,7 @@ pub const LWA_ALPHA: u32 = 0x00000002;
 #[allow(dead_code)]
 pub const LWA_COLORKEY: u32 = 0x00000001;
 pub const SW_SHOW: i32 = 5;
+pub const SW_SHOWNOACTIVATE: i32 = 4;
 pub const SWP_NOZORDER: u32 = 0x0004;
 pub const GWLP_USERDATA: i32 = -21;
 pub const SM_CXSCREEN: i32 = 0;
@@ -203,6 +204,7 @@ pub const WH_MOUSE_LL: i32 = 14;
 pub const HC_ACTION: i32 = 0;
 pub const WM_APP: u32 = 0x8000;
 pub const WM_USER_SHOW_DESKTOP_MENU: u32 = WM_APP + 1;
+pub const WM_USER_OPEN_MENU: u32 = WM_APP + 2; // 延迟打开分类框菜单
 pub const WM_QUIT: u32 = 0x0012;
 pub const WM_COMMAND: u32 = 0x0111;
 pub const WM_CREATE: u32 = 0x0001;
@@ -383,75 +385,100 @@ pub unsafe fn target_inner_create_text_layout(
 }
 
 // =============================================================================
-// Owner-Draw 菜单相关结构体和常量
+// 自定义分层窗口菜单相关类型
 // =============================================================================
 
-/// 自定义菜单项数据（通过 dwItemData 传递给 WM_DRAWITEM）
-pub struct MenuDrawItemData {
-    pub label: Vec<u16>,
+/// 菜单项定义（用于自定义分层窗口菜单）
+pub struct MenuItem {
+    pub label: String,
+    pub id: u32,
     pub is_separator: bool,
     pub is_checked: bool,
     pub is_radio: bool,
+    pub is_disabled: bool,
+    pub children: Vec<MenuItem>,
 }
 
-/// MENUITEMINFOW — 用于 InsertMenuItemW / SetMenuItemInfoW
-#[repr(C)]
-pub struct MENUITEMINFOW {
-    pub cb_size: u32,
-    pub f_mask: u32,
-    pub f_type: u32,
-    pub f_state: u32,
-    pub w_id: u32,
-    pub h_submenu: HMENU,
-    pub hbmp_checked: HBITMAP,
-    pub hbmp_unchecked: HBITMAP,
-    pub dw_item_data: usize,
-    pub dw_type_data: usize,
-    pub cch: u32,
-    pub hbmp_item: HBITMAP,
+impl MenuItem {
+    /// 创建一个普通菜单项
+    pub fn new(label: &str, id: u32) -> Self {
+        Self {
+            label: label.to_string(),
+            id,
+            is_separator: false,
+            is_checked: false,
+            is_radio: false,
+            is_disabled: false,
+            children: Vec::new(),
+        }
+    }
+
+    /// 创建一个分隔线
+    pub fn separator() -> Self {
+        Self {
+            label: String::new(),
+            id: 0,
+            is_separator: true,
+            is_checked: false,
+            is_radio: false,
+            is_disabled: false,
+            children: Vec::new(),
+        }
+    }
+
+    /// 创建一个带子菜单的菜单项
+    pub fn with_children(label: &str, children: Vec<MenuItem>) -> Self {
+        Self {
+            label: label.to_string(),
+            id: 0,
+            is_separator: false,
+            is_checked: false,
+            is_radio: false,
+            is_disabled: false,
+            children,
+        }
+    }
+
+    /// 设置勾选状态
+    pub fn checked(mut self, checked: bool) -> Self {
+        self.is_checked = checked;
+        self
+    }
+
+    /// 设置为单选按钮样式
+    pub fn radio(mut self, radio: bool) -> Self {
+        self.is_radio = radio;
+        self
+    }
+
+    /// 设置为禁用状态
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.is_disabled = disabled;
+        self
+    }
+
+    /// 是否有子菜单
+    pub fn has_submenu(&self) -> bool {
+        !self.children.is_empty()
+    }
 }
 
-pub const MIIM_FTYPE: u32 = 0x00000100;
-pub const MIIM_ID: u32 = 0x00000002;
-pub const MIIM_SUBMENU: u32 = 0x00000004;
-pub const MIIM_DATA: u32 = 0x00000020;
+// ===== 键盘消息常量 =====
+pub const WM_KEYDOWN: u32 = 0x0100;
+pub const VK_ESCAPE: u32 = 0x1B;
+pub const VK_UP: u32 = 0x26;
+pub const VK_DOWN: u32 = 0x28;
+pub const VK_LEFT: u32 = 0x25;
+pub const VK_RIGHT: u32 = 0x27;
+pub const VK_RETURN: u32 = 0x0D;
 
-pub const MFT_OWNERDRAW: u32 = 0x00000100;
-pub const MFT_SEPARATOR: u32 = 0x00000800;
+// ===== WM_ACTIVATE 常量 =====
+pub const WA_INACTIVE: u32 = 0;
+pub const WM_MOUSEACTIVATE: u32 = 0x0021;
+pub const MA_NOACTIVATE: i32 = 3;
 
-pub const MFS_CHECKED: u32 = 0x00000008;
-
-/// MEASUREITEMSTRUCT — WM_MEASUREITEM 的 lParam
-#[repr(C)]
-pub struct MEASUREITEMSTRUCT {
-    pub ctl_type: u32,
-    pub ctl_id: u32,
-    pub item_id: u32,
-    pub item_width: u32,
-    pub item_height: u32,
-    pub item_data: usize,
-}
-
-/// DRAWITEMSTRUCT — WM_DRAWITEM 的 lParam
-#[repr(C)]
-pub struct DRAWITEMSTRUCT {
-    pub ctl_type: u32,
-    pub ctl_id: u32,
-    pub item_id: u32,
-    pub item_action: u32,
-    pub item_state: u32,
-    pub hwnd_item: HWND,
-    pub hdc: HDC,
-    pub rc_item: RECT,
-    pub item_data: usize,
-}
-
-pub const ODT_MENU: u32 = 1;
-pub const ODS_SELECTED: u32 = 0x0001;
-pub const ODS_CHECKED: u32 = 0x0008;
-
-pub const WM_MEASUREITEM: u32 = 0x002C;
-pub const WM_DRAWITEM: u32 = 0x002B;
+// ===== SetWindowPos 标志 =====
+pub const SWP_SHOWWINDOW: u32 = 0x0040;
 
 /// COLORREF 辅助：从 RGB 创建 COLORREF（BGR 顺序）
 pub const fn colorref(r: u8, g: u8, b: u8) -> u32 {
@@ -501,13 +528,33 @@ mod tests {
     }
 
     #[test]
-    fn test_menu_command_constants() {
-        // 验证 owner-draw 相关常量值正确
-        assert_eq!(MIIM_FTYPE, 0x00000100);
-        assert_eq!(MFT_OWNERDRAW, 0x00000100);
-        assert_eq!(MFT_SEPARATOR, 0x00000800);
-        assert_eq!(ODT_MENU, 1);
-        assert_eq!(ODS_SELECTED, 0x0001);
+    fn test_menu_constants() {
+        assert_eq!(WM_KEYDOWN, 0x0100);
+        assert_eq!(VK_ESCAPE, 0x1B);
+        assert_eq!(WA_INACTIVE, 0);
         assert_eq!(TRANSPARENT, 1);
+    }
+
+    #[test]
+    fn test_menu_item_builder() {
+        let item = MenuItem::new("测试", 42);
+        assert_eq!(item.label, "测试");
+        assert_eq!(item.id, 42);
+        assert!(!item.is_separator);
+        assert!(!item.has_submenu());
+
+        let sep = MenuItem::separator();
+        assert!(sep.is_separator);
+
+        let with_sub = MenuItem::with_children("排序", vec![MenuItem::new("名称", 1)]);
+        assert!(with_sub.has_submenu());
+        assert_eq!(with_sub.children.len(), 1);
+
+        let checked = MenuItem::new("递增", 2).checked(true).radio(true);
+        assert!(checked.is_checked);
+        assert!(checked.is_radio);
+
+        let disabled = MenuItem::new("大图标", 3).disabled(true);
+        assert!(disabled.is_disabled);
     }
 }

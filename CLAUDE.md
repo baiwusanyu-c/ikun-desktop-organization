@@ -83,7 +83,7 @@ src/
 │   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎（995 行）
 │   │   ├── grid_window.rs     #   窗口创建/销毁/布局收集（830 行）
 │   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc（758 行）
-│   │   ├── menu_window.rs     #   深色主题 Owner-Draw 弹出菜单（260 行）
+│   │   ├── menu_window.rs     #   自定义分层窗口深色菜单（D2D/DirectWrite 渲染）
 │   │   ├── shell_menu.rs      #   Shell 右键菜单 + 注册表管理（590 行）
 │   │   ├── icon_extract.rs    #   图标提取（SHGetFileInfoW + .lnk 解析）
 │   │   ├── icon_hider.rs      #   图标隐藏/恢复（SysListView32）
@@ -254,7 +254,7 @@ main.rs
 
 **标题栏布局**：左侧纯文本名称（无图标、无数量），右侧 🔒/🔓 锁定按钮 + ⋮ "更多"按钮（`Segoe UI Emoji` / `Segoe UI Symbol` 字体）。锁定时整个窗口返回 `HTCLIENT`（禁止拖拽和缩放），未锁定时正常边缘缩放（`hover_edge` 驱动蓝色指示条反馈）。按钮 hover 时显示手型光标 + 半透明背景高亮。
 
-**更多下拉菜单**：点击 ⋮ 按钮弹出深色主题 Owner-Draw 菜单（`MF_OWNERDRAW` + `WM_MEASUREITEM`/`WM_DRAWITEM`），包含删除、排序（8维度+递增/递减）、分组（8维度）、查看（8模式）四个功能组，子菜单自动定位。菜单打开期间分类框自动锁定。使用 Win32 原生 `TrackPopupMenu` 保留系统菜单行为（键盘导航、子菜单展开、点击外部关闭）。
+**更多下拉菜单**：点击 ⋮ 按钮弹出自定义分层窗口菜单（`WS_POPUP | WS_EX_LAYERED` + D2D/DirectWrite 渲染），支持 per-pixel alpha 半透明深色背景、圆角、DirectWrite 清晰文字（任意 DPI 不模糊）、无系统阴影。包含删除、排序（8维度+递增/递减）、分组（8维度）、查看（8模式，预留回调接口暂未实现）四个功能组，子菜单自动定位（屏幕边界翻转）。多分类框菜单互斥（全局 `OPEN_MENU_HWND` + `PostMessage` 延迟切换）。菜单打开期间分类框自动锁定。通过 `SetForegroundWindow` + `WM_ACTIVATE(WA_INACTIVE)` 实现点击外部关闭，子菜单使用 `SW_SHOWNOACTIVATE` + `MA_NOACTIVATE` 避免抢焦点。
 
 **锁定状态持久化**：`GridWindowData.locked` ↔ `BoxLayoutData.locked` ↔ `~/.ikun_organizer.json`，保存时 `collect_grid_layout()` 读取实际状态，恢复时 `restore_layout()` 传入 `locked` 参数。
 
@@ -303,7 +303,7 @@ main.rs
 - [x] 拖拽移动 + 位置记忆（通过 collect_grid_layout + restore_layout）
 - [x] 边缘拖拽修改尺寸 + 尺寸记忆（同上）
 - [x] 锁定按钮 + 锁定记忆（锁定后不可拖拽/缩放，hover 反馈，状态持久化）
-- [x] "更多"下拉菜单（排序/分组/查看/删除，深色主题 Owner-Draw）
+- [x] "更多"下拉菜单（排序/分组/查看/删除，自定义分层窗口 + D2D/DirectWrite 渲染）
 - [ ] 分类框名称修改
 - [x] 排序方式：名称、类型、修改时间、作者、创建时间、大小、标记、标题 × 递增/递减（引擎已实现，菜单可选）
 - [x] 查看方式：超大、大、中、小、列表、详细信息、平铺、内容（引擎已实现，菜单可选）

@@ -139,12 +139,6 @@ extern "system" {
     ) -> i32;
     pub fn DestroyMenu(hMenu: HMENU) -> i32;
     pub fn GetMenuItemCount(hMenu: HMENU) -> i32;
-    pub fn InsertMenuItemW(
-        hMenu: HMENU,
-        item: u32,
-        fByPosition: i32,
-        lpmi: *const MENUITEMINFOW,
-    ) -> i32;
 
     // GDI drawing (for owner-draw menu)
     pub fn SetTextColor(hdc: HDC, color: u32) -> u32;
