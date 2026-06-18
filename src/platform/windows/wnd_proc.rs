@@ -609,6 +609,150 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             0
         }
 
+        // ===== Owner-Draw 菜单尺寸测量 =====
+        WM_MEASUREITEM => {
+            let mis = lparam as *mut MEASUREITEMSTRUCT;
+            if !mis.is_null() && unsafe { (*mis).ctl_type } == ODT_MENU {
+                let data_ptr = unsafe { (*mis).item_data } as *const MenuDrawItemData;
+                if !data_ptr.is_null() {
+                    let data = unsafe { &*data_ptr };
+                    if data.is_separator {
+                        unsafe {
+                            (*mis).item_height = 9; // 细分隔线
+                        }
+                    } else {
+                        // 测量文字宽度
+                        let hdc = unsafe { GetDC(hwnd) };
+                        let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
+                        let hfont = unsafe {
+                            CreateFontW(
+                                scale_for_dpi(14, unsafe { GetDpiForWindow(hwnd) }),
+                                0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 0, 0,
+                                font_name.as_ptr(),
+                            )
+                        };
+                        let old_font = unsafe { SelectObject(hdc, hfont as HGDIOBJ) };
+                        let mut sz = SIZE { cx: 0, cy: 0 };
+                        unsafe {
+                            GetTextExtentPoint32W(
+                                hdc,
+                                data.label.as_ptr(),
+                                data.label.len().saturating_sub(1) as i32,
+                                &mut sz,
+                            );
+                            SelectObject(hdc, old_font);
+                            DeleteObject(hfont as HGDIOBJ);
+                            ReleaseDC(hwnd, hdc);
+                        }
+                        let check_w = scale_for_dpi(28, unsafe { GetDpiForWindow(hwnd) });
+                        let padding = scale_for_dpi(16, unsafe { GetDpiForWindow(hwnd) });
+                        unsafe {
+                            (*mis).item_width = (sz.cx + check_w + padding) as u32;
+                            (*mis).item_height = scale_for_dpi(30, unsafe { GetDpiForWindow(hwnd) }) as u32;
+                        }
+                    }
+                }
+            }
+            1 // TRUE = 已处理
+        }
+
+        // ===== Owner-Draw 菜单绘制 =====
+        WM_DRAWITEM => {
+            let dis = lparam as *const DRAWITEMSTRUCT;
+            if !dis.is_null() && unsafe { (*dis).ctl_type } == ODT_MENU {
+                let data_ptr = unsafe { (*dis).item_data } as *const MenuDrawItemData;
+                if !data_ptr.is_null() {
+                    let data = unsafe { &*data_ptr };
+                    let hdc = unsafe { (*dis).hdc };
+                    let rc = unsafe { &(*dis).rc_item };
+                    let is_selected = unsafe { (*dis).item_state } & ODS_SELECTED != 0;
+                    let dpi = unsafe { GetDpiForWindow(hwnd) };
+                    let dpi = if dpi > 0 { dpi } else { 96 };
+
+                    // 背景色
+                    let bg_color = if is_selected {
+                        colorref(50, 55, 70) // hover 高亮色
+                    } else {
+                        colorref(25, 25, 35) // 深色背景
+                    };
+                    let bg_brush = unsafe { CreateSolidBrush(bg_color) };
+                    unsafe { FillRect(hdc, rc, bg_brush) };
+                    unsafe { DeleteObject(bg_brush as HGDIOBJ) };
+
+                    if data.is_separator {
+                        // 绘制分隔线
+                        let line_y = (rc.top + rc.bottom) / 2;
+                        let line_color = colorref(60, 60, 75);
+                        let pen_brush = unsafe { CreateSolidBrush(line_color) };
+                        let line_rect = RECT {
+                            left: rc.left + scale_for_dpi(8, dpi),
+                            top: line_y,
+                            right: rc.right - scale_for_dpi(8, dpi),
+                            bottom: line_y + 1,
+                        };
+                        unsafe { FillRect(hdc, &line_rect, pen_brush) };
+                        unsafe { DeleteObject(pen_brush as HGDIOBJ) };
+                    } else {
+                        // 设置文字
+                        unsafe {
+                            SetBkMode(hdc, TRANSPARENT);
+                            SetTextColor(hdc, if is_selected {
+                                colorref(255, 255, 255)
+                            } else {
+                                colorref(220, 220, 230)
+                            });
+                        }
+
+                        let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
+                        let hfont = unsafe {
+                            CreateFontW(
+                                scale_for_dpi(14, dpi),
+                                0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 0, 0,
+                                font_name.as_ptr(),
+                            )
+                        };
+                        let old_font = unsafe { SelectObject(hdc, hfont as HGDIOBJ) };
+
+                        // 勾选标记
+                        let check_w = scale_for_dpi(28, dpi);
+                        if data.is_checked {
+                            let check_str = if data.is_radio { "●" } else { "✓" };
+                            let check_wide: Vec<u16> = check_str.encode_utf16().collect();
+                            unsafe {
+                                SetTextColor(hdc, colorref(100, 210, 255)); // 亮蓝色
+                                TextOutW(
+                                    hdc,
+                                    rc.left + scale_for_dpi(6, dpi),
+                                    rc.top + scale_for_dpi(5, dpi),
+                                    check_wide.as_ptr(),
+                                    check_wide.len() as i32,
+                                );
+                                SetTextColor(hdc, if is_selected {
+                                    colorref(255, 255, 255)
+                                } else {
+                                    colorref(220, 220, 230)
+                                });
+                            }
+                        }
+
+                        // 标签文字
+                        unsafe {
+                            TextOutW(
+                                hdc,
+                                rc.left + check_w,
+                                rc.top + scale_for_dpi(5, dpi),
+                                data.label.as_ptr(),
+                                data.label.len().saturating_sub(1) as i32,
+                            );
+                            SelectObject(hdc, old_font);
+                            DeleteObject(hfont as HGDIOBJ);
+                        }
+                    }
+                }
+            }
+            1 // TRUE = 已处理
+        }
+
         // ===== 窗口销毁 =====
         WM_DESTROY => {
             let data_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GridWindowData;

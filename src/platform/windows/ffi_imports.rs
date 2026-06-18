@@ -139,6 +139,26 @@ extern "system" {
     ) -> i32;
     pub fn DestroyMenu(hMenu: HMENU) -> i32;
     pub fn GetMenuItemCount(hMenu: HMENU) -> i32;
+    pub fn InsertMenuItemW(
+        hMenu: HMENU,
+        item: u32,
+        fByPosition: i32,
+        lpmi: *const MENUITEMINFOW,
+    ) -> i32;
+
+    // GDI drawing (for owner-draw menu)
+    pub fn SetTextColor(hdc: HDC, color: u32) -> u32;
+    pub fn SetBkColor(hdc: HDC, color: u32) -> u32;
+    pub fn SetBkMode(hdc: HDC, mode: i32) -> i32;
+    pub fn FillRect(hdc: HDC, lprc: *const RECT, hbr: HBRUSH) -> i32;
+    pub fn CreateSolidBrush(color: u32) -> HBRUSH;
+    pub fn TextOutW(hdc: HDC, x: i32, y: i32, lpString: *const u16, c: i32) -> i32;
+    pub fn GetTextExtentPoint32W(
+        hdc: HDC,
+        lpString: *const u16,
+        c: i32,
+        psizl: *mut SIZE,
+    ) -> i32;
 
     // Window management (additional)
     pub fn SetForegroundWindow(hWnd: HWND) -> i32;

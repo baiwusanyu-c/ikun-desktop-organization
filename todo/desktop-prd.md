@@ -44,3 +44,5 @@
 请运行 cargo run 验证效果
 
 egui-elegance
+* 菜单偏移
+* 图标异常

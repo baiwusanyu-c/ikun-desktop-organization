@@ -50,6 +50,15 @@ pub struct POINT {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SIZE {
+    pub cx: i32,
+    pub cy: i32,
+}
+
+pub const TRANSPARENT: i32 = 1;
+
+#[repr(C)]
 pub struct PAINTSTRUCT {
     pub hdc: HDC,
     pub f_erase: i32,
@@ -372,3 +381,80 @@ pub unsafe fn target_inner_create_text_layout(
     let _ = layout.SetParagraphAlignment(para_align);
     Some(layout)
 }
+
+// =============================================================================
+// Owner-Draw 菜单相关结构体和常量
+// =============================================================================
+
+/// 自定义菜单项数据（通过 dwItemData 传递给 WM_DRAWITEM）
+pub struct MenuDrawItemData {
+    pub label: Vec<u16>,
+    pub is_separator: bool,
+    pub is_checked: bool,
+    pub is_radio: bool,
+}
+
+/// MENUITEMINFOW — 用于 InsertMenuItemW / SetMenuItemInfoW
+#[repr(C)]
+pub struct MENUITEMINFOW {
+    pub cb_size: u32,
+    pub f_mask: u32,
+    pub f_type: u32,
+    pub f_state: u32,
+    pub w_id: u32,
+    pub h_submenu: HMENU,
+    pub hbmp_checked: HBITMAP,
+    pub hbmp_unchecked: HBITMAP,
+    pub dw_item_data: usize,
+    pub dw_type_data: usize,
+    pub cch: u32,
+    pub hbmp_item: HBITMAP,
+}
+
+pub const MIIM_FTYPE: u32 = 0x00000100;
+pub const MIIM_ID: u32 = 0x00000002;
+pub const MIIM_SUBMENU: u32 = 0x00000004;
+pub const MIIM_DATA: u32 = 0x00000020;
+
+pub const MFT_OWNERDRAW: u32 = 0x00000100;
+pub const MFT_SEPARATOR: u32 = 0x00000800;
+
+pub const MFS_CHECKED: u32 = 0x00000008;
+
+/// MEASUREITEMSTRUCT — WM_MEASUREITEM 的 lParam
+#[repr(C)]
+pub struct MEASUREITEMSTRUCT {
+    pub ctl_type: u32,
+    pub ctl_id: u32,
+    pub item_id: u32,
+    pub item_width: u32,
+    pub item_height: u32,
+    pub item_data: usize,
+}
+
+/// DRAWITEMSTRUCT — WM_DRAWITEM 的 lParam
+#[repr(C)]
+pub struct DRAWITEMSTRUCT {
+    pub ctl_type: u32,
+    pub ctl_id: u32,
+    pub item_id: u32,
+    pub item_action: u32,
+    pub item_state: u32,
+    pub hwnd_item: HWND,
+    pub hdc: HDC,
+    pub rc_item: RECT,
+    pub item_data: usize,
+}
+
+pub const ODT_MENU: u32 = 1;
+pub const ODS_SELECTED: u32 = 0x0001;
+pub const ODS_CHECKED: u32 = 0x0008;
+
+pub const WM_MEASUREITEM: u32 = 0x002C;
+pub const WM_DRAWITEM: u32 = 0x002B;
+
+/// COLORREF 辅助：从 RGB 创建 COLORREF（BGR 顺序）
+pub const fn colorref(r: u8, g: u8, b: u8) -> u32 {
+    (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
+}
+
