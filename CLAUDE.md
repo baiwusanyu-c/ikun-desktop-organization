@@ -77,11 +77,12 @@ src/
 │   ├── types.rs               #   跨平台类型：DesktopIcon, IconInfo, ScreenInfo
 │   ├── windows/
 │   │   ├── mod.rs             #   Windows 平台入口
-│   │   ├── ffi_types.rs       #   Win32 FFI 类型/常量（251 行）
-│   │   ├── ffi_imports.rs     #   Win32 extern "system" 声明（374 行）
+│   │   ├── ffi_types.rs       #   Win32 FFI 类型/常量（351 行）
+│   │   ├── ffi_imports.rs     #   Win32 extern "system" 声明（493 行）
 │   │   ├── desktop_manager.rs #   桌面图标枚举（文件系统读取）
-│   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎（625 行）
-│   │   ├── grid_window.rs     #   窗口创建/销毁 + wnd_proc 消息处理（701 行）
+│   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎（847 行）
+│   │   ├── grid_window.rs     #   窗口创建/销毁/布局收集（693 行）
+│   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc（580 行）
 │   │   ├── shell_menu.rs      #   Shell 右键菜单 + 注册表管理（创建分类框）
 │   │   ├── icon_extract.rs    #   图标提取（SHGetFileInfoW + .lnk 解析）
 │   │   ├── icon_hider.rs      #   图标隐藏/恢复（SysListView32）
@@ -250,6 +251,10 @@ main.rs
 
 **窗口类型**：`WS_POPUP | WS_EX_LAYERED | WS_EX_TOOLWINDOW`，标题栏拖拽通过 `WM_NCHITTEST → HTCAPTION`，边缘缩放通过 `HTLEFT/HTRIGHT/...`
 
+**标题栏布局**：左侧纯文本名称（无图标、无数量），右侧 🔒/🔓 锁定按钮（`Segoe UI Emoji` 字体）。锁定时整个窗口返回 `HTCLIENT`（禁止拖拽和缩放），未锁定时正常边缘缩放（`hover_edge` 驱动蓝色指示条反馈）。锁定按钮 hover 时显示手型光标 + 半透明背景高亮。
+
+**锁定状态持久化**：`GridWindowData.locked` ↔ `BoxLayoutData.locked` ↔ `~/.ikun_organizer.json`，保存时 `collect_grid_layout()` 读取实际状态，恢复时 `restore_layout()` 传入 `locked` 参数。
+
 **窗口层级**：
 ```
 顶层窗口 > 普通应用 > **分类框窗口** > 桌面图标 (SysListView32) > 壁纸 (Progman/WorkerW)
@@ -294,7 +299,7 @@ main.rs
 ### 分类框功能
 - [x] 拖拽移动 + 位置记忆（通过 collect_grid_layout + restore_layout）
 - [x] 边缘拖拽修改尺寸 + 尺寸记忆（同上）
-- [ ] 锁定按钮 + 锁定记忆（锁定后不可拖拽/缩放）
+- [x] 锁定按钮 + 锁定记忆（锁定后不可拖拽/缩放，hover 反馈，状态持久化）
 - [ ] 分类框名称修改
 - [x] 排序方式：名称、类型、修改时间、作者、创建时间、大小、标记、标题 × 递增/递减（引擎已实现）
 - [x] 查看方式：超大、大、中、小、列表、详细信息、平铺、内容（引擎已实现）

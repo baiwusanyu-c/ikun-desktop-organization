@@ -22,6 +22,7 @@ pub mod icon_extract;
 pub mod icon_hider;
 pub mod shell_menu;
 mod sys_tray;
+mod wnd_proc;
 
 // Re-export key items
 pub use desktop_manager::DesktopManager;

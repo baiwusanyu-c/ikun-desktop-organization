@@ -39,7 +39,7 @@ use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 
 use super::ffi_imports::*;
 use super::ffi_types::*;
-use super::grid_window::GridWindowData;
+use super::grid_window::{submenu_width, GridWindowData};
 
 /// 初始化 D2D/DirectWrite/WIC 设备（首次渲染时调用）
 pub fn init_d2d_devices(data: &mut GridWindowData) {
@@ -169,6 +169,18 @@ pub fn render_layered_window(hwnd: HWND) {
     let ww = w as f32;
     let hh = h as f32;
 
+    // 当菜单打开且子菜单在左侧时，窗口被扩展了。
+    // cw = 原始内容宽度（不含子菜单区域）
+    // ox = 内容 x 偏移量（子菜单在左时为正值）
+    let dpi_early = unsafe { GetDpiForWindow(hwnd) };
+    let dpi_early = if dpi_early > 0 { dpi_early } else { 96 };
+    let ox: f32 = if data.menu.open && data.menu.sub_on_left {
+        (submenu_width(dpi_early) + scale_for_dpi(8, dpi_early)) as f32
+    } else {
+        0.0
+    };
+    let cw = ww - ox; // 内容区域宽度（原始窗口宽度）
+
     // 创建 32 位 ARGB DIB Section（D2D 渲染后端）
     let screen_dc = unsafe { GetDC(std::ptr::null_mut()) };
     let mem_dc = unsafe { CreateCompatibleDC(screen_dc) };
@@ -240,12 +252,23 @@ pub fn render_layered_window(hwnd: HWND) {
     };
     unsafe { target.Clear(Some(&transparent)) };
 
+    // ===== 获取 DPI（提前获取，用于渲染偏移计算）=====
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    let dpi = if dpi > 0 { dpi } else { 96 };
+
+    // 菜单打开且子菜单在左侧时，窗口向左扩展，所有内容需要向右偏移
+    let ox: f32 = if data.menu.open && data.menu.sub_on_left {
+        (submenu_width(dpi) + scale_for_dpi(8, dpi)) as f32
+    } else {
+        0.0
+    };
+
     // ===== 绘制圆角背景（整体，四角圆角）=====
     let bg_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(1, 1, 1, 38), None) };
     if let Ok(ref brush) = bg_brush {
         let corner_radius = 16.0_f32;
         let rounded_rect = D2D1_ROUNDED_RECT {
-            rect: d2d_rect(0.0, 0.0, ww, hh),
+            rect: d2d_rect(ox, 0.0, ox + cw, hh),
             radiusX: corner_radius,
             radiusY: corner_radius,
         };
@@ -256,7 +279,7 @@ pub fn render_layered_window(hwnd: HWND) {
     let title_h = data.title_h;
     let sep_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(100, 100, 100, 100), None) };
     if let Ok(ref brush) = sep_brush {
-        let sep_rect = d2d_rect(0.0, (title_h - 1) as f32, ww, title_h as f32);
+        let sep_rect = d2d_rect(ox, (title_h - 1) as f32, ox + cw, title_h as f32);
         unsafe { target.FillRectangle(&sep_rect, brush) };
     }
 
@@ -286,17 +309,20 @@ pub fn render_layered_window(hwnd: HWND) {
 
     if let Ok(ref tf) = title_format {
         let _ = unsafe { tf.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP) };
-        let title_text: Vec<u16> = format!("📁 {} ({})", data.title, data.items.len())
-            .encode_utf16()
-            .collect();
+        let title_text: Vec<u16> = data.title.encode_utf16().collect();
 
-        // 创建 TextLayout
+        // 锁定按钮区域（标题栏右侧，使用内容宽度 cw 计算后加偏移 ox）
+        let (btn_x0, btn_y, btn_size) = super::grid_window::lock_btn_rect(cw as i32, title_h, dpi);
+        let btn_x = btn_x0 as f32 + ox;
+
+        // 创建 TextLayout（右侧为锁定按钮预留空间）
+        let text_max_w = (btn_x - ox - 10.0).max(40.0);
         let layout = unsafe {
             target_inner_create_text_layout(
                 dw_factory,
                 &title_text,
                 tf,
-                (w - 20) as f32,
+                text_max_w,
                 title_h as f32,
                 DWRITE_TEXT_ALIGNMENT_LEADING,
                 DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
@@ -314,7 +340,7 @@ pub fn render_layered_window(hwnd: HWND) {
                     (0.0, -shadow_offset),
                 ] {
                     let origin = D2D_POINT_2F {
-                        x: 10.0 + dx,
+                        x: ox + 10.0 + dx,
                         y: dy,
                     };
                     unsafe {
@@ -324,9 +350,188 @@ pub fn render_layered_window(hwnd: HWND) {
             }
             // 主文字（白色）
             if let Ok(ref wb) = white_brush {
-                let origin = D2D_POINT_2F { x: 10.0, y: 0.0 };
+                let origin = D2D_POINT_2F { x: ox + 10.0, y: 0.0 };
                 unsafe {
                     target.DrawTextLayout(origin, layout, wb, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                }
+            }
+        }
+
+        // ===== 绘制锁定按钮（标题栏右侧）=====
+        let lock_icon = if data.locked { "🔒" } else { "🔓" };
+        let lock_font_size = scale_for_dpi(14, dpi) as f32;
+        let lock_format = unsafe {
+            let font_name: Vec<u16> = "Segoe UI Emoji\0".encode_utf16().collect();
+            let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
+            dw_factory.CreateTextFormat::<_, _, _>(
+                windows::core::PCWSTR(font_name.as_ptr()),
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                lock_font_size,
+                windows::core::PCWSTR(locale.as_ptr()),
+            )
+        };
+
+        if let Ok(ref lf) = lock_format {
+            let _ = unsafe { lf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER) };
+            let _ = unsafe { lf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER) };
+
+            let lock_text: Vec<u16> = lock_icon.encode_utf16().collect();
+            let lock_layout = unsafe {
+                target_inner_create_text_layout(
+                    dw_factory,
+                    &lock_text,
+                    lf,
+                    btn_size as f32,
+                    btn_size as f32,
+                    DWRITE_TEXT_ALIGNMENT_CENTER,
+                    DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+                )
+            };
+
+            if let Some(ref ll) = lock_layout {
+                // 锁定按钮 hover 背景高亮
+                if data.lock_hovered {
+                    let hover_brush = unsafe {
+                        target.CreateSolidColorBrush(&d2d_color(255, 255, 255, 40), None)
+                    };
+                    if let Ok(ref hb) = hover_brush {
+                        let pad = scale_for_dpi(3, dpi) as f32;
+                        let hover_rect = D2D1_ROUNDED_RECT {
+                            rect: d2d_rect(
+                                btn_x - pad,
+                                (btn_y - pad as i32) as f32,
+                                btn_x + btn_size as f32 + pad,
+                                (btn_y + btn_size + pad as i32) as f32,
+                            ),
+                            radiusX: 4.0,
+                            radiusY: 4.0,
+                        };
+                        unsafe { target.FillRoundedRectangle(&hover_rect, hb) };
+                    }
+                }
+
+                // 锁定按钮阴影
+                let shadow_offset = scale_for_dpi(1, dpi) as f32;
+                if let Ok(ref sb) = shadow_brush {
+                    for &(sdx, sdy) in &[
+                        (shadow_offset, 0.0),
+                        (-shadow_offset, 0.0),
+                        (0.0, shadow_offset),
+                        (0.0, -shadow_offset),
+                    ] {
+                        let origin = D2D_POINT_2F {
+                            x: btn_x + sdx,
+                            y: btn_y as f32 + sdy,
+                        };
+                        unsafe {
+                            target.DrawTextLayout(origin, ll, sb, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                        }
+                    }
+                }
+                // 锁定按钮主文字
+                if let Ok(ref wb) = white_brush {
+                    let origin = D2D_POINT_2F {
+                        x: btn_x,
+                        y: btn_y as f32,
+                    };
+                    unsafe {
+                        target.DrawTextLayout(origin, ll, wb, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                    }
+                }
+            }
+        }
+    }
+
+    // ===== 绘制"更多"按钮（⋮，锁定按钮右侧）=====
+    {
+        let (mbtn_x0, mbtn_y, mbtn_size) =
+            super::grid_window::more_btn_rect(cw as i32, title_h, dpi);
+        let mbtn_x = mbtn_x0 as f32 + ox;
+        let more_icon = "\u{22EE}"; // ⋮ 三个竖点
+        let more_font_size = scale_for_dpi(16, dpi) as f32;
+        let more_format = unsafe {
+            let font_name: Vec<u16> = "Segoe UI Symbol\0".encode_utf16().collect();
+            let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
+            dw_factory.CreateTextFormat::<_, _, _>(
+                windows::core::PCWSTR(font_name.as_ptr()),
+                None,
+                DWRITE_FONT_WEIGHT_BOLD,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                more_font_size,
+                windows::core::PCWSTR(locale.as_ptr()),
+            )
+        };
+
+        if let Ok(ref mf) = more_format {
+            let _ = unsafe { mf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER) };
+            let _ = unsafe { mf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER) };
+
+            let more_text: Vec<u16> = more_icon.encode_utf16().collect();
+            let more_layout = unsafe {
+                target_inner_create_text_layout(
+                    dw_factory,
+                    &more_text,
+                    mf,
+                    mbtn_size as f32,
+                    mbtn_size as f32,
+                    DWRITE_TEXT_ALIGNMENT_CENTER,
+                    DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+                )
+            };
+
+            if let Some(ref ml) = more_layout {
+                // hover 背景高亮
+                if data.more_hovered || data.menu.open {
+                    let hover_brush = unsafe {
+                        target.CreateSolidColorBrush(&d2d_color(255, 255, 255, 40), None)
+                    };
+                    if let Ok(ref hb) = hover_brush {
+                        let pad = scale_for_dpi(3, dpi) as f32;
+                        let hover_rect = D2D1_ROUNDED_RECT {
+                            rect: d2d_rect(
+                                mbtn_x - pad,
+                                (mbtn_y - pad as i32) as f32,
+                                mbtn_x + mbtn_size as f32 + pad,
+                                (mbtn_y + mbtn_size + pad as i32) as f32,
+                            ),
+                            radiusX: 4.0,
+                            radiusY: 4.0,
+                        };
+                        unsafe { target.FillRoundedRectangle(&hover_rect, hb) };
+                    }
+                }
+
+                // 阴影
+                let shadow_offset = scale_for_dpi(1, dpi) as f32;
+                if let Ok(ref sb) = shadow_brush {
+                    for &(sdx, sdy) in &[
+                        (shadow_offset, 0.0),
+                        (-shadow_offset, 0.0),
+                        (0.0, shadow_offset),
+                        (0.0, -shadow_offset),
+                    ] {
+                        let origin = D2D_POINT_2F {
+                            x: mbtn_x + sdx,
+                            y: mbtn_y as f32 + sdy,
+                        };
+                        unsafe {
+                            target.DrawTextLayout(origin, ml, sb, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                        }
+                    }
+                }
+                // 主文字
+                if let Ok(ref wb) = white_brush {
+                    let origin = D2D_POINT_2F {
+                        x: mbtn_x,
+                        y: mbtn_y as f32,
+                    };
+                    unsafe {
+                        target.DrawTextLayout(origin, ml, wb, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                    }
                 }
             }
         }
@@ -335,7 +540,7 @@ pub fn render_layered_window(hwnd: HWND) {
     // ===== 绘制图标网格（独立方法，参数化设计）=====
     // 通过 view_engine 获取视图参数，layout_calc 计算网格布局
     let view_params = get_view_params(&data.view_mode, dpi);
-    let grid_layout = calculate_grid(w, title_h, &view_params, dpi);
+    let grid_layout = calculate_grid(cw as i32, title_h, &view_params, dpi);
 
     render_icon_grid(
         target,
@@ -347,7 +552,30 @@ pub fn render_layered_window(hwnd: HWND) {
         data.selected_item,
         data.hovered_item,
         dpi,
+        ox,
     );
+
+    // ===== 绘制边缘拖拽指示条（未锁定时鼠标悬停边缘显示）=====
+    if !data.locked && data.hover_edge > 0 {
+        let edge_brush =
+            unsafe { target.CreateSolidColorBrush(&d2d_color(120, 180, 255, 100), None) };
+        if let Ok(ref eb) = edge_brush {
+            let border_w = scale_for_dpi(3, dpi) as f32;
+            let edge_rect = match data.hover_edge {
+                1 => d2d_rect(ox, 0.0, ox + border_w, hh),               // 左边缘
+                2 => d2d_rect(ox + cw - border_w, 0.0, ox + cw, hh),     // 右边缘
+                3 => d2d_rect(ox, 0.0, ox + cw, border_w),               // 上边缘
+                4 => d2d_rect(ox, hh - border_w, ox + cw, hh),           // 下边缘
+                _ => d2d_rect(0.0, 0.0, 0.0, 0.0),
+            };
+            unsafe { target.FillRectangle(&edge_rect, eb) };
+        }
+    }
+
+    // ===== 绘制下拉菜单（"更多"按钮展开时）=====
+    if data.menu.open {
+        render_dropdown_menu(target, dw_factory, data, cw as i32, title_h, dpi, ox);
+    }
 
     // ===== D2D 渲染结束 =====
     let mut tag1: u64 = 0;
@@ -431,12 +659,13 @@ pub fn render_icon_grid(
     selected_item: i32,
     hovered_item: i32,
     dpi: u32,
+    offset_x: f32,
 ) {
     let icon_size = view_params.icon_size;
     let cell_w = layout.cell_w;
     let cell_h = layout.cell_h;
     let cols = layout.cols;
-    let grid_left = layout.grid_left;
+    let grid_left = layout.grid_left + offset_x as i32;
     let grid_top = layout.grid_top;
     let icon_label_h = scale_for_dpi(36, dpi); // 2 行文字高度（支持换行）
 
@@ -779,6 +1008,486 @@ fn draw_icon_d2d(
     }
     if !icon_info.hbm_mask.is_null() {
         unsafe { DeleteObject(icon_info.hbm_mask as HGDIOBJ) };
+    }
+}
+
+// =============================================================================
+// 下拉菜单渲染
+// =============================================================================
+
+/// 排序维度显示标签
+fn sort_mode_label(m: &crate::config::app_config::SortMode) -> &'static str {
+    use crate::config::app_config::SortMode;
+    match m {
+        SortMode::Name => "名称",
+        SortMode::Type => "类型",
+        SortMode::ModifiedTime => "修改时间",
+        SortMode::Author => "作者",
+        SortMode::CreatedTime => "创建时间",
+        SortMode::Size => "大小",
+        SortMode::Tag => "标记",
+        SortMode::Title => "标题",
+    }
+}
+
+/// 分组维度显示标签
+fn group_by_label(g: &crate::config::app_config::GroupBy) -> &'static str {
+    use crate::config::app_config::GroupBy;
+    match g {
+        GroupBy::None => "无",
+        GroupBy::Name => "名称",
+        GroupBy::Type => "类型",
+        GroupBy::ModifiedTime => "修改时间",
+        GroupBy::Author => "作者",
+        GroupBy::CreatedTime => "创建时间",
+        GroupBy::Size => "大小",
+        GroupBy::Tag => "标记",
+        GroupBy::Title => "标题",
+    }
+}
+
+/// 视图模式显示标签
+fn view_mode_label(v: &crate::config::app_config::ViewMode) -> &'static str {
+    use crate::config::app_config::ViewMode;
+    match v {
+        ViewMode::ExtraLarge => "超大图标",
+        ViewMode::Large => "大图标",
+        ViewMode::Medium => "中图标",
+        ViewMode::Small => "小图标",
+        ViewMode::List => "列表",
+        ViewMode::Detail => "详细信息",
+        ViewMode::Tiles => "平铺",
+        ViewMode::Content => "内容",
+    }
+}
+
+/// 所有排序维度（用于子菜单遍历）
+const SORT_MODES: &[crate::config::app_config::SortMode] = &[
+    crate::config::app_config::SortMode::Name,
+    crate::config::app_config::SortMode::Type,
+    crate::config::app_config::SortMode::ModifiedTime,
+    crate::config::app_config::SortMode::Author,
+    crate::config::app_config::SortMode::CreatedTime,
+    crate::config::app_config::SortMode::Size,
+    crate::config::app_config::SortMode::Tag,
+    crate::config::app_config::SortMode::Title,
+];
+
+/// 所有分组维度
+const GROUP_MODES: &[crate::config::app_config::GroupBy] = &[
+    crate::config::app_config::GroupBy::Name,
+    crate::config::app_config::GroupBy::Type,
+    crate::config::app_config::GroupBy::ModifiedTime,
+    crate::config::app_config::GroupBy::Author,
+    crate::config::app_config::GroupBy::CreatedTime,
+    crate::config::app_config::GroupBy::Size,
+    crate::config::app_config::GroupBy::Tag,
+    crate::config::app_config::GroupBy::Title,
+];
+
+/// 所有视图模式
+const VIEW_MODES: &[crate::config::app_config::ViewMode] = &[
+    crate::config::app_config::ViewMode::ExtraLarge,
+    crate::config::app_config::ViewMode::Large,
+    crate::config::app_config::ViewMode::Medium,
+    crate::config::app_config::ViewMode::Small,
+    crate::config::app_config::ViewMode::List,
+    crate::config::app_config::ViewMode::Detail,
+    crate::config::app_config::ViewMode::Tiles,
+    crate::config::app_config::ViewMode::Content,
+];
+
+/// 渲染下拉菜单（主菜单 + 子菜单）
+fn render_dropdown_menu(
+    target: &ID2D1DCRenderTarget,
+    dw_factory: &IDWriteFactory,
+    data: &GridWindowData,
+    win_w: i32,
+    title_h: i32,
+    dpi: u32,
+    ox: f32,
+) {
+    use super::grid_window::{main_menu_rect, menu_row_h, sub_menu_rect, submenu_width};
+
+    let (mx0, my, mw, mh) = main_menu_rect(win_w, title_h, dpi);
+    let mx = mx0 + ox as i32; // 应用内容偏移
+    let rh = menu_row_h(dpi);
+    let padding = scale_for_dpi(4, dpi);
+
+    // ===== 主菜单背景（与分类框背景协调的半透明暗色）=====
+    let menu_bg_brush =
+        unsafe { target.CreateSolidColorBrush(&d2d_color(10, 10, 15, 170), None) };
+    let menu_border_brush =
+        unsafe { target.CreateSolidColorBrush(&d2d_color(60, 60, 80, 120), None) };
+    if let Ok(ref bg) = menu_bg_brush {
+        let rounded = D2D1_ROUNDED_RECT {
+            rect: d2d_rect(mx as f32, my as f32, (mx + mw) as f32, (my + mh) as f32),
+            radiusX: 8.0,
+            radiusY: 8.0,
+        };
+        unsafe { target.FillRoundedRectangle(&rounded, bg) };
+    }
+    if let Ok(ref bb) = menu_border_brush {
+        let border_rect = D2D1_ROUNDED_RECT {
+            rect: d2d_rect(mx as f32, my as f32, (mx + mw) as f32, (my + mh) as f32),
+            radiusX: 8.0,
+            radiusY: 8.0,
+        };
+        unsafe {
+            target.DrawRoundedRectangle(
+                &border_rect,
+                bb,
+                1.0,
+                None,
+            );
+        }
+    }
+
+    // ===== 主菜单项 =====
+    let main_labels = ["删除", "排序", "分组", "查看"];
+    let has_sub = [false, true, true, true]; // 排序/分组/查看有子菜单
+    let item_text_brush =
+        unsafe { target.CreateSolidColorBrush(&d2d_color(240, 240, 255, 255), None) };
+    let item_hover_brush =
+        unsafe { target.CreateSolidColorBrush(&d2d_color(60, 70, 100, 180), None) };
+    let arrow_text = "▶";
+
+    // 创建菜单项文字格式
+    let menu_font_size = scale_for_dpi(14, dpi) as f32;
+    let menu_format = unsafe {
+        let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
+        let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
+        dw_factory.CreateTextFormat::<_, _, _>(
+            windows::core::PCWSTR(font_name.as_ptr()),
+            None,
+            DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            menu_font_size,
+            windows::core::PCWSTR(locale.as_ptr()),
+        )
+    };
+
+    let arrow_format = unsafe {
+        let font_name: Vec<u16> = "Segoe UI Symbol\0".encode_utf16().collect();
+        let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
+        dw_factory.CreateTextFormat::<_, _, _>(
+            windows::core::PCWSTR(font_name.as_ptr()),
+            None,
+            DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            scale_for_dpi(10, dpi) as f32,
+            windows::core::PCWSTR(locale.as_ptr()),
+        )
+    };
+
+    if let Ok(ref mf) = menu_format {
+        let _ = unsafe { mf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER) };
+
+        let mut cur_y = my + padding;
+
+        for (i, label) in main_labels.iter().enumerate() {
+            let item_y = cur_y;
+            let item_h = rh;
+
+            // hover 背景
+            if data.menu.hovered_item == i as i32 {
+                if let Ok(ref hb) = item_hover_brush {
+                    let hl_rect = d2d_rect(
+                        (mx + 2) as f32,
+                        item_y as f32,
+                        (mx + mw - 2) as f32,
+                        (item_y + item_h) as f32,
+                    );
+                    unsafe { target.FillRectangle(&hl_rect, hb) };
+                }
+            }
+
+            // 项文字
+            let text: Vec<u16> = label.encode_utf16().collect();
+            let text_layout = unsafe {
+                target_inner_create_text_layout(
+                    dw_factory,
+                    &text,
+                    mf,
+                    (mw - scale_for_dpi(40, dpi)) as f32,
+                    item_h as f32,
+                    DWRITE_TEXT_ALIGNMENT_LEADING,
+                    DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+                )
+            };
+            if let Some(ref tl) = text_layout {
+                if let Ok(ref tb) = item_text_brush {
+                    let origin = D2D_POINT_2F {
+                        x: (mx + scale_for_dpi(16, dpi)) as f32,
+                        y: item_y as f32,
+                    };
+                    unsafe {
+                        target.DrawTextLayout(origin, tl, tb, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                    }
+                }
+            }
+
+            // 子菜单箭头
+            if has_sub[i] {
+                if let Ok(ref af) = arrow_format {
+                    let arrow: Vec<u16> = arrow_text.encode_utf16().collect();
+                    let arrow_layout = unsafe {
+                        target_inner_create_text_layout(
+                            dw_factory,
+                            &arrow,
+                            af,
+                            scale_for_dpi(20, dpi) as f32,
+                            item_h as f32,
+                            DWRITE_TEXT_ALIGNMENT_CENTER,
+                            DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+                        )
+                    };
+                    if let Some(ref al) = arrow_layout {
+                        if let Ok(ref tb) = item_text_brush {
+                            let origin = D2D_POINT_2F {
+                                x: (mx + mw - scale_for_dpi(24, dpi)) as f32,
+                                y: item_y as f32,
+                            };
+                            unsafe {
+                                target.DrawTextLayout(
+                                    origin,
+                                    al,
+                                    tb,
+                                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            cur_y += item_h;
+
+            // 分隔线（删除后）
+            if i == 0 {
+                let sep_brush =
+                    unsafe { target.CreateSolidColorBrush(&d2d_color(100, 100, 120, 120), None) };
+                if let Ok(ref sb) = sep_brush {
+                    let sep_rect = d2d_rect(
+                        (mx + scale_for_dpi(8, dpi)) as f32,
+                        cur_y as f32,
+                        (mx + mw - scale_for_dpi(8, dpi)) as f32,
+                        (cur_y + scale_for_dpi(1, dpi)) as f32,
+                    );
+                    unsafe { target.FillRectangle(&sep_rect, sb) };
+                }
+                cur_y += scale_for_dpi(1, dpi);
+            }
+        }
+    }
+
+    // ===== 子菜单渲染 =====
+    if data.menu.expanded_item >= 1 && data.menu.expanded_item <= 3 {
+        let sub_idx = data.menu.expanded_item;
+        // 确定子菜单项数量和标签
+        let sub_labels: Vec<String> = match sub_idx {
+            1 => SORT_MODES.iter().map(|m| sort_mode_label(m).to_string()).collect(),
+            2 => GROUP_MODES.iter().map(|g| group_by_label(g).to_string()).collect(),
+            3 => VIEW_MODES.iter().map(|v| view_mode_label(v).to_string()).collect(),
+            _ => Vec::new(),
+        };
+
+        let mut all_labels = sub_labels;
+        // 排序子菜单有额外的递增/递减
+        let has_order_section = sub_idx == 1;
+        if has_order_section {
+            all_labels.push("───".to_string()); // 分隔符
+            all_labels.push("递增".to_string());
+            all_labels.push("递减".to_string());
+        }
+
+        let sub_count = all_labels.len() as i32;
+        let (sx0, sy, sw, sh) = sub_menu_rect(win_w, title_h, dpi, sub_count, data.menu.sub_on_left);
+        let sx = sx0 + ox as i32; // 应用内容偏移
+
+        // 子菜单背景
+        if let Ok(ref bg) = menu_bg_brush {
+            let rounded = D2D1_ROUNDED_RECT {
+                rect: d2d_rect(sx as f32, sy as f32, (sx + sw) as f32, (sy + sh) as f32),
+                radiusX: 8.0,
+                radiusY: 8.0,
+            };
+            unsafe { target.FillRoundedRectangle(&rounded, bg) };
+        }
+        if let Ok(ref bb) = menu_border_brush {
+            let border_rect = D2D1_ROUNDED_RECT {
+                rect: d2d_rect(sx as f32, sy as f32, (sx + sw) as f32, (sy + sh) as f32),
+                radiusX: 8.0,
+                radiusY: 8.0,
+            };
+            unsafe {
+                target.DrawRoundedRectangle(&border_rect, bb, 1.0, None);
+            }
+        }
+
+        // 子菜单项
+        if let Ok(ref mf) = menu_format {
+            let mut cur_y = sy + padding;
+
+            let dim_count = match sub_idx {
+                1 => SORT_MODES.len(),
+                2 => GROUP_MODES.len(),
+                3 => VIEW_MODES.len(),
+                _ => 0,
+            };
+
+            for (j, label) in all_labels.iter().enumerate() {
+                let item_y = cur_y;
+                let item_h = rh;
+                let is_separator = has_order_section && j == dim_count;
+
+                if is_separator {
+                    // 分组分隔线 + 标题（排序子菜单专用）
+                    let sep_brush = unsafe {
+                        target.CreateSolidColorBrush(&d2d_color(80, 80, 100, 140), None)
+                    };
+                    if let Ok(ref sb) = sep_brush {
+                        // 上方分隔线
+                        let line_y = item_y + scale_for_dpi(6, dpi);
+                        let sep_rect = d2d_rect(
+                            (sx + scale_for_dpi(8, dpi)) as f32,
+                            line_y as f32,
+                            (sx + sw - scale_for_dpi(8, dpi)) as f32,
+                            (line_y + scale_for_dpi(1, dpi)) as f32,
+                        );
+                        unsafe { target.FillRectangle(&sep_rect, sb) };
+                    }
+                    // 分组标题 "排序方向"
+                    let header_text = "  排序方向";
+                    let header: Vec<u16> = header_text.encode_utf16().collect();
+                    let header_font_size = scale_for_dpi(12, dpi) as f32;
+                    let header_format = unsafe {
+                        let font_name: Vec<u16> =
+                            "Microsoft YaHei UI\0".encode_utf16().collect();
+                        let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
+                        dw_factory.CreateTextFormat::<_, _, _>(
+                            windows::core::PCWSTR(font_name.as_ptr()),
+                            None,
+                            DWRITE_FONT_WEIGHT_NORMAL,
+                            DWRITE_FONT_STYLE_NORMAL,
+                            DWRITE_FONT_STRETCH_NORMAL,
+                            header_font_size,
+                            windows::core::PCWSTR(locale.as_ptr()),
+                        )
+                    };
+                    if let Ok(ref hf) = header_format {
+                        let _ = unsafe {
+                            hf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)
+                        };
+                        let header_layout = unsafe {
+                            target_inner_create_text_layout(
+                                dw_factory,
+                                &header,
+                                hf,
+                                (sw - scale_for_dpi(16, dpi)) as f32,
+                                (item_h - scale_for_dpi(10, dpi)) as f32,
+                                DWRITE_TEXT_ALIGNMENT_LEADING,
+                                DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+                            )
+                        };
+                        if let Some(ref hl) = header_layout {
+                            let dim_brush = unsafe {
+                                target.CreateSolidColorBrush(
+                                    &d2d_color(160, 160, 180, 200),
+                                    None,
+                                )
+                            };
+                            if let Ok(ref db) = dim_brush {
+                                let origin = D2D_POINT_2F {
+                                    x: (sx + scale_for_dpi(4, dpi)) as f32,
+                                    y: (item_y + scale_for_dpi(8, dpi)) as f32,
+                                };
+                                unsafe {
+                                    target.DrawTextLayout(
+                                        origin,
+                                        hl,
+                                        db,
+                                        D2D1_DRAW_TEXT_OPTIONS_NONE,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    cur_y += item_h;
+                    continue;
+                }
+
+                // hover 背景
+                if data.menu.sub_hovered == j as i32 {
+                    if let Ok(ref hb) = item_hover_brush {
+                        let hl_rect = d2d_rect(
+                            (sx + 2) as f32,
+                            item_y as f32,
+                            (sx + sw - 2) as f32,
+                            (item_y + item_h) as f32,
+                        );
+                        unsafe { target.FillRectangle(&hl_rect, hb) };
+                    }
+                }
+
+                // 选中状态检查（✓）
+                let is_checked = if j < dim_count {
+                    // 维度项
+                    match sub_idx {
+                        1 => SORT_MODES[j] == data.sort_mode,
+                        2 => GROUP_MODES[j] == data.group_by,
+                        3 => VIEW_MODES[j] == data.view_mode,
+                        _ => false,
+                    }
+                } else if has_order_section && j > dim_count {
+                    // 递增/递减
+                    let is_asc = j == dim_count + 1;
+                    data.sort_ascending == is_asc
+                } else {
+                    false
+                };
+
+                // 文字（带可选 ✓ 前缀）
+                let display = if is_checked {
+                    format!("✓ {}", label)
+                } else {
+                    format!("  {}", label)
+                };
+
+                let text: Vec<u16> = display.encode_utf16().collect();
+                let text_layout = unsafe {
+                    target_inner_create_text_layout(
+                        dw_factory,
+                        &text,
+                        mf,
+                        (sw - scale_for_dpi(16, dpi)) as f32,
+                        item_h as f32,
+                        DWRITE_TEXT_ALIGNMENT_LEADING,
+                        DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+                    )
+                };
+                if let Some(ref tl) = text_layout {
+                    if let Ok(ref tb) = item_text_brush {
+                        let origin = D2D_POINT_2F {
+                            x: (sx + scale_for_dpi(12, dpi)) as f32,
+                            y: item_y as f32,
+                        };
+                        unsafe {
+                            target.DrawTextLayout(
+                                origin,
+                                tl,
+                                tb,
+                                D2D1_DRAW_TEXT_OPTIONS_NONE,
+                            );
+                        }
+                    }
+                }
+
+                cur_y += item_h;
+            }
+        }
     }
 }
 

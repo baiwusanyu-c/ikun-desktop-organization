@@ -133,6 +133,8 @@ pub const WM_LBUTTONDOWN: u32 = 0x0201;
 pub const WM_LBUTTONUP: u32 = 0x0202;
 pub const WM_LBUTTONDBLCLK: u32 = 0x0203;
 pub const WM_RBUTTONUP: u32 = 0x0205;
+pub const WM_MOUSELEAVE: u32 = 0x02A3;
+pub const WM_TIMER: u32 = 0x0113;
 
 // ===== Hit Test Constants =====
 pub const HTCLIENT: i32 = 1;
@@ -152,6 +154,7 @@ pub const IDC_SIZENWSE_ID: u16 = 32642;
 pub const IDC_SIZENESW_ID: u16 = 32643;
 pub const IDC_SIZEWE_ID: u16 = 32644;
 pub const IDC_SIZENS_ID: u16 = 32645;
+pub const IDC_HAND_ID: u16 = 32649;
 
 // ===== Other Constants =====
 #[allow(dead_code)]
@@ -270,6 +273,18 @@ pub struct MONITORINFO {
     pub rcWork: RECT,
     pub dwFlags: u32,
 }
+
+/// Win32 TRACKMOUSEEVENT 结构体（用于 WM_MOUSELEAVE 跟踪）
+#[repr(C)]
+pub struct TRACKMOUSEEVENT {
+    pub cbSize: u32,
+    pub dwFlags: u32,
+    pub hwndTrack: HWND,
+    pub dwHoverTime: u32,
+}
+
+/// TrackMouseEvent 标志：请求 WM_MOUSELEAVE 消息
+pub const TME_LEAVE: u32 = 0x00000002;
 
 #[repr(C)]
 pub struct BLENDFUNCTION {

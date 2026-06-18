@@ -35,7 +35,8 @@ src/
 │   │   ├── ffi_imports.rs     #   Win32 extern "system" 声明
 │   │   ├── desktop_manager.rs #   桌面图标枚举（文件系统读取）
 │   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎
-│   │   ├── grid_window.rs     #   窗口创建/销毁 + wnd_proc 消息处理
+│   │   ├── grid_window.rs     #   窗口创建/销毁/布局收集
+│   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc
 │   │   ├── shell_menu.rs      #   Shell 右键菜单 + 注册表管理（创建分类框）
 │   │   ├── icon_extract.rs    #   图标提取（SHGetFileInfoW + .lnk 解析）
 │   │   ├── icon_hider.rs      #   图标隐藏/恢复（SysListView32）

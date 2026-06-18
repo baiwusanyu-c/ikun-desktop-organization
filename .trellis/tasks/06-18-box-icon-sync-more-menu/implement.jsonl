@@ -1,0 +1,7 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": "src/platform/windows/d2d_render.rs", "reason": "渲染锁定按钮和下拉菜单的核心代码"}
+{"file": "src/platform/windows/wnd_proc.rs", "reason": "窗口消息处理（点击/hover/菜单交互）"}
+{"file": "src/platform/windows/grid_window.rs", "reason": "GridWindowData 数据结构和窗口创建"}
+{"file": "src/config/app_config.rs", "reason": "SortMode/ViewMode/GroupBy 枚举定义"}
+{"file": "src/app.rs", "reason": "restore_layout 图标同步过滤逻辑"}

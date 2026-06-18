@@ -1,4 +1,4 @@
-//! 格子窗口 - 核心组件（Direct2D/DirectWrite 渲染）
+﻿//! 格子窗口 - 核心组件（Direct2D/DirectWrite 渲染）
 //!
 //! 每个收纳格子是一个独立的 WS_POPUP 分层窗口。
 //! 使用 Direct2D + DirectWrite 渲染到 DIB，通过 UpdateLayeredWindow 提交。
@@ -23,14 +23,12 @@ use windows::Win32::Graphics::Imaging::IWICImagingFactory;
 // ===== 业务层导入 =====
 use crate::box_core::layout_calc::{calculate_grid, hit_test as layout_hit_test};
 use crate::box_core::view_engine::get_view_params;
-use crate::config::app_config::ViewMode;
+use crate::config::app_config::{GroupBy, SortMode, ViewMode};
 
 // ===== Import shared types and functions from new modules =====
 use super::d2d_render::render_layered_window;
 use super::ffi_imports::*;
 use super::ffi_types::*;
-use super::shell_menu::{show_desktop_context_menu, show_shell_context_menu};
-
 // ===== 公共数据结构 =====
 
 /// 格子内的文件项
@@ -45,6 +43,39 @@ pub struct GridFileItem {
 
 unsafe impl Send for GridFileItem {}
 
+/// 下拉菜单状态
+#[derive(Debug, Clone)]
+pub(crate) struct MenuState {
+    /// 菜单是否打开
+    pub(crate) open: bool,
+    /// 当前 hover 的主菜单项索引（0=删除, 1=排序, 2=分组, 3=查看, -1=无）
+    pub(crate) hovered_item: i32,
+    /// 当前展开的子菜单项索引（-1=无展开）
+    pub(crate) expanded_item: i32,
+    /// 子菜单中当前 hover 的项索引（-1=无）
+    /// 对于排序：0-7=维度, 8=分隔线, 9=递增, 10=递减
+    /// 对于分组/查看：0-7 或 0-7
+    pub(crate) sub_hovered: i32,
+    /// 子菜单是否显示在左侧（true=左侧, false=右侧）
+    /// 根据窗口在屏幕上的位置自动决定
+    pub(crate) sub_on_left: bool,
+    /// 子菜单收起延时定时器 ID（0=无定时器）
+    pub(crate) collapse_timer_id: usize,
+}
+
+impl Default for MenuState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            hovered_item: -1,
+            expanded_item: -1,
+            sub_hovered: -1,
+            sub_on_left: false,
+            collapse_timer_id: 0,
+        }
+    }
+}
+
 /// 格子窗口创建参数
 pub struct GridCreateParams {
     pub id: usize,
@@ -56,6 +87,14 @@ pub struct GridCreateParams {
     pub items: Vec<GridFileItem>,
     /// 视图模式（决定图标大小和布局，默认 Medium）
     pub view_mode: ViewMode,
+    /// 是否锁定（锁定后不可拖拽移动/边缘缩放）
+    pub locked: bool,
+    /// 排序方式
+    pub sort_mode: SortMode,
+    /// 是否升序
+    pub sort_ascending: bool,
+    /// 分组方式
+    pub group_by: GroupBy,
 }
 
 /// 格子窗口内部数据（存储在 GWLP_USERDATA）
@@ -81,6 +120,27 @@ pub(crate) struct GridWindowData {
     pub(crate) tooltip_hwnd: HWND,
     /// 视图模式（决定图标大小、布局参数）
     pub(crate) view_mode: ViewMode,
+    /// 是否锁定（锁定后不可拖拽移动/边缘缩放）
+    pub(crate) locked: bool,
+    /// 锁定按钮是否被鼠标悬停
+    pub(crate) lock_hovered: bool,
+    /// 当前鼠标悬停的边缘（0=无，1=左，2=右，3=上，4=下）
+    pub(crate) hover_edge: i32,
+    /// "更多"按钮是否被鼠标悬停
+    pub(crate) more_hovered: bool,
+    /// 菜单状态
+    pub(crate) menu: MenuState,
+    /// 排序方式
+    pub(crate) sort_mode: SortMode,
+    /// 是否升序
+    pub(crate) sort_ascending: bool,
+    /// 分组方式
+    pub(crate) group_by: GroupBy,
+    /// 菜单打开前的窗口位置和尺寸（用于关闭菜单时恢复）
+    pub(crate) base_window_x: i32,
+    pub(crate) base_window_y: i32,
+    pub(crate) base_window_w: i32,
+    pub(crate) base_window_h: i32,
 
     // ===== D2D/DirectWrite 设备缓存（窗口级） =====
     pub(crate) d2d_factory: Option<ID2D1Factory>,
@@ -356,6 +416,18 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         hovered_item: -1,
         tooltip_hwnd: std::ptr::null_mut(),
         view_mode: params.view_mode,
+        locked: params.locked,
+        lock_hovered: false,
+        hover_edge: 0,
+        more_hovered: false,
+        menu: MenuState::default(),
+        sort_mode: params.sort_mode,
+        sort_ascending: params.sort_ascending,
+        group_by: params.group_by,
+        base_window_x: params.x,
+        base_window_y: params.y,
+        base_window_w: scaled_w,
+        base_window_h: scaled_h,
         d2d_factory: None,
         dw_factory: None,
         wic_factory: None,
@@ -436,7 +508,7 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
 ///
 /// 使用 view_engine 获取视图参数，layout_calc 计算网格布局。
 /// 窗口拖拽缩放时自动调用，保证图标始终可见并自动换行。
-fn recalculate_layout(data: &mut GridWindowData, width: i32, _height: i32, dpi: u32) {
+pub(crate) fn recalculate_layout(data: &mut GridWindowData, width: i32, _height: i32, dpi: u32) {
     data.title_h = scale_for_dpi(40, dpi);
 
     // 通过 view_engine 获取当前视图模式的参数（支持 ExtraLarge/Large/Medium/Small 等）
@@ -454,7 +526,7 @@ fn recalculate_layout(data: &mut GridWindowData, width: i32, _height: i32, dpi: 
 ///
 /// 委托给 `layout_calc::hit_test`，保证与渲染使用完全相同的布局计算公式，
 /// 消除 hover/选中/双击/右键的目标偏移问题。
-fn grid_hit_test(
+pub(crate) fn grid_hit_test(
     data: &GridWindowData,
     window_width: i32,
     click_x: i32,
@@ -467,6 +539,92 @@ fn grid_hit_test(
     layout_hit_test(&layout, data.items.len(), click_x, click_y)
         .map(|i| i as i32)
         .unwrap_or(-1)
+}
+
+/// 计算锁定按钮在窗口坐标中的矩形区域
+///
+/// 位于标题栏右侧（"更多"按钮左边），用于渲染和命中测试。
+/// 返回 (x, y, btn_size) 其中 btn_size 为按钮边长。
+pub(super) fn lock_btn_rect(win_w: i32, title_h: i32, dpi: u32) -> (i32, i32, i32) {
+    let btn_size = scale_for_dpi(26, dpi);
+    // 锁定按钮在"更多"按钮左侧
+    let (_, _, more_size) = more_btn_rect(win_w, title_h, dpi);
+    let btn_x = win_w - more_size - btn_size - scale_for_dpi(10, dpi);
+    let btn_y = (title_h - btn_size) / 2;
+    (btn_x, btn_y, btn_size)
+}
+
+/// 计算"更多"按钮在窗口坐标中的矩形区域
+///
+/// 位于锁定按钮右侧，用于渲染和命中测试。
+/// 返回 (x, y, btn_size) 其中 btn_size 为按钮边长。
+pub(super) fn more_btn_rect(win_w: i32, title_h: i32, dpi: u32) -> (i32, i32, i32) {
+    let btn_size = scale_for_dpi(26, dpi);
+    // "更多"按钮在最右侧
+    let btn_x = win_w - btn_size - scale_for_dpi(6, dpi);
+    let btn_y = (title_h - btn_size) / 2;
+    (btn_x, btn_y, btn_size)
+}
+
+/// 菜单行高（DPI 缩放后）
+pub(super) fn menu_row_h(dpi: u32) -> i32 {
+    scale_for_dpi(36, dpi)
+}
+
+/// 主菜单宽度（DPI 缩放后）
+pub(super) fn menu_width(dpi: u32) -> i32 {
+    scale_for_dpi(160, dpi)
+}
+
+/// 子菜单宽度（DPI 缩放后）
+pub(super) fn submenu_width(dpi: u32) -> i32 {
+    scale_for_dpi(160, dpi)
+}
+
+/// 分隔线高度
+pub(super) fn menu_separator_h(dpi: u32) -> i32 {
+    scale_for_dpi(1, dpi)
+}
+
+/// 主菜单在窗口坐标中的矩形
+/// 返回 (x, y, w, h)
+pub(super) fn main_menu_rect(win_w: i32, title_h: i32, dpi: u32) -> (i32, i32, i32, i32) {
+    let mw = menu_width(dpi);
+    let mx = win_w - mw - scale_for_dpi(6, dpi);
+    let my = title_h + scale_for_dpi(2, dpi);
+    // 4 项 + 1 分隔线 + padding (top 4 + bottom 12)
+    let mh = menu_row_h(dpi) * 4 + menu_separator_h(dpi) + scale_for_dpi(16, dpi);
+    (mx, my, mw, mh)
+}
+
+/// 子菜单在窗口坐标中的矩形
+///
+/// `on_left` 为 true 时显示在主菜单左侧，否则显示在右侧。
+/// 返回 (x, y, w, h)
+pub(super) fn sub_menu_rect(
+    win_w: i32,
+    title_h: i32,
+    dpi: u32,
+    sub_item_count: i32,
+    on_left: bool,
+) -> (i32, i32, i32, i32) {
+    let (mx, my, mw, _mh) = main_menu_rect(win_w, title_h, dpi);
+    let sw = submenu_width(dpi);
+    let sx = if on_left {
+        mx - sw - scale_for_dpi(2, dpi)
+    } else {
+        mx + mw + scale_for_dpi(2, dpi)
+    };
+    let sy = my;
+    // padding top(4) + items + padding bottom(12) 确保圆角不裁剪
+    let sh = menu_row_h(dpi) * sub_item_count + scale_for_dpi(16, dpi);
+    (sx, sy, sw, sh)
+}
+
+/// 菜单需要的额外窗口高度
+pub(super) fn menu_extra_height(dpi: u32) -> i32 {
+    // 4 主项 + 1 分隔线 + padding + 额外空间
+    menu_row_h(dpi) * 4 + menu_separator_h(dpi) + scale_for_dpi(32, dpi)
 }
 
 /// 销毁所有格子窗口
@@ -542,11 +700,11 @@ pub fn collect_grid_layout() -> Vec<crate::config::BoxLayoutData> {
             name: data.title.clone(),
             position: [x, y],
             size: [w, h],
-            locked: false, // TODO: 从窗口数据读取锁定状态
-            sort_mode: crate::config::SortMode::Name,
-            sort_ascending: true,
+            locked: data.locked,
+            sort_mode: data.sort_mode.clone(),
+            sort_ascending: data.sort_ascending,
             view_mode: data.view_mode.clone(),
-            group_by: crate::config::GroupBy::None,
+            group_by: data.group_by.clone(),
             icon_names,
             style_overrides: None,
         });
@@ -556,10 +714,11 @@ pub fn collect_grid_layout() -> Vec<crate::config::BoxLayoutData> {
     layouts
 }
 
-// ===== 窗口过程 =====
+// ===== 窗口过程（已拆分到 wnd_proc.rs）=====
+use super::wnd_proc::grid_wnd_proc;
 
 /// 从 HWND 获取 GridWindowData 引用
-unsafe fn get_data<'a>(hwnd: HWND) -> Option<&'a mut GridWindowData> {
+pub(crate) unsafe fn get_data<'a>(hwnd: HWND) -> Option<&'a mut GridWindowData> {
     let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GridWindowData;
     if ptr.is_null() {
         None
@@ -568,440 +727,104 @@ unsafe fn get_data<'a>(hwnd: HWND) -> Option<&'a mut GridWindowData> {
     }
 }
 
-unsafe extern "system" fn grid_wnd_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    match msg {
-        // ===== WM_PAINT（分层窗口使用 UpdateLayeredWindow，此处仅验证绘制）=====
-        WM_PAINT => {
-            let mut ps: PAINTSTRUCT = std::mem::zeroed();
-            let _hdc = BeginPaint(hwnd, &mut ps);
-            EndPaint(hwnd, &ps);
-            0
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        // ===== Hit Test：标题栏拖拽 + 边缘缩放 =====
-        WM_NCHITTEST => {
-            let screen_x = get_x_lparam(lparam);
-            let screen_y = get_y_lparam(lparam);
+    // ===== lock_btn_rect 计算验证 =====
 
-            let mut wr = RECT {
-                left: 0,
-                top: 0,
-                right: 0,
-                bottom: 0,
-            };
-            unsafe { GetWindowRect(hwnd, &mut wr) };
-            let dx = screen_x - wr.left;
-            let dy = screen_y - wr.top;
-            let win_w = wr.right - wr.left;
-            let win_h = wr.bottom - wr.top;
+    #[test]
+    fn test_lock_btn_rect_at_96dpi() {
+        // DPI 96: scale_for_dpi(x, 96) = x
+        // more 按钮在最右: x = 400 - 26 - 6 = 368
+        // lock 按钮在 more 左侧: x = 400 - 26 - 26 - 10 = 338... let me compute
+        // more_btn_rect(400, 40, 96) = (368, 7, 26)
+        // lock_x = 400 - 26 - 26 - 10 = 338
+        let win_w = 400;
+        let title_h = 40;
+        let dpi = 96;
+        let (btn_x, btn_y, btn_size) = lock_btn_rect(win_w, title_h, dpi);
+        assert_eq!(btn_size, 26);
+        // lock 在 more 左侧
+        let (more_x, _, more_size) = more_btn_rect(win_w, title_h, dpi);
+        assert_eq!(more_x, 368); // more 在最右
+        assert!(btn_x < more_x, "锁定按钮应在更多按钮左侧");
+        assert_eq!(btn_x, win_w - more_size - btn_size - 10);
+        assert_eq!(btn_y, 7);
+    }
 
-            let title_h = get_data(hwnd).map(|d| d.title_h).unwrap_or(40);
-            let dpi = unsafe { GetDpiForWindow(hwnd) };
-            let dpi = if dpi > 0 { dpi } else { 96 };
-            let edge = scale_for_dpi(8, dpi);
+    #[test]
+    fn test_lock_btn_rect_at_144dpi() {
+        let win_w = 600;
+        let title_h = 60;
+        let dpi = 144;
+        let (btn_x, btn_y, btn_size) = lock_btn_rect(win_w, title_h, dpi);
+        assert_eq!(btn_size, 39);
+        let (more_x, _, more_size) = more_btn_rect(win_w, title_h, dpi);
+        assert!(btn_x < more_x, "锁定按钮应在更多按钮左侧");
+        assert_eq!(btn_y, 10);
+    }
 
-            let on_left = dx >= 0 && dx < edge;
-            let on_right = dx > win_w - edge && dx <= win_w;
-            let on_bottom = dy > win_h - edge && dy <= win_h;
+    #[test]
+    fn test_lock_btn_rect_at_192dpi() {
+        let win_w = 800;
+        let title_h = 80;
+        let dpi = 192;
+        let (btn_x, btn_y, btn_size) = lock_btn_rect(win_w, title_h, dpi);
+        assert_eq!(btn_size, 52);
+        let (more_x, _, more_size) = more_btn_rect(win_w, title_h, dpi);
+        assert!(btn_x < more_x, "锁定按钮应在更多按钮左侧");
+        assert_eq!(btn_y, 14);
+    }
 
-            // 主体区域边缘检测
-            if dy >= title_h {
-                if on_left && on_bottom {
-                    return HTBOTTOMLEFT as LRESULT;
-                }
-                if on_right && on_bottom {
-                    return HTBOTTOMRIGHT as LRESULT;
-                }
-                if on_left {
-                    return HTLEFT as LRESULT;
-                }
-                if on_right {
-                    return HTRIGHT as LRESULT;
-                }
-                if on_bottom {
-                    return HTBOTTOM as LRESULT;
-                }
-            }
+    #[test]
+    fn test_lock_btn_rect_narrow_window() {
+        // 窄窗口：按钮不应超出窗口右边界
+        let win_w = 100;
+        let title_h = 40;
+        let dpi = 96;
+        let (btn_x, _btn_y, btn_size) = lock_btn_rect(win_w, title_h, dpi);
+        let (more_x, _more_y, more_size) = more_btn_rect(win_w, title_h, dpi);
 
-            // 标题栏区域
-            if dy >= 0 && dy < title_h {
-                let h_edge = scale_for_dpi(8, dpi);
-                let on_h_left = dx >= 0 && dx < h_edge;
-                let on_h_right = dx > win_w - h_edge && dx <= win_w;
-                let on_h_top = dy >= 0 && dy < h_edge;
+        assert!(more_x + more_size <= win_w, "更多按钮不应超出窗口右边界");
+        assert!(btn_x >= 0, "锁定按钮 x 坐标不应为负数");
+        assert!(btn_x < more_x, "锁定按钮应在更多按钮左侧");
+    }
 
-                if on_h_top && on_h_left {
-                    return HTTOPLEFT as LRESULT;
-                }
-                if on_h_top && on_h_right {
-                    return HTTOPRIGHT as LRESULT;
-                }
-                if on_h_top {
-                    return HTTOP as LRESULT;
-                }
-                if on_h_left {
-                    return HTLEFT as LRESULT;
-                }
-                if on_h_right {
-                    return HTRIGHT as LRESULT;
-                }
-                return HTCAPTION as LRESULT;
-            }
+    // ===== GridCreateParams locked 字段 =====
 
-            HTCLIENT as LRESULT
-        }
+    #[test]
+    fn test_grid_create_params_locked_field() {
+        let params = GridCreateParams {
+            id: 0,
+            title: "测试".to_string(),
+            x: 0,
+            y: 0,
+            width: 400,
+            height: 600,
+            items: Vec::new(),
+            view_mode: crate::config::app_config::ViewMode::Medium,
+            locked: true,
+            sort_mode: crate::config::app_config::SortMode::Name,
+            sort_ascending: true,
+            group_by: crate::config::app_config::GroupBy::None,
+        };
+        assert!(params.locked);
 
-        // ===== 光标设置 =====
-        WM_SETCURSOR => {
-            let hit_test = (lparam & 0xFFFF) as i16 as i32;
-            let cursor_id = match hit_test {
-                HTLEFT | HTRIGHT => IDC_SIZEWE_ID,
-                HTTOP | HTBOTTOM => IDC_SIZENS_ID,
-                HTTOPLEFT | HTBOTTOMRIGHT => IDC_SIZENWSE_ID,
-                HTTOPRIGHT | HTBOTTOMLEFT => IDC_SIZENESW_ID,
-                _ => {
-                    return DefWindowProcW(hwnd, msg, wparam, lparam);
-                }
-            };
-            let cursor = LoadCursorW(std::ptr::null_mut(), cursor_id as *const u16);
-            SetCursor(cursor);
-            1
-        }
-
-        // ===== 窗口缩放 → 重新计算布局并渲染 =====
-        WM_SIZE => {
-            if wparam != 0 {
-                let dpi = unsafe { GetDpiForWindow(hwnd) };
-                let dpi = if dpi > 0 { dpi } else { 96 };
-                let mut wr = RECT {
-                    left: 0,
-                    top: 0,
-                    right: 0,
-                    bottom: 0,
-                };
-                unsafe { GetWindowRect(hwnd, &mut wr) };
-                let win_w = wr.right - wr.left;
-                let win_h = wr.bottom - wr.top;
-
-                if let Some(data) = get_data(hwnd) {
-                    recalculate_layout(data, win_w, win_h, dpi);
-                }
-            }
-            render_layered_window(hwnd);
-            0
-        }
-
-        // ===== DPI 变化（跨显示器移动）=====
-        WM_DPICHANGED => {
-            let new_dpi = (wparam & 0xFFFF) as u32;
-            log::info!("DPI 变化: {} → 重新计算布局", new_dpi);
-
-            let suggested_rect = lparam as *const RECT;
-            let new_w = unsafe { (*suggested_rect).right - (*suggested_rect).left };
-            let new_h = unsafe { (*suggested_rect).bottom - (*suggested_rect).top };
-
-            if let Some(data) = get_data(hwnd) {
-                recalculate_layout(data, new_w, new_h, new_dpi);
-            }
-
-            unsafe {
-                SetWindowPos(
-                    hwnd,
-                    std::ptr::null_mut(),
-                    (*suggested_rect).left,
-                    (*suggested_rect).top,
-                    new_w,
-                    new_h,
-                    SWP_NOZORDER,
-                );
-            }
-
-            render_layered_window(hwnd);
-            0
-        }
-
-        // ===== 最小/最大窗口尺寸 =====
-        WM_GETMINMAXINFO => {
-            let dpi = unsafe { GetDpiForWindow(hwnd) };
-            let dpi = if dpi > 0 { dpi } else { 96 };
-            let title_h = get_data(hwnd)
-                .map(|d| d.title_h)
-                .unwrap_or(scale_for_dpi(40, dpi));
-            let mmi = &mut *(lparam as *mut MINMAXINFO);
-            mmi.pt_min_track_size = POINT {
-                x: scale_for_dpi(200, dpi),
-                y: title_h + scale_for_dpi(100, dpi),
-            };
-            mmi.pt_max_track_size = POINT {
-                x: scale_for_dpi(3000, dpi),
-                y: scale_for_dpi(3000, dpi),
-            };
-            0
-        }
-
-        // ===== 鼠标移动：hover 效果 + tooltip =====
-        WM_MOUSEMOVE => {
-            let mx = get_x_lparam(lparam);
-            let my = get_y_lparam(lparam);
-
-            let mut need_rerender = false;
-            let mut show_tooltip = false;
-            let mut tooltip_text = String::new();
-            let mut tooltip_x: i32 = 0;
-            let mut tooltip_y: i32 = 0;
-
-            if let Some(data) = get_data(hwnd) {
-                let mut wr = RECT {
-                    left: 0,
-                    top: 0,
-                    right: 0,
-                    bottom: 0,
-                };
-                unsafe { GetWindowRect(hwnd, &mut wr) };
-                let w = wr.right - wr.left;
-                let dpi = unsafe { GetDpiForWindow(hwnd) };
-                let dpi = if dpi > 0 { dpi } else { 96 };
-                let hit = grid_hit_test(data, w, mx, my, dpi);
-
-                // 更新 hover 状态
-                if hit != data.hovered_item {
-                    data.hovered_item = hit;
-                    need_rerender = true;
-                }
-
-                // 仅在分类框有选中项时显示 tooltip
-                if hit >= 0
-                    && data.selected_item >= 0
-                    && (hit as usize) < data.items.len()
-                    && !data.tooltip_hwnd.is_null()
-                {
-                    tooltip_text = data.items[hit as usize].display_name.clone();
-                    show_tooltip = true;
-                    // tooltip 位置：鼠标下方偏移（屏幕坐标）
-                    let mut pt = POINT { x: 0, y: 0 };
-                    unsafe { GetCursorPos(&mut pt) };
-                    tooltip_x = pt.x + 16;
-                    tooltip_y = pt.y + 16;
-                }
-            }
-
-            if need_rerender {
-                render_layered_window(hwnd);
-            }
-
-            // 更新 tooltip（在 render 之后，避免 data 借用冲突）
-            if let Some(data) = get_data(hwnd) {
-                let tt = data.tooltip_hwnd;
-                if !tt.is_null() {
-                    if show_tooltip {
-                        let text_wide: Vec<u16> = tooltip_text.encode_utf16().collect();
-                        let mut ti = TOOLINFOW {
-                            cbSize: std::mem::size_of::<TOOLINFOW>() as u32,
-                            uFlags: TTF_SUBCLASS | TTF_IDISHWND,
-                            hwnd,
-                            uId: 0,
-                            rect: RECT {
-                                left: 0,
-                                top: 0,
-                                right: 0,
-                                bottom: 0,
-                            },
-                            hinst: std::ptr::null_mut(),
-                            lpszText: text_wide.as_ptr(),
-                            lParam: 0,
-                            lpReserved: std::ptr::null_mut(),
-                        };
-                        unsafe {
-                            SendMessageW(
-                                tt,
-                                TTM_UPDATETIPTEXTW,
-                                0,
-                                &mut ti as *mut TOOLINFOW as LPARAM,
-                            );
-                            SendMessageW(
-                                tt,
-                                TTM_TRACKPOSITION,
-                                0,
-                                ((tooltip_x as u32 as LPARAM) & 0xFFFF)
-                                    | (((tooltip_y as u32 as LPARAM) & 0xFFFF) << 16),
-                            );
-                            SendMessageW(
-                                tt,
-                                TTM_TRACKACTIVATE,
-                                1,
-                                &mut ti as *mut TOOLINFOW as LPARAM,
-                            );
-                        }
-                    } else {
-                        // 隐藏 tooltip
-                        let mut ti = TOOLINFOW {
-                            cbSize: std::mem::size_of::<TOOLINFOW>() as u32,
-                            uFlags: TTF_SUBCLASS | TTF_IDISHWND,
-                            hwnd,
-                            uId: 0,
-                            rect: RECT {
-                                left: 0,
-                                top: 0,
-                                right: 0,
-                                bottom: 0,
-                            },
-                            hinst: std::ptr::null_mut(),
-                            lpszText: std::ptr::null(),
-                            lParam: 0,
-                            lpReserved: std::ptr::null_mut(),
-                        };
-                        unsafe {
-                            SendMessageW(
-                                tt,
-                                TTM_TRACKACTIVATE,
-                                0,
-                                &mut ti as *mut TOOLINFOW as LPARAM,
-                            );
-                        }
-                    }
-                }
-            }
-            0
-        }
-
-        // ===== 鼠标左键：选中项 =====
-        WM_LBUTTONDOWN => {
-            let click_x = get_x_lparam(lparam);
-            let click_y = get_y_lparam(lparam);
-            let mut need_rerender = false;
-
-            if let Some(data) = get_data(hwnd) {
-                let mut wr = RECT {
-                    left: 0,
-                    top: 0,
-                    right: 0,
-                    bottom: 0,
-                };
-                unsafe { GetWindowRect(hwnd, &mut wr) };
-                let w = wr.right - wr.left;
-                let dpi = unsafe { GetDpiForWindow(hwnd) };
-                let dpi = if dpi > 0 { dpi } else { 96 };
-                let hit = grid_hit_test(data, w, click_x, click_y, dpi);
-                if hit != data.selected_item {
-                    data.selected_item = hit;
-                    need_rerender = true;
-                }
-            }
-
-            if need_rerender {
-                render_layered_window(hwnd);
-            }
-            0
-        }
-
-        // ===== 鼠标左键双击：打开文件 =====
-        WM_LBUTTONDBLCLK => {
-            let click_x = get_x_lparam(lparam);
-            let click_y = get_y_lparam(lparam);
-
-            if let Some(data) = get_data(hwnd) {
-                let mut wr = RECT {
-                    left: 0,
-                    top: 0,
-                    right: 0,
-                    bottom: 0,
-                };
-                unsafe { GetWindowRect(hwnd, &mut wr) };
-                let w = wr.right - wr.left;
-                let dpi = unsafe { GetDpiForWindow(hwnd) };
-                let dpi = if dpi > 0 { dpi } else { 96 };
-                let idx = grid_hit_test(data, w, click_x, click_y, dpi);
-
-                if idx >= 0 && (idx as usize) < data.items.len() {
-                    let item = &data.items[idx as usize];
-                    let op: Vec<u16> = "open\0".encode_utf16().collect();
-                    let path: Vec<u16> = item
-                        .file_path
-                        .encode_utf16()
-                        .chain(std::iter::once(0))
-                        .collect();
-                    ShellExecuteW(
-                        hwnd,
-                        op.as_ptr(),
-                        path.as_ptr(),
-                        std::ptr::null(),
-                        std::ptr::null(),
-                        SW_SHOW,
-                    );
-                    log::info!("双击打开: {}", item.display_name);
-                }
-            }
-            0
-        }
-
-        // ===== 鼠标右键：弹出上下文菜单 =====
-        WM_RBUTTONUP => {
-            let click_x = get_x_lparam(lparam);
-            let click_y = get_y_lparam(lparam);
-
-            let mut file_path: Option<String> = None;
-            if let Some(data) = get_data(hwnd) {
-                let mut wr = RECT {
-                    left: 0,
-                    top: 0,
-                    right: 0,
-                    bottom: 0,
-                };
-                unsafe { GetWindowRect(hwnd, &mut wr) };
-                let w = wr.right - wr.left;
-                let dpi = unsafe { GetDpiForWindow(hwnd) };
-                let dpi = if dpi > 0 { dpi } else { 96 };
-                let hit = grid_hit_test(data, w, click_x, click_y, dpi);
-                if hit >= 0 {
-                    data.selected_item = hit;
-                    if (hit as usize) < data.items.len() {
-                        file_path = Some(data.items[hit as usize].file_path.clone());
-                    }
-                    render_layered_window(hwnd);
-                }
-            }
-
-            if let Some(ref path) = file_path {
-                show_shell_context_menu(hwnd, path);
-            } else {
-                show_desktop_context_menu(hwnd);
-                // shell_menu.rs 会在用户点击「创建分类框」时设置 PENDING_CREATE_BOX 标志，
-                // app.rs 的 update 循环轮询该标志并打开 egui viewport 对话框。
-            }
-            0
-        }
-
-        // ===== 窗口销毁 =====
-        WM_DESTROY => {
-            let data_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GridWindowData;
-            if !data_ptr.is_null() {
-                let data = Box::from_raw(data_ptr);
-
-                // 释放图标句柄
-                for item in &data.items {
-                    if !item.icon_handle.is_null() {
-                        super::icon_extract::destroy_icon(item.icon_handle);
-                    }
-                }
-
-                // D2D/DW/WIC 资源通过 Drop 自动释放（windows crate COM 包装器）
-                drop(data.d2d_target);
-                drop(data.d2d_factory);
-                drop(data.dw_factory);
-                drop(data.wic_factory);
-
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                log::info!("格子窗口 D2D/DW 资源已释放");
-            }
-            0
-        }
-
-        // ===== 默认处理 =====
-        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        let params2 = GridCreateParams {
+            id: 1,
+            title: "测试2".to_string(),
+            x: 0,
+            y: 0,
+            width: 400,
+            height: 600,
+            items: Vec::new(),
+            view_mode: crate::config::app_config::ViewMode::Medium,
+            locked: false,
+            sort_mode: crate::config::app_config::SortMode::Name,
+            sort_ascending: true,
+            group_by: crate::config::app_config::GroupBy::None,
+        };
+        assert!(!params2.locked);
     }
 }

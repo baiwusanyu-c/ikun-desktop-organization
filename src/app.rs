@@ -265,6 +265,11 @@ impl MyApp {
         for (i, box_data) in boxes.iter().enumerate() {
             let mut items: Vec<GridFileItem> = Vec::new();
             for file_path in &box_data.icon_names {
+                // 过滤已删除的图标：只保留仍然存在于桌面的文件
+                if !std::path::Path::new(file_path).exists() {
+                    log::info!("跳过已删除的图标: {}", file_path);
+                    continue;
+                }
                 let display_name = std::path::Path::new(file_path)
                     .file_stem()
                     .and_then(|s| s.to_str())
@@ -288,6 +293,10 @@ impl MyApp {
                 height: box_data.size[1] as i32,
                 items,
                 view_mode: box_data.view_mode.clone(),
+                locked: box_data.locked,
+                sort_mode: box_data.sort_mode.clone(),
+                sort_ascending: box_data.sort_ascending,
+                group_by: box_data.group_by.clone(),
             };
             if create_grid_window(params).is_ok() {
                 created_count += 1;
@@ -373,6 +382,10 @@ impl MyApp {
                 height: box_h,
                 items,
                 view_mode: self.ctx.config.box_defaults.view_mode.clone(),
+                locked: false,
+                sort_mode: self.ctx.config.box_defaults.sort_mode.clone(),
+                sort_ascending: self.ctx.config.box_defaults.sort_ascending,
+                group_by: self.ctx.config.box_defaults.group_by.clone(),
             };
             if create_grid_window(params).is_ok() {
                 created_count += 1;
@@ -421,6 +434,10 @@ impl MyApp {
             height: box_h,
             items: Vec::new(),
             view_mode: self.ctx.config.box_defaults.view_mode.clone(),
+            locked: false,
+            sort_mode: self.ctx.config.box_defaults.sort_mode.clone(),
+            sort_ascending: self.ctx.config.box_defaults.sort_ascending,
+            group_by: self.ctx.config.box_defaults.group_by.clone(),
         };
         match create_grid_window(params) {
             Ok(_) => {

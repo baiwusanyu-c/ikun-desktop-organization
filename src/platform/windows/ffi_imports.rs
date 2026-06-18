@@ -58,6 +58,7 @@ extern "system" {
     pub fn SetCapture(hWnd: HWND) -> HWND;
     #[allow(dead_code)]
     pub fn ReleaseCapture() -> i32;
+    pub fn TrackMouseEvent(lpEventTrack: *mut TRACKMOUSEEVENT) -> i32;
     pub fn MoveWindow(hWnd: HWND, X: i32, Y: i32, nWidth: i32, nHeight: i32, bRepaint: i32) -> i32;
     pub fn GetDpiForWindow(hwnd: HWND) -> u32;
     pub fn SendMessageW(hWnd: HWND, Msg: u32, wParam: WPARAM, lParam: LPARAM) -> LRESULT;
@@ -222,6 +223,10 @@ extern "system" {
 
     // Tooltip / Common Controls
     pub fn InitCommonControlsEx(lpInitCtrls: *const INITCOMMONCONTROLSEX) -> i32;
+
+    // Timer
+    pub fn SetTimer(hWnd: HWND, nIDEvent: usize, uElapse: u32, lpTimerFunc: *mut c_void) -> usize;
+    pub fn KillTimer(hWnd: HWND, uIDEvent: usize) -> i32;
 }
 
 // ===== Shell Context Menu COM Types =====
