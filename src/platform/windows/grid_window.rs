@@ -134,6 +134,16 @@ pub(crate) struct GridWindowData {
     pub(crate) more_hovered: bool,
     /// 菜单状态
     pub(crate) menu: MenuState,
+    /// 是否在名称编辑模式
+    pub(crate) editing_name: bool,
+    /// 编辑模式输入缓冲区
+    pub(crate) edit_buffer: String,
+    /// 编辑模式光标位置（字符索引）
+    pub(crate) edit_cursor: usize,
+    /// 清除按钮是否被鼠标悬停
+    pub(crate) clear_hovered: bool,
+    /// 保存按钮是否被鼠标悬停
+    pub(crate) save_hovered: bool,
     /// 排序方式
     pub(crate) sort_mode: SortMode,
     /// 是否升序
@@ -178,6 +188,11 @@ impl GridWindowData {
             hover_edge: 0,
             more_hovered: false,
             menu: MenuState::default(),
+            editing_name: false,
+            edit_buffer: String::new(),
+            edit_cursor: 0,
+            clear_hovered: false,
+            save_hovered: false,
             sort_mode: SortMode::Name,
             sort_ascending: true,
             group_by: GroupBy::None,
@@ -464,6 +479,11 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         hover_edge: 0,
         more_hovered: false,
         menu: MenuState::default(),
+        editing_name: false,
+        edit_buffer: String::new(),
+        edit_cursor: 0,
+        clear_hovered: false,
+        save_hovered: false,
         sort_mode: params.sort_mode,
         sort_ascending: params.sort_ascending,
         group_by: params.group_by,
@@ -607,6 +627,44 @@ pub(super) fn more_btn_rect(win_w: i32, title_h: i32, dpi: u32) -> (i32, i32, i3
     let btn_x = win_w - btn_size - scale_for_dpi(6, dpi);
     let btn_y = (title_h - btn_size) / 2;
     (btn_x, btn_y, btn_size)
+}
+
+/// 计算名称编辑模式下的输入框矩形
+///
+/// 位于标题栏左侧，为右侧的清除/保存按钮预留空间。
+/// 返回 (x, y, w, h)。
+pub(super) fn input_box_rect(win_w: i32, title_h: i32, dpi: u32) -> (i32, i32, i32, i32) {
+    let pad = scale_for_dpi(8, dpi);
+    let box_h = scale_for_dpi(28, dpi);
+    let box_y = (title_h - box_h) / 2;
+    // 右侧为清除按钮 + 保存按钮预留空间
+    let right_reserve = scale_for_dpi(90, dpi);
+    let box_w = (win_w - pad - right_reserve).max(scale_for_dpi(100, dpi));
+    (pad, box_y, box_w, box_h)
+}
+
+/// 计算清除按钮在窗口坐标中的矩形区域
+///
+/// 位于输入框右侧内部，显示 "×" 图标。
+/// 返回 (x, y, w, h)。
+pub(super) fn clear_btn_rect(win_w: i32, title_h: i32, dpi: u32) -> (i32, i32, i32, i32) {
+    let btn_size = scale_for_dpi(22, dpi);
+    let btn_y = (title_h - btn_size) / 2;
+    let (_, _, save_w, _) = save_btn_rect(win_w, title_h, dpi);
+    let btn_x = win_w - save_w - scale_for_dpi(4, dpi) - btn_size - scale_for_dpi(2, dpi);
+    (btn_x, btn_y, btn_size, btn_size)
+}
+
+/// 计算保存按钮在窗口坐标中的矩形区域
+///
+/// 位于清除按钮右侧，显示 "保存" 文字。
+/// 返回 (x, y, w, h)。
+pub(super) fn save_btn_rect(win_w: i32, title_h: i32, dpi: u32) -> (i32, i32, i32, i32) {
+    let btn_w = scale_for_dpi(54, dpi);
+    let btn_h = scale_for_dpi(26, dpi);
+    let btn_x = win_w - btn_w - scale_for_dpi(6, dpi);
+    let btn_y = (title_h - btn_h) / 2;
+    (btn_x, btn_y, btn_w, btn_h)
 }
 
 /// 菜单行高（DPI 缩放后）

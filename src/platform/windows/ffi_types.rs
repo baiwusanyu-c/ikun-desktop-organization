@@ -165,6 +165,7 @@ pub const IDC_SIZENESW_ID: u16 = 32643;
 pub const IDC_SIZEWE_ID: u16 = 32644;
 pub const IDC_SIZENS_ID: u16 = 32645;
 pub const IDC_HAND_ID: u16 = 32649;
+pub const IDC_IBEAM_ID: u16 = 32513;
 
 // ===== Other Constants =====
 #[allow(dead_code)]
@@ -471,12 +472,18 @@ impl MenuItem {
 
 // ===== 键盘消息常量 =====
 pub const WM_KEYDOWN: u32 = 0x0100;
+pub const WM_CHAR: u32 = 0x0102;
+pub const WM_KILLFOCUS: u32 = 0x0008;
 pub const VK_ESCAPE: u32 = 0x1B;
 pub const VK_UP: u32 = 0x26;
 pub const VK_DOWN: u32 = 0x28;
 pub const VK_LEFT: u32 = 0x25;
 pub const VK_RIGHT: u32 = 0x27;
 pub const VK_RETURN: u32 = 0x0D;
+pub const VK_BACK: u32 = 0x08;
+pub const VK_DELETE: u32 = 0x2E;
+pub const VK_HOME: u32 = 0x24;
+pub const VK_END: u32 = 0x23;
 
 // ===== WM_ACTIVATE 常量 =====
 pub const WA_INACTIVE: u32 = 0;
