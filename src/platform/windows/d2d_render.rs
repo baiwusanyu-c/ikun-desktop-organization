@@ -290,135 +290,139 @@ pub fn render_layered_window(hwnd: HWND) {
 
     if let Ok(ref tf) = title_format {
         let _ = unsafe { tf.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP) };
-        let title_text: Vec<u16> = data.title.encode_utf16().collect();
 
-        // 锁定按钮区域（标题栏右侧）
-        let (btn_x, btn_y, btn_size) = super::grid_window::lock_btn_rect(w, title_h, dpi);
+        if !data.editing_name {
+            // ===== 正常模式：绘制标题文字 =====
+            let title_text: Vec<u16> = data.title.encode_utf16().collect();
 
-        // 创建 TextLayout（右侧为锁定按钮预留空间）
-        let text_max_w = (btn_x as f32 - 10.0).max(40.0);
-        let layout = unsafe {
-            target_inner_create_text_layout(
-                dw_factory,
-                &title_text,
-                tf,
-                text_max_w,
-                title_h as f32,
-                DWRITE_TEXT_ALIGNMENT_LEADING,
-                DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
-            )
-        };
+            // 锁定按钮区域（标题栏右侧）
+            let (btn_x, btn_y, btn_size) = super::grid_window::lock_btn_rect(w, title_h, dpi);
 
-        if let Some(ref layout) = layout {
-            // 阴影描边
-            let shadow_offset = scale_for_dpi(1, dpi) as f32;
-            if let Ok(ref sb) = shadow_brush {
-                for &(dx, dy) in &[
-                    (shadow_offset, 0.0),
-                    (-shadow_offset, 0.0),
-                    (0.0, shadow_offset),
-                    (0.0, -shadow_offset),
-                ] {
-                    let origin = D2D_POINT_2F {
-                        x: 10.0 + dx,
-                        y: dy,
-                    };
-                    unsafe {
-                        target.DrawTextLayout(origin, layout, sb, D2D1_DRAW_TEXT_OPTIONS_NONE);
-                    }
-                }
-            }
-            // 主文字（白色）
-            if let Ok(ref wb) = white_brush {
-                let origin = D2D_POINT_2F { x: 10.0, y: 0.0 };
-                unsafe {
-                    target.DrawTextLayout(origin, layout, wb, D2D1_DRAW_TEXT_OPTIONS_NONE);
-                }
-            }
-        }
-
-        // ===== 绘制锁定按钮（标题栏右侧）=====
-        let lock_icon = if data.locked { "🔒" } else { "🔓" };
-        let lock_font_size = scale_for_dpi(14, dpi) as f32;
-        let lock_format = unsafe {
-            let font_name: Vec<u16> = "Segoe UI Emoji\0".encode_utf16().collect();
-            let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
-            dw_factory.CreateTextFormat::<_, _, _>(
-                windows::core::PCWSTR(font_name.as_ptr()),
-                None,
-                DWRITE_FONT_WEIGHT_NORMAL,
-                DWRITE_FONT_STYLE_NORMAL,
-                DWRITE_FONT_STRETCH_NORMAL,
-                lock_font_size,
-                windows::core::PCWSTR(locale.as_ptr()),
-            )
-        };
-
-        if let Ok(ref lf) = lock_format {
-            let _ = unsafe { lf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER) };
-            let _ = unsafe { lf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER) };
-
-            let lock_text: Vec<u16> = lock_icon.encode_utf16().collect();
-            let lock_layout = unsafe {
+            // 创建 TextLayout（右侧为锁定按钮预留空间）
+            let text_max_w = (btn_x as f32 - 10.0).max(40.0);
+            let layout = unsafe {
                 target_inner_create_text_layout(
                     dw_factory,
-                    &lock_text,
-                    lf,
-                    btn_size as f32,
-                    btn_size as f32,
-                    DWRITE_TEXT_ALIGNMENT_CENTER,
+                    &title_text,
+                    tf,
+                    text_max_w,
+                    title_h as f32,
+                    DWRITE_TEXT_ALIGNMENT_LEADING,
                     DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
                 )
             };
 
-            if let Some(ref ll) = lock_layout {
-                // 锁定按钮 hover 背景高亮
-                if data.lock_hovered {
-                    let hover_brush = unsafe {
-                        target.CreateSolidColorBrush(&d2d_color(255, 255, 255, 40), None)
-                    };
-                    if let Ok(ref hb) = hover_brush {
-                        let pad = scale_for_dpi(3, dpi) as f32;
-                        let hover_rect = D2D1_ROUNDED_RECT {
-                            rect: d2d_rect(
-                                (btn_x - pad as i32) as f32,
-                                (btn_y - pad as i32) as f32,
-                                (btn_x + btn_size + pad as i32) as f32,
-                                (btn_y + btn_size + pad as i32) as f32,
-                            ),
-                            radiusX: 4.0,
-                            radiusY: 4.0,
-                        };
-                        unsafe { target.FillRoundedRectangle(&hover_rect, hb) };
-                    }
-                }
-
-                // 锁定按钮阴影
+            if let Some(ref layout) = layout {
+                // 阴影描边
                 let shadow_offset = scale_for_dpi(1, dpi) as f32;
                 if let Ok(ref sb) = shadow_brush {
-                    for &(sdx, sdy) in &[
+                    for &(dx, dy) in &[
                         (shadow_offset, 0.0),
                         (-shadow_offset, 0.0),
                         (0.0, shadow_offset),
                         (0.0, -shadow_offset),
                     ] {
                         let origin = D2D_POINT_2F {
-                            x: btn_x as f32 + sdx,
-                            y: btn_y as f32 + sdy,
+                            x: 10.0 + dx,
+                            y: dy,
                         };
                         unsafe {
-                            target.DrawTextLayout(origin, ll, sb, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                            target.DrawTextLayout(origin, layout, sb, D2D1_DRAW_TEXT_OPTIONS_NONE);
                         }
                     }
                 }
-                // 锁定按钮主文字
+                // 主文字（白色）
                 if let Ok(ref wb) = white_brush {
-                    let origin = D2D_POINT_2F {
-                        x: btn_x as f32,
-                        y: btn_y as f32,
-                    };
+                    let origin = D2D_POINT_2F { x: 10.0, y: 0.0 };
                     unsafe {
-                        target.DrawTextLayout(origin, ll, wb, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                        target.DrawTextLayout(origin, layout, wb, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                    }
+                }
+            }
+
+            // ===== 绘制锁定按钮（标题栏右侧）=====
+            let lock_icon = if data.locked { "🔒" } else { "🔓" };
+            let lock_font_size = scale_for_dpi(14, dpi) as f32;
+            let lock_format = unsafe {
+                let font_name: Vec<u16> = "Segoe UI Emoji\0".encode_utf16().collect();
+                let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
+                dw_factory.CreateTextFormat::<_, _, _>(
+                    windows::core::PCWSTR(font_name.as_ptr()),
+                    None,
+                    DWRITE_FONT_WEIGHT_NORMAL,
+                    DWRITE_FONT_STYLE_NORMAL,
+                    DWRITE_FONT_STRETCH_NORMAL,
+                    lock_font_size,
+                    windows::core::PCWSTR(locale.as_ptr()),
+                )
+            };
+
+            if let Ok(ref lf) = lock_format {
+                let _ = unsafe { lf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER) };
+                let _ = unsafe { lf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER) };
+
+                let lock_text: Vec<u16> = lock_icon.encode_utf16().collect();
+                let lock_layout = unsafe {
+                    target_inner_create_text_layout(
+                        dw_factory,
+                        &lock_text,
+                        lf,
+                        btn_size as f32,
+                        btn_size as f32,
+                        DWRITE_TEXT_ALIGNMENT_CENTER,
+                        DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+                    )
+                };
+
+                if let Some(ref ll) = lock_layout {
+                    // 锁定按钮 hover 背景高亮
+                    if data.lock_hovered {
+                        let hover_brush = unsafe {
+                            target.CreateSolidColorBrush(&d2d_color(255, 255, 255, 40), None)
+                        };
+                        if let Ok(ref hb) = hover_brush {
+                            let pad = scale_for_dpi(3, dpi) as f32;
+                            let hover_rect = D2D1_ROUNDED_RECT {
+                                rect: d2d_rect(
+                                    (btn_x - pad as i32) as f32,
+                                    (btn_y - pad as i32) as f32,
+                                    (btn_x + btn_size + pad as i32) as f32,
+                                    (btn_y + btn_size + pad as i32) as f32,
+                                ),
+                                radiusX: 4.0,
+                                radiusY: 4.0,
+                            };
+                            unsafe { target.FillRoundedRectangle(&hover_rect, hb) };
+                        }
+                    }
+
+                    // 锁定按钮阴影
+                    let shadow_offset = scale_for_dpi(1, dpi) as f32;
+                    if let Ok(ref sb) = shadow_brush {
+                        for &(sdx, sdy) in &[
+                            (shadow_offset, 0.0),
+                            (-shadow_offset, 0.0),
+                            (0.0, shadow_offset),
+                            (0.0, -shadow_offset),
+                        ] {
+                            let origin = D2D_POINT_2F {
+                                x: btn_x as f32 + sdx,
+                                y: btn_y as f32 + sdy,
+                            };
+                            unsafe {
+                                target.DrawTextLayout(origin, ll, sb, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                            }
+                        }
+                    }
+                    // 锁定按钮主文字
+                    if let Ok(ref wb) = white_brush {
+                        let origin = D2D_POINT_2F {
+                            x: btn_x as f32,
+                            y: btn_y as f32,
+                        };
+                        unsafe {
+                            target.DrawTextLayout(origin, ll, wb, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                        }
                     }
                 }
             }
@@ -426,7 +430,7 @@ pub fn render_layered_window(hwnd: HWND) {
     }
 
     // ===== 绘制"更多"按钮（⋮，锁定按钮右侧）=====
-    {
+    if !data.editing_name {
         let (mbtn_x, mbtn_y, mbtn_size) = super::grid_window::more_btn_rect(w, title_h, dpi);
         let more_icon = "\u{22EE}"; // ⋮ 三个竖点
         let more_font_size = scale_for_dpi(16, dpi) as f32;
@@ -509,6 +513,259 @@ pub fn render_layered_window(hwnd: HWND) {
                     };
                     unsafe {
                         target.DrawTextLayout(origin, ml, wb, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                    }
+                }
+            }
+        }
+    }
+
+    // ===== 名称编辑模式：绘制输入框 + 清除按钮 + 保存按钮 =====
+    if data.editing_name {
+        let (ix, iy, iw, ih) = super::grid_window::input_box_rect(w, title_h, dpi);
+        let (cx, cy, cw, ch) = super::grid_window::clear_btn_rect(w, title_h, dpi);
+        let (sx, sy, sw, sh) = super::grid_window::save_btn_rect(w, title_h, dpi);
+        let radius = 4.0_f32;
+
+        // 输入框背景（比分类框背景略深、半透明）
+        let input_bg_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(0, 0, 0, 60), None) };
+        if let Ok(ref bg) = input_bg_brush {
+            let input_rect = D2D1_ROUNDED_RECT {
+                rect: d2d_rect(ix as f32, iy as f32, (ix + iw) as f32, (iy + ih) as f32),
+                radiusX: radius,
+                radiusY: radius,
+            };
+            unsafe { target.FillRoundedRectangle(&input_rect, bg) };
+        }
+
+        // 输入框文字
+        let input_font_size = scale_for_dpi(14, dpi) as f32;
+        let input_format = unsafe {
+            let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
+            let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
+            dw_factory.CreateTextFormat::<_, _, _>(
+                windows::core::PCWSTR(font_name.as_ptr()),
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                input_font_size,
+                windows::core::PCWSTR(locale.as_ptr()),
+            )
+        };
+
+        if let Ok(ref inf) = input_format {
+            let _ = unsafe { inf.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP) };
+            let display_text = if data.edit_buffer.is_empty() {
+                "输入名称...".to_string()
+            } else {
+                data.edit_buffer.clone()
+            };
+            let text_wide: Vec<u16> = display_text.encode_utf16().collect();
+            let text_pad = scale_for_dpi(6, dpi) as f32;
+            let text_max_w = (iw as f32 - text_pad * 2.0).max(20.0);
+            let input_layout = unsafe {
+                target_inner_create_text_layout(
+                    dw_factory,
+                    &text_wide,
+                    inf,
+                    text_max_w,
+                    ih as f32,
+                    DWRITE_TEXT_ALIGNMENT_LEADING,
+                    DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+                )
+            };
+
+            if let Some(ref il) = input_layout {
+                let text_color = if data.edit_buffer.is_empty() {
+                    // 占位符白色
+                    unsafe { target.CreateSolidColorBrush(&d2d_color(255, 255, 255, 255), None) }
+                } else {
+                    // 正常文字白色
+                    unsafe { target.CreateSolidColorBrush(&d2d_color(255, 255, 255, 255), None) }
+                };
+                if let Ok(ref tc) = text_color {
+                    let origin = D2D_POINT_2F {
+                        x: ix as f32 + text_pad,
+                        y: iy as f32,
+                    };
+                    unsafe {
+                        target.DrawTextLayout(origin, il, tc, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                    }
+                }
+
+                // 绘制光标（编辑模式始终显示）
+                {
+                    // 计算光标 x 位置（使用光标前文字的宽度）
+                    let cursor_prefix: Vec<u16> = data
+                        .edit_buffer
+                        .chars()
+                        .take(data.edit_cursor)
+                        .collect::<String>()
+                        .encode_utf16()
+                        .collect();
+                    let cursor_layout = unsafe {
+                        target_inner_create_text_layout(
+                            dw_factory,
+                            &cursor_prefix,
+                            inf,
+                            text_max_w,
+                            ih as f32,
+                            DWRITE_TEXT_ALIGNMENT_LEADING,
+                            DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+                        )
+                    };
+                    let cursor_x = if let Some(ref cl) = cursor_layout {
+                        let mut metrics =
+                            windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_METRICS::default();
+                        let _ = unsafe { cl.GetMetrics(&mut metrics) };
+                        ix as f32 + text_pad + metrics.width
+                    } else {
+                        ix as f32 + text_pad
+                    };
+                    let cursor_brush = unsafe {
+                        target.CreateSolidColorBrush(&d2d_color(255, 255, 255, 255), None)
+                    };
+                    if let Ok(ref cb) = cursor_brush {
+                        let cursor_top = iy as f32 + scale_for_dpi(4, dpi) as f32;
+                        let cursor_bottom = (iy + ih) as f32 - scale_for_dpi(4, dpi) as f32;
+                        let p1 = D2D_POINT_2F {
+                            x: cursor_x,
+                            y: cursor_top,
+                        };
+                        let p2 = D2D_POINT_2F {
+                            x: cursor_x,
+                            y: cursor_bottom,
+                        };
+                        unsafe { target.DrawLine(p1, p2, cb, 1.5, None) };
+                    }
+                }
+            }
+        }
+
+        // ===== 清除按钮（"×"，与保存按钮相同绿色风格）=====
+        {
+            let clear_hovered = data.clear_hovered;
+            // 按钮背景（绿色，与保存按钮一致）
+            let clear_bg_brush = if clear_hovered {
+                unsafe { target.CreateSolidColorBrush(&d2d_color(40, 180, 80, 255), None) }
+            } else {
+                unsafe { target.CreateSolidColorBrush(&d2d_color(50, 160, 90, 255), None) }
+            };
+            if let Ok(ref bg) = clear_bg_brush {
+                let clear_rect = D2D1_ROUNDED_RECT {
+                    rect: d2d_rect(cx as f32, cy as f32, (cx + cw) as f32, (cy + ch) as f32),
+                    radiusX: radius,
+                    radiusY: radius,
+                };
+                unsafe { target.FillRoundedRectangle(&clear_rect, bg) };
+            }
+            // "清空" 文字
+            let clear_font_size = scale_for_dpi(13, dpi) as f32;
+            let clear_format = unsafe {
+                let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
+                let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
+                dw_factory.CreateTextFormat::<_, _, _>(
+                    windows::core::PCWSTR(font_name.as_ptr()),
+                    None,
+                    DWRITE_FONT_WEIGHT_NORMAL,
+                    DWRITE_FONT_STYLE_NORMAL,
+                    DWRITE_FONT_STRETCH_NORMAL,
+                    clear_font_size,
+                    windows::core::PCWSTR(locale.as_ptr()),
+                )
+            };
+            if let Ok(ref cf) = clear_format {
+                let _ = unsafe { cf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER) };
+                let _ = unsafe { cf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER) };
+                let clear_text: Vec<u16> = "清空".encode_utf16().collect();
+                let clear_layout = unsafe {
+                    target_inner_create_text_layout(
+                        dw_factory,
+                        &clear_text,
+                        cf,
+                        cw as f32,
+                        ch as f32,
+                        DWRITE_TEXT_ALIGNMENT_CENTER,
+                        DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+                    )
+                };
+                if let Some(ref cl) = clear_layout {
+                    // "×" 始终白色（hover 与非 hover 一致）
+                    let color = unsafe {
+                        target.CreateSolidColorBrush(&d2d_color(255, 255, 255, 255), None)
+                    };
+                    if let Ok(ref cc) = color {
+                        let origin = D2D_POINT_2F {
+                            x: cx as f32,
+                            y: cy as f32,
+                        };
+                        unsafe {
+                            target.DrawTextLayout(origin, cl, cc, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                        }
+                    }
+                }
+            }
+        }
+
+        // ===== 保存按钮 =====
+        {
+            let save_hovered = data.save_hovered;
+            // 按钮背景（绿色）
+            let save_bg_brush = if save_hovered {
+                unsafe { target.CreateSolidColorBrush(&d2d_color(40, 180, 80, 255), None) }
+            } else {
+                unsafe { target.CreateSolidColorBrush(&d2d_color(50, 160, 90, 255), None) }
+            };
+            if let Ok(ref sb) = save_bg_brush {
+                let save_rect = D2D1_ROUNDED_RECT {
+                    rect: d2d_rect(sx as f32, sy as f32, (sx + sw) as f32, (sy + sh) as f32),
+                    radiusX: radius,
+                    radiusY: radius,
+                };
+                unsafe { target.FillRoundedRectangle(&save_rect, sb) };
+            }
+            // "保存" 文字
+            let save_font_size = scale_for_dpi(13, dpi) as f32;
+            let save_format = unsafe {
+                let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
+                let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
+                dw_factory.CreateTextFormat::<_, _, _>(
+                    windows::core::PCWSTR(font_name.as_ptr()),
+                    None,
+                    DWRITE_FONT_WEIGHT_NORMAL,
+                    DWRITE_FONT_STYLE_NORMAL,
+                    DWRITE_FONT_STRETCH_NORMAL,
+                    save_font_size,
+                    windows::core::PCWSTR(locale.as_ptr()),
+                )
+            };
+            if let Ok(ref sf) = save_format {
+                let _ = unsafe { sf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER) };
+                let _ = unsafe { sf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER) };
+                let save_text: Vec<u16> = "保存".encode_utf16().collect();
+                let save_layout = unsafe {
+                    target_inner_create_text_layout(
+                        dw_factory,
+                        &save_text,
+                        sf,
+                        sw as f32,
+                        sh as f32,
+                        DWRITE_TEXT_ALIGNMENT_CENTER,
+                        DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+                    )
+                };
+                if let Some(ref sl) = save_layout {
+                    let text_brush = unsafe {
+                        target.CreateSolidColorBrush(&d2d_color(255, 255, 255, 255), None)
+                    };
+                    if let Ok(ref tb) = text_brush {
+                        let origin = D2D_POINT_2F {
+                            x: sx as f32,
+                            y: sy as f32,
+                        };
+                        unsafe {
+                            target.DrawTextLayout(origin, sl, tb, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                        }
                     }
                 }
             }

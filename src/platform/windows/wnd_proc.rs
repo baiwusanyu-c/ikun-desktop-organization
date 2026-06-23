@@ -1,13 +1,15 @@
 //! 格子窗口消息处理（wnd_proc）
 //!
 //! 包含 `grid_wnd_proc` 窗口过程，处理所有 Win32 消息：
-//! - WM_NCHITTEST：标题栏拖拽 + 边缘缩放 + 锁定按钮 + hover_edge 同步
-//! - WM_SETCURSOR：边缘缩放手柄 + 锁定按钮手型光标
+//! - WM_NCHITTEST：标题栏拖拽 + 边缘缩放 + 锁定按钮 + hover_edge 同步 + 编辑模式锁定
+//! - WM_SETCURSOR：边缘缩放手柄 + 锁定/更多按钮手型 + 编辑模式 I 型光标
 //! - WM_SIZE / WM_DPICHANGED：布局重算 + 重绘
-//! - WM_MOUSEMOVE：锁定按钮 hover + 图标 hover + tooltip + TrackMouseEvent
+//! - WM_MOUSEMOVE：锁定按钮 hover + 编辑模式清除/保存 hover + 图标 hover + tooltip
 //! - WM_MOUSELEAVE：重置所有 hover 状态
-//! - WM_LBUTTONDOWN：锁定按钮切换 + 图标选中 + "更多"菜单
-//! - WM_LBUTTONDBLCLK：双击打开文件
+//! - WM_LBUTTONDOWN：编辑模式清除/保存按钮 + 锁定按钮切换 + 图标选中 + "更多"菜单
+//! - WM_LBUTTONDBLCLK：标题栏双击进入名称编辑 + 双击打开文件
+//! - WM_CHAR / WM_KEYDOWN：名称编辑模式文字输入 + 光标移动 + 保存/取消
+//! - WM_KILLFOCUS：名称编辑模式失去焦点取消
 //! - WM_RBUTTONUP：Shell 上下文菜单
 //! - WM_DESTROY：释放图标句柄 + D2D/DW/WIC 资源
 
@@ -15,7 +17,8 @@ use super::d2d_render::render_layered_window;
 use super::ffi_imports::*;
 use super::ffi_types::*;
 use super::grid_window::{
-    get_data, grid_hit_test, lock_btn_rect, more_btn_rect, recalculate_layout, GridWindowData,
+    clear_btn_rect, get_data, grid_hit_test, input_box_rect, lock_btn_rect, more_btn_rect,
+    recalculate_layout, save_btn_rect, GridWindowData,
 };
 use super::menu_window::show_menu_window;
 use super::shell_menu::{show_desktop_context_menu, show_shell_context_menu};
@@ -89,6 +92,13 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             // 菜单打开时，分类框已锁定，全部返回 HTCLIENT
             if let Some(ref d) = data_opt {
                 if d.menu.open {
+                    return HTCLIENT as LRESULT;
+                }
+            }
+
+            // 名称编辑模式时，全部返回 HTCLIENT（禁止拖拽和缩放）
+            if let Some(ref d) = data_opt {
+                if d.editing_name {
                     return HTCLIENT as LRESULT;
                 }
             }
@@ -185,12 +195,39 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 HTTOPLEFT | HTBOTTOMRIGHT => IDC_SIZENWSE_ID,
                 HTTOPRIGHT | HTBOTTOMLEFT => IDC_SIZENESW_ID,
                 HTCLIENT => {
-                    // 检查是否在锁定按钮或"更多"按钮上 → 显示手型光标
-                    if get_data(hwnd)
-                        .map(|d| d.lock_hovered || d.more_hovered)
-                        .unwrap_or(false)
-                    {
-                        IDC_HAND_ID
+                    if let Some(data) = get_data(hwnd) {
+                        if data.editing_name {
+                            // 编辑模式：输入框上显示 I 型光标，按钮上显示手型
+                            let mut wr = RECT {
+                                left: 0,
+                                top: 0,
+                                right: 0,
+                                bottom: 0,
+                            };
+                            unsafe { GetWindowRect(hwnd, &mut wr) };
+                            let w = wr.right - wr.left;
+                            let dpi = unsafe { GetDpiForWindow(hwnd) };
+                            let dpi = if dpi > 0 { dpi } else { 96 };
+                            let (ix, iy, iw, ih) = input_box_rect(w, data.title_h, dpi);
+                            // 使用鼠标在窗口中的坐标来定位
+                            let mut pt = POINT { x: 0, y: 0 };
+                            unsafe { GetCursorPos(&mut pt) };
+                            let mx = pt.x - wr.left;
+                            let my = pt.y - wr.top;
+                            let on_input = mx >= ix && mx < ix + iw && my >= iy && my < iy + ih;
+                            if on_input {
+                                IDC_IBEAM_ID
+                            } else if data.clear_hovered || data.save_hovered {
+                                IDC_HAND_ID
+                            } else {
+                                return DefWindowProcW(hwnd, msg, wparam, lparam);
+                            }
+                        } else if data.lock_hovered || data.more_hovered {
+                            // 正常模式：按钮上显示手型光标
+                            IDC_HAND_ID
+                        } else {
+                            return DefWindowProcW(hwnd, msg, wparam, lparam);
+                        }
                     } else {
                         return DefWindowProcW(hwnd, msg, wparam, lparam);
                     }
@@ -310,24 +347,43 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 let dpi = unsafe { GetDpiForWindow(hwnd) };
                 let dpi = if dpi > 0 { dpi } else { 96 };
 
-                // 锁定按钮 hover 检测
-                let (btn_x, btn_y, btn_size) = lock_btn_rect(w, data.title_h, dpi);
-                let over_lock =
-                    mx >= btn_x && mx < btn_x + btn_size && my >= btn_y && my < btn_y + btn_size;
-                if over_lock != data.lock_hovered {
-                    data.lock_hovered = over_lock;
-                    need_rerender = true;
-                }
+                if data.editing_name {
+                    // 编辑模式：检测清除/保存按钮 hover
+                    let (cx, cy, cw, ch) = clear_btn_rect(w, data.title_h, dpi);
+                    let over_clear = mx >= cx && mx < cx + cw && my >= cy && my < cy + ch;
+                    if over_clear != data.clear_hovered {
+                        data.clear_hovered = over_clear;
+                        need_rerender = true;
+                    }
 
-                // "更多"按钮 hover 检测
-                let (mbtn_x, mbtn_y, mbtn_size) = more_btn_rect(w, data.title_h, dpi);
-                let over_more = mx >= mbtn_x
-                    && mx < mbtn_x + mbtn_size
-                    && my >= mbtn_y
-                    && my < mbtn_y + mbtn_size;
-                if over_more != data.more_hovered {
-                    data.more_hovered = over_more;
-                    need_rerender = true;
+                    let (sx, sy, sw, sh) = save_btn_rect(w, data.title_h, dpi);
+                    let over_save = mx >= sx && mx < sx + sw && my >= sy && my < sy + sh;
+                    if over_save != data.save_hovered {
+                        data.save_hovered = over_save;
+                        need_rerender = true;
+                    }
+                } else {
+                    // 正常模式：锁定按钮 hover 检测
+                    let (btn_x, btn_y, btn_size) = lock_btn_rect(w, data.title_h, dpi);
+                    let over_lock = mx >= btn_x
+                        && mx < btn_x + btn_size
+                        && my >= btn_y
+                        && my < btn_y + btn_size;
+                    if over_lock != data.lock_hovered {
+                        data.lock_hovered = over_lock;
+                        need_rerender = true;
+                    }
+
+                    // "更多"按钮 hover 检测
+                    let (mbtn_x, mbtn_y, mbtn_size) = more_btn_rect(w, data.title_h, dpi);
+                    let over_more = mx >= mbtn_x
+                        && mx < mbtn_x + mbtn_size
+                        && my >= mbtn_y
+                        && my < mbtn_y + mbtn_size;
+                    if over_more != data.more_hovered {
+                        data.more_hovered = over_more;
+                        need_rerender = true;
+                    }
                 }
 
                 // 边缘 resize hover 已由 WM_NCHITTEST 更新 hover_edge
@@ -432,7 +488,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             0
         }
 
-        // ===== 鼠标左键：锁定按钮 + "更多"按钮 + 图标选中 =====
+        // ===== 鼠标左键：编辑模式按钮 + 锁定按钮 + "更多"按钮 + 图标选中 =====
         WM_LBUTTONDOWN => {
             let click_x = get_x_lparam(lparam);
             let click_y = get_y_lparam(lparam);
@@ -449,6 +505,57 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             let win_w = wr.right - wr.left;
             let dpi = unsafe { GetDpiForWindow(hwnd) };
             let dpi = if dpi > 0 { dpi } else { 96 };
+
+            // 名称编辑模式：处理清除/保存按钮点击
+            let in_edit_mode = get_data(hwnd).map(|d| d.editing_name).unwrap_or(false);
+            if in_edit_mode {
+                let (cx, cy, cw, ch) = clear_btn_rect(win_w, get_data(hwnd).unwrap().title_h, dpi);
+                let (sx, sy, sw, sh) = save_btn_rect(win_w, get_data(hwnd).unwrap().title_h, dpi);
+                let (ix, iy, iw, ih) = input_box_rect(win_w, get_data(hwnd).unwrap().title_h, dpi);
+
+                let on_clear =
+                    click_x >= cx && click_x < cx + cw && click_y >= cy && click_y < cy + ch;
+                let on_save =
+                    click_x >= sx && click_x < sx + sw && click_y >= sy && click_y < sy + sh;
+                let on_input =
+                    click_x >= ix && click_x < ix + iw && click_y >= iy && click_y < iy + ih;
+
+                if let Some(data) = get_data(hwnd) {
+                    if on_clear {
+                        // 清除输入内容
+                        data.edit_buffer.clear();
+                        data.edit_cursor = 0;
+                        need_rerender = true;
+                    } else if on_save {
+                        // 保存名称
+                        let new_name = data.edit_buffer.trim().to_string();
+                        if !new_name.is_empty() {
+                            data.title = new_name.clone();
+                            log::info!("分类框名称已保存: {}", new_name);
+                        }
+                        data.editing_name = false;
+                        data.edit_buffer.clear();
+                        data.edit_cursor = 0;
+                        need_rerender = true;
+                    } else if on_input {
+                        // 点击输入框：移动光标到点击位置（简化：移到末尾）
+                        data.edit_cursor = data.edit_buffer.chars().count();
+                        unsafe { SetFocus(hwnd) };
+                        need_rerender = true;
+                    } else {
+                        // 点击编辑区域外：取消编辑
+                        data.editing_name = false;
+                        data.edit_buffer.clear();
+                        data.edit_cursor = 0;
+                        need_rerender = true;
+                    }
+                }
+
+                if need_rerender {
+                    render_layered_window(hwnd);
+                }
+                return 0;
+            }
 
             // 检查是否点击了锁定按钮
             let lock_clicked = if let Some(data) = get_data(hwnd) {
@@ -505,7 +612,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             0
         }
 
-        // ===== 鼠标左键双击：打开文件 =====
+        // ===== 鼠标左键双击：标题栏进入名称编辑 / 图标打开文件 =====
         WM_LBUTTONDBLCLK => {
             let click_x = get_x_lparam(lparam);
             let click_y = get_y_lparam(lparam);
@@ -521,6 +628,35 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 let w = wr.right - wr.left;
                 let dpi = unsafe { GetDpiForWindow(hwnd) };
                 let dpi = if dpi > 0 { dpi } else { 96 };
+
+                // 检查是否双击了标题栏文字区域（非按钮区域）
+                if click_y < data.title_h && !data.menu.open {
+                    let (btn_x, btn_y, btn_size) = lock_btn_rect(w, data.title_h, dpi);
+                    let (mbtn_x, mbtn_y, mbtn_size) = more_btn_rect(w, data.title_h, dpi);
+                    let on_lock = click_x >= btn_x
+                        && click_x < btn_x + btn_size
+                        && click_y >= btn_y
+                        && click_y < btn_y + btn_size;
+                    let on_more = click_x >= mbtn_x
+                        && click_x < mbtn_x + mbtn_size
+                        && click_y >= mbtn_y
+                        && click_y < mbtn_y + mbtn_size;
+
+                    if !on_lock && !on_more {
+                        // 进入名称编辑模式
+                        data.editing_name = true;
+                        data.edit_buffer = data.title.clone();
+                        data.edit_cursor = data.edit_buffer.chars().count();
+                        data.clear_hovered = false;
+                        data.save_hovered = false;
+                        unsafe { SetFocus(hwnd) };
+                        log::info!("进入名称编辑模式: {}", data.title);
+                        render_layered_window(hwnd);
+                        return 0;
+                    }
+                }
+
+                // 双击图标打开文件
                 let idx = grid_hit_test(data, w, click_x, click_y, dpi);
 
                 if idx >= 0 && (idx as usize) < data.items.len() {
@@ -540,6 +676,200 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                         SW_SHOW,
                     );
                     log::info!("双击打开: {}", item.display_name);
+                }
+            }
+            0
+        }
+
+        // ===== 非客户区双击：标题栏进入名称编辑（未锁定时 HTCAPTION 区域双击）=====
+        WM_NCLBUTTONDBLCLK => {
+            if wparam as i32 == HTCAPTION {
+                // lparam 为屏幕坐标，转换为窗口坐标
+                let screen_x = (lparam & 0xFFFF) as i16 as i32;
+                let screen_y = ((lparam >> 16) & 0xFFFF) as i16 as i32;
+
+                if let Some(data) = get_data(hwnd) {
+                    let mut wr = RECT {
+                        left: 0,
+                        top: 0,
+                        right: 0,
+                        bottom: 0,
+                    };
+                    unsafe { GetWindowRect(hwnd, &mut wr) };
+                    let w = wr.right - wr.left;
+                    let click_x = screen_x - wr.left;
+                    let click_y = screen_y - wr.top;
+                    let dpi = unsafe { GetDpiForWindow(hwnd) };
+                    let dpi = if dpi > 0 { dpi } else { 96 };
+
+                    // 排除锁定/更多按钮区域（理论上不会收到 HTCAPTION，双重保险）
+                    let (btn_x, btn_y, btn_size) = lock_btn_rect(w, data.title_h, dpi);
+                    let (mbtn_x, mbtn_y, mbtn_size) = more_btn_rect(w, data.title_h, dpi);
+                    let on_lock = click_x >= btn_x
+                        && click_x < btn_x + btn_size
+                        && click_y >= btn_y
+                        && click_y < btn_y + btn_size;
+                    let on_more = click_x >= mbtn_x
+                        && click_x < mbtn_x + mbtn_size
+                        && click_y >= mbtn_y
+                        && click_y < mbtn_y + mbtn_size;
+
+                    if !on_lock && !on_more && !data.menu.open {
+                        data.editing_name = true;
+                        data.edit_buffer = data.title.clone();
+                        data.edit_cursor = data.edit_buffer.chars().count();
+                        data.clear_hovered = false;
+                        data.save_hovered = false;
+                        unsafe { SetFocus(hwnd) };
+                        log::info!("进入名称编辑模式: {}", data.title);
+                        render_layered_window(hwnd);
+                        return 0;
+                    }
+                }
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
+
+        // ===== 键盘字符输入：名称编辑模式 =====
+        WM_CHAR => {
+            if let Some(data) = get_data(hwnd) {
+                if data.editing_name {
+                    let ch = wparam as u32;
+                    // 过滤控制字符（回车、退格等已由 WM_KEYDOWN 处理）
+                    if ch >= 0x20 && ch != 0x7F {
+                        // 限制最大 16 个字符
+                        let char_count = data.edit_buffer.chars().count();
+                        if char_count < 16 {
+                            // 支持 Unicode 字符（包括中文、emoji 等）
+                            if let Some(c) = char::from_u32(ch) {
+                                let byte_pos = data
+                                    .edit_buffer
+                                    .char_indices()
+                                    .nth(data.edit_cursor)
+                                    .map(|(i, _)| i)
+                                    .unwrap_or(data.edit_buffer.len());
+                                data.edit_buffer.insert(byte_pos, c);
+                                data.edit_cursor += 1;
+                                render_layered_window(hwnd);
+                            }
+                        }
+                    }
+                    return 0;
+                }
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
+
+        // ===== 键盘按键：名称编辑模式特殊键 =====
+        WM_KEYDOWN => {
+            if let Some(data) = get_data(hwnd) {
+                if data.editing_name {
+                    let vk = wparam as u32;
+                    match vk {
+                        VK_ESCAPE => {
+                            // 取消编辑
+                            data.editing_name = false;
+                            data.edit_buffer.clear();
+                            data.edit_cursor = 0;
+                            render_layered_window(hwnd);
+                            return 0;
+                        }
+                        VK_RETURN => {
+                            // 保存名称
+                            let new_name = data.edit_buffer.trim().to_string();
+                            if !new_name.is_empty() {
+                                data.title = new_name.clone();
+                                log::info!("分类框名称已修改: {}", new_name);
+                            }
+                            data.editing_name = false;
+                            data.edit_buffer.clear();
+                            data.edit_cursor = 0;
+                            render_layered_window(hwnd);
+                            return 0;
+                        }
+                        VK_BACK => {
+                            // 退格：删除光标前的一个字符
+                            if data.edit_cursor > 0 {
+                                let byte_pos = data
+                                    .edit_buffer
+                                    .char_indices()
+                                    .nth(data.edit_cursor - 1)
+                                    .map(|(i, _)| i)
+                                    .unwrap_or(data.edit_buffer.len());
+                                let next_byte = data
+                                    .edit_buffer
+                                    .char_indices()
+                                    .nth(data.edit_cursor)
+                                    .map(|(i, _)| i)
+                                    .unwrap_or(data.edit_buffer.len());
+                                data.edit_buffer.drain(byte_pos..next_byte);
+                                data.edit_cursor -= 1;
+                                render_layered_window(hwnd);
+                            }
+                            return 0;
+                        }
+                        VK_DELETE => {
+                            // Delete：删除光标处的字符
+                            let char_count = data.edit_buffer.chars().count();
+                            if data.edit_cursor < char_count {
+                                let byte_pos = data
+                                    .edit_buffer
+                                    .char_indices()
+                                    .nth(data.edit_cursor)
+                                    .map(|(i, _)| i)
+                                    .unwrap_or(data.edit_buffer.len());
+                                let next_byte = data
+                                    .edit_buffer
+                                    .char_indices()
+                                    .nth(data.edit_cursor + 1)
+                                    .map(|(i, _)| i)
+                                    .unwrap_or(data.edit_buffer.len());
+                                data.edit_buffer.drain(byte_pos..next_byte);
+                                render_layered_window(hwnd);
+                            }
+                            return 0;
+                        }
+                        VK_LEFT => {
+                            if data.edit_cursor > 0 {
+                                data.edit_cursor -= 1;
+                                render_layered_window(hwnd);
+                            }
+                            return 0;
+                        }
+                        VK_RIGHT => {
+                            let char_count = data.edit_buffer.chars().count();
+                            if data.edit_cursor < char_count {
+                                data.edit_cursor += 1;
+                                render_layered_window(hwnd);
+                            }
+                            return 0;
+                        }
+                        VK_HOME => {
+                            data.edit_cursor = 0;
+                            render_layered_window(hwnd);
+                            return 0;
+                        }
+                        VK_END => {
+                            data.edit_cursor = data.edit_buffer.chars().count();
+                            render_layered_window(hwnd);
+                            return 0;
+                        }
+                        _ => {}
+                    }
+                    return 0;
+                }
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
+
+        // ===== 失去焦点：取消名称编辑 =====
+        WM_KILLFOCUS => {
+            if let Some(data) = get_data(hwnd) {
+                if data.editing_name {
+                    data.editing_name = false;
+                    data.edit_buffer.clear();
+                    data.edit_cursor = 0;
+                    render_layered_window(hwnd);
                 }
             }
             0
@@ -596,6 +926,14 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 }
                 if data.more_hovered {
                     data.more_hovered = false;
+                    need_rerender = true;
+                }
+                if data.clear_hovered {
+                    data.clear_hovered = false;
+                    need_rerender = true;
+                }
+                if data.save_hovered {
+                    data.save_hovered = false;
                     need_rerender = true;
                 }
                 if data.hover_edge != 0 {

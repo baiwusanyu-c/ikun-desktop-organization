@@ -637,22 +637,27 @@ pub(super) fn input_box_rect(win_w: i32, title_h: i32, dpi: u32) -> (i32, i32, i
     let pad = scale_for_dpi(8, dpi);
     let box_h = scale_for_dpi(28, dpi);
     let box_y = (title_h - box_h) / 2;
-    // 右侧为清除按钮 + 保存按钮预留空间
-    let right_reserve = scale_for_dpi(90, dpi);
-    let box_w = (win_w - pad - right_reserve).max(scale_for_dpi(100, dpi));
+    let gap = scale_for_dpi(4, dpi);
+    let (_, _, save_w, _) = save_btn_rect(win_w, title_h, dpi);
+    let (_, _, clear_w, _) = clear_btn_rect(win_w, title_h, dpi);
+    // 右侧为间隙 + 清除按钮 + 间隙 + 保存按钮 预留空间
+    let right_reserve = gap + clear_w + gap + save_w + scale_for_dpi(6, dpi);
+    let box_w = (win_w - pad - right_reserve).max(scale_for_dpi(80, dpi));
     (pad, box_y, box_w, box_h)
 }
 
 /// 计算清除按钮在窗口坐标中的矩形区域
 ///
-/// 位于输入框右侧内部，显示 "×" 图标。
+/// 位于保存按钮左侧，与输入框/保存按钮水平对齐（同高，统一间距）。
 /// 返回 (x, y, w, h)。
 pub(super) fn clear_btn_rect(win_w: i32, title_h: i32, dpi: u32) -> (i32, i32, i32, i32) {
-    let btn_size = scale_for_dpi(22, dpi);
-    let btn_y = (title_h - btn_size) / 2;
+    let btn_w = scale_for_dpi(54, dpi);
+    let btn_h = scale_for_dpi(28, dpi);
+    let btn_y = (title_h - btn_h) / 2;
     let (_, _, save_w, _) = save_btn_rect(win_w, title_h, dpi);
-    let btn_x = win_w - save_w - scale_for_dpi(4, dpi) - btn_size - scale_for_dpi(2, dpi);
-    (btn_x, btn_y, btn_size, btn_size)
+    let gap = scale_for_dpi(4, dpi);
+    let btn_x = win_w - save_w - scale_for_dpi(6, dpi) - gap - btn_w;
+    (btn_x, btn_y, btn_w, btn_h)
 }
 
 /// 计算保存按钮在窗口坐标中的矩形区域
@@ -661,7 +666,7 @@ pub(super) fn clear_btn_rect(win_w: i32, title_h: i32, dpi: u32) -> (i32, i32, i
 /// 返回 (x, y, w, h)。
 pub(super) fn save_btn_rect(win_w: i32, title_h: i32, dpi: u32) -> (i32, i32, i32, i32) {
     let btn_w = scale_for_dpi(54, dpi);
-    let btn_h = scale_for_dpi(26, dpi);
+    let btn_h = scale_for_dpi(28, dpi);
     let btn_x = win_w - btn_w - scale_for_dpi(6, dpi);
     let btn_y = (title_h - btn_h) / 2;
     (btn_x, btn_y, btn_w, btn_h)
@@ -1010,5 +1015,147 @@ mod tests {
         // config_id 应为 v4 UUID
         assert_eq!(data.config_id.get_version_num(), 4);
         let _ = id; // 验证外部 UUID 可用
+    }
+
+    // ===== 名称编辑模式布局计算验证 =====
+
+    #[test]
+    fn test_save_btn_rect_at_96dpi() {
+        let win_w = 400;
+        let title_h = 40;
+        let dpi = 96;
+        let (x, y, w, h) = save_btn_rect(win_w, title_h, dpi);
+        // DPI 96: scale_for_dpi(x, 96) = x
+        assert_eq!(w, 54, "保存按钮宽度应为 54");
+        assert_eq!(h, 28, "保存按钮高度应为 28");
+        assert_eq!(x, win_w - 54 - 6, "保存按钮应在窗口右侧（右边距 6）");
+        assert_eq!(y, (title_h - 28) / 2, "保存按钮应垂直居中");
+    }
+
+    #[test]
+    fn test_clear_btn_rect_at_96dpi() {
+        let win_w = 400;
+        let title_h = 40;
+        let dpi = 96;
+        let (x, y, w, h) = clear_btn_rect(win_w, title_h, dpi);
+        assert_eq!(w, 54, "清空按钮宽度应与保存按钮一致（54）");
+        assert_eq!(h, 28, "清空按钮高度应与保存按钮一致（28）");
+        assert_eq!(y, (title_h - 28) / 2, "清空按钮应垂直居中");
+        // 清空按钮应在保存按钮左侧，间距 4
+        let (sx, _, _, _) = save_btn_rect(win_w, title_h, dpi);
+        assert_eq!(x, sx - 4 - 54, "清空按钮应在保存按钮左侧（间距 4）");
+    }
+
+    #[test]
+    fn test_input_box_rect_at_96dpi() {
+        let win_w = 400;
+        let title_h = 40;
+        let dpi = 96;
+        let (x, y, w, h) = input_box_rect(win_w, title_h, dpi);
+        assert_eq!(x, 8, "输入框左边距应为 8");
+        assert_eq!(h, 28, "输入框高度应为 28");
+        assert_eq!(y, (title_h - 28) / 2, "输入框应垂直居中");
+        // 输入框右边缘不超过清空按钮左边缘
+        let (cx, _, _, _) = clear_btn_rect(win_w, title_h, dpi);
+        assert!(
+            x + w <= cx,
+            "输入框右边缘 {} 不应超过清空按钮左边缘 {}",
+            x + w,
+            cx
+        );
+    }
+
+    #[test]
+    fn test_edit_mode_layout_alignment() {
+        // 三个元素在 DPI 96 下应垂直对齐、高度一致
+        let win_w = 500;
+        let title_h = 40;
+        let dpi = 96;
+        let (_, iy, _, ih) = input_box_rect(win_w, title_h, dpi);
+        let (_, cy, _, ch) = clear_btn_rect(win_w, title_h, dpi);
+        let (_, sy, _, sh) = save_btn_rect(win_w, title_h, dpi);
+
+        assert_eq!(ih, ch, "输入框和清空按钮高度应一致");
+        assert_eq!(ch, sh, "清空按钮和保存按钮高度应一致");
+        assert_eq!(iy, cy, "输入框和清空按钮 y 坐标应一致（垂直对齐）");
+        assert_eq!(cy, sy, "清空按钮和保存按钮 y 坐标应一致（垂直对齐）");
+    }
+
+    #[test]
+    fn test_edit_mode_layout_horizontal_order() {
+        // 水平顺序：输入框 < 清空按钮 < 保存按钮
+        let win_w = 500;
+        let title_h = 40;
+        let dpi = 96;
+        let (ix, _, iw, _) = input_box_rect(win_w, title_h, dpi);
+        let (cx, _, cw, _) = clear_btn_rect(win_w, title_h, dpi);
+        let (sx, _, sw, _) = save_btn_rect(win_w, title_h, dpi);
+
+        assert!(ix + iw < cx, "输入框右边缘应在清空按钮左侧");
+        assert!(cx + cw < sx, "清空按钮右边缘应在保存按钮左侧");
+        assert!(sx + sw <= win_w, "保存按钮不应超出窗口右边界");
+    }
+
+    #[test]
+    fn test_edit_mode_layout_at_144dpi() {
+        let win_w = 750;
+        let title_h = 60;
+        let dpi = 144;
+        let (_, iy, _, ih) = input_box_rect(win_w, title_h, dpi);
+        let (_, cy, _, ch) = clear_btn_rect(win_w, title_h, dpi);
+        let (_, sy, _, sh) = save_btn_rect(win_w, title_h, dpi);
+
+        assert_eq!(ih, ch, "DPI 144: 输入框和清空按钮高度应一致");
+        assert_eq!(ch, sh, "DPI 144: 清空按钮和保存按钮高度应一致");
+        assert_eq!(iy, cy, "DPI 144: 垂直对齐");
+        assert_eq!(cy, sy, "DPI 144: 垂直对齐");
+    }
+
+    #[test]
+    fn test_edit_mode_layout_narrow_window() {
+        // 窄窗口：输入框有最小宽度保护，不应为负
+        let win_w = 200;
+        let title_h = 40;
+        let dpi = 96;
+        let (ix, _, iw, _) = input_box_rect(win_w, title_h, dpi);
+        let (cx, _, cw, _) = clear_btn_rect(win_w, title_h, dpi);
+        let (sx, _, sw, _) = save_btn_rect(win_w, title_h, dpi);
+
+        assert!(iw > 0, "输入框宽度不应为 0 或负数");
+        assert!(ix >= 0, "输入框 x 不应为负");
+        assert!(sx + sw <= win_w, "保存按钮不应超出窗口");
+        assert!(cx + cw <= sx, "清空按钮不应与保存按钮重叠");
+    }
+
+    // ===== GridWindowData 编辑模式字段验证 =====
+
+    #[test]
+    fn test_grid_window_data_edit_mode_defaults() {
+        let data = GridWindowData::test_default();
+        assert!(!data.editing_name, "默认不应处于编辑模式");
+        assert!(data.edit_buffer.is_empty(), "编辑缓冲区应默认为空");
+        assert_eq!(data.edit_cursor, 0, "编辑光标应默认为 0");
+        assert!(!data.clear_hovered, "清空按钮默认不应 hover");
+        assert!(!data.save_hovered, "保存按钮默认不应 hover");
+    }
+
+    // ===== 名称字符限制验证 =====
+
+    #[test]
+    fn test_name_max_length_16_chars() {
+        // 验证 16 字符限制对 ASCII 和中文均有效
+        let max_chars = 16;
+        let ascii_name: String = "a".repeat(max_chars);
+        assert_eq!(ascii_name.chars().count(), 16);
+
+        let chinese_name: String = "名".repeat(max_chars);
+        assert_eq!(chinese_name.chars().count(), 16);
+
+        // 超出限制
+        let over_limit: String = "a".repeat(max_chars + 1);
+        assert!(
+            over_limit.chars().count() > max_chars,
+            "超出 16 字符应被拒绝"
+        );
     }
 }

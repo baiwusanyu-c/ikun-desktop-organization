@@ -133,6 +133,7 @@ pub const WM_PAINT: u32 = 0x000F;
 pub const WM_DESTROY: u32 = 0x0002;
 pub const WM_SIZE: u32 = 0x0005;
 pub const WM_NCHITTEST: u32 = 0x0084;
+pub const WM_NCLBUTTONDBLCLK: u32 = 0x00A3;
 pub const WM_SETCURSOR: u32 = 0x0020;
 pub const WM_GETMINMAXINFO: u32 = 0x0024;
 pub const WM_DPICHANGED: u32 = 0x02E0;
@@ -546,6 +547,30 @@ mod tests {
         assert_eq!(VK_ESCAPE, 0x1B);
         assert_eq!(WA_INACTIVE, 0);
         assert_eq!(TRANSPARENT, 1);
+    }
+
+    #[test]
+    fn test_edit_mode_constants() {
+        // 名称编辑模式使用的 Win32 常量
+        assert_eq!(WM_CHAR, 0x0102, "WM_CHAR 字符输入消息");
+        assert_eq!(WM_KILLFOCUS, 0x0008, "WM_KILLFOCUS 失去焦点消息");
+        assert_eq!(
+            WM_NCLBUTTONDBLCLK, 0x00A3,
+            "WM_NCLBUTTONDBLCLK 非客户区双击"
+        );
+        assert_eq!(VK_BACK, 0x08, "退格键");
+        assert_eq!(VK_DELETE, 0x2E, "删除键");
+        assert_eq!(VK_HOME, 0x24, "Home 键");
+        assert_eq!(VK_END, 0x23, "End 键");
+    }
+
+    #[test]
+    fn test_idc_ibeam_cursor_id() {
+        // I 型光标（文本输入模式）
+        assert_eq!(IDC_IBEAM_ID, 32513);
+        // 确保与其他光标 ID 不冲突
+        assert_ne!(IDC_IBEAM_ID, IDC_ARROW_ID);
+        assert_ne!(IDC_IBEAM_ID, IDC_HAND_ID);
     }
 
     #[test]
