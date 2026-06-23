@@ -17,17 +17,15 @@ use crate::config::app_config::{GroupBy, SortMode, ViewMode};
 use std::ffi::c_void;
 
 use windows::Win32::Graphics::Direct2D::{
-    Common::{D2D1_PIXEL_FORMAT},
-    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, D2D1_DRAW_TEXT_OPTIONS_NONE,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
-    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
-    D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT,
+    Common::D2D1_PIXEL_FORMAT, D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory,
+    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
+    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE,
+    D2D1_ROUNDED_RECT,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL,
-    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_NORMAL,
-    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
-    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_WORD_WRAPPING_NO_WRAP,
+    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_WORD_WRAPPING_NO_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::HDC as GdiHDC;
@@ -125,7 +123,13 @@ pub fn show_menu_window(parent_hwnd: HWND) {
     let (menu_w, menu_h) = calculate_menu_size(&items, dpi);
 
     // 屏幕边界检测（使用父窗口所在显示器）
-    let (final_x, final_y) = adjust_menu_position(menu_x, menu_y, menu_w, menu_h, parent_rect.left + btn_x + btn_size);
+    let (final_x, final_y) = adjust_menu_position(
+        menu_x,
+        menu_y,
+        menu_w,
+        menu_h,
+        parent_rect.left + btn_x + btn_size,
+    );
 
     // 创建并显示菜单窗口
     let cmd = run_menu_loop(parent_hwnd, final_x, final_y, menu_w, menu_h, items, dpi);
@@ -133,10 +137,34 @@ pub fn show_menu_window(parent_hwnd: HWND) {
     // 恢复状态
     parent_data.locked = was_locked;
     parent_data.menu.open = false;
-    render_layered_window(parent_hwnd);
 
     if cmd > 0 {
-        handle_menu_command(parent_data, cmd);
+        let should_destroy = handle_menu_command(parent_data, cmd);
+        if should_destroy {
+            // 1. 先读 config_id（窗口销毁前）
+            let config_id = parent_data.config_id;
+            let title = parent_data.title.clone();
+            // 2. 销毁窗口
+            super::grid_window::destroy_grid_window(parent_hwnd);
+            // parent_data 已失效，不再访问
+            // 3. 销毁后重绘所有剩余窗口（修复 DestroyWindow 导致其他分层窗口失效）
+            super::grid_window::rerender_all_grid_windows();
+            // 4. 按 UUID 精确删除配置
+            match crate::config::AppConfig::load() {
+                Ok(mut config) => {
+                    config.layout.boxes.retain(|b| b.id != config_id);
+                    if let Err(e) = config.save() {
+                        log::warn!("删除后保存配置失败: {}", e);
+                    } else {
+                        log::info!("已删除 '{}', 剩余 {} 个", title, config.layout.boxes.len());
+                    }
+                }
+                Err(e) => log::warn!("加载配置失败: {}", e),
+            }
+        } else {
+            render_layered_window(parent_hwnd);
+        }
+    } else {
         render_layered_window(parent_hwnd);
     }
 }
@@ -175,8 +203,16 @@ fn build_menu_items(
         })
         .collect();
     sort_children.push(MenuItem::separator());
-    sort_children.push(MenuItem::new("递增", CMD_SORT_ASC).checked(current_asc).radio(true));
-    sort_children.push(MenuItem::new("递减", CMD_SORT_DESC).checked(!current_asc).radio(true));
+    sort_children.push(
+        MenuItem::new("递增", CMD_SORT_ASC)
+            .checked(current_asc)
+            .radio(true),
+    );
+    sort_children.push(
+        MenuItem::new("递减", CMD_SORT_DESC)
+            .checked(!current_asc)
+            .radio(true),
+    );
 
     // 分组子菜单
     let group_items_data = [
@@ -212,8 +248,7 @@ fn build_menu_items(
         .iter()
         .enumerate()
         .map(|(i, (label, mode))| {
-            MenuItem::new(label, CMD_VIEW_BASE + i as u32)
-                .checked(*mode == *current_view)
+            MenuItem::new(label, CMD_VIEW_BASE + i as u32).checked(*mode == *current_view)
         })
         .collect();
 
@@ -275,8 +310,18 @@ fn adjust_menu_position(x: i32, y: i32, w: i32, h: i32, btn_right_x: i32) -> (i3
     let monitor = unsafe { MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST) };
     let mut mi = MONITORINFO {
         cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-        rcMonitor: RECT { left: 0, top: 0, right: 0, bottom: 0 },
-        rcWork: RECT { left: 0, top: 0, right: 0, bottom: 0 },
+        rcMonitor: RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        },
+        rcWork: RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        },
         dwFlags: 0,
     };
     unsafe { GetMonitorInfoW(monitor, &mut mi) };
@@ -306,13 +351,33 @@ fn adjust_menu_position(x: i32, y: i32, w: i32, h: i32, btn_right_x: i32) -> (i3
 }
 
 /// 子菜单位置计算
-fn adjust_submenu_position(parent_right: i32, parent_top: i32, item_top: i32, sub_w: i32, sub_h: i32, parent_left: i32) -> (i32, i32) {
-    let pt = POINT { x: parent_right, y: item_top };
+fn adjust_submenu_position(
+    parent_right: i32,
+    parent_top: i32,
+    item_top: i32,
+    sub_w: i32,
+    sub_h: i32,
+    parent_left: i32,
+) -> (i32, i32) {
+    let pt = POINT {
+        x: parent_right,
+        y: item_top,
+    };
     let monitor = unsafe { MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST) };
     let mut mi = MONITORINFO {
         cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-        rcMonitor: RECT { left: 0, top: 0, right: 0, bottom: 0 },
-        rcWork: RECT { left: 0, top: 0, right: 0, bottom: 0 },
+        rcMonitor: RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        },
+        rcWork: RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        },
         dwFlags: 0,
     };
     unsafe { GetMonitorInfoW(monitor, &mut mi) };
@@ -344,11 +409,11 @@ struct MenuWindowData {
     menu_width: i32,
     menu_height: i32,
     dpi: u32,
-    parent_hwnd: HWND,        // 分类框窗口
-    main_menu_hwnd: HWND,     // 主菜单窗口（子菜单用，用于传播命令）
-    submenu_hwnd: HWND,       // 当前打开的子菜单窗口
+    parent_hwnd: HWND,    // 分类框窗口
+    main_menu_hwnd: HWND, // 主菜单窗口（子菜单用，用于传播命令）
+    submenu_hwnd: HWND,   // 当前打开的子菜单窗口
     submenu_parent_index: i32,
-    is_submenu: bool,         // 是否为子菜单
+    is_submenu: bool,             // 是否为子菜单
     ignore_first_lbuttonup: bool, // 跳过按钮原始点击的 WM_LBUTTONUP
     result_cmd: i32,
     is_closing: bool,
@@ -437,10 +502,10 @@ fn run_menu_loop(
     }
 
     // 初始化 D2D 设备
-    let d2d_factory = unsafe {
-        D2D1CreateFactory::<ID2D1Factory>(D2D1_FACTORY_TYPE_SINGLE_THREADED, None).ok()
-    };
-    let dw_factory = unsafe { DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED).ok() };
+    let d2d_factory =
+        unsafe { D2D1CreateFactory::<ID2D1Factory>(D2D1_FACTORY_TYPE_SINGLE_THREADED, None).ok() };
+    let dw_factory =
+        unsafe { DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED).ok() };
     let wic_factory = unsafe {
         CoCreateInstance::<_, IWICImagingFactory>(
             &CLSID_WICImagingFactory,
@@ -454,7 +519,8 @@ fn run_menu_loop(
             r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
             pixelFormat: D2D1_PIXEL_FORMAT {
                 format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                alphaMode: windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED,
+                alphaMode:
+                    windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED,
             },
             dpiX: 0.0,
             dpiY: 0.0,
@@ -648,10 +714,17 @@ unsafe extern "system" fn menu_wnd_proc(
             if !data.submenu_hwnd.is_null() {
                 let mut pt = POINT { x: 0, y: 0 };
                 unsafe { GetCursorPos(&mut pt) };
-                let mut sub_rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+                let mut sub_rect = RECT {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                };
                 unsafe { GetWindowRect(data.submenu_hwnd, &mut sub_rect) };
-                if pt.x >= sub_rect.left && pt.x < sub_rect.right
-                    && pt.y >= sub_rect.top && pt.y < sub_rect.bottom
+                if pt.x >= sub_rect.left
+                    && pt.x < sub_rect.right
+                    && pt.y >= sub_rect.top
+                    && pt.y < sub_rect.bottom
                 {
                     return 0; // 鼠标在子菜单上，不关闭
                 }
@@ -666,7 +739,8 @@ unsafe extern "system" fn menu_wnd_proc(
         WM_ACTIVATE => {
             let activate_state = (wparam & 0xFFFF) as u32;
             if activate_state == WA_INACTIVE {
-                let data_ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut MenuWindowData;
+                let data_ptr =
+                    unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut MenuWindowData;
                 if data_ptr.is_null() {
                     return 0;
                 }
@@ -824,7 +898,12 @@ fn open_submenu(parent_hwnd: HWND, data: &mut MenuWindowData, item_index: i32) {
     let (sub_w, sub_h) = calculate_menu_size(&item.children, data.dpi);
 
     // 获取父菜单位置
-    let mut parent_rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    let mut parent_rect = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
     unsafe { GetWindowRect(parent_hwnd, &mut parent_rect) };
 
     // 子菜单位置
@@ -869,21 +948,25 @@ fn open_submenu(parent_hwnd: HWND, data: &mut MenuWindowData, item_index: i32) {
     // 初始化子菜单数据
     let sub_item_rects = calculate_item_rects(&item.children, data.dpi);
 
-    let sub_d2d_factory = unsafe {
-        D2D1CreateFactory::<ID2D1Factory>(D2D1_FACTORY_TYPE_SINGLE_THREADED, None).ok()
-    };
-    let sub_dw_factory = unsafe {
-        DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED).ok()
-    };
+    let sub_d2d_factory =
+        unsafe { D2D1CreateFactory::<ID2D1Factory>(D2D1_FACTORY_TYPE_SINGLE_THREADED, None).ok() };
+    let sub_dw_factory =
+        unsafe { DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED).ok() };
     let sub_wic_factory = unsafe {
-        CoCreateInstance::<_, IWICImagingFactory>(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok()
+        CoCreateInstance::<_, IWICImagingFactory>(
+            &CLSID_WICImagingFactory,
+            None,
+            CLSCTX_INPROC_SERVER,
+        )
+        .ok()
     };
     let sub_d2d_target = if let Some(ref factory) = sub_d2d_factory {
         let props = D2D1_RENDER_TARGET_PROPERTIES {
             r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
             pixelFormat: D2D1_PIXEL_FORMAT {
                 format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                alphaMode: windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED,
+                alphaMode:
+                    windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED,
             },
             dpiX: 0.0,
             dpiY: 0.0,
@@ -896,15 +979,19 @@ fn open_submenu(parent_hwnd: HWND, data: &mut MenuWindowData, item_index: i32) {
     };
 
     let sub_data = Box::new(MenuWindowData {
-        items: item.children.iter().map(|c| MenuItem {
-            label: c.label.clone(),
-            id: c.id,
-            is_separator: c.is_separator,
-            is_checked: c.is_checked,
-            is_radio: c.is_radio,
-            is_disabled: c.is_disabled,
-            children: Vec::new(), // 子菜单不支持多级
-        }).collect(),
+        items: item
+            .children
+            .iter()
+            .map(|c| MenuItem {
+                label: c.label.clone(),
+                id: c.id,
+                is_separator: c.is_separator,
+                is_checked: c.is_checked,
+                is_radio: c.is_radio,
+                is_disabled: c.is_disabled,
+                children: Vec::new(), // 子菜单不支持多级
+            })
+            .collect(),
         item_rects: sub_item_rects,
         hovered_index: -1,
         menu_width: sub_w,
@@ -947,21 +1034,23 @@ fn close_submenu(data: &mut MenuWindowData) {
 fn render_menu(hwnd: HWND) {
     let data = unsafe {
         let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut MenuWindowData;
-        if ptr.is_null() { return; }
+        if ptr.is_null() {
+            return;
+        }
         &mut *ptr
     };
 
-    let (Some(ref _d2d_factory), Some(ref dw_factory), Some(ref target)) = (
-        &data.d2d_factory,
-        &data.dw_factory,
-        &data.d2d_target,
-    ) else {
+    let (Some(ref _d2d_factory), Some(ref dw_factory), Some(ref target)) =
+        (&data.d2d_factory, &data.dw_factory, &data.d2d_target)
+    else {
         return;
     };
 
     let w = data.menu_width;
     let h = data.menu_height;
-    if w <= 0 || h <= 0 { return; }
+    if w <= 0 || h <= 0 {
+        return;
+    }
 
     let ww = w as f32;
     let hh = h as f32;
@@ -997,16 +1086,29 @@ fn render_menu(hwnd: HWND) {
         )
     };
     if dib.is_null() || bits.is_null() {
-        unsafe { DeleteDC(mem_dc); ReleaseDC(std::ptr::null_mut(), screen_dc) };
+        unsafe {
+            DeleteDC(mem_dc);
+            ReleaseDC(std::ptr::null_mut(), screen_dc)
+        };
         return;
     }
 
     let old_bmp = unsafe { SelectObject(mem_dc, dib as HGDIOBJ) };
 
     // 绑定 D2D render target
-    let bind_rect = windows::Win32::Foundation::RECT { left: 0, top: 0, right: w, bottom: h };
+    let bind_rect = windows::Win32::Foundation::RECT {
+        left: 0,
+        top: 0,
+        right: w,
+        bottom: h,
+    };
     if unsafe { target.BindDC(GdiHDC(mem_dc), &bind_rect) }.is_err() {
-        unsafe { SelectObject(mem_dc, old_bmp); DeleteObject(dib as HGDIOBJ); DeleteDC(mem_dc); ReleaseDC(std::ptr::null_mut(), screen_dc) };
+        unsafe {
+            SelectObject(mem_dc, old_bmp);
+            DeleteObject(dib as HGDIOBJ);
+            DeleteDC(mem_dc);
+            ReleaseDC(std::ptr::null_mut(), screen_dc)
+        };
         return;
     }
 
@@ -1015,7 +1117,10 @@ fn render_menu(hwnd: HWND) {
 
     // 清空透明
     let transparent = windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F {
-        r: 0.0, g: 0.0, b: 0.0, a: 0.0,
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+        a: 0.0,
     };
     unsafe { target.Clear(Some(&transparent)) };
 
@@ -1044,7 +1149,8 @@ fn render_menu(hwnd: HWND) {
     for (i, item) in data.items.iter().enumerate() {
         if item.is_separator {
             // 分隔线
-            let line_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(100, 105, 125, 140), None) };
+            let line_brush =
+                unsafe { target.CreateSolidColorBrush(&d2d_color(100, 105, 125, 140), None) };
             if let Ok(ref brush) = line_brush {
                 let line_y = (y + sep_h / 2) as f32;
                 let line_rect = d2d_rect(padding_x, line_y, ww - padding_x, line_y + 1.0);
@@ -1060,7 +1166,8 @@ fn render_menu(hwnd: HWND) {
 
         // Hover 高亮背景
         if is_hovered && !item.is_disabled {
-            let hover_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(75, 80, 105, 240), None) };
+            let hover_brush =
+                unsafe { target.CreateSolidColorBrush(&d2d_color(75, 80, 105, 240), None) };
             if let Ok(ref brush) = hover_brush {
                 let hover_rect = D2D1_ROUNDED_RECT {
                     rect: d2d_rect(4.0, item_top + 1.0, ww - 4.0, item_bottom - 1.0),
@@ -1103,13 +1210,17 @@ fn render_menu(hwnd: HWND) {
                     )
                 };
                 if let Some(ref cl) = check_layout {
-                    let check_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(100, 210, 255, 255), None) };
+                    let check_brush = unsafe {
+                        target.CreateSolidColorBrush(&d2d_color(100, 210, 255, 255), None)
+                    };
                     if let Ok(ref cb) = check_brush {
                         let origin = windows::Win32::Graphics::Direct2D::Common::D2D_POINT_2F {
                             x: 0.0,
                             y: item_top,
                         };
-                        unsafe { target.DrawTextLayout(origin, cl, cb, D2D1_DRAW_TEXT_OPTIONS_NONE) };
+                        unsafe {
+                            target.DrawTextLayout(origin, cl, cb, D2D1_DRAW_TEXT_OPTIONS_NONE)
+                        };
                     }
                 }
             }
@@ -1203,7 +1314,9 @@ fn render_menu(hwnd: HWND) {
                             x: ww - arrow_w as f32 - 4.0,
                             y: item_top,
                         };
-                        unsafe { target.DrawTextLayout(origin, al, ab, D2D1_DRAW_TEXT_OPTIONS_NONE) };
+                        unsafe {
+                            target.DrawTextLayout(origin, al, ab, D2D1_DRAW_TEXT_OPTIONS_NONE)
+                        };
                     }
                 }
             }
@@ -1229,7 +1342,17 @@ fn render_menu(hwnd: HWND) {
         alpha_format: AC_SRC_ALPHA,
     };
     unsafe {
-        UpdateLayeredWindow(hwnd, screen_dc, std::ptr::null(), &size, mem_dc, &src_pt, 0, &blend, LWA_ALPHA);
+        UpdateLayeredWindow(
+            hwnd,
+            screen_dc,
+            std::ptr::null(),
+            &size,
+            mem_dc,
+            &src_pt,
+            0,
+            &blend,
+            LWA_ALPHA,
+        );
     }
 
     // 清理 GDI 资源
@@ -1243,14 +1366,25 @@ fn render_menu(hwnd: HWND) {
 
 // ===== 命令处理 =====
 
-fn handle_menu_command(pd: &mut super::grid_window::GridWindowData, cmd: i32) {
+/// 处理菜单命令
+///
+/// 返回 `true` 表示分类框已被删除，调用方应销毁窗口（不再渲染）。
+/// 返回 `false` 表示仅修改了状态，调用方应重新渲染窗口。
+fn handle_menu_command(pd: &mut super::grid_window::GridWindowData, cmd: i32) -> bool {
     let cmd = cmd as u32;
     if cmd == CMD_DELETE {
-        log::info!("[预留] 分类框删除: {}", pd.title);
+        log::info!("删除分类框: {}", pd.title);
+        return true; // 通知调用方销毁窗口
     } else if cmd >= CMD_SORT_BASE && cmd < CMD_SORT_BASE + 8 {
         let modes = [
-            SortMode::Name, SortMode::Type, SortMode::ModifiedTime, SortMode::Author,
-            SortMode::CreatedTime, SortMode::Size, SortMode::Tag, SortMode::Title,
+            SortMode::Name,
+            SortMode::Type,
+            SortMode::ModifiedTime,
+            SortMode::Author,
+            SortMode::CreatedTime,
+            SortMode::Size,
+            SortMode::Tag,
+            SortMode::Title,
         ];
         pd.sort_mode = modes[(cmd - CMD_SORT_BASE) as usize].clone();
         log::info!("排序: {:?}", pd.sort_mode);
@@ -1262,19 +1396,32 @@ fn handle_menu_command(pd: &mut super::grid_window::GridWindowData, cmd: i32) {
         log::info!("排序: 递减");
     } else if cmd >= CMD_GROUP_BASE && cmd < CMD_GROUP_BASE + 8 {
         let modes = [
-            GroupBy::Name, GroupBy::Type, GroupBy::ModifiedTime, GroupBy::Author,
-            GroupBy::CreatedTime, GroupBy::Size, GroupBy::Tag, GroupBy::Title,
+            GroupBy::Name,
+            GroupBy::Type,
+            GroupBy::ModifiedTime,
+            GroupBy::Author,
+            GroupBy::CreatedTime,
+            GroupBy::Size,
+            GroupBy::Tag,
+            GroupBy::Title,
         ];
         pd.group_by = modes[(cmd - CMD_GROUP_BASE) as usize].clone();
         log::info!("分组: {:?}", pd.group_by);
     } else if cmd >= CMD_VIEW_BASE && cmd < CMD_VIEW_BASE + 8 {
         let modes = [
-            ViewMode::ExtraLarge, ViewMode::Large, ViewMode::Medium, ViewMode::Small,
-            ViewMode::List, ViewMode::Detail, ViewMode::Tiles, ViewMode::Content,
+            ViewMode::ExtraLarge,
+            ViewMode::Large,
+            ViewMode::Medium,
+            ViewMode::Small,
+            ViewMode::List,
+            ViewMode::Detail,
+            ViewMode::Tiles,
+            ViewMode::Content,
         ];
         let mode = &modes[(cmd - CMD_VIEW_BASE) as usize];
         log::info!("[预留] 查看模式切换: {:?}（暂未实现）", mode);
     }
+    false // 非删除操作，窗口保留
 }
 
 // ===== 测试 =====
@@ -1313,7 +1460,11 @@ mod tests {
         assert!(sort_item.children[1].is_checked);
         assert_eq!(sort_item.children[1].label, "类型");
         // 递减应该被勾选
-        let desc_item = sort_item.children.iter().find(|c| c.label == "递减").unwrap();
+        let desc_item = sort_item
+            .children
+            .iter()
+            .find(|c| c.label == "递减")
+            .unwrap();
         assert!(desc_item.is_checked);
     }
 
@@ -1483,6 +1634,24 @@ mod tests {
     }
 
     #[test]
+    fn test_handle_menu_command_delete_returns_true() {
+        let mut data = super::super::grid_window::GridWindowData::test_default();
+        // CMD_DELETE 应返回 true（通知调用方销毁窗口）
+        assert!(handle_menu_command(&mut data, CMD_DELETE as i32));
+    }
+
+    #[test]
+    fn test_handle_menu_command_non_delete_returns_false() {
+        let mut data = super::super::grid_window::GridWindowData::test_default();
+        // 排序命令应返回 false（不删除窗口）
+        assert!(!handle_menu_command(&mut data, CMD_SORT_BASE as i32));
+        // 分组命令应返回 false
+        assert!(!handle_menu_command(&mut data, CMD_GROUP_BASE as i32));
+        // 查看命令应返回 false
+        assert!(!handle_menu_command(&mut data, CMD_VIEW_BASE as i32));
+    }
+
+    #[test]
     fn test_menu_item_builder_chaining() {
         let item = MenuItem::new("测试", 42)
             .checked(true)
@@ -1500,10 +1669,18 @@ mod tests {
     fn test_menu_group_checked_state() {
         let items = build_menu_items(&SortMode::Name, true, &GroupBy::Author, &ViewMode::Medium);
         let group_item = &items[3]; // 分组
-        let author_child = group_item.children.iter().find(|c| c.label == "作者").unwrap();
+        let author_child = group_item
+            .children
+            .iter()
+            .find(|c| c.label == "作者")
+            .unwrap();
         assert!(author_child.is_checked, "当前分组为 Author，应被勾选");
 
-        let name_child = group_item.children.iter().find(|c| c.label == "名称").unwrap();
+        let name_child = group_item
+            .children
+            .iter()
+            .find(|c| c.label == "名称")
+            .unwrap();
         assert!(!name_child.is_checked, "非当前分组不应被勾选");
     }
 }

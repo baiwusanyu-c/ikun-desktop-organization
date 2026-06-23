@@ -844,4 +844,95 @@ mod tests {
         assert_eq!(overrides.border_radius, Some(20.0));
         assert!(overrides.background_alpha.is_none());
     }
+
+    // ---- UUID 精确删除验证 ----
+
+    #[test]
+    fn test_box_layout_retain_by_uuid_removes_exact_one() {
+        let id_a = uuid::Uuid::new_v4();
+        let id_b = uuid::Uuid::new_v4();
+        let id_c = uuid::Uuid::new_v4();
+
+        let mut layout = LayoutConfig {
+            boxes: vec![
+                BoxLayoutData {
+                    id: id_a,
+                    name: "A".into(),
+                    ..Default::default()
+                },
+                BoxLayoutData {
+                    id: id_b,
+                    name: "B".into(),
+                    ..Default::default()
+                },
+                BoxLayoutData {
+                    id: id_c,
+                    name: "C".into(),
+                    ..Default::default()
+                },
+            ],
+        };
+
+        // 按 B 的 UUID 删除，应该只移除 B
+        layout.boxes.retain(|b| b.id != id_b);
+        assert_eq!(layout.boxes.len(), 2);
+        assert_eq!(layout.boxes[0].name, "A");
+        assert_eq!(layout.boxes[0].id, id_a);
+        assert_eq!(layout.boxes[1].name, "C");
+        assert_eq!(layout.boxes[1].id, id_c);
+    }
+
+    #[test]
+    fn test_box_layout_retain_by_uuid_no_match_keeps_all() {
+        let id_a = uuid::Uuid::new_v4();
+        let id_b = uuid::Uuid::new_v4();
+        let unknown_id = uuid::Uuid::new_v4();
+
+        let mut layout = LayoutConfig {
+            boxes: vec![
+                BoxLayoutData {
+                    id: id_a,
+                    name: "A".into(),
+                    ..Default::default()
+                },
+                BoxLayoutData {
+                    id: id_b,
+                    name: "B".into(),
+                    ..Default::default()
+                },
+            ],
+        };
+
+        // 不存在的 UUID 不应删除任何条目
+        layout.boxes.retain(|b| b.id != unknown_id);
+        assert_eq!(layout.boxes.len(), 2);
+    }
+
+    #[test]
+    fn test_box_layout_retain_by_uuid_duplicate_name_different_id() {
+        // 验证：即使两个 box 同名，UUID 删除也只删一个
+        let id_a = uuid::Uuid::new_v4();
+        let id_b = uuid::Uuid::new_v4();
+
+        let mut layout = LayoutConfig {
+            boxes: vec![
+                BoxLayoutData {
+                    id: id_a,
+                    name: "同名".into(),
+                    ..Default::default()
+                },
+                BoxLayoutData {
+                    id: id_b,
+                    name: "同名".into(),
+                    ..Default::default()
+                },
+            ],
+        };
+
+        // 按 id_b 删除，应该只删第二个
+        layout.boxes.retain(|b| b.id != id_b);
+        assert_eq!(layout.boxes.len(), 1);
+        assert_eq!(layout.boxes[0].id, id_a);
+        assert_eq!(layout.boxes[0].name, "同名");
+    }
 }

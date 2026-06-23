@@ -641,6 +641,36 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             0
         }
 
+        // ===== 延迟删除分类框（由菜单 PostMessage 触发，在消息循环正常调度时处理）=====
+        WM_USER_DELETE_BOX => {
+            // 先读取 config_id 和 title（窗口销毁前）
+            let (config_id, title) = get_data(hwnd)
+                .map(|d| (d.config_id, d.title.clone()))
+                .unwrap_or((uuid::Uuid::nil(), String::new()));
+            log::info!("删除分类框: '{}' (id={})", title, config_id);
+
+            // 销毁窗口（从全局列表移除 + DestroyWindow）
+            super::grid_window::destroy_grid_window(hwnd);
+
+            // 按 UUID 精确删除配置中的一条记录
+            match crate::config::AppConfig::load() {
+                Ok(mut config) => {
+                    let before = config.layout.boxes.len();
+                    config.layout.boxes.retain(|b| b.id != config_id);
+                    let after = config.layout.boxes.len();
+                    if let Err(e) = config.save() {
+                        log::warn!("删除分类框后保存配置失败: {}", e);
+                    } else {
+                        log::info!("已删除分类框 '{}'，配置: {} → {} 个", title, before, after);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("加载配置失败，跳过配置更新: {}", e);
+                }
+            }
+            0
+        }
+
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }

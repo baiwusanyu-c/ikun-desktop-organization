@@ -297,6 +297,7 @@ impl MyApp {
                 sort_mode: box_data.sort_mode.clone(),
                 sort_ascending: box_data.sort_ascending,
                 group_by: box_data.group_by.clone(),
+                config_id: box_data.id,
             };
             if create_grid_window(params).is_ok() {
                 created_count += 1;
@@ -386,6 +387,7 @@ impl MyApp {
                 sort_mode: self.ctx.config.box_defaults.sort_mode.clone(),
                 sort_ascending: self.ctx.config.box_defaults.sort_ascending,
                 group_by: self.ctx.config.box_defaults.group_by.clone(),
+                config_id: uuid::Uuid::new_v4(),
             };
             if create_grid_window(params).is_ok() {
                 created_count += 1;
@@ -438,6 +440,7 @@ impl MyApp {
             sort_mode: self.ctx.config.box_defaults.sort_mode.clone(),
             sort_ascending: self.ctx.config.box_defaults.sort_ascending,
             group_by: self.ctx.config.box_defaults.group_by.clone(),
+            config_id: uuid::Uuid::new_v4(),
         };
         match create_grid_window(params) {
             Ok(_) => {

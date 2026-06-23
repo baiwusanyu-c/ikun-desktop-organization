@@ -1,4 +1,4 @@
-﻿//! 格子窗口 - 核心组件（Direct2D/DirectWrite 渲染）
+//! 格子窗口 - 核心组件（Direct2D/DirectWrite 渲染）
 //!
 //! 每个收纳格子是一个独立的 WS_POPUP 分层窗口。
 //! 使用 Direct2D + DirectWrite 渲染到 DIB，通过 UpdateLayeredWindow 提交。
@@ -95,6 +95,8 @@ pub struct GridCreateParams {
     pub sort_ascending: bool,
     /// 分组方式
     pub group_by: GroupBy,
+    /// 配置持久化 ID（对应 BoxLayoutData.id，删除时按此 ID 精确匹配）
+    pub config_id: uuid::Uuid,
 }
 
 /// 格子窗口内部数据（存储在 GWLP_USERDATA）
@@ -103,6 +105,8 @@ pub(crate) struct GridWindowData {
     pub(crate) items: Vec<GridFileItem>,
     #[allow(dead_code)]
     pub(crate) grid_id: usize,
+    /// 配置持久化 ID（对应 BoxLayoutData.id，删除时按此 ID 精确匹配）
+    pub(crate) config_id: uuid::Uuid,
     pub(crate) title_h: i32,
     /// 单元格宽度
     pub(crate) cell_w: i32,
@@ -159,6 +163,7 @@ impl GridWindowData {
             title: "测试分类框".to_string(),
             items: Vec::new(),
             grid_id: 0,
+            config_id: uuid::Uuid::new_v4(),
             title_h: 40,
             cell_w: 80,
             cell_h: 100,
@@ -444,6 +449,7 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         title: params.title,
         items: params.items,
         grid_id: params.id,
+        config_id: params.config_id,
         title_h,
         cell_w,
         cell_h,
@@ -664,6 +670,23 @@ pub(super) fn menu_extra_height(dpi: u32) -> i32 {
     menu_row_h(dpi) * 4 + menu_separator_h(dpi) + scale_for_dpi(32, dpi)
 }
 
+/// 销毁单个格子窗口
+///
+/// 从全局列表中移除并销毁 Win32 窗口。
+/// WM_DESTROY 会自动释放 GridWindowData（图标句柄、D2D/DW 资源）。
+pub fn destroy_grid_window(hwnd: HWND) {
+    // 从全局列表移除
+    if let Ok(mut grids) = GRID_WINDOWS.lock() {
+        grids.retain(|g| g.hwnd != hwnd);
+    }
+
+    // 销毁窗口（触发 WM_DESTROY → 释放 GridWindowData）
+    unsafe {
+        DestroyWindow(hwnd);
+    }
+    log::info!("分类框窗口已销毁");
+}
+
 /// 销毁所有格子窗口
 pub fn destroy_all_grid_windows() {
     if let Ok(mut grids) = GRID_WINDOWS.lock() {
@@ -674,6 +697,32 @@ pub fn destroy_all_grid_windows() {
         }
     }
     log::info!("所有格子窗口已销毁");
+}
+
+/// 刷新所有格子窗口（修复 DestroyWindow 导致的分层窗口异常）
+///
+/// DestroyWindow 会导致同线程其他分层窗口 Z-order 和可见性异常。
+/// 修复顺序：先 UpdateLayeredWindow 刷新内容 → 再 SetWindowPos 恢复 Z-order。
+pub fn rerender_all_grid_windows() {
+    if let Ok(grids) = GRID_WINDOWS.lock() {
+        for grid in grids.iter() {
+            // 1. 先重绘内容（UpdateLayeredWindow 刷新分层窗口位图）
+            render_layered_window(grid.hwnd);
+            // 2. 恢复 Z-order + 确保可见（不抢焦点）
+            unsafe {
+                SetWindowPos(
+                    grid.hwnd,
+                    std::ptr::null_mut(), // HWND_TOP
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE,
+                );
+                ShowWindow(grid.hwnd, SW_SHOWNA);
+            }
+        }
+    }
 }
 
 /// 获取格子数量
@@ -733,7 +782,7 @@ pub fn collect_grid_layout() -> Vec<crate::config::BoxLayoutData> {
             .collect();
 
         layouts.push(BoxLayoutData {
-            id: Uuid::new_v4(), // TODO: 创建时分配固定 ID，此处暂用新生成
+            id: data.config_id,
             name: data.title.clone(),
             position: [x, y],
             size: [w, h],
@@ -845,6 +894,7 @@ mod tests {
             sort_mode: crate::config::app_config::SortMode::Name,
             sort_ascending: true,
             group_by: crate::config::app_config::GroupBy::None,
+            config_id: uuid::Uuid::new_v4(),
         };
         assert!(params.locked);
 
@@ -861,7 +911,46 @@ mod tests {
             sort_mode: crate::config::app_config::SortMode::Name,
             sort_ascending: true,
             group_by: crate::config::app_config::GroupBy::None,
+            config_id: uuid::Uuid::new_v4(),
         };
         assert!(!params2.locked);
+    }
+
+    #[test]
+    fn test_grid_create_params_config_id_field() {
+        let id = uuid::Uuid::new_v4();
+        let params = GridCreateParams {
+            id: 0,
+            title: "测试".to_string(),
+            x: 0,
+            y: 0,
+            width: 400,
+            height: 600,
+            items: Vec::new(),
+            view_mode: crate::config::app_config::ViewMode::Medium,
+            locked: false,
+            sort_mode: crate::config::app_config::SortMode::Name,
+            sort_ascending: true,
+            group_by: crate::config::app_config::GroupBy::None,
+            config_id: id,
+        };
+        assert_eq!(params.config_id, id);
+        // 每个窗口应有独立的 UUID
+        let params2 = GridCreateParams {
+            config_id: uuid::Uuid::new_v4(),
+            ..params
+        };
+        assert_ne!(params.config_id, params2.config_id);
+    }
+
+    #[test]
+    fn test_grid_window_data_config_id_field() {
+        let id = uuid::Uuid::new_v4();
+        let data = GridWindowData::test_default();
+        // test_default 生成的 config_id 应为有效 UUID
+        assert_ne!(data.config_id, uuid::Uuid::nil());
+        // config_id 应为 v4 UUID
+        assert_eq!(data.config_id.get_version_num(), 4);
+        let _ = id; // 验证外部 UUID 可用
     }
 }

@@ -211,7 +211,10 @@ pub trait Plugin: Send {
 ```
 保存: collect_grid_layout() → config.layout.boxes → save() → ~/.ikun_organizer.json
 恢复: load() → config.layout.boxes → restore_layout() → create_grid_window()
+删除: 菜单 CMD_DELETE → destroy_grid_window(hwnd) → AppConfig.retain(id != config_id) → save()
 ```
+
+**UUID 持久化标识**：每个窗口创建时分配 `config_id: uuid::Uuid`（`GridCreateParams.config_id` → `GridWindowData.config_id`），`collect_grid_layout()` 使用该固定 ID（而非每次 `Uuid::new_v4()`），确保删除操作可按 UUID 精确匹配配置条目。
 
 **DPI 处理**：配置存储逻辑像素（DPI 96 基准），创建/恢复时 `create_grid_window` 按实际 DPI 缩放，`collect_grid_layout` 反向转换回逻辑像素。
 
@@ -303,14 +306,14 @@ main.rs
 - [x] 拖拽移动 + 位置记忆（通过 collect_grid_layout + restore_layout）
 - [x] 边缘拖拽修改尺寸 + 尺寸记忆（同上）
 - [x] 锁定按钮 + 锁定记忆（锁定后不可拖拽/缩放，hover 反馈，状态持久化）
-- [x] "更多"下拉菜单（排序/分组/查看/删除，自定义分层窗口 + D2D/DirectWrite 渲染）
+- [x] "更多"下拉菜单（排序/分组/查看/删除，自定义分层窗口 + D2D/DirectWrite 渲染，删除功能已实现）
 - [ ] 分类框名称修改
 - [x] 排序方式：名称、类型、修改时间、作者、创建时间、大小、标记、标题 × 递增/递减（引擎已实现，菜单可选）
 - [x] 查看方式：超大、大、中、小、列表、详细信息、平铺、内容（引擎已实现，菜单可选）
 - [x] 分组展示：按名称、类型、修改时间、作者、创建时间、大小、标记、标题（引擎已实现，菜单可选）
 - [ ] 拖拽快捷方式到外部桌面 / 外部桌面快捷方式拖入分类框
 - [x] 右键功能与原生快捷方式一致（Shell 上下文菜单已实现）
-- [ ] 分类框删除
+- [x] 分类框删除（更多菜单 → DestroyWindow + UUID 精确删除配置 + rerender_all 修复分层窗口）
 
 ### 桌面右键菜单
 - [x] 创建桌面分类框（注册表注入 + 信号文件 IPC + egui viewport 对话框）
