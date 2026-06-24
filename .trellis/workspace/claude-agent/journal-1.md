@@ -137,3 +137,48 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: 拖拽覆盖文字对齐 + 图标隐藏架构重构
+
+**Date**: 2026-06-25
+**Task**: 修复拖拽体验 — 文字换行对齐 + 拖拽到桌面图标消失
+**Branch**: `master`
+
+### Summary
+
+修复两个拖拽问题：
+1. **拖拽覆盖文字换行不一致**（已修复 ✅）：分类框内 "Microsoft Edge" 显示两行，拖拽时只显示一行。根因是覆盖窗口宽度用 `icon_size*5/2=120px` 而框内 cell_w=80px。修复：传递实际 cell_w + 添加 ellipsis trimming。
+2. **拖拽到桌面空白区域图标消失**（架构已重构，功能仍失效 ❌）：根因是 `hide_native_icons()` 将整个 SysListView32 移到屏幕外 (-32000,-32000)，`show_icon_at()` 设置的图标位置在不可见窗口中。架构已重构为逐个隐藏管理图标（SysListView32 保持原位），但实测仍未生效，需要在其他对话中继续调试。
+
+### Main Changes
+
+- `drag_image.rs`: `create_drag_overlay` 新增 `cell_w` 参数，使用分类框实际单元格宽度
+- `drag_handler.rs`: 传递 `data.cell_w`；`get_or_init_icon_manager` 改为 `pub(crate)`
+- `d2d_render.rs`: 拖拽覆盖文字添加 `CreateEllipsisTrimmingSign` + `SetTrimming`
+- `icon_hider.rs`: 重构 — `hide_native_icons()` 不再移动 SysListView32；新增 `hide_managed_icons(file_paths)` 逐个隐藏；`restore_native_icons()` 恢复每个图标原始位置
+- `icon_manager.rs`: 新增 `get_saved_position()` 方法
+- `app.rs`: `restore_layout()` 和 `perform_auto_classify()` 后调用 `hide_managed_icons()`
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4042dbd` | fix(drag): 拖拽覆盖文字换行对齐分类框 + 逐个隐藏图标架构重构 |
+
+### Testing
+
+- [OK] 编译通过（仅 warnings，无 error）
+- [OK] 拖拽覆盖文字换行与分类框一致
+- [FAIL] 拖拽到桌面空白区域图标仍然消失（架构已重构但未生效）
+
+### Status
+
+**部分完成** — 问题 2（图标消失）架构已重构但功能仍失效
+
+### Next Steps（给下一个对话的上下文）
+
+- **问题 2 待继续调试**：`hide_managed_icons` 可能未正确匹配桌面图标名称（file_stem vs display_name），需检查 `~/.ikun_organizer.log` 确认哪些图标被成功隐藏、哪些未匹配
+- 可能原因：`DesktopIconManager` 的 `find_icon_by_name` 按 SysListView32 显示的文本匹配，但传入的 file_stem 可能与实际桌面显示名称不完全一致
+- 建议：在 `hide_managed_icons` 中添加更详细的日志（输出所有桌面图标名称 + 搜索名称），排查匹配失败原因
+- 还需验证：SysListView32 保持原位后，分类框窗口是否正确覆盖在桌面图标上方（层级关系是否正常）
