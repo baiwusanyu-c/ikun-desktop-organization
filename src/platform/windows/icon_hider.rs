@@ -143,9 +143,16 @@ static ICON_HIDER: Mutex<Option<IconHider>> = Mutex::new(None);
 pub fn hide_native_icons() -> Result<()> {
     let lv_hwnd = find_desktop_listview()?;
 
-    // ★ 关键：在隐藏 SysListView32 前预先初始化 DesktopIconManager
+    // ★ 关键：在隐藏 SysListView32 前保存 HWND 到全局共享位置
     // 隐藏后 FindWindowExW 将无法找到 SysListView32，
-    // 导致后续 DesktopIconManager 初始化失败
+    // DesktopIconManager 需要使用此缓存的 HWND
+    super::ffi_types::SHARED_LISTVIEW_HWND.store(
+        lv_hwnd as isize,
+        std::sync::atomic::Ordering::SeqCst,
+    );
+    log::info!("SysListView32 HWND 已缓存: {:?}", lv_hwnd);
+
+    // 预先初始化 DesktopIconManager（使用缓存的 HWND）
     super::drag_handler::init_icon_manager_early();
 
     // 保存原始位置（用于恢复）

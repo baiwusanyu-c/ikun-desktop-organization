@@ -1391,9 +1391,10 @@ pub fn render_drag_overlay_bitmap(
             a: 0.0,
         }));
 
-        // 绘制图标（使用 draw_icon_d2d：HICON → GetDIBits → premultiplied D2D Bitmap）
+        // 绘制图标（居中于覆盖窗口宽度内）
         if !icon_handle.is_null() {
-            draw_icon_d2d(&target, None, icon_handle, 0, 0, icon_size);
+            let icon_x = (total_w - icon_size) / 2; // 水平居中
+            draw_icon_d2d(&target, None, icon_handle, icon_x, 0, icon_size);
         }
 
         // 绘制标签文字（DirectWrite，与分类框一致）

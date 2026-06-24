@@ -53,10 +53,12 @@ pub(crate) unsafe fn create_drag_overlay(
         return;
     }
 
-    // 计算总尺寸：图标 + 标签区域（与分类框 icon_label_h = scale_for_dpi(36, dpi) 一致）
+    // 计算总尺寸：宽度对齐分类框 cell_w（cell_w / icon_size ≈ 2.5）
+    // 这样标签文字换行行为与分类框一致
+    let overlay_w = icon_size * 5 / 2; // 约 cell_w 比例
     let label_h = if display_name.is_empty() { 0 } else { icon_size * 36 / 48 };
     let gap = if display_name.is_empty() { 0 } else { icon_size * 6 / 48 };
-    let total_w = icon_size;
+    let total_w = overlay_w;
     let total_h = icon_size + gap + label_h;
 
     // 使用 D2D + DirectWrite 渲染复合位图（与分类框标签质量一致）

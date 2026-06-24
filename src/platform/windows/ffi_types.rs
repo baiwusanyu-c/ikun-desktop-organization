@@ -574,6 +574,17 @@ pub struct DragItemInfo {
     pub icon_handle: HICON,
 }
 
+// ===== 共享 SysListView32 HWND =====
+//
+// icon_hider 在隐藏前找到 SysListView32 并保存 HWND 到此全局变量。
+// DesktopIconManager 初始化时优先使用此缓存 HWND，
+// 避免隐藏后 FindWindowExW 无法找到 SysListView32 的问题。
+
+use std::sync::atomic::AtomicIsize;
+
+/// 缓存的 SysListView32 HWND（由 icon_hider 保存，icon_manager 读取）
+pub static SHARED_LISTVIEW_HWND: AtomicIsize = AtomicIsize::new(0);
+
 /// 拖拽启动阈值（像素），鼠标移动超过此距离后启动 OLE 拖拽
 pub const DRAG_THRESHOLD: i32 = 5;
 

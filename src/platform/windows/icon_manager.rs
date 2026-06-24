@@ -58,10 +58,25 @@ impl DesktopIconManager {
     /// 创建桌面图标管理器
     ///
     /// 查找 SysListView32、打开 explorer.exe 进程、构建索引缓存。
+    /// 若 `find_desktop_listview()` 失败（如窗口已被隐藏），
+    /// 则使用 `SHARED_LISTVIEW_HWND` 中缓存的 HWND（由 icon_hider 保存）。
     /// 失败时返回错误（上层应优雅降级）。
     pub fn new() -> Result<Self> {
-        let listview_hwnd = find_desktop_listview()
-            .context("无法找到桌面 SysListView32 窗口")?;
+        let listview_hwnd = find_desktop_listview().unwrap_or_else(|_| {
+            // SysListView32 可能被 icon_hider 隐藏，使用缓存的 HWND
+            let cached = super::ffi_types::SHARED_LISTVIEW_HWND
+                .load(std::sync::atomic::Ordering::SeqCst);
+            if cached != 0 {
+                log::info!("使用缓存的 SysListView32 HWND: {:#X}", cached);
+                cached as HWND
+            } else {
+                std::ptr::null_mut()
+            }
+        });
+
+        if listview_hwnd.is_null() {
+            anyhow::bail!("无法找到桌面 SysListView32 窗口（包括缓存）");
+        }
 
         // 获取 SysListView32 所在进程 ID
         let mut pid: u32 = 0;
