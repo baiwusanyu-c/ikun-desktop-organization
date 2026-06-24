@@ -53,14 +53,15 @@ pub(crate) unsafe fn create_drag_overlay(
         return;
     }
 
-    // 计算总尺寸：图标 + 标签区域
-    let label_h = if display_name.is_empty() { 0 } else { icon_size / 2 };
+    // 计算总尺寸：图标 + 标签区域（与分类框 icon_label_h = scale_for_dpi(36, dpi) 一致）
+    let label_h = if display_name.is_empty() { 0 } else { icon_size * 36 / 48 };
+    let gap = if display_name.is_empty() { 0 } else { icon_size * 6 / 48 };
     let total_w = icon_size;
-    let total_h = icon_size + label_h;
+    let total_h = icon_size + gap + label_h;
 
     // 使用 D2D + DirectWrite 渲染复合位图（与分类框标签质量一致）
     let hbmp = super::d2d_render::render_drag_overlay_bitmap(
-        icon_handle, icon_size, display_name, total_w, total_h, dpi,
+        icon_handle, icon_size, display_name, total_w, total_h, gap, label_h, dpi,
     );
     if hbmp.is_null() {
         log::warn!("创建拖拽覆盖: D2D 位图渲染失败");

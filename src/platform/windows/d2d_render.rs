@@ -1265,7 +1265,9 @@ unsafe fn get_data<'a>(hwnd: HWND) -> Option<&'a mut GridWindowData> {
 /// - `icon_size`: 图标渲染尺寸（DPI 自适应）
 /// - `display_name`: 标签文字
 /// - `total_w`: 位图总宽度
-/// - `total_h`: 位图总高度（图标 + 标签区域）
+/// - `total_h`: 位图总高度（图标 + gap + 标签区域）
+/// - `gap`: 图标与标签之间的间距（DPI 自适应，6px at 96 DPI）
+/// - `label_h`: 标签区域高度（2 行文字高度，36px at 96 DPI）
 /// - `dpi`: 当前 DPI（用于字体缩放）
 pub fn render_drag_overlay_bitmap(
     icon_handle: HICON,
@@ -1273,6 +1275,8 @@ pub fn render_drag_overlay_bitmap(
     display_name: &str,
     total_w: i32,
     total_h: i32,
+    gap: i32,
+    label_h: i32,
     dpi: u32,
 ) -> HBITMAP {
     unsafe {
@@ -1412,43 +1416,67 @@ pub fn render_drag_overlay_bitmap(
                 ) {
                     let _ = text_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
                     let _ = text_format
-                        .SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                        .SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
                     let _ = text_format.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
 
-                    let label_y = icon_size as f32;
-                    let label_h = (total_h - icon_size) as f32;
+                    // 创建省略号裁剪标志（与分类框一致：2 行 + 省略号）
+                    let ellipsis_sign = dw_factory.CreateEllipsisTrimmingSign(&text_format).ok();
+
+                    // 标签位置：图标下方 + 间距，两侧各 2px padding
+                    let label_x = 2.0_f32;
+                    let label_y = (icon_size + gap) as f32;
+                    let label_w = (total_w - 4) as f32;
 
                     let text_wide: Vec<u16> = display_name.encode_utf16().collect();
                     if let Some(layout) = target_inner_create_text_layout(
                         &dw_factory,
                         &text_wide,
                         &text_format,
-                        total_w as f32,
-                        label_h,
+                        label_w,
+                        label_h as f32,
                         DWRITE_TEXT_ALIGNMENT_CENTER,
-                        DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+                        DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
                     ) {
+                        // 应用 line-clamp（2 行 + 省略号，与分类框一致）
+                        if let Some(ref sign) = ellipsis_sign {
+                            let trimming = DWRITE_TRIMMING {
+                                granularity: DWRITE_TRIMMING_GRANULARITY_WORD,
+                                delimiter: 0,
+                                delimiterCount: 0,
+                            };
+                            let _ = layout.SetTrimming(&trimming, sign);
+                        }
+
                         if let Ok(brush) =
                             target.CreateSolidColorBrush(&d2d_color(250, 250, 255, 255), None)
                         {
-                            // 文字阴影（与分类框一致）
+                            // 4 方向阴影描边（与分类框一致）
+                            let shadow_offset = scale_for_dpi(1, dpi) as f32;
                             if let Ok(shadow) = target.CreateSolidColorBrush(
-                                &d2d_color(0, 0, 0, 180),
+                                &d2d_color(0, 0, 0, 200),
                                 None,
                             ) {
-                                target.DrawTextLayout(
-                                    D2D_POINT_2F {
-                                        x: 1.0,
-                                        y: label_y + 1.0,
-                                    },
-                                    &layout,
-                                    &shadow,
-                                    D2D1_DRAW_TEXT_OPTIONS_NONE,
-                                );
+                                for &(dx, dy) in &[
+                                    (shadow_offset, 0.0),
+                                    (-shadow_offset, 0.0),
+                                    (0.0, shadow_offset),
+                                    (0.0, -shadow_offset),
+                                ] {
+                                    target.DrawTextLayout(
+                                        D2D_POINT_2F {
+                                            x: label_x + dx,
+                                            y: label_y + dy,
+                                        },
+                                        &layout,
+                                        &shadow,
+                                        D2D1_DRAW_TEXT_OPTIONS_NONE,
+                                    );
+                                }
                             }
+                            // 主文字（浅灰白色）
                             target.DrawTextLayout(
                                 D2D_POINT_2F {
-                                    x: 0.0,
+                                    x: label_x,
                                     y: label_y,
                                 },
                                 &layout,

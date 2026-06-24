@@ -11,7 +11,7 @@ use crate::context::AppContext;
 use crate::platform::{
     cleanup_desktop_registry, collect_grid_layout, create_grid_window, destroy_all_grid_windows,
     extract_file_icon, get_cursor_monitor_work_area_phys, get_grid_count, get_screen_resolution,
-    hide_native_icons, reposition_window_by_title, restore_native_icons, setup_desktop_registry,
+    hide_native_icons, init_icon_manager_early, reposition_window_by_title, restore_native_icons, setup_desktop_registry,
     take_pending_create_box, DesktopIcon, DesktopManagerTrait, GridCreateParams, GridFileItem,
 };
 use eframe::egui;
@@ -253,6 +253,7 @@ impl MyApp {
         log::info!("开始恢复布局: {} 个分类框", boxes.len());
 
         if !self.ctx.state.icons_hidden {
+            init_icon_manager_early(); // 在隐藏 SysListView32 前缓存 HWND
             if let Err(e) = hide_native_icons() {
                 self.ctx.set_status(format!("隐藏图标失败: {}", e));
                 return;
@@ -322,6 +323,7 @@ impl MyApp {
 
     fn perform_auto_classify(&mut self) {
         if !self.ctx.state.icons_hidden {
+            init_icon_manager_early(); // 在隐藏 SysListView32 前缓存 HWND
             if let Err(e) = hide_native_icons() {
                 self.ctx.set_status(format!("隐藏图标失败: {}", e));
                 return;
@@ -415,6 +417,7 @@ impl MyApp {
     fn create_empty_box(&mut self, name: String) {
         log::info!("创建分类框: '{}'", name);
         if !self.ctx.state.icons_hidden {
+            init_icon_manager_early(); // 在隐藏 SysListView32 前缓存 HWND
             if let Err(e) = hide_native_icons() {
                 self.ctx.set_status(format!("隐藏图标失败: {}", e));
                 return;

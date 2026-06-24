@@ -44,6 +44,29 @@ fn get_or_init_icon_manager() -> Option<std::sync::MutexGuard<'static, Option<De
     Some(guard)
 }
 
+/// 预先初始化桌面图标管理器（在 SysListView32 隐藏前调用）
+///
+/// `hide_native_icons()` 会使 SysListView32 无法被 `FindWindowExW` 找到，
+/// 因此必须在隐藏前初始化 DesktopIconManager 并缓存 HWND。
+pub fn init_icon_manager_early() {
+    let mut guard = match DRAG_ICON_MANAGER.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    if guard.is_some() {
+        return; // 已初始化
+    }
+    match DesktopIconManager::new() {
+        Ok(mgr) => {
+            log::info!("桌面图标管理器已预先初始化（SysListView32 隐藏前）");
+            *guard = Some(mgr);
+        }
+        Err(e) => {
+            log::warn!("桌面图标管理器预先初始化失败: {}", e);
+        }
+    }
+}
+
 // =============================================================================
 // Phase 1: 拖拽阈值检测（从 WM_MOUSEMOVE 调用）
 // =============================================================================

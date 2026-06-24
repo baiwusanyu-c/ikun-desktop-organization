@@ -40,6 +40,7 @@ pub use grid_window::{
 };
 pub use icon_extract::extract_file_icon;
 pub use icon_hider::{hide_native_icons, restore_native_icons};
+pub use drag_handler::init_icon_manager_early;
 pub use icon_manager::DesktopIconManager;
 pub use ole_dnd::{get_box_drag_format_id, start_box_drag};
 pub use drop_target::{
