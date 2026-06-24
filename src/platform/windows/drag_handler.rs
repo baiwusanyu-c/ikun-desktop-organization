@@ -27,7 +27,7 @@ static DRAG_ICON_MANAGER: Mutex<Option<DesktopIconManager>> = Mutex::new(None);
 /// 获取或初始化桌面图标管理器
 ///
 /// 首次调用时创建 DesktopIconManager，失败时返回 None 并记录警告。
-fn get_or_init_icon_manager() -> Option<std::sync::MutexGuard<'static, Option<DesktopIconManager>>> {
+pub(crate) fn get_or_init_icon_manager() -> Option<std::sync::MutexGuard<'static, Option<DesktopIconManager>>> {
     let mut guard = DRAG_ICON_MANAGER.lock().ok()?;
     if guard.is_none() {
         match DesktopIconManager::new() {
@@ -44,10 +44,10 @@ fn get_or_init_icon_manager() -> Option<std::sync::MutexGuard<'static, Option<De
     Some(guard)
 }
 
-/// 预先初始化桌面图标管理器（在 SysListView32 隐藏前调用）
+/// 预先初始化桌面图标管理器
 ///
-/// `hide_native_icons()` 会使 SysListView32 无法被 `FindWindowExW` 找到，
-/// 因此必须在隐藏前初始化 DesktopIconManager 并缓存 HWND。
+/// 在 `hide_native_icons()` 中调用，确保 DesktopIconManager 提前就绪，
+/// 供后续 `hide_managed_icons` 和拖拽释放使用。
 pub fn init_icon_manager_early() {
     let mut guard = match DRAG_ICON_MANAGER.lock() {
         Ok(g) => g,
@@ -108,11 +108,12 @@ pub(crate) fn check_drag_threshold(hwnd: HWND, mx: i32, my: i32) -> bool {
 
     // 创建拖拽覆盖窗口（半透明图标 + 名称标签跟随光标，DPI 自适应尺寸）
     let icon_size = data.icon_size;
+    let cell_w = data.cell_w;
     let display_name = data.items[item_idx as usize].display_name.clone();
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     let dpi = if dpi > 0 { dpi } else { 96 };
     unsafe {
-        super::drag_image::create_drag_overlay(icon_handle, icon_size, &display_name, dpi);
+        super::drag_image::create_drag_overlay(icon_handle, icon_size, cell_w, &display_name, dpi);
         super::drag_image::update_drag_overlay();
         SetCapture(hwnd);
     }

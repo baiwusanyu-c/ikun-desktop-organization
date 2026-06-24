@@ -38,11 +38,13 @@ const FF_DONTCARE: i32 = 0;
 /// # 参数
 /// - `icon_handle`: 被拖拽图标的 HICON 句柄
 /// - `icon_size`: 图标显示尺寸（DPI 自适应，与分类框内图标大小一致）
+/// - `cell_w`: 分类框的单元格宽度（用于标签换行，与框内显示一致）
 /// - `display_name`: 图标下方的标签文字（空字符串则不显示标签）
 /// - `dpi`: 当前窗口 DPI（用于字体缩放）
 pub(crate) unsafe fn create_drag_overlay(
     icon_handle: HICON,
     icon_size: i32,
+    cell_w: i32,
     display_name: &str,
     dpi: u32,
 ) {
@@ -53,9 +55,8 @@ pub(crate) unsafe fn create_drag_overlay(
         return;
     }
 
-    // 计算总尺寸：宽度对齐分类框 cell_w（cell_w / icon_size ≈ 2.5）
-    // 这样标签文字换行行为与分类框一致
-    let overlay_w = icon_size * 5 / 2; // 约 cell_w 比例
+    // 使用分类框的实际 cell_w，确保标签换行行为与框内一致
+    let overlay_w = cell_w;
     let label_h = if display_name.is_empty() { 0 } else { icon_size * 36 / 48 };
     let gap = if display_name.is_empty() { 0 } else { icon_size * 6 / 48 };
     let total_w = overlay_w;

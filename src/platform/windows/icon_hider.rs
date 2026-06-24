@@ -1,17 +1,17 @@
-//! 隐藏/恢复原生桌面图标
+//! 隐藏/恢复桌面图标
 //!
-//! 通过 `SetWindowPos` 将 SysListView32 窗口移到屏幕外来隐藏图标，
-//! 替代 `ShowWindow(SW_HIDE)` 方案。
+//! 通过逐个操作 SysListView32 中的图标位置来隐藏/显示，
+//! **不移动整个 SysListView32 窗口**。
 //!
 //! # 架构决策
 //!
-//! **不使用 `ShowWindow(SW_HIDE)`**：Windows 10/11 下 `SW_HIDE` 会导致
-//! SysListView32 无法被 `FindWindowExW` 找到，从而使 `DesktopIconManager`
-//! 初始化失败（拖拽到桌面时无法恢复图标）。
+//! **不移动 SysListView32 窗口**：将整个窗口移到屏幕外会导致
+//! `show_icon_at` 设置的图标位置不可见（拖拽到桌面时图标消失）。
+//! 保持 SysListView32 在原位，仅将管理的图标移到屏幕外坐标，
+//! 这样拖拽释放时图标可以立即显示在桌面可见位置。
 //!
-//! **使用 `SetWindowPos` 移到屏幕外**：窗口仍然存在于窗口树中，
-//! `FindWindowExW` 可以正常找到，LVM_* 消息正常工作，
-//! 但图标在视觉上不可见。
+//! **旧方案（已废弃）**：`SetWindowPos` 将 SysListView32 移到屏幕外。
+//! 导致拖拽到桌面空白区域时图标不可见（仅程序退出后才恢复）。
 
 use anyhow::Result;
 use std::ffi::c_void;
@@ -28,31 +28,8 @@ extern "system" {
         lpClassName: *const u16,
         lpWindowName: *const u16,
     ) -> HWND;
-    fn SetWindowPos(
-        hWnd: HWND,
-        hWndInsertAfter: HWND,
-        X: i32,
-        Y: i32,
-        cx: i32,
-        cy: i32,
-        uFlags: u32,
-    ) -> i32;
-    fn GetWindowRect(hWnd: HWND, lpRect: *mut Rect) -> i32;
     fn IsWindow(hWnd: HWND) -> i32;
 }
-
-/// 简化的 RECT 结构（仅用于 GetWindowRect）
-#[repr(C)]
-struct Rect {
-    left: i32,
-    top: i32,
-    right: i32,
-    bottom: i32,
-}
-
-// SetWindowPos 标志
-const SWP_NOZORDER: u32 = 0x0004;
-const SWP_NOACTIVATE: u32 = 0x0010;
 
 static PROG_CLASS: &[u16] = &[80, 114, 111, 103, 109, 97, 110, 0]; // "Progman"
 static WORKER_CLASS: &[u16] = &[87, 111, 114, 107, 101, 114, 87, 0]; // "WorkerW"
@@ -122,10 +99,9 @@ fn find_desktop_listview() -> Result<HWND> {
 
 /// 图标隐藏器全局状态
 struct IconHider {
-    listview_hwnd: HWND,
-    /// 隐藏前的原始窗口位置（用于恢复）
-    original_rect: Rect,
     hidden: bool,
+    /// 已隐藏的图标文件路径列表（用于恢复）
+    hidden_file_paths: Vec<String>,
 }
 
 // Safety: HWND 是 Send 的（只在同一线程使用）
@@ -133,78 +109,128 @@ unsafe impl Send for IconHider {}
 
 static ICON_HIDER: Mutex<Option<IconHider>> = Mutex::new(None);
 
-/// 隐藏所有原生桌面图标
+/// 初始化图标隐藏系统（缓存 SysListView32 HWND + 预初始化图标管理器）
 ///
-/// 通过 `SetWindowPos` 将 SysListView32 移到屏幕外（-32000, -32000），
-/// 保持窗口在窗口树中可被 `FindWindowExW` 找到。
+/// 不再移动 SysListView32 窗口，仅缓存句柄和初始化 DesktopIconManager，
+/// 为后续 `hide_managed_icons` 做准备。
 ///
-/// 不使用 `ShowWindow(SW_HIDE)`，因为 Windows 10/11 下会导致
-/// SysListView32 无法被后续找到（影响 DesktopIconManager 初始化）。
+/// 保持 SysListView32 在原位，使拖拽到桌面时图标可立即显示。
 pub fn hide_native_icons() -> Result<()> {
     let lv_hwnd = find_desktop_listview()?;
 
-    // ★ 关键：在隐藏 SysListView32 前保存 HWND 到全局共享位置
-    // 隐藏后 FindWindowExW 将无法找到 SysListView32，
-    // DesktopIconManager 需要使用此缓存的 HWND
+    // ★ 缓存 SysListView32 HWND（供 DesktopIconManager 使用）
     super::ffi_types::SHARED_LISTVIEW_HWND.store(
         lv_hwnd as isize,
         std::sync::atomic::Ordering::SeqCst,
     );
-    log::info!("SysListView32 HWND 已缓存: {:?}", lv_hwnd);
+    log::info!("SysListView32 HWND 已缓存: {:?}（窗口保持在原位）", lv_hwnd);
 
-    // 预先初始化 DesktopIconManager（使用缓存的 HWND）
+    // 预先初始化 DesktopIconManager
     super::drag_handler::init_icon_manager_early();
-
-    // 保存原始位置（用于恢复）
-    let mut original_rect = Rect {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
-    };
-    let got_rect = unsafe { GetWindowRect(lv_hwnd, &mut original_rect) };
-    if got_rect == 0 {
-        anyhow::bail!("GetWindowRect 失败");
-    }
-
-    let width = original_rect.right - original_rect.left;
-    let height = original_rect.bottom - original_rect.top;
-
-    // 移到屏幕外（-32000 是 Windows 隐藏窗口的标准坐标）
-    let result = unsafe {
-        SetWindowPos(
-            lv_hwnd,
-            std::ptr::null_mut(),
-            -32000, -32000,
-            width, height,
-            SWP_NOZORDER | SWP_NOACTIVATE,
-        )
-    };
-
-    if result == 0 {
-        anyhow::bail!("SetWindowPos 隐藏 SysListView32 失败");
-    }
-
-    log::info!(
-        "已将桌面 SysListView32 移到屏幕外 (原始位置: {},{},{},{})",
-        original_rect.left, original_rect.top, original_rect.right, original_rect.bottom
-    );
 
     let mut guard = ICON_HIDER
         .lock()
         .map_err(|e| anyhow::anyhow!("锁获取失败: {}", e))?;
     *guard = Some(IconHider {
-        listview_hwnd: lv_hwnd,
-        original_rect,
         hidden: true,
+        hidden_file_paths: Vec::new(),
     });
 
     Ok(())
 }
 
-/// 恢复原生桌面图标
+/// 隐藏已管理的桌面图标（逐个移动到屏幕外）
 ///
-/// 将 SysListView32 移回到原始位置。
+/// 将配置中属于分类框的图标从桌面 SysListView32 中逐个移到屏幕外，
+/// 保持 SysListView32 窗口在原位，使非管理图标和后续拖拽释放的图标可见。
+///
+/// # 参数
+///
+/// - `file_paths`: 分类框中管理的文件路径列表（从配置中获取）
+pub fn hide_managed_icons(file_paths: &[String]) -> Result<()> {
+    if file_paths.is_empty() {
+        log::info!("无管理的图标需要隐藏");
+        return Ok(());
+    }
+
+    let mut hider_guard = ICON_HIDER
+        .lock()
+        .map_err(|e| anyhow::anyhow!("锁获取失败: {}", e))?;
+
+    // 获取 DesktopIconManager（可变引用，用于 rebuild_index）
+    let mut icon_mgr_guard = match super::drag_handler::get_or_init_icon_manager() {
+        Some(g) => g,
+        None => {
+            log::warn!("DesktopIconManager 不可用，跳过逐个隐藏");
+            return Ok(());
+        }
+    };
+
+    let mgr = match icon_mgr_guard.as_mut() {
+        Some(m) => m,
+        None => {
+            log::warn!("DesktopIconManager 为 None，跳过逐个隐藏");
+            return Ok(());
+        }
+    };
+
+    // 刷新索引
+    if let Err(e) = mgr.rebuild_index() {
+        log::warn!("hide_managed_icons: rebuild_index 失败: {}", e);
+    }
+
+    let mut hidden_paths = Vec::new();
+    let mut hidden_count = 0;
+
+    for file_path in file_paths {
+        let file_stem = std::path::Path::new(file_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        let display_name = std::path::Path::new(file_path)
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        // 尝试多个名称匹配（file_stem 和 display_name）
+        let search_names = [file_stem.clone(), display_name.clone()];
+        for name in &search_names {
+            if name.is_empty() {
+                continue;
+            }
+            if let Some(index) = mgr.find_icon_by_name(name) {
+                // 保存位置并隐藏
+                mgr.save_icon_position(name);
+                if let Err(e) = mgr.hide_icon(index) {
+                    log::warn!("隐藏图标 '{}' 失败: {}", name, e);
+                } else {
+                    hidden_count += 1;
+                    hidden_paths.push(file_path.clone());
+                    log::debug!("已隐藏图标: '{}' (index={})", name, index);
+                }
+                break;
+            }
+        }
+    }
+
+    log::info!(
+        "已逐个隐藏 {} 个管理的桌面图标（共 {} 个文件路径）",
+        hidden_count,
+        file_paths.len()
+    );
+
+    if let Some(ref mut hider) = *hider_guard {
+        hider.hidden_file_paths = hidden_paths;
+    }
+
+    Ok(())
+}
+
+/// 恢复所有已管理的桌面图标到原始位置
+///
+/// 将之前通过 `hide_managed_icons` 隐藏的图标移回原来的桌面坐标。
+/// SysListView32 窗口始终在原位，无需移动。
 pub fn restore_native_icons() -> Result<()> {
     let mut guard = ICON_HIDER
         .lock()
@@ -215,28 +241,63 @@ pub fn restore_native_icons() -> Result<()> {
             return Ok(());
         }
 
-        let valid = unsafe { IsWindow(hider.listview_hwnd) };
-        if valid != 0 {
-            let width = hider.original_rect.right - hider.original_rect.left;
-            let height = hider.original_rect.bottom - hider.original_rect.top;
-
-            unsafe {
-                SetWindowPos(
-                    hider.listview_hwnd,
-                    std::ptr::null_mut(),
-                    hider.original_rect.left,
-                    hider.original_rect.top,
-                    width, height,
-                    SWP_NOZORDER | SWP_NOACTIVATE,
-                );
-            }
-            log::info!(
-                "已恢复桌面 SysListView32 到原始位置 ({},{})",
-                hider.original_rect.left, hider.original_rect.top
-            );
-        } else {
-            log::warn!("SysListView32 窗口已失效，跳过恢复");
+        if hider.hidden_file_paths.is_empty() {
+            log::info!("无隐藏的图标需要恢复");
+            return Ok(());
         }
+
+        // 获取 DesktopIconManager 恢复图标位置
+        let icon_mgr_guard = match super::drag_handler::get_or_init_icon_manager() {
+            Some(g) => g,
+            None => {
+                log::warn!("DesktopIconManager 不可用，无法恢复图标位置");
+                return Ok(());
+            }
+        };
+
+        let mgr = match icon_mgr_guard.as_ref() {
+            Some(m) => m,
+            None => {
+                log::warn!("DesktopIconManager 为 None，无法恢复图标位置");
+                return Ok(());
+            }
+        };
+
+        // 恢复每个隐藏的图标到其原始位置
+        let mut restored_count = 0;
+        for file_path in &hider.hidden_file_paths {
+            let file_stem = std::path::Path::new(file_path)
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            let display_name = std::path::Path::new(file_path)
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            let search_names = [file_stem.as_str(), display_name.as_str()];
+            for name in &search_names {
+                if name.is_empty() {
+                    continue;
+                }
+                if let Some(index) = mgr.find_icon_by_name(name) {
+                    // 使用保存的原始位置恢复
+                    let (orig_x, orig_y) = mgr
+                        .get_saved_position(name)
+                        .unwrap_or((100, 100));
+                    if let Err(e) = mgr.show_icon_at(index, orig_x, orig_y) {
+                        log::warn!("恢复图标 '{}' 失败: {}", name, e);
+                    } else {
+                        restored_count += 1;
+                        log::debug!("已恢复图标: '{}' → ({}, {})", name, orig_x, orig_y);
+                    }
+                    break;
+                }
+            }
+        }
+
+        log::info!("已恢复 {} 个桌面图标到原始位置", restored_count);
     }
 
     Ok(())

@@ -295,6 +295,11 @@ impl DesktopIconManager {
         self.name_to_index.keys().cloned().collect()
     }
 
+    /// 获取保存的图标原始位置（用于恢复时定位）
+    pub fn get_saved_position(&self, name: &str) -> Option<(i32, i32)> {
+        self.name_to_position.get(name).copied()
+    }
+
     /// 检查 SysListView32 窗口是否仍然有效
     pub fn is_valid(&self) -> bool {
         unsafe { IsWindow(self.listview_hwnd) != 0 }

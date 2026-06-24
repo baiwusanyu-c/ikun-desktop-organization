@@ -11,7 +11,7 @@ use crate::context::AppContext;
 use crate::platform::{
     cleanup_desktop_registry, collect_grid_layout, create_grid_window, destroy_all_grid_windows,
     extract_file_icon, get_cursor_monitor_work_area_phys, get_grid_count, get_screen_resolution,
-    hide_native_icons, init_icon_manager_early, reposition_window_by_title, restore_native_icons, setup_desktop_registry,
+    hide_managed_icons, hide_native_icons, init_icon_manager_early, reposition_window_by_title, restore_native_icons, setup_desktop_registry,
     take_pending_create_box, DesktopIcon, DesktopManagerTrait, GridCreateParams, GridFileItem,
 };
 use eframe::egui;
@@ -303,6 +303,16 @@ impl MyApp {
                 created_count += 1;
             }
         }
+
+        // 逐个隐藏管理的桌面图标（保持 SysListView32 在原位）
+        let all_file_paths: Vec<String> = boxes
+            .iter()
+            .flat_map(|b| b.icon_names.clone())
+            .collect();
+        if let Err(e) = hide_managed_icons(&all_file_paths) {
+            log::warn!("逐个隐藏管理的图标失败: {}", e);
+        }
+
         self.ctx
             .set_status(format!("恢复了 {} 个分类框", created_count));
     }
@@ -393,6 +403,16 @@ impl MyApp {
                 created_count += 1;
             }
         }
+
+        // 逐个隐藏分类后的桌面图标
+        let all_file_paths: Vec<String> = icons
+            .iter()
+            .map(|icon| icon.path.to_string_lossy().to_string())
+            .collect();
+        if let Err(e) = hide_managed_icons(&all_file_paths) {
+            log::warn!("自动分类后逐个隐藏图标失败: {}", e);
+        }
+
         self.ctx.set_status(format!(
             "分类完成！{} 个图标 → {} 个分类框",
             icons.len(),

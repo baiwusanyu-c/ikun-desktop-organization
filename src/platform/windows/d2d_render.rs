@@ -1435,6 +1435,16 @@ pub fn render_drag_overlay_bitmap(
                         DWRITE_TEXT_ALIGNMENT_CENTER,
                         DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
                     ) {
+                        // 应用 word-level 省略号裁剪（与分类框未选中项一致）
+                        if let Ok(ellipsis) = dw_factory.CreateEllipsisTrimmingSign(&text_format) {
+                            let trimming = DWRITE_TRIMMING {
+                                granularity: DWRITE_TRIMMING_GRANULARITY_WORD,
+                                delimiter: 0,
+                                delimiterCount: 0,
+                            };
+                            let _ = layout.SetTrimming(&trimming, &ellipsis);
+                        }
+
                         if let Ok(brush) =
                             target.CreateSolidColorBrush(&d2d_color(250, 250, 255, 255), None)
                         {
