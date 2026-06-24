@@ -6,10 +6,43 @@
 //!
 //! 不依赖 Shell CF_HDROP，避免域安全策略触发 UAC。
 
+use std::sync::Mutex;
+
 use super::d2d_render::render_layered_window;
 use super::ffi_imports::*;
 use super::ffi_types::*;
 use super::grid_window::get_data;
+use super::icon_manager::DesktopIconManager;
+
+// =============================================================================
+// 全局桌面图标管理器（懒加载，首次拖拽时初始化）
+// =============================================================================
+
+/// 桌面图标管理器单例
+///
+/// 首次拖拽到桌面时懒加载初始化。
+/// 初始化失败不影响拖拽功能（仅降级为不恢复桌面图标位置）。
+static DRAG_ICON_MANAGER: Mutex<Option<DesktopIconManager>> = Mutex::new(None);
+
+/// 获取或初始化桌面图标管理器
+///
+/// 首次调用时创建 DesktopIconManager，失败时返回 None 并记录警告。
+fn get_or_init_icon_manager() -> Option<std::sync::MutexGuard<'static, Option<DesktopIconManager>>> {
+    let mut guard = DRAG_ICON_MANAGER.lock().ok()?;
+    if guard.is_none() {
+        match DesktopIconManager::new() {
+            Ok(mgr) => {
+                log::info!("拖拽用桌面图标管理器已初始化");
+                *guard = Some(mgr);
+            }
+            Err(e) => {
+                log::warn!("桌面图标管理器初始化失败（拖拽到桌面将不恢复图标位置）: {}", e);
+                return None;
+            }
+        }
+    }
+    Some(guard)
+}
 
 // =============================================================================
 // Phase 1: 拖拽阈值检测（从 WM_MOUSEMOVE 调用）
@@ -50,9 +83,11 @@ pub(crate) fn check_drag_threshold(hwnd: HWND, mx: i32, my: i32) -> bool {
 
     log::info!("自定义拖拽激活: item={}", item_idx);
 
-    // 创建拖拽覆盖窗口（半透明图标跟随光标）
+    // 创建拖拽覆盖窗口（半透明图标 + 名称标签跟随光标，DPI 自适应尺寸）
+    let icon_size = data.icon_size;
+    let display_name = data.items[item_idx as usize].display_name.clone();
     unsafe {
-        super::drag_image::create_drag_overlay(icon_handle);
+        super::drag_image::create_drag_overlay(icon_handle, icon_size, &display_name);
         super::drag_image::update_drag_overlay();
         SetCapture(hwnd);
     }
@@ -215,7 +250,10 @@ fn handle_box_to_box_move(source_hwnd: HWND, target_hwnd: HWND, item_index: usiz
     }
 }
 
-/// 框→桌面：从框中移除项（.lnk 文件保留在磁盘原位）
+/// 框→桌面：从框中移除项，并将图标恢复到桌面释放位置
+///
+/// 使用 DesktopIconManager 将 SysListView32 中的图标从屏幕外
+/// 移动到鼠标释放位置，使图标重新显示在桌面上。
 fn handle_box_to_desktop(hwnd: HWND, item_index: usize) {
     let data = match unsafe { get_data(hwnd) } {
         Some(d) => d,
@@ -226,18 +264,100 @@ fn handle_box_to_desktop(hwnd: HWND, item_index: usize) {
         return;
     }
 
-    let removed = data.items.remove(item_index);
+    let removed = &data.items[item_index];
+    let display_name = removed.display_name.clone();
+    let file_path = removed.file_path.clone();
+
+    // 获取鼠标释放位置（屏幕坐标）
+    let mut pt = POINT { x: 0, y: 0 };
+    unsafe { GetCursorPos(&mut pt) };
+
     log::info!(
-        "框→桌面: 移除 '{}' — .lnk 文件保留在 {}",
-        removed.display_name,
-        removed.file_path
+        "框→桌面: 开始恢复图标 '{}' (path={}) 到位置 ({}, {})",
+        display_name, file_path, pt.x, pt.y
     );
 
-    if data.selected_item >= data.items.len() as i32 {
-        data.selected_item = -1;
+    // 尝试恢复桌面图标到释放位置
+    let mut restored = false;
+    if let Some(mut guard) = get_or_init_icon_manager() {
+        if let Some(ref mut mgr) = *guard {
+            // 每次拖拽到桌面时刷新索引（explorer 可能重启、图标可能变化）
+            if let Err(e) = mgr.rebuild_index() {
+                log::warn!("框→桌面: rebuild_index 失败: {}", e);
+            }
+
+            log::info!(
+                "框→桌面: 桌面图标管理器索引已刷新，共 {} 个图标",
+                mgr.get_icon_count()
+            );
+
+            // 搜索名称列表：display_name + file_stem（覆盖不同命名方式）
+            let file_stem = std::path::Path::new(&file_path)
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            let search_names = vec![display_name.clone(), file_stem.clone()];
+
+            for name in &search_names {
+                if name.is_empty() {
+                    continue;
+                }
+                log::debug!("框→桌面: 搜索桌面图标名称 '{}'", name);
+                if let Some(index) = mgr.find_icon_by_name(name) {
+                    log::info!("框→桌面: 找到图标 '{}' → index={}", name, index);
+                    match mgr.show_icon_at(index, pt.x, pt.y) {
+                        Ok(()) => {
+                            log::info!(
+                                "框→桌面: 图标 '{}' 已恢复到桌面位置 ({}, {})",
+                                name, pt.x, pt.y
+                            );
+                            restored = true;
+                            break;
+                        }
+                        Err(e) => {
+                            log::warn!("框→桌面: show_icon_at 失败 (index={}): {}", index, e);
+                        }
+                    }
+                } else {
+                    log::debug!("框→桌面: 未找到图标 '{}'", name);
+                }
+            }
+
+            if !restored {
+                // 输出索引中的所有名称用于调试
+                let cached = mgr.cached_names();
+                log::warn!(
+                    "框→桌面: 无法匹配桌面图标 (display_name='{}', file_stem='{}'), \
+                     索引中共 {} 个图标: {:?}",
+                    display_name, file_stem,
+                    cached.len(),
+                    if cached.len() <= 20 { cached.clone() } else { cached[..20].to_vec() }
+                );
+            }
+        }
     }
-    render_layered_window(hwnd);
-    save_config();
+
+    if !restored {
+        log::info!(
+            "框→桌面: 降级处理 — 仅从框中移除 '{}'（.lnk 文件保留在 {}）",
+            display_name, file_path
+        );
+    }
+
+    // 从框中移除项
+    let data = match unsafe { get_data(hwnd) } {
+        Some(d) => d,
+        None => return,
+    };
+    if item_index < data.items.len() {
+        data.items.remove(item_index);
+        if data.selected_item >= data.items.len() as i32 {
+            data.selected_item = -1;
+        }
+        render_layered_window(hwnd);
+        save_config();
+    }
 }
 
 // =============================================================================
