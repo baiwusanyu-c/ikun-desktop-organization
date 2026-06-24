@@ -143,6 +143,11 @@ static ICON_HIDER: Mutex<Option<IconHider>> = Mutex::new(None);
 pub fn hide_native_icons() -> Result<()> {
     let lv_hwnd = find_desktop_listview()?;
 
+    // ★ 关键：在隐藏 SysListView32 前预先初始化 DesktopIconManager
+    // 隐藏后 FindWindowExW 将无法找到 SysListView32，
+    // 导致后续 DesktopIconManager 初始化失败
+    super::drag_handler::init_icon_manager_early();
+
     // 保存原始位置（用于恢复）
     let mut original_rect = Rect {
         left: 0,

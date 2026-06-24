@@ -253,7 +253,6 @@ impl MyApp {
         log::info!("开始恢复布局: {} 个分类框", boxes.len());
 
         if !self.ctx.state.icons_hidden {
-            init_icon_manager_early(); // 在隐藏 SysListView32 前缓存 HWND
             if let Err(e) = hide_native_icons() {
                 self.ctx.set_status(format!("隐藏图标失败: {}", e));
                 return;
@@ -323,7 +322,6 @@ impl MyApp {
 
     fn perform_auto_classify(&mut self) {
         if !self.ctx.state.icons_hidden {
-            init_icon_manager_early(); // 在隐藏 SysListView32 前缓存 HWND
             if let Err(e) = hide_native_icons() {
                 self.ctx.set_status(format!("隐藏图标失败: {}", e));
                 return;
@@ -417,7 +415,6 @@ impl MyApp {
     fn create_empty_box(&mut self, name: String) {
         log::info!("创建分类框: '{}'", name);
         if !self.ctx.state.icons_hidden {
-            init_icon_manager_early(); // 在隐藏 SysListView32 前缓存 HWND
             if let Err(e) = hide_native_icons() {
                 self.ctx.set_status(format!("隐藏图标失败: {}", e));
                 return;

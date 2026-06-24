@@ -1419,9 +1419,6 @@ pub fn render_drag_overlay_bitmap(
                         .SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
                     let _ = text_format.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
 
-                    // 创建省略号裁剪标志（与分类框一致：2 行 + 省略号）
-                    let ellipsis_sign = dw_factory.CreateEllipsisTrimmingSign(&text_format).ok();
-
                     // 标签位置：图标下方 + 间距，两侧各 2px padding
                     let label_x = 2.0_f32;
                     let label_y = (icon_size + gap) as f32;
@@ -1437,16 +1434,6 @@ pub fn render_drag_overlay_bitmap(
                         DWRITE_TEXT_ALIGNMENT_CENTER,
                         DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
                     ) {
-                        // 应用 line-clamp（2 行 + 省略号，与分类框一致）
-                        if let Some(ref sign) = ellipsis_sign {
-                            let trimming = DWRITE_TRIMMING {
-                                granularity: DWRITE_TRIMMING_GRANULARITY_WORD,
-                                delimiter: 0,
-                                delimiterCount: 0,
-                            };
-                            let _ = layout.SetTrimming(&trimming, sign);
-                        }
-
                         if let Ok(brush) =
                             target.CreateSolidColorBrush(&d2d_color(250, 250, 255, 255), None)
                         {

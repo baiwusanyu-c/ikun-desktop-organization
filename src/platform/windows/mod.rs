@@ -16,7 +16,7 @@
 
 mod d2d_render;
 pub mod desktop_manager;
-mod drag_handler;
+pub mod drag_handler;
 mod drag_image;
 mod drop_target;
 pub mod ffi_imports;
