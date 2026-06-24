@@ -312,10 +312,20 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             0
         }
 
-        // ===== 鼠标移动：hover 效果 + tooltip + 锁定按钮 + 边缘指示 =====
+        // ===== 鼠标移动：hover 效果 + tooltip + 锁定按钮 + 边缘指示 + 拖拽检测 =====
         WM_MOUSEMOVE => {
             let mx = get_x_lparam(lparam);
             let my = get_y_lparam(lparam);
+
+            // Phase 1: 拖拽阈值检测（超过阈值 → 创建覆盖窗口 + SetCapture）
+            if super::drag_handler::check_drag_threshold(hwnd, mx, my) {
+                return 0;
+            }
+
+            // Phase 2: 拖拽中更新覆盖窗口位置
+            if super::drag_handler::update_drag(hwnd) {
+                return 0;
+            }
 
             let mut need_rerender = false;
             let mut show_tooltip = false;
@@ -603,6 +613,12 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 if hit != data.selected_item {
                     data.selected_item = hit;
                     need_rerender = true;
+                }
+                // 点击图标时开始拖拽检测（锁定状态下不启动）
+                if hit >= 0 && !data.locked {
+                    data.drag_pending = true;
+                    data.drag_start_x = click_x;
+                    data.drag_start_y = click_y;
                 }
             }
 
@@ -953,6 +969,11 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             if !data_ptr.is_null() {
                 let data = Box::from_raw(data_ptr);
 
+                // 注销 OLE 拖拽目标
+                if !data.drop_target_ptr.is_null() {
+                    super::drop_target::unregister_box_drop_target(hwnd, data.drop_target_ptr);
+                }
+
                 // 释放图标句柄
                 for item in &data.items {
                     if !item.icon_handle.is_null() {
@@ -1004,6 +1025,57 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 }
                 Err(e) => {
                     log::warn!("加载配置失败，跳过配置更新: {}", e);
+                }
+            }
+            0
+        }
+
+        // ===== 鼠标左键释放：完成自定义拖拽 / 取消拖拽检测 =====
+        WM_LBUTTONUP => {
+            // Phase 3: 完成拖拽（检测目标 + 执行移动/移除）
+            if super::drag_handler::end_drag(hwnd) {
+                return 0;
+            }
+            // 非拖拽状态：取消拖拽检测
+            if let Some(data) = get_data(hwnd) {
+                data.drag_pending = false;
+            }
+            0
+        }
+
+        // ===== 拖拽悬停进入：显示高亮 =====
+        WM_USER_DRAG_ENTER => {
+            super::drag_handler::handle_drag_enter(hwnd);
+            0
+        }
+
+        // ===== 拖拽悬停离开：清除高亮 =====
+        WM_USER_DRAG_LEAVE => {
+            super::drag_handler::handle_drag_leave(hwnd);
+            0
+        }
+
+        // ===== 框→框移动：目标框添加项（由源框 PostMessage 触发）=====
+        WM_USER_DRAG_ITEM_ADDED => {
+            super::drag_handler::handle_drag_item_added(hwnd);
+            0
+        }
+
+        // ===== 源框通知：项已被拖出（OLE Drop Target 触发，保留兼容）=====
+        WM_USER_DRAG_ITEM_REMOVED => {
+            // 自定义拖拽模式下，框→框移动在 end_drag 中直接处理
+            // 此处理器保留给 OLE Drop Target 的外部拖拽场景
+            if let Some(removal) = super::drop_target::take_pending_source_removal() {
+                if let Some(data) = get_data(hwnd) {
+                    let idx = removal.item_index;
+                    if idx < data.items.len() {
+                        let removed = data.items.remove(idx);
+                        log::info!("OLE 拖拽移除: '{}'", removed.display_name);
+                        if data.selected_item >= data.items.len() as i32 {
+                            data.selected_item = -1;
+                        }
+                        render_layered_window(hwnd);
+                    }
                 }
             }
             0

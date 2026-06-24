@@ -9,18 +9,24 @@
 //! - `d2d_render`: Direct2D/DirectWrite 渲染
 //! - `grid_window`: 格子窗口管理
 //! - `icon_extract`: 文件图标提取
-//! - `icon_hider`: 图标隐藏/恢复
+//! - `icon_hider`: 图标整体隐藏/恢复（ShowWindow）
+//! - `icon_manager`: 逐图标管理（LVM_SETITEMPOSITION 跨进程操作）
 //! - `shell_menu`: Shell 上下文菜单 + 注册表管理
 //! - `sys_tray`: 系统托盘（TODO）
 
 mod d2d_render;
 pub mod desktop_manager;
+mod drag_handler;
+mod drag_image;
+mod drop_target;
 pub mod ffi_imports;
 pub mod ffi_types;
 pub mod grid_window;
 pub mod icon_extract;
 pub mod icon_hider;
+pub mod icon_manager;
 mod menu_window;
+pub mod ole_dnd;
 pub mod shell_menu;
 mod sys_tray;
 mod wnd_proc;
@@ -34,4 +40,11 @@ pub use grid_window::{
 };
 pub use icon_extract::extract_file_icon;
 pub use icon_hider::{hide_native_icons, restore_native_icons};
+pub use icon_manager::DesktopIconManager;
+pub use ole_dnd::{get_box_drag_format_id, start_box_drag};
+pub use drop_target::{
+    register_box_drop_target, take_pending_drop, take_pending_source_removal,
+    unregister_box_drop_target,
+};
+pub use ffi_types::{IkunBoxDragData, IkunDragItemData};
 pub use shell_menu::{cleanup_desktop_registry, setup_desktop_registry, take_pending_create_box};

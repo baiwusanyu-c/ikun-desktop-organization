@@ -27,6 +27,10 @@ pub type HICON = *mut c_void;
 pub type HMENU = *mut c_void;
 pub type HHOOK = *mut c_void;
 pub type HMONITOR = *mut c_void;
+pub type HANDLE = *mut c_void;
+
+/// COM HRESULT 返回值类型
+pub type HRESULT = i32;
 pub type HOOKPROC =
     unsafe extern "system" fn(nCode: i32, wParam: WPARAM, lParam: LPARAM) -> LRESULT;
 pub type LPARAM = isize;
@@ -122,6 +126,7 @@ pub const WS_EX_LAYERED: u32 = 0x00080000;
 pub const WS_EX_TOOLWINDOW: u32 = 0x00000080;
 #[allow(dead_code)]
 pub const WS_EX_TOPMOST: u32 = 0x00000008;
+pub const WS_EX_TRANSPARENT: u32 = 0x00000020;
 
 // ===== Class Styles =====
 pub const CS_HREDRAW: u32 = 0x0002;
@@ -497,6 +502,213 @@ pub const SWP_SHOWWINDOW: u32 = 0x0040;
 /// COLORREF 辅助：从 RGB 创建 COLORREF（BGR 顺序）
 pub const fn colorref(r: u8, g: u8, b: u8) -> u32 {
     (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
+}
+
+// ===== ListView 消息常量（用于跨进程操作 SysListView32）=====
+pub const LVM_FIRST: u32 = 0x1000;
+pub const LVM_GETITEMCOUNT: u32 = LVM_FIRST + 4;
+pub const LVM_GETITEMTEXTW: u32 = LVM_FIRST + 115;
+pub const LVM_GETITEMPOSITION: u32 = LVM_FIRST + 16;
+pub const LVM_SETITEMPOSITION: u32 = LVM_FIRST + 15;
+
+/// ListView 项目掩码
+pub const LVIF_TEXT: u32 = 0x0001;
+
+/// 跨进程内存操作常量
+pub const PROCESS_VM_OPERATION: u32 = 0x0008;
+pub const PROCESS_VM_READ: u32 = 0x0010;
+pub const PROCESS_VM_WRITE: u32 = 0x0020;
+
+pub const MEM_COMMIT: u32 = 0x1000;
+pub const MEM_RESERVE: u32 = 0x2000;
+pub const MEM_RELEASE: u32 = 0x8000;
+
+pub const PAGE_READWRITE: u32 = 0x04;
+
+/// 隐藏图标时使用的屏幕外 X 坐标
+pub const HIDDEN_ICON_X: i32 = -32000;
+/// 隐藏图标时使用的屏幕外 Y 坐标
+pub const HIDDEN_ICON_Y: i32 = -32000;
+
+/// LVITEMW 结构体（64-bit Windows 布局，60 字节）
+///
+/// 用于跨进程 SendMessage 操作 SysListView32。
+/// 字段布局严格匹配 Windows 64-bit 的 C 结构体对齐规则。
+/// 注意：不包含 iGroupId/cColumns/puColumns（后续版本追加字段）。
+#[repr(C)]
+pub struct LVITEMW {
+    pub mask: u32,
+    pub i_item: i32,
+    pub i_sub_item: i32,
+    pub state: u32,
+    pub state_mask: u32,
+    pub psz_text: *mut u16,
+    pub cch_text_max: i32,
+    pub i_image: i32,
+    pub l_param: isize,
+    pub i_indent: i32,
+}
+
+// ===== 拖拽相关自定义消息 =====
+/// 通知源框：某项已被拖拽到其他框或桌面（从 items 中移除）
+pub const WM_USER_DRAG_ITEM_REMOVED: u32 = WM_APP + 10;
+/// 通知目标框：外部文件被拖入（添加新项）
+pub const WM_USER_DRAG_ITEM_ADDED: u32 = WM_APP + 11;
+/// 通知框：拖拽悬停进入（设置高亮）
+pub const WM_USER_DRAG_ENTER: u32 = WM_APP + 12;
+/// 通知框：拖拽悬停离开（清除高亮）
+pub const WM_USER_DRAG_LEAVE: u32 = WM_APP + 13;
+/// 通知框：拖拽放置完成（处理 pending drop）
+pub const WM_USER_DRAG_DROP: u32 = WM_APP + 14;
+
+/// 拖拽项信息（用于框间拖拽数据传递）
+#[derive(Debug, Clone)]
+pub struct DragItemInfo {
+    /// 在源框 items 中的索引
+    pub index: usize,
+    /// 文件路径（.lnk）
+    pub file_path: String,
+    /// 显示名称
+    pub display_name: String,
+    /// 图标句柄（目标框需要重新提取）
+    pub icon_handle: HICON,
+}
+
+/// 拖拽启动阈值（像素），鼠标移动超过此距离后启动 OLE 拖拽
+pub const DRAG_THRESHOLD: i32 = 5;
+
+// ===== OLE / 拖拽类型 =====
+pub type HGLOBAL = *mut c_void;
+
+/// CF_HDROP 标准剪贴板格式 ID
+pub const CF_HDROP: u32 = 15;
+
+/// OLE 拖拽效果
+pub const DROPEFFECT_NONE: u32 = 0;
+pub const DROPEFFECT_COPY: u32 = 1;
+pub const DROPEFFECT_MOVE: u32 = 2;
+#[allow(dead_code)]
+pub const DROPEFFECT_LINK: u32 = 4;
+
+/// FORMATETC 存储介质类型
+pub const TYMED_HGLOBAL: i32 = 1;
+
+/// FORMATETC 绘制方向
+pub const DVASPECT_CONTENT: u32 = 1;
+
+/// GlobalAlloc 标志
+pub const GMEM_MOVEABLE: u32 = 0x0002;
+pub const GMEM_ZEROINIT: u32 = 0x0040;
+pub const GHND: u32 = GMEM_MOVEABLE | GMEM_ZEROINIT;
+
+/// OLE HRESULT 常量
+pub const S_FALSE: HRESULT = 1;
+pub const E_NOTIMPL: HRESULT = -2147467263; // 0x80004001
+pub const E_NOINTERFACE: HRESULT = -2147467262; // 0x80004002
+pub const E_POINTER: HRESULT = -2147467261; // 0x80004003
+pub const E_INVALIDARG: HRESULT = -2147467260; // 0x80070057
+pub const E_UNEXPECTED: HRESULT = -2147418113; // 0x8000FFFF
+pub const E_OUTOFMEMORY: HRESULT = -2147024882; // 0x8007000E
+pub const OLE_E_ADVISENOTSUPPORTED: HRESULT = -2147221501; // 0x80040003
+pub const DRAGDROP_S_DROP: HRESULT = 0x00040100;
+pub const DRAGDROP_S_CANCEL: HRESULT = 0x00040101;
+pub const DRAGDROP_S_USEDEFAULTCURSORS: HRESULT = 0x00040102;
+
+/// IID_IUnknown = {00000000-0000-0000-C000-000000000046}
+pub const IID_IUNKNOWN: [u8; 16] = [
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
+];
+
+/// IID_IDataObject = {0000010e-0000-0000-C000-000000000046}
+pub const IID_IDATAOBJECT: [u8; 16] = [
+    0x0E, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
+];
+
+/// IID_IDropSource = {00000121-0000-0000-C000-000000000046}
+pub const IID_IDROPSOURCE: [u8; 16] = [
+    0x21, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
+];
+
+/// IID_IDropTarget = {00000122-0000-0000-C000-000000000046}
+pub const IID_IDROPTARGET: [u8; 16] = [
+    0x22, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
+];
+
+/// IID_IDragSourceHelper = {DE5BF786-477A-11D2-839D-00C04FD918D0}
+pub const IID_IDRAGSOURCEHELPER: [u8; 16] = [
+    0x86, 0xF7, 0x5B, 0xDE, 0x7A, 0x47, 0xD2, 0x11, 0x83, 0x9D, 0x00, 0xC0, 0x4F, 0xD9, 0x18, 0xD0,
+];
+
+/// CLSID_DragDropHelper = {4657278A-411B-11D2-839A-00C04FD918D0}
+pub const CLSID_DRAGDROPHELPER: [u8; 16] = [
+    0x8A, 0x27, 0x57, 0x46, 0x1B, 0x41, 0xD2, 0x11, 0x83, 0x9A, 0x00, 0xC0, 0x4F, 0xD9, 0x18, 0xD0,
+];
+
+/// COM 类上下文
+pub const CLSCTX_INPROC_SERVER: u32 = 0x1;
+
+/// SHDRAGIMAGE 结构体（IDragSourceHelper 拖拽图像描述）
+#[repr(C)]
+pub struct SHDRAGIMAGE {
+    pub size_drag_image: SIZE,
+    pub pt_offset: POINT,
+    pub hbmp_drag_image: HBITMAP,
+    pub cr_color_key: u32,
+}
+
+/// FORMATETC 结构体（OLE 数据格式描述）
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FORMATETC {
+    pub cf_format: u32,
+    pub ptd: *mut c_void,
+    pub dw_aspect: u32,
+    pub lindex: i32,
+    pub tymed: i32,
+}
+
+/// STGMEDIUM 结构体（OLE 数据存储）
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct STGMEDIUM {
+    pub tymed: u32,
+    pub h_global: HGLOBAL,
+    pub unk_for_release: *mut c_void,
+}
+
+/// DROPFILES 结构体（CF_HDROP 格式头部）
+#[repr(C)]
+pub struct DROPFILES {
+    pub p_files: u32,
+    pub pt_x: i32,
+    pub pt_y: i32,
+    pub f_nc: i32,
+    pub f_wide: i32,
+}
+
+/// 框间拖拽自定义数据（序列化为 JSON 存储在全局内存中）
+///
+/// 用于在 IDataObject 中传递源框信息，使目标框可以执行内部移动
+/// 而不是文件系统操作。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct IkunBoxDragData {
+    /// 源分类框窗口句柄（usize 以便序列化）
+    pub source_hwnd: usize,
+    /// 源分类框 config_id
+    pub source_config_id: String,
+    /// 被拖拽的项列表（MVP 为单个，预留多选）
+    pub items: Vec<IkunDragItemData>,
+}
+
+/// 框间拖拽的单项数据
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct IkunDragItemData {
+    /// 在源框 items 中的索引
+    pub index: usize,
+    /// 文件路径
+    pub file_path: String,
+    /// 显示名称
+    pub display_name: String,
 }
 
 #[cfg(test)]

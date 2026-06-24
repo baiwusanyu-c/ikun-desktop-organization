@@ -156,6 +156,21 @@ pub(crate) struct GridWindowData {
     pub(crate) base_window_w: i32,
     pub(crate) base_window_h: i32,
 
+    // ===== 拖拽状态（自定义拖拽跟踪，替代 OLE Drag Source）=====
+    /// 是否正在检测拖拽阈值（鼠标按下后跟踪）
+    pub(crate) drag_pending: bool,
+    /// 拖拽检测起始位置（窗口坐标）
+    pub(crate) drag_start_x: i32,
+    pub(crate) drag_start_y: i32,
+    /// 自定义拖拽是否已激活（超过阈值后）
+    pub(crate) drag_active: bool,
+    /// 当前拖拽的项索引
+    pub(crate) drag_item_index: i32,
+    /// 拖拽悬停高亮（目标框被拖拽物悬停时显示）
+    pub(crate) drop_highlight: bool,
+    /// IDropTarget COM 对象指针（窗口销毁时释放）
+    pub(crate) drop_target_ptr: *mut std::ffi::c_void,
+
     // ===== D2D/DirectWrite 设备缓存（窗口级） =====
     pub(crate) d2d_factory: Option<ID2D1Factory>,
     pub(crate) dw_factory: Option<IDWriteFactory>,
@@ -200,6 +215,13 @@ impl GridWindowData {
             base_window_y: 100,
             base_window_w: 400,
             base_window_h: 600,
+            drag_pending: false,
+            drag_start_x: 0,
+            drag_start_y: 0,
+            drag_active: false,
+            drag_item_index: -1,
+            drop_highlight: false,
+            drop_target_ptr: std::ptr::null_mut(),
             d2d_factory: None,
             dw_factory: None,
             wic_factory: None,
@@ -491,6 +513,13 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         base_window_y: params.y,
         base_window_w: scaled_w,
         base_window_h: scaled_h,
+        drag_pending: false,
+        drag_start_x: 0,
+        drag_start_y: 0,
+        drag_active: false,
+        drag_item_index: -1,
+        drop_highlight: false,
+        drop_target_ptr: std::ptr::null_mut(),
         d2d_factory: None,
         dw_factory: None,
         wic_factory: None,
@@ -544,6 +573,15 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
     unsafe {
         let data_ref = &mut *data_ptr;
         data_ref.tooltip_hwnd = tooltip_hwnd;
+    }
+
+    // 2.5 注册 OLE 拖拽目标（使此框可接收拖入的图标）
+    let drop_target = super::drop_target::register_box_drop_target(hwnd);
+    if !drop_target.is_null() {
+        unsafe {
+            let data_ref = &mut *data_ptr;
+            data_ref.drop_target_ptr = drop_target;
+        }
     }
 
     // 3. 首次渲染（使用 Direct2D + UpdateLayeredWindow）

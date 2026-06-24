@@ -103,6 +103,17 @@ extern "system" {
         lpbmi: *mut c_void,
         usage: u32,
     ) -> i32;
+    pub fn DrawIconEx(
+        hdc: HDC,
+        x_left: i32,
+        y_top: i32,
+        hicon: HICON,
+        cx_width: i32,
+        cy_width: i32,
+        istep_if_ani_cur: u32,
+        hbr_flicker_free_draw: HBRUSH,
+        di_flags: u32,
+    ) -> i32;
 
     // System
     pub fn GetSystemMetrics(nIndex: i32) -> i32;
@@ -158,6 +169,12 @@ extern "system" {
     pub fn PostMessageW(hWnd: HWND, Msg: u32, wParam: WPARAM, lParam: LPARAM) -> i32;
     pub fn PostThreadMessageW(idThread: u32, Msg: u32, wParam: WPARAM, lParam: LPARAM) -> i32;
     pub fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> HWND;
+    pub fn FindWindowExW(
+        hWndParent: HWND,
+        hWndChildAfter: HWND,
+        lpClassName: *const u16,
+        lpWindowName: *const u16,
+    ) -> HWND;
     pub fn SetFocus(hWnd: HWND) -> HWND;
     #[allow(dead_code)]
     pub fn GetFocus() -> HWND;
@@ -239,11 +256,68 @@ extern "system" {
     // Timer
     pub fn SetTimer(hWnd: HWND, nIDEvent: usize, uElapse: u32, lpTimerFunc: *mut c_void) -> usize;
     pub fn KillTimer(hWnd: HWND, uIDEvent: usize) -> i32;
+
+    // Process / Memory（跨进程 SysListView32 操作）
+    pub fn IsWindow(hWnd: HWND) -> i32;
+    pub fn GetWindowThreadProcessId(hWnd: HWND, lpdwProcessId: *mut u32) -> u32;
+    pub fn OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) -> HANDLE;
+    pub fn CloseHandle(hObject: HANDLE) -> i32;
+    pub fn VirtualAllocEx(
+        hProcess: HANDLE,
+        lpAddress: *mut c_void,
+        dwSize: usize,
+        flAllocationType: u32,
+        flProtect: u32,
+    ) -> *mut c_void;
+    pub fn VirtualFreeEx(
+        hProcess: HANDLE,
+        lpAddress: *mut c_void,
+        dwSize: usize,
+        dwFreeType: u32,
+    ) -> i32;
+    pub fn ReadProcessMemory(
+        hProcess: HANDLE,
+        lpBaseAddress: *const c_void,
+        lpBuffer: *mut c_void,
+        nSize: usize,
+        lpNumberOfBytesRead: *mut usize,
+    ) -> i32;
+    pub fn WriteProcessMemory(
+        hProcess: HANDLE,
+        lpBaseAddress: *mut c_void,
+        lpBuffer: *const c_void,
+        nSize: usize,
+        lpNumberOfBytesWritten: *mut usize,
+    ) -> i32;
+
+    // OLE / Clipboard（拖拽支持）
+    pub fn DoDragDrop(
+        pDataObj: *mut c_void,
+        pDropSource: *mut c_void,
+        dwOKEffects: u32,
+        pdwEffect: *mut u32,
+    ) -> HRESULT;
+    pub fn RegisterDragDrop(hwnd: HWND, pDropTarget: *mut c_void) -> HRESULT;
+    pub fn RevokeDragDrop(hwnd: HWND) -> HRESULT;
+    pub fn OleInitialize(pMalloc: *mut c_void) -> HRESULT;
+    pub fn RegisterClipboardFormatW(lpszFormat: *const u16) -> u32;
+    pub fn GlobalAlloc(uFlags: u32, dwBytes: usize) -> HGLOBAL;
+    pub fn GlobalLock(hMem: HGLOBAL) -> *mut c_void;
+    pub fn GlobalUnlock(hMem: HGLOBAL) -> i32;
+    pub fn GlobalFree(hMem: HGLOBAL) -> HGLOBAL;
+
+    // COM 实例创建（IDragSourceHelper）
+    pub fn CoCreateInstance(
+        rclsid: *const u8,
+        pUnkOuter: *mut c_void,
+        dwClsContext: u32,
+        riid: *const u8,
+        ppv: *mut *mut c_void,
+    ) -> HRESULT;
 }
 
 // ===== Shell Context Menu COM Types =====
 
-pub type HRESULT = i32;
 pub const S_OK: HRESULT = 0;
 #[allow(dead_code)]
 pub const COINIT_APARTMENTTHREADED: u32 = 0x2;
