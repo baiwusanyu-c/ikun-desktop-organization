@@ -104,3 +104,36 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: 分类框图标自定义拖拽跟踪
+
+**Date**: 2026-06-24
+**Task**: 分类框图标自定义拖拽跟踪
+**Branch**: `master`
+
+### Summary
+
+实现分类框图标三向拖拽：框→框移动、框→桌面移除、桌面→框拖入。弃用 OLE DoDragDrop 改用自定义拖拽跟踪（SetCapture + WM_MOUSEMOVE），创建 WS_EX_LAYERED 覆盖窗口显示半透明拖拽图标。移除 CF_HDROP 避免域安全策略 UAC。新增 5 个模块：drag_handler.rs、drag_image.rs、drop_target.rs、icon_manager.rs、ole_dnd.rs。99 个单元测试全部通过。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e81c7a0` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
