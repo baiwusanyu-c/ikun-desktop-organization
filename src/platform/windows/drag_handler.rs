@@ -86,8 +86,10 @@ pub(crate) fn check_drag_threshold(hwnd: HWND, mx: i32, my: i32) -> bool {
     // 创建拖拽覆盖窗口（半透明图标 + 名称标签跟随光标，DPI 自适应尺寸）
     let icon_size = data.icon_size;
     let display_name = data.items[item_idx as usize].display_name.clone();
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    let dpi = if dpi > 0 { dpi } else { 96 };
     unsafe {
-        super::drag_image::create_drag_overlay(icon_handle, icon_size, &display_name);
+        super::drag_image::create_drag_overlay(icon_handle, icon_size, &display_name, dpi);
         super::drag_image::update_drag_overlay();
         SetCapture(hwnd);
     }

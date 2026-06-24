@@ -1,7 +1,17 @@
 //! 隐藏/恢复原生桌面图标
 //!
-//! 通过 ShowWindow(SW_HIDE) 隐藏整个 SysListView32 窗口，
-//! 原子操作，无闪烁。退出时 ShowWindow(SW_SHOW) 恢复。
+//! 通过 `SetWindowPos` 将 SysListView32 窗口移到屏幕外来隐藏图标，
+//! 替代 `ShowWindow(SW_HIDE)` 方案。
+//!
+//! # 架构决策
+//!
+//! **不使用 `ShowWindow(SW_HIDE)`**：Windows 10/11 下 `SW_HIDE` 会导致
+//! SysListView32 无法被 `FindWindowExW` 找到，从而使 `DesktopIconManager`
+//! 初始化失败（拖拽到桌面时无法恢复图标）。
+//!
+//! **使用 `SetWindowPos` 移到屏幕外**：窗口仍然存在于窗口树中，
+//! `FindWindowExW` 可以正常找到，LVM_* 消息正常工作，
+//! 但图标在视觉上不可见。
 
 use anyhow::Result;
 use std::ffi::c_void;
@@ -9,9 +19,6 @@ use std::sync::Mutex;
 
 // ===== Raw FFI =====
 type HWND = *mut c_void;
-
-const SW_HIDE: i32 = 0;
-const SW_SHOW: i32 = 5;
 
 extern "system" {
     fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> HWND;
@@ -21,9 +28,31 @@ extern "system" {
         lpClassName: *const u16,
         lpWindowName: *const u16,
     ) -> HWND;
-    fn ShowWindow(hWnd: HWND, nCmdShow: i32) -> i32;
+    fn SetWindowPos(
+        hWnd: HWND,
+        hWndInsertAfter: HWND,
+        X: i32,
+        Y: i32,
+        cx: i32,
+        cy: i32,
+        uFlags: u32,
+    ) -> i32;
+    fn GetWindowRect(hWnd: HWND, lpRect: *mut Rect) -> i32;
     fn IsWindow(hWnd: HWND) -> i32;
 }
+
+/// 简化的 RECT 结构（仅用于 GetWindowRect）
+#[repr(C)]
+struct Rect {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+// SetWindowPos 标志
+const SWP_NOZORDER: u32 = 0x0004;
+const SWP_NOACTIVATE: u32 = 0x0010;
 
 static PROG_CLASS: &[u16] = &[80, 114, 111, 103, 109, 97, 110, 0]; // "Progman"
 static WORKER_CLASS: &[u16] = &[87, 111, 114, 107, 101, 114, 87, 0]; // "WorkerW"
@@ -94,6 +123,8 @@ fn find_desktop_listview() -> Result<HWND> {
 /// 图标隐藏器全局状态
 struct IconHider {
     listview_hwnd: HWND,
+    /// 隐藏前的原始窗口位置（用于恢复）
+    original_rect: Rect,
     hidden: bool,
 }
 
@@ -104,22 +135,55 @@ static ICON_HIDER: Mutex<Option<IconHider>> = Mutex::new(None);
 
 /// 隐藏所有原生桌面图标
 ///
-/// 通过 ShowWindow(SW_HIDE) 隐藏整个 SysListView32 窗口，
-/// 原子操作，不会产生闪烁。
+/// 通过 `SetWindowPos` 将 SysListView32 移到屏幕外（-32000, -32000），
+/// 保持窗口在窗口树中可被 `FindWindowExW` 找到。
+///
+/// 不使用 `ShowWindow(SW_HIDE)`，因为 Windows 10/11 下会导致
+/// SysListView32 无法被后续找到（影响 DesktopIconManager 初始化）。
 pub fn hide_native_icons() -> Result<()> {
     let lv_hwnd = find_desktop_listview()?;
 
-    unsafe {
-        ShowWindow(lv_hwnd, SW_HIDE);
+    // 保存原始位置（用于恢复）
+    let mut original_rect = Rect {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    let got_rect = unsafe { GetWindowRect(lv_hwnd, &mut original_rect) };
+    if got_rect == 0 {
+        anyhow::bail!("GetWindowRect 失败");
     }
 
-    log::info!("已隐藏桌面 SysListView32 窗口");
+    let width = original_rect.right - original_rect.left;
+    let height = original_rect.bottom - original_rect.top;
+
+    // 移到屏幕外（-32000 是 Windows 隐藏窗口的标准坐标）
+    let result = unsafe {
+        SetWindowPos(
+            lv_hwnd,
+            std::ptr::null_mut(),
+            -32000, -32000,
+            width, height,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+    };
+
+    if result == 0 {
+        anyhow::bail!("SetWindowPos 隐藏 SysListView32 失败");
+    }
+
+    log::info!(
+        "已将桌面 SysListView32 移到屏幕外 (原始位置: {},{},{},{})",
+        original_rect.left, original_rect.top, original_rect.right, original_rect.bottom
+    );
 
     let mut guard = ICON_HIDER
         .lock()
         .map_err(|e| anyhow::anyhow!("锁获取失败: {}", e))?;
     *guard = Some(IconHider {
         listview_hwnd: lv_hwnd,
+        original_rect,
         hidden: true,
     });
 
@@ -128,7 +192,7 @@ pub fn hide_native_icons() -> Result<()> {
 
 /// 恢复原生桌面图标
 ///
-/// 通过 ShowWindow(SW_SHOW) 恢复 SysListView32 窗口。
+/// 将 SysListView32 移回到原始位置。
 pub fn restore_native_icons() -> Result<()> {
     let mut guard = ICON_HIDER
         .lock()
@@ -139,13 +203,25 @@ pub fn restore_native_icons() -> Result<()> {
             return Ok(());
         }
 
-        // 确认窗口仍然有效
         let valid = unsafe { IsWindow(hider.listview_hwnd) };
         if valid != 0 {
+            let width = hider.original_rect.right - hider.original_rect.left;
+            let height = hider.original_rect.bottom - hider.original_rect.top;
+
             unsafe {
-                ShowWindow(hider.listview_hwnd, SW_SHOW);
+                SetWindowPos(
+                    hider.listview_hwnd,
+                    std::ptr::null_mut(),
+                    hider.original_rect.left,
+                    hider.original_rect.top,
+                    width, height,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
             }
-            log::info!("已恢复桌面 SysListView32 窗口");
+            log::info!(
+                "已恢复桌面 SysListView32 到原始位置 ({},{})",
+                hider.original_rect.left, hider.original_rect.top
+            );
         } else {
             log::warn!("SysListView32 窗口已失效，跳过恢复");
         }

@@ -25,6 +25,7 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
     D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT,
 };
+use windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED;
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL,
     DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL,
@@ -977,7 +978,7 @@ pub fn render_icon_grid(
         if !item.icon_handle.is_null() {
             draw_icon_d2d(
                 target,
-                _wic_factory,
+                Some(_wic_factory),
                 item.icon_handle,
                 icon_x,
                 icon_y,
@@ -1061,7 +1062,7 @@ pub fn render_icon_grid(
 /// 手动转换为 premultiplied alpha 后创建 D2D bitmap，确保边缘透明过渡正确。
 fn draw_icon_d2d(
     target: &ID2D1DCRenderTarget,
-    _wic_factory: &IWICImagingFactory,
+    _wic_factory: Option<&IWICImagingFactory>,
     hicon: HICON,
     x: i32,
     y: i32,
@@ -1246,5 +1247,227 @@ unsafe fn get_data<'a>(hwnd: HWND) -> Option<&'a mut GridWindowData> {
         None
     } else {
         Some(&mut *ptr)
+    }
+}
+
+// =============================================================================
+// 拖拽覆盖位图渲染（D2D + DirectWrite，高质量）
+// =============================================================================
+
+/// 为拖拽覆盖窗口渲染复合位图（图标 + 标签文字）
+///
+/// 使用 Direct2D + DirectWrite 渲染，与分类框内图标标签质量一致。
+/// 返回 32-bit ARGB HBITMAP（premultiplied alpha），
+/// 可直接用于 `UpdateLayeredWindow`。
+///
+/// # 参数
+/// - `icon_handle`: 图标句柄（128×128 高清图标）
+/// - `icon_size`: 图标渲染尺寸（DPI 自适应）
+/// - `display_name`: 标签文字
+/// - `total_w`: 位图总宽度
+/// - `total_h`: 位图总高度（图标 + 标签区域）
+/// - `dpi`: 当前 DPI（用于字体缩放）
+pub fn render_drag_overlay_bitmap(
+    icon_handle: HICON,
+    icon_size: i32,
+    display_name: &str,
+    total_w: i32,
+    total_h: i32,
+    dpi: u32,
+) -> HBITMAP {
+    unsafe {
+        let screen_dc = GetDC(std::ptr::null_mut());
+        if screen_dc.is_null() {
+            return std::ptr::null_mut();
+        }
+
+        let mem_dc = CreateCompatibleDC(screen_dc);
+        if mem_dc.is_null() {
+            ReleaseDC(std::ptr::null_mut(), screen_dc);
+            return std::ptr::null_mut();
+        }
+
+        // 创建 32-bit top-down DIB Section
+        let bi = BITMAPINFOHEADER {
+            bi_size: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            bi_width: total_w,
+            bi_height: -total_h,
+            bi_planes: 1,
+            bi_bit_count: 32,
+            bi_compression: 0,
+            bi_size_image: 0,
+            bi_x_pels_per_meter: 0,
+            bi_y_pels_per_meter: 0,
+            bi_clr_used: 0,
+            bi_clr_important: 0,
+        };
+
+        let mut bits: *mut c_void = std::ptr::null_mut();
+        let dib = CreateDIBSection(
+            mem_dc,
+            &bi as *const BITMAPINFOHEADER as *const c_void,
+            DIB_RGB_COLORS,
+            &mut bits,
+            std::ptr::null_mut(),
+            0,
+        );
+
+        if dib.is_null() || bits.is_null() {
+            DeleteDC(mem_dc);
+            ReleaseDC(std::ptr::null_mut(), screen_dc);
+            return std::ptr::null_mut();
+        }
+
+        let old_bmp = SelectObject(mem_dc, dib as HGDIOBJ);
+
+        // 创建临时 D2D DC Render Target
+        let d2d_factory = match D2D1CreateFactory::<ID2D1Factory>(
+            D2D1_FACTORY_TYPE_SINGLE_THREADED,
+            None,
+        ) {
+            Ok(f) => f,
+            Err(e) => {
+                log::warn!("拖拽覆盖: D2D Factory 创建失败: {:?}", e);
+                SelectObject(mem_dc, old_bmp);
+                DeleteObject(dib as HGDIOBJ);
+                DeleteDC(mem_dc);
+                ReleaseDC(std::ptr::null_mut(), screen_dc);
+                return std::ptr::null_mut();
+            }
+        };
+
+        let rt_props = D2D1_RENDER_TARGET_PROPERTIES {
+            r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+            },
+            dpiX: 96.0,
+            dpiY: 96.0,
+            usage: D2D1_RENDER_TARGET_USAGE_NONE,
+            minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
+        };
+
+        let target = match d2d_factory.CreateDCRenderTarget(&rt_props) {
+            Ok(t) => t,
+            Err(e) => {
+                log::warn!("拖拽覆盖: DC RenderTarget 创建失败: {:?}", e);
+                SelectObject(mem_dc, old_bmp);
+                DeleteObject(dib as HGDIOBJ);
+                DeleteDC(mem_dc);
+                ReleaseDC(std::ptr::null_mut(), screen_dc);
+                return std::ptr::null_mut();
+            }
+        };
+
+        // 绑定 D2D render target 到 memory DC
+        let bind_rect = windows::Win32::Foundation::RECT {
+            left: 0,
+            top: 0,
+            right: total_w,
+            bottom: total_h,
+        };
+        if target.BindDC(GdiHDC(mem_dc), &bind_rect).is_err() {
+            log::warn!("拖拽覆盖: BindDC 失败");
+            SelectObject(mem_dc, old_bmp);
+            DeleteObject(dib as HGDIOBJ);
+            DeleteDC(mem_dc);
+            ReleaseDC(std::ptr::null_mut(), screen_dc);
+            return std::ptr::null_mut();
+        }
+
+        // ===== D2D 渲染开始 =====
+        target.BeginDraw();
+
+        // 清空为全透明
+        target.Clear(Some(&D2D1_COLOR_F {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.0,
+        }));
+
+        // 绘制图标（使用 draw_icon_d2d：HICON → GetDIBits → premultiplied D2D Bitmap）
+        if !icon_handle.is_null() {
+            draw_icon_d2d(&target, None, icon_handle, 0, 0, icon_size);
+        }
+
+        // 绘制标签文字（DirectWrite，与分类框一致）
+        if !display_name.is_empty() {
+            if let Ok(dw_factory) =
+                DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)
+            {
+                let label_font_size = scale_for_dpi(13, dpi) as f32;
+                let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
+                let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
+
+                if let Ok(text_format) = dw_factory.CreateTextFormat::<_, _, _>(
+                    windows::core::PCWSTR(font_name.as_ptr()),
+                    None,
+                    DWRITE_FONT_WEIGHT_NORMAL,
+                    DWRITE_FONT_STYLE_NORMAL,
+                    DWRITE_FONT_STRETCH_NORMAL,
+                    label_font_size,
+                    windows::core::PCWSTR(locale.as_ptr()),
+                ) {
+                    let _ = text_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                    let _ = text_format
+                        .SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                    let _ = text_format.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+
+                    let label_y = icon_size as f32;
+                    let label_h = (total_h - icon_size) as f32;
+
+                    let text_wide: Vec<u16> = display_name.encode_utf16().collect();
+                    if let Some(layout) = target_inner_create_text_layout(
+                        &dw_factory,
+                        &text_wide,
+                        &text_format,
+                        total_w as f32,
+                        label_h,
+                        DWRITE_TEXT_ALIGNMENT_CENTER,
+                        DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+                    ) {
+                        if let Ok(brush) =
+                            target.CreateSolidColorBrush(&d2d_color(250, 250, 255, 255), None)
+                        {
+                            // 文字阴影（与分类框一致）
+                            if let Ok(shadow) = target.CreateSolidColorBrush(
+                                &d2d_color(0, 0, 0, 180),
+                                None,
+                            ) {
+                                target.DrawTextLayout(
+                                    D2D_POINT_2F {
+                                        x: 1.0,
+                                        y: label_y + 1.0,
+                                    },
+                                    &layout,
+                                    &shadow,
+                                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                                );
+                            }
+                            target.DrawTextLayout(
+                                D2D_POINT_2F {
+                                    x: 0.0,
+                                    y: label_y,
+                                },
+                                &layout,
+                                &brush,
+                                D2D1_DRAW_TEXT_OPTIONS_NONE,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        let _ = target.EndDraw(None, None);
+
+        // 清理
+        SelectObject(mem_dc, old_bmp);
+        DeleteDC(mem_dc);
+        ReleaseDC(std::ptr::null_mut(), screen_dc);
+
+        dib
     }
 }
