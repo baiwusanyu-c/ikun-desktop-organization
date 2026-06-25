@@ -11,9 +11,9 @@ use crate::context::AppContext;
 use crate::platform::{
     cleanup_desktop_registry, collect_grid_layout, create_grid_window, destroy_all_grid_windows,
     extract_file_icon, get_cursor_monitor_work_area_phys, get_grid_count, get_screen_resolution,
-    hide_native_icons, icon_exists_for_box, reposition_window_by_title, restore_all_hidden_icons,
-    restore_native_icons, resolve_icon_read_path, setup_desktop_registry, take_pending_create_box,
-    DesktopIcon, DesktopManagerTrait, GridCreateParams, GridFileItem,
+    hide_native_icons, icon_exists_for_box, reposition_window_by_title, resolve_icon_read_path,
+    restore_all_hidden_icons, restore_native_icons, setup_desktop_registry,
+    take_pending_create_box, DesktopIcon, DesktopManagerTrait, GridCreateParams, GridFileItem,
 };
 use eframe::egui;
 use std::sync::{Arc, Mutex};
@@ -471,6 +471,8 @@ impl eframe::App for MyApp {
         if !self.initialized {
             self.initialized = true;
             self.restore_layout();
+            // DesktopIconManager 诊断（验证 LVM 方案可行性）
+            crate::platform::windows::icon_manager::diagnose();
             // 先清理旧版残留，再注册新版（退出时清理，保证无残留）
             cleanup_desktop_registry();
             setup_desktop_registry();

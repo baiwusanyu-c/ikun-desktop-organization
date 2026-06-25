@@ -68,8 +68,7 @@ impl DesktopIconManager {
     /// 则使用 `SHARED_LISTVIEW_HWND` 中缓存的 HWND（由 icon_hider 保存）。
     /// 失败时返回错误（上层应优雅降级）。
     pub fn new() -> Result<Self> {
-        let listview_hwnd = find_desktop_listview().unwrap_or_else(|_| {
-            // SysListView32 可能被 icon_hider 隐藏，使用缓存的 HWND
+        let listview_hwnd = super::icon_hider::find_desktop_listview().unwrap_or_else(|_| {
             let cached = super::ffi_types::SHARED_LISTVIEW_HWND
                 .load(std::sync::atomic::Ordering::SeqCst);
             if cached != 0 {
@@ -427,7 +426,7 @@ impl DesktopIconManager {
         // 检查 SysListView32 是否仍然有效
         if unsafe { IsWindow(self.listview_hwnd) } == 0 {
             // 窗口已失效（explorer 重启），尝试重新查找
-            match find_desktop_listview() {
+            match super::icon_hider::find_desktop_listview() {
                 Ok(hwnd) => {
                     self.listview_hwnd = hwnd;
                     // 重新打开进程
@@ -708,6 +707,66 @@ impl Drop for DesktopIconManager {
     fn drop(&mut self) {
         self.cleanup();
     }
+}
+
+/// 诊断测试：检测 DesktopIconManager 是否可正常工作
+///
+/// 尝试创建管理器、重建索引，并将结果记录到日志。
+/// 在应用启动时调用一次，用于验证 LVM 方案可行性。
+pub fn diagnose() {
+    log::info!("===== DesktopIconManager 诊断测试 =====");
+
+    // 测试 1: find_desktop_listview
+    match super::icon_hider::find_desktop_listview() {
+        Ok(hwnd) => log::info!("[诊断] find_desktop_listview: 成功 hwnd={:?}", hwnd),
+        Err(e) => {
+            log::warn!("[诊断] find_desktop_listview: 失败 — {}", e);
+            log::info!("===== 诊断完成（LVM 不可用）=====");
+            return;
+        }
+    }
+
+    // 测试 2: DesktopIconManager::new()
+    let mut mgr = match DesktopIconManager::new() {
+        Ok(m) => {
+            log::info!("[诊断] DesktopIconManager::new(): 成功");
+            m
+        }
+        Err(e) => {
+            log::warn!("[诊断] DesktopIconManager::new(): 失败 — {}", e);
+            log::info!("===== 诊断完成（LVM 不可用）=====");
+            return;
+        }
+    };
+
+    // 测试 3: rebuild_index + 图标列表
+    let count = mgr.get_icon_count();
+    log::info!("[诊断] SysListView32 图标总数: {}", count);
+
+    if let Err(e) = mgr.rebuild_index() {
+        log::warn!("[诊断] rebuild_index: 失败 — {}", e);
+        log::info!("===== 诊断完成（LVM 部分可用）=====");
+        return;
+    }
+
+    let names = mgr.cached_names();
+    log::info!("[诊断] 索引缓存图标数: {}", names.len());
+    if names.len() <= 50 {
+        log::info!("[诊断] 图标名称列表: {:?}", names);
+    }
+
+    // 测试 4: 读取第一个图标位置
+    if let Some(first_name) = names.first() {
+        if let Some(idx) = mgr.find_icon_by_name(first_name) {
+            log::info!(
+                "[诊断] 图标 '{}' index={} 存在",
+                first_name,
+                idx
+            );
+        }
+    }
+
+    log::info!("===== 诊断完成（LVM 可用）=====");
 }
 
 /// 查找桌面 SysListView32 句柄
@@ -1008,7 +1067,7 @@ pub fn find_listview_at_screen_point(pt: POINT) -> Result<HWND> {
     unsafe {
         let mut hwnd = WindowFromPoint(pt);
         if hwnd.is_null() {
-            return find_desktop_listview();
+            return super::icon_hider::find_desktop_listview();
         }
         for _ in 0..12 {
             let lv = FindWindowExW(
@@ -1026,7 +1085,7 @@ pub fn find_listview_at_screen_point(pt: POINT) -> Result<HWND> {
             }
             hwnd = parent;
         }
-        find_desktop_listview()
+        super::icon_hider::find_desktop_listview()
     }
 }
 

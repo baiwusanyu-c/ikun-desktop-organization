@@ -47,8 +47,8 @@ static LISTVIEW_CLASS: &[u16] = &[
     83, 121, 115, 76, 105, 115, 116, 86, 105, 101, 119, 51, 50, 0,
 ]; // "SysListView32"
 
-/// 查找桌面 SysListView32 句柄
-fn find_desktop_listview() -> Result<HWND> {
+/// 查找桌面 SysListView32 句柄（raw FFI，已验证可用）
+pub fn find_desktop_listview() -> Result<HWND> {
     unsafe {
         // 尝试 Progman
         let progman = FindWindowW(PROG_CLASS.as_ptr(), std::ptr::null());
@@ -238,7 +238,10 @@ fn migrate_legacy_hidden_dir(managed_dir: &Path) -> Result<()> {
         }
     }
     if migrated > 0 {
-        log::info!("已从旧版 hidden_icons 迁移 {} 个图标到 managed_icons", migrated);
+        log::info!(
+            "已从旧版 hidden_icons 迁移 {} 个图标到 managed_icons",
+            migrated
+        );
     }
     Ok(())
 }
@@ -255,7 +258,10 @@ pub fn is_user_desktop_path(file_path: &str) -> bool {
 }
 
 fn vault_filename(logical_path: &str) -> Option<String> {
-    let file_name = Path::new(logical_path).file_name()?.to_string_lossy().to_string();
+    let file_name = Path::new(logical_path)
+        .file_name()?
+        .to_string_lossy()
+        .to_string();
     if is_user_desktop_path(logical_path) {
         return Some(format!("{}{}", PREFIX_USER, file_name));
     }
@@ -364,9 +370,8 @@ pub fn ingest_icon(logical_path: &str) -> Result<()> {
     }
 
     if is_public_desktop_path(logical_path) {
-        std::fs::copy(src, &vault).map_err(|e| {
-            anyhow::anyhow!("复制公共桌面图标到仓库失败 {}: {}", logical_path, e)
-        })?;
+        std::fs::copy(src, &vault)
+            .map_err(|e| anyhow::anyhow!("复制公共桌面图标到仓库失败 {}: {}", logical_path, e))?;
         log::info!(
             "公共桌面图标已复制到仓库: {} → {}",
             logical_path,
@@ -375,9 +380,8 @@ pub fn ingest_icon(logical_path: &str) -> Result<()> {
         return Ok(());
     }
 
-    std::fs::rename(src, &vault).map_err(|e| {
-        anyhow::anyhow!("移动图标到仓库失败 {}: {}", logical_path, e)
-    })?;
+    std::fs::rename(src, &vault)
+        .map_err(|e| anyhow::anyhow!("移动图标到仓库失败 {}: {}", logical_path, e))?;
     notify_shell_path(logical_path);
     log::info!("图标已收入仓库: {} → {}", logical_path, vault.display());
     Ok(())
@@ -410,7 +414,11 @@ pub fn export_icon(logical_path: &str) -> Result<(bool, PathBuf)> {
         )
     })?;
     notify_shell_path(&export.to_string_lossy());
-    log::info!("图标已从仓库导出到桌面: {} → {}", logical_path, export.display());
+    log::info!(
+        "图标已从仓库导出到桌面: {} → {}",
+        logical_path,
+        export.display()
+    );
     Ok((true, export))
 }
 
