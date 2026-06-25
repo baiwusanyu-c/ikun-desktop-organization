@@ -47,23 +47,27 @@ impl DesktopManager {
     fn get_desktop_paths() -> Vec<PathBuf> {
         let mut paths = Vec::new();
 
-        // 用户桌面
+        // 用户桌面（可无管理员权限管理图标隐藏/显示）
         if let Some(desktop) = dirs::desktop_dir() {
             paths.push(desktop);
-        }
-
-        // 公共桌面
-        let public_desktop = PathBuf::from(r"C:\Users\Public\Desktop");
-        if public_desktop.exists() {
-            paths.push(public_desktop);
         }
 
         paths
     }
 
+    /// 获取所有桌面路径（含公共桌面，仅用于只读枚举）
+    fn get_all_desktop_paths() -> Vec<PathBuf> {
+        let mut paths = Self::get_desktop_paths();
+        let public_desktop = PathBuf::from(r"C:\Users\Public\Desktop");
+        if public_desktop.exists() {
+            paths.push(public_desktop);
+        }
+        paths
+    }
+
     /// 内部方法：获取桌面图标
     fn get_desktop_icons_internal(&self) -> Result<Vec<DesktopIcon>> {
-        let desktop_paths = Self::get_desktop_paths();
+        let desktop_paths = Self::get_all_desktop_paths();
 
         if desktop_paths.is_empty() {
             anyhow::bail!("无法获取桌面路径");

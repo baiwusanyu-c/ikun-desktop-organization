@@ -9,7 +9,7 @@
 //! - `d2d_render`: Direct2D/DirectWrite 渲染
 //! - `grid_window`: 格子窗口管理
 //! - `icon_extract`: 文件图标提取
-//! - `icon_hider`: 图标整体隐藏/恢复（ShowWindow）
+//! - `icon_hider`: 图标仓库（managed_icons，无需管理员）
 //! - `icon_manager`: 逐图标管理（LVM_SETITEMPOSITION 跨进程操作）
 //! - `shell_menu`: Shell 上下文菜单 + 注册表管理
 //! - `sys_tray`: 系统托盘（TODO）
@@ -39,8 +39,10 @@ pub use grid_window::{
     reposition_window_by_title, GridCreateParams, GridFileItem,
 };
 pub use icon_extract::extract_file_icon;
-pub use icon_hider::{hide_managed_icons, hide_native_icons, restore_native_icons};
-pub use drag_handler::init_icon_manager_early;
+pub use icon_hider::{
+    hide_native_icons, icon_exists_for_box, restore_all_hidden_icons, restore_native_icons,
+    resolve_icon_read_path,
+};
 pub use icon_manager::DesktopIconManager;
 pub use ole_dnd::{get_box_drag_format_id, start_box_drag};
 pub use drop_target::{

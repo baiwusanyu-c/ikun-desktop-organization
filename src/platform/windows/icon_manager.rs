@@ -49,6 +49,12 @@ pub struct DesktopIconManager {
     name_to_index: HashMap<String, i32>,
     /// 文件名 → 上次已知桌面坐标（用于恢复时定位）
     name_to_position: HashMap<String, (i32, i32)>,
+    /// 受保护的可见图标位置（隐藏/显示操作前保存，操作后恢复）
+    ///
+    /// 用于对抗桌面"对齐到网格"导致的自动重排：
+    /// `LVM_SETITEMPOSITION` 触发 SysListView32 重新布局所有可见图标，
+    /// 保存位置后恢复，使非管理图标保持原位。
+    protected_positions: Vec<(i32, (i32, i32))>,
 }
 
 // Safety: HWND 和 HANDLE 在同一线程使用，Send 安全
@@ -102,6 +108,7 @@ impl DesktopIconManager {
             explorer_process: process,
             name_to_index: HashMap::new(),
             name_to_position: HashMap::new(),
+            protected_positions: Vec::new(),
         };
 
         // 构建初始索引
@@ -116,9 +123,71 @@ impl DesktopIconManager {
         Ok(mgr)
     }
 
+    /// 使用指定的 SysListView32 句柄创建管理器（多显示器拖放定位用）
+    pub fn with_listview(listview_hwnd: HWND) -> Result<Self> {
+        if listview_hwnd.is_null() {
+            anyhow::bail!("SysListView32 句柄无效");
+        }
+
+        let mut pid: u32 = 0;
+        unsafe { GetWindowThreadProcessId(listview_hwnd, &mut pid) };
+        if pid == 0 {
+            anyhow::bail!("无法获取 SysListView32 的进程 ID");
+        }
+
+        let process = unsafe {
+            OpenProcess(
+                PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE,
+                0,
+                pid,
+            )
+        };
+        if process.is_null() {
+            anyhow::bail!("OpenProcess 失败（pid={}）", pid);
+        }
+
+        let mut mgr = Self {
+            listview_hwnd,
+            explorer_process: process,
+            name_to_index: HashMap::new(),
+            name_to_position: HashMap::new(),
+            protected_positions: Vec::new(),
+        };
+
+        if let Err(e) = mgr.rebuild_index() {
+            log::warn!("索引构建失败（非致命）: {}", e);
+        }
+
+        Ok(mgr)
+    }
+
+    /// 获取 SysListView32 句柄
+    pub fn listview_hwnd(&self) -> HWND {
+        self.listview_hwnd
+    }
+
     /// 获取 SysListView32 中的图标总数
     pub fn get_icon_count(&self) -> i32 {
         unsafe { SendMessageW(self.listview_hwnd, LVM_GETITEMCOUNT, 0, 0) as i32 }
+    }
+
+    /// 禁用 SysListView32 重绘（防止批量操作触发桌面自动重排级联）
+    ///
+    /// 配合 `enable_redraw` 使用，在批量 `hide_icon` / `show_icon_at` 前调用。
+    pub fn disable_redraw(&self) {
+        unsafe {
+            SendMessageW(self.listview_hwnd, WM_SETREDRAW, 0, 0);
+        }
+    }
+
+    /// 重新启用 SysListView32 重绘并触发统一重绘
+    ///
+    /// 配合 `disable_redraw` 使用，在批量操作完成后调用。
+    pub fn enable_redraw(&self) {
+        unsafe {
+            SendMessageW(self.listview_hwnd, WM_SETREDRAW, 1, 0);
+            InvalidateRect(self.listview_hwnd, std::ptr::null(), 1);
+        }
     }
 
     /// 按文件名查找图标的 ListView index
@@ -133,6 +202,67 @@ impl DesktopIconManager {
     ///
     /// 将指定 index 的桌面图标移动到 `HIDDEN_ICON_X, HIDDEN_ICON_Y`，
     /// 使其在桌面上不可见但仍在 SysListView32 中存在。
+    /// 设置图标位置（使用 LVM_SETITEMPOSITION32 跨进程传坐标）
+    ///
+    /// LVM_SETITEMPOSITION32 通过远程内存传递 POINT 结构，
+    /// 可能绕过桌面 Shell 对 LVM_SETITEMPOSITION 的拦截。
+    fn set_icon_position_32(&self, index: i32, x: i32, y: i32) -> Result<()> {
+        if self.explorer_process.is_null() {
+            anyhow::bail!("explorer 进程句柄无效");
+        }
+
+        // 在 explorer.exe 中分配 POINT 内存
+        let remote_point = unsafe {
+            VirtualAllocEx(
+                self.explorer_process,
+                std::ptr::null_mut(),
+                std::mem::size_of::<POINT>(),
+                MEM_COMMIT | MEM_RESERVE,
+                PAGE_READWRITE,
+            )
+        };
+        if remote_point.is_null() {
+            anyhow::bail!("VirtualAllocEx 失败");
+        }
+
+        // 写入 POINT{x, y} 到远程内存
+        let point = POINT { x, y };
+        let mut bytes_written: usize = 0;
+        let write_ok = unsafe {
+            WriteProcessMemory(
+                self.explorer_process,
+                remote_point,
+                &point as *const POINT as *const c_void,
+                std::mem::size_of::<POINT>(),
+                &mut bytes_written,
+            )
+        };
+        if write_ok == 0 {
+            unsafe { VirtualFreeEx(self.explorer_process, remote_point, 0, MEM_RELEASE) };
+            anyhow::bail!("WriteProcessMemory 失败");
+        }
+
+        // 发送 LVM_SETITEMPOSITION32
+        let ret = unsafe {
+            SendMessageW(
+                self.listview_hwnd,
+                LVM_SETITEMPOSITION32,
+                index as WPARAM,
+                remote_point as LPARAM,
+            )
+        };
+
+        // 释放远程内存
+        unsafe { VirtualFreeEx(self.explorer_process, remote_point, 0, MEM_RELEASE) };
+
+        log::info!(
+            "set_icon_position_32: index={}, ({}, {}), ret={}",
+            index, x, y, ret
+        );
+
+        Ok(())
+    }
+
     pub fn hide_icon(&self, index: i32) -> Result<()> {
         self.set_icon_position(index, HIDDEN_ICON_X, HIDDEN_ICON_Y)
             .context("隐藏图标失败")
@@ -213,6 +343,77 @@ impl DesktopIconManager {
                 self.name_to_position.insert(name.to_string(), (x, y));
             }
         }
+    }
+
+    /// 保存可见图标的位置到保护列表（排除指定索引）
+    ///
+    /// 在 `hide_icon` 批量操作之前调用，记录非管理图标的 (index, position)，
+    /// 供后续 `restore_protected_positions` 恢复。
+    ///
+    /// # 参数
+    ///
+    /// - `exclude_indices`: 管理图标的 index 集合，这些图标即将被隐藏，
+    ///   不应纳入保护列表（否则 restore 会将其恢复到可见位置，撤消隐藏）
+    ///
+    /// 原理：`LVM_SETITEMPOSITION` 触发桌面"对齐到网格"自动重排，
+    /// 导致所有可见图标位置偏移。保存非管理图标后恢复，使其保持原位。
+    pub fn save_protected_positions(&mut self, exclude_indices: &[i32]) {
+        self.protected_positions.clear();
+        for (_, &index) in &self.name_to_index {
+            // 跳过即将被隐藏的管理图标（防止 restore 将其恢复回可见位置）
+            if exclude_indices.contains(&index) {
+                continue;
+            }
+            if let Ok(pos) = self.get_icon_position(index) {
+                // 只保存可见位置的图标（排除已隐藏在屏幕外的）
+                if pos.0 >= 0 && pos.1 >= 0 {
+                    self.protected_positions.push((index, pos));
+                }
+            }
+        }
+        log::debug!(
+            "已保存 {} 个非管理图标位置到保护列表（排除 {} 个管理图标）",
+            self.protected_positions.len(),
+            exclude_indices.len()
+        );
+    }
+
+    /// 恢复所有受保护的可见图标位置
+    ///
+    /// 在 `LVM_SETITEMPOSITION` 操作后调用，将被自动重排偏移的可见图标
+    /// 恢复到操作前的位置。已处于正确位置的图标跳过（避免触发额外重排）。
+    ///
+    /// 使用 `WM_SETREDRAW` 包裹批量操作，防止每次 `LVM_SETITEMPOSITION`
+    /// 触发桌面自动重排级联。所有位置设置完成后统一重绘一次。
+    ///
+    /// 调用时机：
+    /// - `hide_managed_icons`: 隐藏所有管理图标后调用一次
+    /// - `handle_box_to_desktop`: `show_icon_at` 后立即调用
+    /// - `restore_native_icons`: 恢复所有图标后调用一次
+    pub fn restore_protected_positions(&self) {
+        if self.protected_positions.is_empty() {
+            return;
+        }
+
+        let mut restored = 0;
+        let mut skipped = 0;
+        for &(index, (saved_x, saved_y)) in &self.protected_positions {
+            // 读取当前位置，只在实际偏移时恢复（避免无必要的 LVM_SETITEMPOSITION）
+            if let Ok((cur_x, cur_y)) = self.get_icon_position(index) {
+                if cur_x == saved_x && cur_y == saved_y {
+                    skipped += 1;
+                    continue;
+                }
+                if self.set_icon_position(index, saved_x, saved_y).is_ok() {
+                    restored += 1;
+                }
+            }
+        }
+
+        log::debug!(
+            "恢复受保护图标: {} 个已恢复, {} 个未偏移（跳过）",
+            restored, skipped
+        );
     }
 
     /// 重建 name → index 映射缓存
@@ -313,6 +514,7 @@ impl DesktopIconManager {
         }
         self.name_to_index.clear();
         self.name_to_position.clear();
+        self.protected_positions.clear();
         log::info!("桌面图标管理器已清理");
     }
 
@@ -333,6 +535,19 @@ impl DesktopIconManager {
             )
         };
         Ok(())
+    }
+
+    /// 设置图标位置并返回 SendMessageW 原始返回值（用于诊断）
+    fn set_icon_position_raw(&self, index: i32, x: i32, y: i32) -> LRESULT {
+        let lparam = ((y & 0xFFFF) << 16) | (x & 0xFFFF);
+        unsafe {
+            SendMessageW(
+                self.listview_hwnd,
+                LVM_SETITEMPOSITION,
+                index as WPARAM,
+                lparam as LPARAM,
+            )
+        }
     }
 
     /// 获取图标在 SysListView32 中的位置
@@ -499,6 +714,9 @@ impl Drop for DesktopIconManager {
 ///
 /// 逐层查找：Progman → SHELLDLL_DefView → SysListView32，
 /// 或 WorkerW → SHELLDLL_DefView → SysListView32。
+///
+/// Windows 10/11 上 SysListView32 通常在 WorkerW 下而非 Progman 下。
+/// 需要先向 Progman 发送 0x052C 消息激活桌面 WorkerW 窗口。
 fn find_desktop_listview() -> Result<HWND> {
     unsafe {
         // 尝试 Progman
@@ -518,14 +736,21 @@ fn find_desktop_listview() -> Result<HWND> {
                     std::ptr::null(),
                 );
                 if !lv.is_null() {
+                    log::debug!("SysListView32 在 Progman 下找到");
                     return Ok(lv);
                 }
             }
+
+            // Windows 10/11: 向 Progman 发送 0x052C 激活桌面 WorkerW
+            SendMessageW(progman, 0x052C, 0, 0);
+            log::debug!("已向 Progman 发送 0x052C 激活桌面 WorkerW");
         }
 
         // 尝试 WorkerW
         let mut worker = FindWindowW(WORKER_CLASS.as_ptr(), std::ptr::null());
+        let mut worker_count = 0;
         while !worker.is_null() {
+            worker_count += 1;
             let defview = FindWindowExW(
                 worker,
                 std::ptr::null_mut(),
@@ -540,6 +765,10 @@ fn find_desktop_listview() -> Result<HWND> {
                     std::ptr::null(),
                 );
                 if !lv.is_null() {
+                    log::debug!(
+                        "SysListView32 在第 {} 个 WorkerW 下找到",
+                        worker_count
+                    );
                     return Ok(lv);
                 }
             }
@@ -551,11 +780,359 @@ fn find_desktop_listview() -> Result<HWND> {
             );
         }
 
-        anyhow::bail!("无法找到 SysListView32")
+        log::warn!(
+            "无法找到 SysListView32（已搜索 Progman + {} 个 WorkerW）",
+            worker_count
+        );
+        anyhow::bail!(
+            "无法找到桌面 SysListView32（已搜索 Progman + {} 个 WorkerW）",
+            worker_count
+        )
     }
 }
 
-// ===== 单元测试 =====
+// =============================================================================
+// 桌面自动排列控制（通过 IFolderView2 COM 接口）
+// =============================================================================
+//
+// 桌面 SysListView32 开启"自动排列图标"时，LVM_SETITEMPOSITION 将图标移到
+// 屏幕外后，桌面会立即将图标重排回可见区域，导致隐藏操作失效。
+//
+// 解决方案：在批量隐藏/显示图标前，通过 IFolderView2::SetCurrentFolderFlags
+// 临时关闭 FWF_AUTOARRANGE（自动排列），操作完成后恢复。
+//
+// COM 链路：IShellWindows → IDispatch → IServiceProvider → IShellBrowser
+//           → IShellView → IFolderView2
+
+use windows::core::{Interface as WinInterface, GUID, VARIANT};
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
+    IDispatch, IServiceProvider,
+};
+use windows::Win32::UI::Shell::{IFolderView2, IShellBrowser, IShellView, IShellWindows};
+
+/// CLSID_ShellWindows = {9BA05972-F6A8-11CF-A442-00A0C90A8F39}
+const CLSID_SHELL_WINDOWS: GUID = GUID::from_u128(0x9BA05972_F6A8_11CF_A442_00A0C90A8F39);
+
+/// SID_STopLevelBrowser = {4C96BE40-915C-11CF-99D3-00AA004AE837}
+const SID_S_TOP_LEVEL_BROWSER: GUID = GUID::from_u128(0x4C96BE40_915C_11CF_99D3_00AA004AE837);
+
+/// FWF_AUTOARRANGE — 桌面"自动排列图标"标志位
+const FWF_AUTOARRANGE: u32 = 0x1;
+
+/// 临时禁用桌面"自动排列图标"
+///
+/// 通过 COM 接口 `IFolderView2::SetCurrentFolderFlags` 清除 `FWF_AUTOARRANGE` 位，
+/// 使后续 `LVM_SETITEMPOSITION` 操作不被桌面自动重排撤消。
+///
+/// 返回 `Some(true)` 表示自动排列已关闭（需要在操作完成后调用 `restore_auto_arrange`），
+/// 返回 `Some(false)` 表示自动排列本来就未开启（无需恢复），
+/// 返回 `None` 表示 COM 操作失败（上层应继续执行，仅降级为无保护模式）。
+pub fn disable_desktop_auto_arrange() -> Option<bool> {
+    unsafe {
+        // CoInitializeEx 可安全重复调用（配对使用）
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+
+        let sw: IShellWindows = match CoCreateInstance(&CLSID_SHELL_WINDOWS, None, CLSCTX_ALL) {
+            Ok(sw) => sw,
+            Err(e) => {
+                log::warn!("disable_auto_arrange: CoCreateInstance(IShellWindows) 失败: {}", e);
+                CoUninitialize();
+                return None;
+            }
+        };
+
+        let index = VARIANT::from(0i32);
+        let dispatch: IDispatch = match sw.Item(&index) {
+            Ok(d) => d,
+            Err(e) => {
+                log::warn!("disable_auto_arrange: IShellWindows.Item(0) 失败: {}", e);
+                CoUninitialize();
+                return None;
+            }
+        };
+
+        let sp: IServiceProvider = match WinInterface::cast::<IServiceProvider>(&dispatch) {
+            Ok(sp) => sp,
+            Err(e) => {
+                log::warn!("disable_auto_arrange: QueryInterface(IServiceProvider) 失败: {}", e);
+                CoUninitialize();
+                return None;
+            }
+        };
+
+        let sb: IShellBrowser = match sp.QueryService::<IShellBrowser>(&SID_S_TOP_LEVEL_BROWSER) {
+            Ok(sb) => sb,
+            Err(e) => {
+                log::warn!("disable_auto_arrange: QueryService(IShellBrowser) 失败: {}", e);
+                CoUninitialize();
+                return None;
+            }
+        };
+
+        let sv: IShellView = match sb.QueryActiveShellView() {
+            Ok(sv) => sv,
+            Err(e) => {
+                log::warn!("disable_auto_arrange: QueryActiveShellView 失败: {}", e);
+                CoUninitialize();
+                return None;
+            }
+        };
+
+        let fv2: IFolderView2 = match WinInterface::cast::<IFolderView2>(&sv) {
+            Ok(fv) => fv,
+            Err(e) => {
+                log::warn!("disable_auto_arrange: QueryInterface(IFolderView2) 失败: {}", e);
+                CoUninitialize();
+                return None;
+            }
+        };
+
+        let flags = match fv2.GetCurrentFolderFlags() {
+            Ok(f) => f,
+            Err(e) => {
+                log::warn!("disable_auto_arrange: GetCurrentFolderFlags 失败: {}", e);
+                CoUninitialize();
+                return None;
+            }
+        };
+
+        if (flags & FWF_AUTOARRANGE) == 0 {
+            log::info!("桌面自动排列已关闭，无需禁用 (flags={:#X})", flags);
+            // 仍然调用 CoUninitialize 保持配对
+            CoUninitialize();
+            return Some(false);
+        }
+
+        match fv2.SetCurrentFolderFlags(FWF_AUTOARRANGE, 0) {
+            Ok(()) => {
+                log::info!(
+                    "桌面自动排列已禁用 (flags: {:#X} → {:#X})",
+                    flags, flags & !FWF_AUTOARRANGE
+                );
+                // CoUninitialize 在 restore 时调用
+                // 注意：此处故意不调用 CoUninitialize，COM 对象需要保持活跃
+                // restore_auto_arrange 会重新获取接口并调用 CoUninitialize
+                Some(true)
+            }
+            Err(e) => {
+                log::warn!("disable_auto_arrange: SetCurrentFolderFlags 失败: {}", e);
+                CoUninitialize();
+                None
+            }
+        }
+    }
+}
+
+/// 恢复桌面"自动排列图标"设置
+///
+/// 在 `disable_desktop_auto_arrange` 返回 `Some(true)` 后调用，
+/// 重新设置 `FWF_AUTOARRANGE` 位，恢复用户原始的桌面设置。
+pub fn restore_desktop_auto_arrange() {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+
+        let sw: IShellWindows = match CoCreateInstance(&CLSID_SHELL_WINDOWS, None, CLSCTX_ALL) {
+            Ok(sw) => sw,
+            Err(e) => {
+                log::warn!("restore_auto_arrange: CoCreateInstance 失败: {}", e);
+                CoUninitialize();
+                return;
+            }
+        };
+
+        let index = VARIANT::from(0i32);
+        let dispatch: IDispatch = match sw.Item(&index) {
+            Ok(d) => d,
+            Err(e) => {
+                log::warn!("restore_auto_arrange: Item(0) 失败: {}", e);
+                CoUninitialize();
+                return;
+            }
+        };
+
+        let sp: IServiceProvider = match WinInterface::cast::<IServiceProvider>(&dispatch) {
+            Ok(sp) => sp,
+            Err(e) => {
+                log::warn!("restore_auto_arrange: IServiceProvider 失败: {}", e);
+                CoUninitialize();
+                return;
+            }
+        };
+
+        let sb: IShellBrowser = match sp.QueryService::<IShellBrowser>(&SID_S_TOP_LEVEL_BROWSER) {
+            Ok(sb) => sb,
+            Err(e) => {
+                log::warn!("restore_auto_arrange: IShellBrowser 失败: {}", e);
+                CoUninitialize();
+                return;
+            }
+        };
+
+        let sv: IShellView = match sb.QueryActiveShellView() {
+            Ok(sv) => sv,
+            Err(e) => {
+                log::warn!("restore_auto_arrange: QueryActiveShellView 失败: {}", e);
+                CoUninitialize();
+                return;
+            }
+        };
+
+        let fv2: IFolderView2 = match WinInterface::cast::<IFolderView2>(&sv) {
+            Ok(fv) => fv,
+            Err(e) => {
+                log::warn!("restore_auto_arrange: IFolderView2 失败: {}", e);
+                CoUninitialize();
+                return;
+            }
+        };
+
+        match fv2.SetCurrentFolderFlags(FWF_AUTOARRANGE, FWF_AUTOARRANGE) {
+            Ok(()) => log::info!("桌面自动排列已恢复"),
+            Err(e) => log::warn!("restore_auto_arrange: SetCurrentFolderFlags 失败: {}", e),
+        }
+
+        CoUninitialize();
+    }
+}
+
+// =============================================================================
+// 拖放后定位（仅用于可见坐标，不用于隐藏）
+// =============================================================================
+
+/// 根据屏幕坐标查找对应的桌面 SysListView32
+///
+/// 从光标位置向上遍历窗口树，找到承载图标的 ListView。
+/// 多显示器场景下比固定查找 Progman 更准确。
+pub fn find_listview_at_screen_point(pt: POINT) -> Result<HWND> {
+    unsafe {
+        let mut hwnd = WindowFromPoint(pt);
+        if hwnd.is_null() {
+            return find_desktop_listview();
+        }
+        for _ in 0..12 {
+            let lv = FindWindowExW(
+                hwnd,
+                std::ptr::null_mut(),
+                LISTVIEW_CLASS.as_ptr(),
+                std::ptr::null(),
+            );
+            if !lv.is_null() {
+                return Ok(lv);
+            }
+            let parent = GetParent(hwnd);
+            if parent.is_null() {
+                break;
+            }
+            hwnd = parent;
+        }
+        find_desktop_listview()
+    }
+}
+
+/// 从 .lnk 路径收集可能的 SysListView32 显示名称
+fn icon_name_candidates(file_path: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let path = std::path::Path::new(file_path);
+    if let Some(stem) = path.file_stem() {
+        let s = stem.to_string_lossy().to_string();
+        if !s.is_empty() {
+            names.push(s);
+        }
+    }
+    if let Some(name) = path.file_name() {
+        let s = name.to_string_lossy().to_string();
+        if !s.is_empty() && !names.contains(&s) {
+            names.push(s);
+        }
+    }
+    names
+}
+
+/// 将桌面图标定位到屏幕坐标（拖放释放后调用）
+///
+/// 配合 `icon_hider::restore_single_icon` 使用：
+/// 1. 文件移动恢复可见性
+/// 2. 本函数通过 LVM 设置释放位置（屏幕坐标 → ListView 客户区坐标）
+///
+/// 失败时仅记录警告，不影响图标已在桌面显示。
+pub fn position_icon_at_screen(file_path: &str, screen_x: i32, screen_y: i32) {
+    let auto_arrange_was_on = disable_desktop_auto_arrange();
+
+    let result = (|| -> Result<()> {
+        let listview = find_listview_at_screen_point(POINT {
+            x: screen_x,
+            y: screen_y,
+        })?;
+
+        let mut mgr = DesktopIconManager::with_listview(listview)?;
+
+        let mut client_pt = POINT {
+            x: screen_x,
+            y: screen_y,
+        };
+        unsafe {
+            if ScreenToClient(mgr.listview_hwnd(), &mut client_pt) == 0 {
+                log::warn!("ScreenToClient 失败，使用屏幕坐标作为回退");
+                client_pt = POINT {
+                    x: screen_x,
+                    y: screen_y,
+                };
+            }
+        }
+
+        let names = icon_name_candidates(file_path);
+        if names.is_empty() {
+            anyhow::bail!("无法从路径提取图标名称: {}", file_path);
+        }
+
+        // Explorer 刷新 ListView 可能有延迟，重试查找
+        let mut index = None;
+        for attempt in 0..20 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            mgr.rebuild_index()?;
+            for name in &names {
+                if let Some(idx) = mgr.find_icon_by_name(name) {
+                    index = Some(idx);
+                    break;
+                }
+            }
+            if index.is_some() {
+                break;
+            }
+        }
+
+        let index = index.ok_or_else(|| {
+            anyhow::anyhow!(
+                "SysListView32 中未找到图标（已尝试名称: {:?}）",
+                names
+            )
+        })?;
+
+        mgr.show_icon_at(index, client_pt.x, client_pt.y)?;
+        log::info!(
+            "桌面图标已定位到 ({}, {}) [客户区 ({}, {})]",
+            screen_x,
+            screen_y,
+            client_pt.x,
+            client_pt.y
+        );
+        Ok(())
+    })();
+
+    if auto_arrange_was_on == Some(true) {
+        restore_desktop_auto_arrange();
+    }
+
+    if let Err(e) = result {
+        log::warn!(
+            "桌面图标定位失败（图标应已显示在默认网格位置）: {}",
+            e
+        );
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

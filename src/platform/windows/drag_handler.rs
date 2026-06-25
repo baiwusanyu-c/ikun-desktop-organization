@@ -6,66 +6,10 @@
 //!
 //! 不依赖 Shell CF_HDROP，避免域安全策略触发 UAC。
 
-use std::sync::Mutex;
-
 use super::d2d_render::render_layered_window;
 use super::ffi_imports::*;
 use super::ffi_types::*;
 use super::grid_window::get_data;
-use super::icon_manager::DesktopIconManager;
-
-// =============================================================================
-// 全局桌面图标管理器（懒加载，首次拖拽时初始化）
-// =============================================================================
-
-/// 桌面图标管理器单例
-///
-/// 首次拖拽到桌面时懒加载初始化。
-/// 初始化失败不影响拖拽功能（仅降级为不恢复桌面图标位置）。
-static DRAG_ICON_MANAGER: Mutex<Option<DesktopIconManager>> = Mutex::new(None);
-
-/// 获取或初始化桌面图标管理器
-///
-/// 首次调用时创建 DesktopIconManager，失败时返回 None 并记录警告。
-pub(crate) fn get_or_init_icon_manager() -> Option<std::sync::MutexGuard<'static, Option<DesktopIconManager>>> {
-    let mut guard = DRAG_ICON_MANAGER.lock().ok()?;
-    if guard.is_none() {
-        match DesktopIconManager::new() {
-            Ok(mgr) => {
-                log::info!("拖拽用桌面图标管理器已初始化");
-                *guard = Some(mgr);
-            }
-            Err(e) => {
-                log::warn!("桌面图标管理器初始化失败（拖拽到桌面将不恢复图标位置）: {}", e);
-                return None;
-            }
-        }
-    }
-    Some(guard)
-}
-
-/// 预先初始化桌面图标管理器
-///
-/// 在 `hide_native_icons()` 中调用，确保 DesktopIconManager 提前就绪，
-/// 供后续 `hide_managed_icons` 和拖拽释放使用。
-pub fn init_icon_manager_early() {
-    let mut guard = match DRAG_ICON_MANAGER.lock() {
-        Ok(g) => g,
-        Err(_) => return,
-    };
-    if guard.is_some() {
-        return; // 已初始化
-    }
-    match DesktopIconManager::new() {
-        Ok(mgr) => {
-            log::info!("桌面图标管理器已预先初始化（SysListView32 隐藏前）");
-            *guard = Some(mgr);
-        }
-        Err(e) => {
-            log::warn!("桌面图标管理器预先初始化失败: {}", e);
-        }
-    }
-}
 
 // =============================================================================
 // Phase 1: 拖拽阈值检测（从 WM_MOUSEMOVE 调用）
@@ -226,7 +170,7 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
         handle_box_to_box_move(hwnd, target_hwnd, item_idx as usize);
     } else {
         // === 框→桌面（从框中移除项）===
-        handle_box_to_desktop(hwnd, item_idx as usize);
+        handle_box_to_desktop(hwnd, item_idx as usize, pt.x, pt.y);
     }
 
     // 清除所有框的高亮
@@ -276,11 +220,8 @@ fn handle_box_to_box_move(source_hwnd: HWND, target_hwnd: HWND, item_index: usiz
     }
 }
 
-/// 框→桌面：从框中移除项，并将图标恢复到桌面释放位置
-///
-/// 使用 DesktopIconManager 将 SysListView32 中的图标从屏幕外
-/// 移动到鼠标释放位置，使图标重新显示在桌面上。
-fn handle_box_to_desktop(hwnd: HWND, item_index: usize) {
+/// 框→桌面：从仓库导出到用户桌面并定位
+fn handle_box_to_desktop(hwnd: HWND, item_index: usize, drop_x: i32, drop_y: i32) {
     let data = match unsafe { get_data(hwnd) } {
         Some(d) => d,
         None => return,
@@ -294,81 +235,34 @@ fn handle_box_to_desktop(hwnd: HWND, item_index: usize) {
     let display_name = removed.display_name.clone();
     let file_path = removed.file_path.clone();
 
-    // 获取鼠标释放位置（屏幕坐标）
-    let mut pt = POINT { x: 0, y: 0 };
-    unsafe { GetCursorPos(&mut pt) };
+    log::info!("框→桌面: 导出图标 '{}' (path={})", display_name, file_path);
 
-    log::info!(
-        "框→桌面: 开始恢复图标 '{}' (path={}) 到位置 ({}, {})",
-        display_name, file_path, pt.x, pt.y
-    );
-
-    // 尝试恢复桌面图标到释放位置
-    let mut restored = false;
-    if let Some(mut guard) = get_or_init_icon_manager() {
-        if let Some(ref mut mgr) = *guard {
-            // 每次拖拽到桌面时刷新索引（explorer 可能重启、图标可能变化）
-            if let Err(e) = mgr.rebuild_index() {
-                log::warn!("框→桌面: rebuild_index 失败: {}", e);
-            }
-
+    let mut export_path = super::icon_hider::export_desktop_path(&file_path);
+    match super::icon_hider::export_icon(&file_path) {
+        Ok((true, path)) => {
+            export_path = path;
             log::info!(
-                "框→桌面: 桌面图标管理器索引已刷新，共 {} 个图标",
-                mgr.get_icon_count()
+                "框→桌面: 图标 '{}' 已导出到 {}",
+                display_name,
+                export_path.display()
             );
-
-            // 搜索名称列表：display_name + file_stem（覆盖不同命名方式）
-            let file_stem = std::path::Path::new(&file_path)
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default();
-
-            let search_names = vec![display_name.clone(), file_stem.clone()];
-
-            for name in &search_names {
-                if name.is_empty() {
-                    continue;
-                }
-                log::debug!("框→桌面: 搜索桌面图标名称 '{}'", name);
-                if let Some(index) = mgr.find_icon_by_name(name) {
-                    log::info!("框→桌面: 找到图标 '{}' → index={}", name, index);
-                    match mgr.show_icon_at(index, pt.x, pt.y) {
-                        Ok(()) => {
-                            log::info!(
-                                "框→桌面: 图标 '{}' 已恢复到桌面位置 ({}, {})",
-                                name, pt.x, pt.y
-                            );
-                            restored = true;
-                            break;
-                        }
-                        Err(e) => {
-                            log::warn!("框→桌面: show_icon_at 失败 (index={}): {}", index, e);
-                        }
-                    }
-                } else {
-                    log::debug!("框→桌面: 未找到图标 '{}'", name);
-                }
+        }
+        Ok((false, path)) => {
+            export_path = path;
+            if export_path.exists() {
+                log::info!("框→桌面: 图标 '{}' 已在桌面", display_name);
+            } else {
+                log::warn!("框→桌面: 图标 '{}' 不在仓库也不在桌面", display_name);
             }
-
-            if !restored {
-                // 输出索引中的所有名称用于调试
-                let cached = mgr.cached_names();
-                log::warn!(
-                    "框→桌面: 无法匹配桌面图标 (display_name='{}', file_stem='{}'), \
-                     索引中共 {} 个图标: {:?}",
-                    display_name, file_stem,
-                    cached.len(),
-                    if cached.len() <= 20 { cached.clone() } else { cached[..20].to_vec() }
-                );
-            }
+        }
+        Err(e) => {
+            log::warn!("框→桌面: 导出图标 '{}' 失败: {}", display_name, e);
         }
     }
 
-    if !restored {
-        log::info!(
-            "框→桌面: 降级处理 — 仅从框中移除 '{}'（.lnk 文件保留在 {}）",
-            display_name, file_path
-        );
+    if export_path.exists() {
+        let export_str = export_path.to_string_lossy().to_string();
+        super::icon_manager::position_icon_at_screen(&export_str, drop_x, drop_y);
     }
 
     // 从框中移除项
@@ -412,7 +306,7 @@ pub(crate) fn handle_drag_leave(hwnd: HWND) {
     }
 }
 
-/// 处理 WM_USER_DRAG_ITEM_ADDED（框→框移动时，目标框添加项）
+/// 处理 WM_USER_DRAG_ITEM_ADDED（框→框移动 或 桌面→框 时，目标框添加项）
 pub(crate) fn handle_drag_item_added(hwnd: HWND) {
     if let Some((file_path, display_name)) = unsafe { super::drop_target::take_pending_add_item() }
     {
@@ -441,9 +335,25 @@ pub(crate) fn handle_drag_item_added(hwnd: HWND) {
                 display_name: actual_name.clone(),
                 icon_handle,
             });
-            log::info!("框→框移动: '{}' 已添加到目标框", actual_name);
+            log::info!("项已添加到框: '{}'", actual_name);
             render_layered_window(hwnd);
             save_config();
+        }
+
+        // ★ 隐藏桌面原始图标（该图标已在分类框中管理，桌面不应再显示）
+        hide_single_desktop_icon(&file_path, &display_name);
+    }
+}
+
+fn hide_single_desktop_icon(file_path: &str, display_name: &str) {
+    match super::icon_hider::hide_single_icon(file_path) {
+        Ok(()) => {
+            if !super::icon_hider::is_public_desktop_path(file_path) {
+                log::info!("桌面图标 '{}' 已收入仓库", display_name);
+            }
+        }
+        Err(e) => {
+            log::warn!("收入仓库失败 '{}': {}", display_name, e);
         }
     }
 }
@@ -458,5 +368,81 @@ fn save_config() {
         } else {
             log::info!("拖拽后配置已保存");
         }
+    }
+}
+
+// =============================================================================
+// OLE 拖拽放置处理（由 WM_USER_DRAG_DROP 触发）
+// =============================================================================
+
+/// 处理 OLE 拖拽放置（桌面→框 或 框→框）
+///
+/// 由 `drop_target.rs` 的 `drop_target_drop()` 通过 `PostMessageW(WM_USER_DRAG_DROP)`
+/// 触发。从 `PENDING_DROP` 读取文件路径，添加到目标分类框，并隐藏桌面图标。
+pub(crate) fn handle_ole_drop(hwnd: HWND) {
+    let drop = match super::drop_target::take_pending_drop() {
+        Some(d) => d,
+        None => {
+            log::debug!("OLE drop: 无待处理数据");
+            return;
+        }
+    };
+
+    let is_box_drag = drop.box_data.is_some();
+    log::info!(
+        "OLE drop: {} 个文件, box_drag={}, drop=({}, {})",
+        drop.file_paths.len(),
+        is_box_drag,
+        drop.drop_x,
+        drop.drop_y
+    );
+
+    let data = match unsafe { get_data(hwnd) } {
+        Some(d) => d,
+        None => return,
+    };
+
+    let mut added = 0;
+    for file_path in &drop.file_paths {
+        // 去重：已存在则跳过
+        if data.items.iter().any(|i| i.file_path == *file_path) {
+            log::debug!("OLE drop: 跳过已存在项 '{}'", file_path);
+            continue;
+        }
+
+        // 提取图标
+        let icon_info = super::icon_extract::extract_file_icon(file_path);
+        let (icon_handle, display_name) = match icon_info {
+            Some(info) => (info.hicon, info.display_name),
+            None => {
+                let name = std::path::Path::new(file_path)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| file_path.clone());
+                (std::ptr::null_mut(), name)
+            }
+        };
+
+        data.items.push(super::grid_window::GridFileItem {
+            file_path: file_path.clone(),
+            display_name: display_name.clone(),
+            icon_handle,
+        });
+        added += 1;
+
+        if !is_box_drag {
+            // 桌面→框：收入仓库
+            if let Err(e) = super::icon_hider::ingest_icon(file_path) {
+                log::warn!("OLE drop: 收入仓库失败 '{}': {}", display_name, e);
+            } else {
+                log::info!("OLE drop: '{}' 已收入仓库", display_name);
+            }
+        }
+    }
+
+    if added > 0 {
+        log::info!("OLE drop: 添加 {} 个项到分类框", added);
+        super::d2d_render::render_layered_window(hwnd);
+        save_config();
     }
 }

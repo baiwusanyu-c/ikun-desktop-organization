@@ -134,6 +134,7 @@ pub const CS_VREDRAW: u32 = 0x0001;
 pub const CS_DBLCLKS: u32 = 0x0008;
 
 // ===== Window Messages =====
+pub const WM_SETREDRAW: u32 = 0x000B;
 pub const WM_PAINT: u32 = 0x000F;
 pub const WM_DESTROY: u32 = 0x0002;
 pub const WM_SIZE: u32 = 0x0005;
@@ -510,6 +511,9 @@ pub const LVM_GETITEMCOUNT: u32 = LVM_FIRST + 4;
 pub const LVM_GETITEMTEXTW: u32 = LVM_FIRST + 115;
 pub const LVM_GETITEMPOSITION: u32 = LVM_FIRST + 16;
 pub const LVM_SETITEMPOSITION: u32 = LVM_FIRST + 15;
+pub const LVM_SETITEMPOSITION32: u32 = LVM_FIRST + 163;
+pub const LVM_GETEXTENDEDLISTVIEWSTYLE: u32 = LVM_FIRST + 55;
+pub const LVM_SETEXTENDEDLISTVIEWSTYLE: u32 = LVM_FIRST + 54;
 
 /// ListView 项目掩码
 pub const LVIF_TEXT: u32 = 0x0001;

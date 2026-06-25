@@ -11,8 +11,9 @@ use crate::context::AppContext;
 use crate::platform::{
     cleanup_desktop_registry, collect_grid_layout, create_grid_window, destroy_all_grid_windows,
     extract_file_icon, get_cursor_monitor_work_area_phys, get_grid_count, get_screen_resolution,
-    hide_managed_icons, hide_native_icons, init_icon_manager_early, reposition_window_by_title, restore_native_icons, setup_desktop_registry,
-    take_pending_create_box, DesktopIcon, DesktopManagerTrait, GridCreateParams, GridFileItem,
+    hide_native_icons, icon_exists_for_box, reposition_window_by_title, restore_all_hidden_icons,
+    restore_native_icons, resolve_icon_read_path, setup_desktop_registry, take_pending_create_box,
+    DesktopIcon, DesktopManagerTrait, GridCreateParams, GridFileItem,
 };
 use eframe::egui;
 use std::sync::{Arc, Mutex};
@@ -252,6 +253,9 @@ impl MyApp {
         }
         log::info!("开始恢复布局: {} 个分类框", boxes.len());
 
+        // 初始化图标仓库（迁移旧 hidden_icons，不恢复到桌面）
+        restore_all_hidden_icons();
+
         if !self.ctx.state.icons_hidden {
             if let Err(e) = hide_native_icons() {
                 self.ctx.set_status(format!("隐藏图标失败: {}", e));
@@ -265,17 +269,20 @@ impl MyApp {
         for (i, box_data) in boxes.iter().enumerate() {
             let mut items: Vec<GridFileItem> = Vec::new();
             for file_path in &box_data.icon_names {
-                // 过滤已删除的图标：只保留仍然存在于桌面的文件
-                if !std::path::Path::new(file_path).exists() {
+                // 过滤已删除的图标：桌面或隐藏目录中存在即可
+                if !icon_exists_for_box(file_path) {
                     log::info!("跳过已删除的图标: {}", file_path);
                     continue;
                 }
+                let read_path = resolve_icon_read_path(file_path)
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|| file_path.clone());
                 let display_name = std::path::Path::new(file_path)
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or(file_path)
                     .to_string();
-                let hicon = extract_file_icon(file_path)
+                let hicon = extract_file_icon(&read_path)
                     .map(|fi| fi.hicon)
                     .unwrap_or(std::ptr::null_mut());
                 items.push(GridFileItem {
@@ -302,15 +309,6 @@ impl MyApp {
             if create_grid_window(params).is_ok() {
                 created_count += 1;
             }
-        }
-
-        // 逐个隐藏管理的桌面图标（保持 SysListView32 在原位）
-        let all_file_paths: Vec<String> = boxes
-            .iter()
-            .flat_map(|b| b.icon_names.clone())
-            .collect();
-        if let Err(e) = hide_managed_icons(&all_file_paths) {
-            log::warn!("逐个隐藏管理的图标失败: {}", e);
         }
 
         self.ctx
@@ -402,15 +400,6 @@ impl MyApp {
             if create_grid_window(params).is_ok() {
                 created_count += 1;
             }
-        }
-
-        // 逐个隐藏分类后的桌面图标
-        let all_file_paths: Vec<String> = icons
-            .iter()
-            .map(|icon| icon.path.to_string_lossy().to_string())
-            .collect();
-        if let Err(e) = hide_managed_icons(&all_file_paths) {
-            log::warn!("自动分类后逐个隐藏图标失败: {}", e);
         }
 
         self.ctx.set_status(format!(

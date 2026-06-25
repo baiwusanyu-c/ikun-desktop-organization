@@ -1061,6 +1061,12 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             0
         }
 
+        // ===== OLE 拖拽放置：桌面→框 或 框→框（由 IDropTarget PostMessage 触发）=====
+        WM_USER_DRAG_DROP => {
+            super::drag_handler::handle_ole_drop(hwnd);
+            0
+        }
+
         // ===== 源框通知：项已被拖出（OLE Drop Target 触发，保留兼容）=====
         WM_USER_DRAG_ITEM_REMOVED => {
             // 自定义拖拽模式下，框→框移动在 end_drag 中直接处理

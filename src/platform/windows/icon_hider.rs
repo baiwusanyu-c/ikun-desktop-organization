@@ -1,24 +1,30 @@
-//! 隐藏/恢复桌面图标
+//! 隐藏/恢复原生桌面图标 + 图标仓库（Vault）
 //!
-//! 通过逐个操作 SysListView32 中的图标位置来隐藏/显示，
-//! **不移动整个 SysListView32 窗口**。
+//! # 隐藏方式
 //!
-//! # 架构决策
+//! 通过 `ShowWindow(SW_HIDE)` 隐藏整个 SysListView32 窗口，
+//! 原子操作，无闪烁。退出时 `ShowWindow(SW_SHOW)` 恢复。
 //!
-//! **不移动 SysListView32 窗口**：将整个窗口移到屏幕外会导致
-//! `show_icon_at` 设置的图标位置不可见（拖拽到桌面时图标消失）。
-//! 保持 SysListView32 在原位，仅将管理的图标移到屏幕外坐标，
-//! 这样拖拽释放时图标可以立即显示在桌面可见位置。
+//! # 仓库（Vault）
 //!
-//! **旧方案（已废弃）**：`SetWindowPos` 将 SysListView32 移到屏幕外。
-//! 导致拖拽到桌面空白区域时图标不可见（仅程序退出后才恢复）。
+//! 拖拽操作使用文件仓库管理图标：
+//! - 用户桌面 `.lnk` → **移动**到 `~/.ikun_organizer/managed_icons/`
+//! - 公共桌面 `.lnk` → **复制**到仓库（原文件保留）
+//! - 拖回桌面 → 从仓库导出到用户桌面
 
 use anyhow::Result;
 use std::ffi::c_void;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-// ===== Raw FFI =====
+// =============================================================================
+// ShowWindow 隐藏/恢复（e81c7a0 方式）
+// =============================================================================
+
 type HWND = *mut c_void;
+
+const SW_HIDE: i32 = 0;
+const SW_SHOW: i32 = 5;
 
 extern "system" {
     fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> HWND;
@@ -28,6 +34,7 @@ extern "system" {
         lpClassName: *const u16,
         lpWindowName: *const u16,
     ) -> HWND;
+    fn ShowWindow(hWnd: HWND, nCmdShow: i32) -> i32;
     fn IsWindow(hWnd: HWND) -> i32;
 }
 
@@ -97,11 +104,10 @@ fn find_desktop_listview() -> Result<HWND> {
     }
 }
 
-/// 图标隐藏器全局状态
+/// IconHider 全局状态
 struct IconHider {
+    listview_hwnd: HWND,
     hidden: bool,
-    /// 已隐藏的图标文件路径列表（用于恢复）
-    hidden_file_paths: Vec<String>,
 }
 
 // Safety: HWND 是 Send 的（只在同一线程使用）
@@ -109,128 +115,33 @@ unsafe impl Send for IconHider {}
 
 static ICON_HIDER: Mutex<Option<IconHider>> = Mutex::new(None);
 
-/// 初始化图标隐藏系统（缓存 SysListView32 HWND + 预初始化图标管理器）
+/// 隐藏所有原生桌面图标
 ///
-/// 不再移动 SysListView32 窗口，仅缓存句柄和初始化 DesktopIconManager，
-/// 为后续 `hide_managed_icons` 做准备。
-///
-/// 保持 SysListView32 在原位，使拖拽到桌面时图标可立即显示。
+/// 通过 `ShowWindow(SW_HIDE)` 隐藏整个 SysListView32 窗口，
+/// 原子操作，不会产生闪烁。
 pub fn hide_native_icons() -> Result<()> {
     let lv_hwnd = find_desktop_listview()?;
 
-    // ★ 缓存 SysListView32 HWND（供 DesktopIconManager 使用）
-    super::ffi_types::SHARED_LISTVIEW_HWND.store(
-        lv_hwnd as isize,
-        std::sync::atomic::Ordering::SeqCst,
-    );
-    log::info!("SysListView32 HWND 已缓存: {:?}（窗口保持在原位）", lv_hwnd);
+    unsafe {
+        ShowWindow(lv_hwnd, SW_HIDE);
+    }
 
-    // 预先初始化 DesktopIconManager
-    super::drag_handler::init_icon_manager_early();
+    log::info!("已隐藏桌面 SysListView32 窗口");
 
     let mut guard = ICON_HIDER
         .lock()
         .map_err(|e| anyhow::anyhow!("锁获取失败: {}", e))?;
     *guard = Some(IconHider {
+        listview_hwnd: lv_hwnd,
         hidden: true,
-        hidden_file_paths: Vec::new(),
     });
 
     Ok(())
 }
 
-/// 隐藏已管理的桌面图标（逐个移动到屏幕外）
+/// 恢复原生桌面图标
 ///
-/// 将配置中属于分类框的图标从桌面 SysListView32 中逐个移到屏幕外，
-/// 保持 SysListView32 窗口在原位，使非管理图标和后续拖拽释放的图标可见。
-///
-/// # 参数
-///
-/// - `file_paths`: 分类框中管理的文件路径列表（从配置中获取）
-pub fn hide_managed_icons(file_paths: &[String]) -> Result<()> {
-    if file_paths.is_empty() {
-        log::info!("无管理的图标需要隐藏");
-        return Ok(());
-    }
-
-    let mut hider_guard = ICON_HIDER
-        .lock()
-        .map_err(|e| anyhow::anyhow!("锁获取失败: {}", e))?;
-
-    // 获取 DesktopIconManager（可变引用，用于 rebuild_index）
-    let mut icon_mgr_guard = match super::drag_handler::get_or_init_icon_manager() {
-        Some(g) => g,
-        None => {
-            log::warn!("DesktopIconManager 不可用，跳过逐个隐藏");
-            return Ok(());
-        }
-    };
-
-    let mgr = match icon_mgr_guard.as_mut() {
-        Some(m) => m,
-        None => {
-            log::warn!("DesktopIconManager 为 None，跳过逐个隐藏");
-            return Ok(());
-        }
-    };
-
-    // 刷新索引
-    if let Err(e) = mgr.rebuild_index() {
-        log::warn!("hide_managed_icons: rebuild_index 失败: {}", e);
-    }
-
-    let mut hidden_paths = Vec::new();
-    let mut hidden_count = 0;
-
-    for file_path in file_paths {
-        let file_stem = std::path::Path::new(file_path)
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default();
-
-        let display_name = std::path::Path::new(file_path)
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default();
-
-        // 尝试多个名称匹配（file_stem 和 display_name）
-        let search_names = [file_stem.clone(), display_name.clone()];
-        for name in &search_names {
-            if name.is_empty() {
-                continue;
-            }
-            if let Some(index) = mgr.find_icon_by_name(name) {
-                // 保存位置并隐藏
-                mgr.save_icon_position(name);
-                if let Err(e) = mgr.hide_icon(index) {
-                    log::warn!("隐藏图标 '{}' 失败: {}", name, e);
-                } else {
-                    hidden_count += 1;
-                    hidden_paths.push(file_path.clone());
-                    log::debug!("已隐藏图标: '{}' (index={})", name, index);
-                }
-                break;
-            }
-        }
-    }
-
-    log::info!(
-        "已逐个隐藏 {} 个管理的桌面图标（共 {} 个文件路径）",
-        hidden_count,
-        file_paths.len()
-    );
-
-    if let Some(ref mut hider) = *hider_guard {
-        hider.hidden_file_paths = hidden_paths;
-    }
-
-    Ok(())
-}
-
-/// 恢复所有已管理的桌面图标到原始位置
-///
-/// 将之前通过 `hide_managed_icons` 隐藏的图标移回原来的桌面坐标。
-/// SysListView32 窗口始终在原位，无需移动。
+/// 通过 `ShowWindow(SW_SHOW)` 恢复 SysListView32 窗口。
 pub fn restore_native_icons() -> Result<()> {
     let mut guard = ICON_HIDER
         .lock()
@@ -241,64 +152,317 @@ pub fn restore_native_icons() -> Result<()> {
             return Ok(());
         }
 
-        if hider.hidden_file_paths.is_empty() {
-            log::info!("无隐藏的图标需要恢复");
-            return Ok(());
+        let valid = unsafe { IsWindow(hider.listview_hwnd) };
+        if valid != 0 {
+            unsafe {
+                ShowWindow(hider.listview_hwnd, SW_SHOW);
+            }
+            log::info!("已恢复桌面 SysListView32 窗口");
+        } else {
+            log::warn!("SysListView32 窗口已失效，跳过恢复");
         }
-
-        // 获取 DesktopIconManager 恢复图标位置
-        let icon_mgr_guard = match super::drag_handler::get_or_init_icon_manager() {
-            Some(g) => g,
-            None => {
-                log::warn!("DesktopIconManager 不可用，无法恢复图标位置");
-                return Ok(());
-            }
-        };
-
-        let mgr = match icon_mgr_guard.as_ref() {
-            Some(m) => m,
-            None => {
-                log::warn!("DesktopIconManager 为 None，无法恢复图标位置");
-                return Ok(());
-            }
-        };
-
-        // 恢复每个隐藏的图标到其原始位置
-        let mut restored_count = 0;
-        for file_path in &hider.hidden_file_paths {
-            let file_stem = std::path::Path::new(file_path)
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default();
-
-            let display_name = std::path::Path::new(file_path)
-                .file_name()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default();
-
-            let search_names = [file_stem.as_str(), display_name.as_str()];
-            for name in &search_names {
-                if name.is_empty() {
-                    continue;
-                }
-                if let Some(index) = mgr.find_icon_by_name(name) {
-                    // 使用保存的原始位置恢复
-                    let (orig_x, orig_y) = mgr
-                        .get_saved_position(name)
-                        .unwrap_or((100, 100));
-                    if let Err(e) = mgr.show_icon_at(index, orig_x, orig_y) {
-                        log::warn!("恢复图标 '{}' 失败: {}", name, e);
-                    } else {
-                        restored_count += 1;
-                        log::debug!("已恢复图标: '{}' → ({}, {})", name, orig_x, orig_y);
-                    }
-                    break;
-                }
-            }
-        }
-
-        log::info!("已恢复 {} 个桌面图标到原始位置", restored_count);
     }
 
     Ok(())
+}
+
+// =============================================================================
+// 图标仓库（Vault）— 拖拽操作使用
+// =============================================================================
+
+/// 仓库目录名
+const MANAGED_DIR_NAME: &str = "managed_icons";
+
+/// 旧版隐藏目录（启动时自动迁移到 managed_icons）
+const LEGACY_HIDDEN_DIR_NAME: &str = "hidden_icons";
+
+const PREFIX_USER: &str = "user__";
+#[allow(dead_code)]
+const PREFIX_PUBLIC: &str = "public__";
+
+const SHCNE_UPDATEITEM: u32 = 0x0000_2000;
+const SHCNE_CREATE: u32 = 0x0000_0002;
+const SHCNF_PATHW: u32 = 0x0000_8000;
+const SHCNF_FLUSH: u32 = 0x0000_1000;
+
+fn app_data_root() -> Result<PathBuf> {
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("无法获取用户主目录"))?;
+    Ok(home.join(".ikun_organizer"))
+}
+
+fn get_user_desktop() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join("Desktop"))
+}
+
+fn get_public_desktop() -> PathBuf {
+    PathBuf::from(r"C:\Users\Public\Desktop")
+}
+
+fn get_managed_dir() -> Result<PathBuf> {
+    let dir = app_data_root()?.join(MANAGED_DIR_NAME);
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| anyhow::anyhow!("创建仓库目录失败 {}: {}", dir.display(), e))?;
+    }
+    migrate_legacy_hidden_dir(&dir)?;
+    Ok(dir)
+}
+
+/// 将旧版 hidden_icons/ 内容迁移到 managed_icons/
+fn migrate_legacy_hidden_dir(managed_dir: &Path) -> Result<()> {
+    let legacy = app_data_root()?.join(LEGACY_HIDDEN_DIR_NAME);
+    if !legacy.exists() {
+        return Ok(());
+    }
+    let entries = match std::fs::read_dir(&legacy) {
+        Ok(e) => e,
+        Err(_) => return Ok(()),
+    };
+    let mut migrated = 0;
+    for entry in entries.flatten() {
+        let src = entry.path();
+        if !src.is_file() {
+            continue;
+        }
+        let name = match src.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        let dest = managed_dir.join(&name);
+        if dest.exists() {
+            let _ = std::fs::remove_file(&src);
+            continue;
+        }
+        if std::fs::rename(&src, &dest).is_ok() {
+            migrated += 1;
+        }
+    }
+    if migrated > 0 {
+        log::info!("已从旧版 hidden_icons 迁移 {} 个图标到 managed_icons", migrated);
+    }
+    Ok(())
+}
+
+pub fn is_public_desktop_path(file_path: &str) -> bool {
+    Path::new(file_path).starts_with(get_public_desktop())
+}
+
+#[allow(dead_code)]
+pub fn is_user_desktop_path(file_path: &str) -> bool {
+    get_user_desktop()
+        .map(|d| Path::new(file_path).starts_with(&d))
+        .unwrap_or(false)
+}
+
+fn vault_filename(logical_path: &str) -> Option<String> {
+    let file_name = Path::new(logical_path).file_name()?.to_string_lossy().to_string();
+    if is_user_desktop_path(logical_path) {
+        return Some(format!("{}{}", PREFIX_USER, file_name));
+    }
+    if is_public_desktop_path(logical_path) {
+        return Some(format!("{}{}", PREFIX_PUBLIC, file_name));
+    }
+    Some(format!("{}{}", PREFIX_USER, file_name))
+}
+
+fn vault_path_for(logical_path: &str) -> Result<PathBuf> {
+    let name = vault_filename(logical_path)
+        .ok_or_else(|| anyhow::anyhow!("无法生成仓库文件名: {}", logical_path))?;
+    Ok(get_managed_dir()?.join(name))
+}
+
+/// 导出到用户桌面的目标路径
+pub fn export_desktop_path(logical_path: &str) -> PathBuf {
+    if is_user_desktop_path(logical_path) {
+        return PathBuf::from(logical_path);
+    }
+    let file_name = Path::new(logical_path)
+        .file_name()
+        .map(|n| n.to_owned())
+        .unwrap_or_else(|| std::ffi::OsStr::new("shortcut.lnk").to_owned());
+    get_user_desktop()
+        .map(|d| d.join(file_name))
+        .unwrap_or_else(|| PathBuf::from(logical_path))
+}
+
+fn logical_path_from_vault_name(vault_name: &str) -> Option<PathBuf> {
+    if let Some(file_name) = vault_name.strip_prefix(PREFIX_USER) {
+        get_user_desktop().map(|d| d.join(file_name))
+    } else if let Some(file_name) = vault_name.strip_prefix(PREFIX_PUBLIC) {
+        Some(get_public_desktop().join(file_name))
+    } else {
+        get_user_desktop().map(|d| d.join(vault_name))
+    }
+}
+
+fn notify_shell_path(path: &str) {
+    use std::os::windows::ffi::OsStrExt;
+    let wide: Vec<u16> = Path::new(path)
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        super::ffi_imports::SHChangeNotify(
+            SHCNE_CREATE | SHCNE_UPDATEITEM,
+            SHCNF_PATHW | SHCNF_FLUSH,
+            wide.as_ptr() as *const _,
+            std::ptr::null(),
+        );
+    }
+}
+
+// =============================================================================
+// Vault 公开 API（拖拽操作使用）
+// =============================================================================
+
+/// 图标是否在仓库或桌面上可读
+pub fn icon_exists_for_box(logical_path: &str) -> bool {
+    if Path::new(logical_path).exists() {
+        return true;
+    }
+    vault_path_for(logical_path)
+        .map(|p| p.exists())
+        .unwrap_or(false)
+}
+
+/// 读取图标文件路径：优先仓库，其次桌面
+pub fn resolve_icon_read_path(logical_path: &str) -> Option<PathBuf> {
+    if let Ok(vault) = vault_path_for(logical_path) {
+        if vault.exists() {
+            return Some(vault);
+        }
+    }
+    let p = Path::new(logical_path);
+    if p.exists() {
+        Some(p.to_path_buf())
+    } else {
+        None
+    }
+}
+
+/// 收入仓库：用户桌面移动，公共桌面只读复制
+pub fn ingest_icon(logical_path: &str) -> Result<()> {
+    let vault = vault_path_for(logical_path)?;
+    let src = Path::new(logical_path);
+
+    if vault.exists() {
+        if is_user_desktop_path(logical_path) && src.exists() {
+            if let Err(e) = std::fs::remove_file(src) {
+                log::warn!("清理桌面残留副本失败 {}: {}", logical_path, e);
+            } else {
+                notify_shell_path(logical_path);
+                log::info!("已清理桌面残留副本: {}", logical_path);
+            }
+        }
+        return Ok(());
+    }
+
+    if !src.exists() {
+        log::debug!("ingest: 源文件不存在，跳过: {}", logical_path);
+        return Ok(());
+    }
+
+    if is_public_desktop_path(logical_path) {
+        std::fs::copy(src, &vault).map_err(|e| {
+            anyhow::anyhow!("复制公共桌面图标到仓库失败 {}: {}", logical_path, e)
+        })?;
+        log::info!(
+            "公共桌面图标已复制到仓库: {} → {}",
+            logical_path,
+            vault.display()
+        );
+        return Ok(());
+    }
+
+    std::fs::rename(src, &vault).map_err(|e| {
+        anyhow::anyhow!("移动图标到仓库失败 {}: {}", logical_path, e)
+    })?;
+    notify_shell_path(logical_path);
+    log::info!("图标已收入仓库: {} → {}", logical_path, vault.display());
+    Ok(())
+}
+
+/// 从仓库导出到用户桌面
+pub fn export_icon(logical_path: &str) -> Result<(bool, PathBuf)> {
+    let vault = vault_path_for(logical_path)?;
+    if !vault.exists() {
+        let export = export_desktop_path(logical_path);
+        if export.exists() {
+            return Ok((true, export));
+        }
+        return Ok((false, export));
+    }
+
+    let export = export_desktop_path(logical_path);
+    if export.exists() {
+        std::fs::remove_file(&vault)?;
+        log::info!("桌面已有该图标，已从仓库删除副本: {}", logical_path);
+        return Ok((true, export));
+    }
+
+    std::fs::rename(&vault, &export).map_err(|e| {
+        anyhow::anyhow!(
+            "从仓库导出失败 {} → {}: {}",
+            vault.display(),
+            export.display(),
+            e
+        )
+    })?;
+    notify_shell_path(&export.to_string_lossy());
+    log::info!("图标已从仓库导出到桌面: {} → {}", logical_path, export.display());
+    Ok((true, export))
+}
+
+/// 隐藏单个图标（拖入分类框时调用）
+pub fn hide_single_icon(logical_path: &str) -> Result<()> {
+    ingest_icon(logical_path)
+}
+
+/// 删除仓库副本（公共桌面图标拖回桌面时使用）
+pub fn delete_vault_copy(logical_path: &str) {
+    match vault_path_for(logical_path) {
+        Ok(vault) => {
+            if vault.exists() {
+                if let Err(e) = std::fs::remove_file(&vault) {
+                    log::warn!("删除仓库副本失败 {}: {}", vault.display(), e);
+                } else {
+                    log::info!("已删除仓库副本: {}", vault.display());
+                }
+            }
+        }
+        Err(e) => log::warn!("获取仓库路径失败: {}", e),
+    }
+}
+
+/// 启动时初始化仓库目录（迁移旧数据）
+pub fn restore_all_hidden_icons() {
+    if let Err(e) = get_managed_dir() {
+        log::warn!("初始化图标仓库失败: {}", e);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_user_desktop_path_detection() {
+        let desktop = dirs::home_dir()
+            .expect("home dir")
+            .join("Desktop")
+            .join("app.lnk");
+        let user = desktop.to_string_lossy();
+        assert!(is_user_desktop_path(&user));
+        assert!(!is_public_desktop_path(&user));
+    }
+
+    #[test]
+    fn test_public_desktop_export_to_user() {
+        let public = r"C:\Users\Public\Desktop\Chrome.lnk";
+        assert!(is_public_desktop_path(public));
+        let export = export_desktop_path(public);
+        assert!(is_user_desktop_path(&export.to_string_lossy()));
+        assert!(export.file_name().unwrap() == "Chrome.lnk");
+    }
 }

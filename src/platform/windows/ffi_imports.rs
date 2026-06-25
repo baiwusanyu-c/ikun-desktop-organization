@@ -567,6 +567,16 @@ extern "system" {
     ) -> HRESULT;
 }
 
+#[link(name = "shell32")]
+extern "system" {
+    pub fn SHChangeNotify(
+        wEventId: u32,
+        uFlags: u32,
+        dwItem1: *const c_void,
+        dwItem2: *const c_void,
+    ) -> i32;
+}
+
 // Tooltip 窗口创建（避免与主 CreateWindowExW 签名冲突）
 #[link(name = "comctl32")]
 extern "system" {
