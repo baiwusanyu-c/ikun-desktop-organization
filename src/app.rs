@@ -7,11 +7,13 @@
 //! - 分类框空白区域右键 → IContextMenu 编程式注入 → PENDING_CREATE_BOX 原子标志
 //! - 桌面空白区域右键 → 注册表注入（程序退出时自动清理）→ --create-box → 信号文件
 
+use crate::config::app_config::AppConfig;
 use crate::context::AppContext;
 use crate::platform::{
-    cleanup_desktop_registry, collect_grid_layout, create_grid_window, destroy_all_grid_windows,
-    extract_file_icon, get_cursor_monitor_work_area_phys, get_grid_count, get_screen_resolution,
-    hide_native_icons, icon_exists_for_box, reposition_window_by_title, resolve_icon_read_path,
+    cleanup_desktop_registry, collect_grid_layout, create_desktop_overlay, create_grid_window,
+    destroy_all_grid_windows, destroy_desktop_overlay, extract_file_icon,
+    get_cursor_monitor_work_area_phys, get_grid_count, get_screen_resolution, hide_native_icons,
+    icon_exists_for_box, native_icons_hidden, reposition_window_by_title, resolve_icon_read_path,
     restore_all_hidden_icons, restore_native_icons, setup_desktop_registry,
     take_pending_create_box, DesktopIcon, DesktopManagerTrait, GridCreateParams, GridFileItem,
 };
@@ -245,24 +247,26 @@ impl MyApp {
 
     fn restore_layout(&mut self) {
         if !self.ctx.config.general.restore_layout_on_start {
+            log::info!("启动恢复布局已禁用，跳过桌面覆盖生命周期初始化");
             return;
         }
+
+        // 阶段 6：覆盖窗口与应用生命周期绑定。
+        // 先隐藏原生 SysListView32，再创建覆盖窗口渲染非管理图标，最后恢复分类框。
+        restore_all_hidden_icons();
+        self.ensure_native_icons_hidden();
+        if let Err(e) = create_desktop_overlay() {
+            log::warn!("创建桌面覆盖窗口失败: {}", e);
+        }
+
         let boxes = &self.ctx.config.layout.boxes;
         if boxes.is_empty() {
+            log::info!("启动布局为空，仅启用桌面覆盖窗口");
+            self.ctx.set_status("桌面覆盖窗口已启用");
             return;
         }
         log::info!("开始恢复布局: {} 个分类框", boxes.len());
 
-        // 初始化图标仓库（迁移旧 hidden_icons，不恢复到桌面）
-        restore_all_hidden_icons();
-
-        if !self.ctx.state.icons_hidden {
-            if let Err(e) = hide_native_icons() {
-                self.ctx.set_status(format!("隐藏图标失败: {}", e));
-                return;
-            }
-            self.ctx.state.icons_hidden = true;
-        }
         destroy_all_grid_windows();
 
         let mut created_count = 0;
@@ -315,9 +319,51 @@ impl MyApp {
             .set_status(format!("恢复了 {} 个分类框", created_count));
     }
 
+    fn merge_latest_overlay_config(&mut self) {
+        match AppConfig::load() {
+            Ok(config) => {
+                self.ctx.config.overlay = config.overlay;
+            }
+            Err(e) => {
+                log::warn!("保存配置前读取覆盖窗口配置失败，保留内存配置: {}", e);
+            }
+        }
+    }
+
+    fn ensure_native_icons_hidden(&mut self) -> bool {
+        if self.ctx.state.icons_hidden && native_icons_hidden() {
+            return true;
+        }
+
+        if self.ctx.state.icons_hidden {
+            log::warn!("原生桌面图标窗口已恢复或失效，尝试重新隐藏");
+        }
+        match hide_native_icons() {
+            Ok(()) => {
+                self.ctx.state.icons_hidden = true;
+                true
+            }
+            Err(e) => {
+                self.ctx.state.icons_hidden = false;
+                self.ctx.set_status(format!("隐藏图标失败: {}", e));
+                false
+            }
+        }
+    }
+
+    fn ensure_desktop_overlay_running(&mut self) {
+        if !self.ensure_native_icons_hidden() {
+            return;
+        }
+        if let Err(e) = create_desktop_overlay() {
+            log::warn!("创建桌面覆盖窗口失败: {}", e);
+        }
+    }
+
     fn save_layout_and_config(&mut self) {
         let layout = collect_grid_layout();
         self.ctx.config.layout.boxes = layout;
+        self.merge_latest_overlay_config();
         if let Err(e) = self.ctx.save_config() {
             self.ctx.set_status(format!("保存失败: {}", e));
         } else {
@@ -329,13 +375,7 @@ impl MyApp {
     }
 
     fn perform_auto_classify(&mut self) {
-        if !self.ctx.state.icons_hidden {
-            if let Err(e) = hide_native_icons() {
-                self.ctx.set_status(format!("隐藏图标失败: {}", e));
-                return;
-            }
-            self.ctx.state.icons_hidden = true;
-        }
+        self.ensure_desktop_overlay_running();
         let icons = self.ctx.desktop_manager.get_desktop_icons();
         if icons.is_empty() {
             self.ctx.set_status("未找到桌面图标");
@@ -412,8 +452,10 @@ impl MyApp {
     fn clear_and_restore(&mut self) {
         let layout = collect_grid_layout();
         self.ctx.config.layout.boxes = layout;
+        self.merge_latest_overlay_config();
         let _ = self.ctx.save_config();
         destroy_all_grid_windows();
+        destroy_desktop_overlay();
         if self.ctx.state.icons_hidden {
             let _ = restore_native_icons();
             self.ctx.state.icons_hidden = false;
@@ -423,13 +465,7 @@ impl MyApp {
 
     fn create_empty_box(&mut self, name: String) {
         log::info!("创建分类框: '{}'", name);
-        if !self.ctx.state.icons_hidden {
-            if let Err(e) = hide_native_icons() {
-                self.ctx.set_status(format!("隐藏图标失败: {}", e));
-                return;
-            }
-            self.ctx.state.icons_hidden = true;
-        }
+        self.ensure_desktop_overlay_running();
         let (screen_w, screen_h) = get_screen_resolution();
         let box_w = self.ctx.config.box_defaults.default_width;
         let box_h = self.ctx.config.box_defaults.default_height;
@@ -455,6 +491,7 @@ impl MyApp {
             Ok(_) => {
                 let layout = collect_grid_layout();
                 self.ctx.config.layout.boxes = layout;
+                self.merge_latest_overlay_config();
                 if let Err(e) = self.ctx.save_config() {
                     self.ctx.set_status(format!("创建成功但保存失败: {}", e));
                 } else {
@@ -476,6 +513,12 @@ impl eframe::App for MyApp {
             // 先清理旧版残留，再注册新版（退出时清理，保证无残留）
             cleanup_desktop_registry();
             setup_desktop_registry();
+            self.ensure_desktop_overlay_running();
+        }
+
+        if should_retry_native_icon_hide(self.ctx.state.icons_hidden, native_icons_hidden()) {
+            log::warn!("检测到 Explorer 桌面图标窗口恢复，重新隐藏并保持覆盖窗口接管");
+            self.ensure_desktop_overlay_running();
         }
 
         // 信号文件（--create-box 从注册表菜单写入）→ 打开对话框
@@ -562,11 +605,14 @@ impl Drop for MyApp {
         let layout = collect_grid_layout();
         if !layout.is_empty() {
             self.ctx.config.layout.boxes = layout;
+            self.merge_latest_overlay_config();
             let _ = self.ctx.save_config();
         }
         destroy_all_grid_windows();
+        destroy_desktop_overlay();
         if self.ctx.state.icons_hidden {
             let _ = restore_native_icons();
+            self.ctx.state.icons_hidden = false;
         }
         // 程序退出时清理注册表，确保不运行时桌面菜单完全原生
         cleanup_desktop_registry();
@@ -720,10 +766,36 @@ mod tests {
         assert!(is_box_name_valid("中"));
         assert!(is_box_name_valid("1"));
     }
+
+    // ===== 阶段 6 生命周期判定 =====
+
+    #[test]
+    fn test_should_retry_native_icon_hide_when_state_hidden_but_native_visible() {
+        assert!(should_retry_native_icon_hide(true, false));
+    }
+
+    #[test]
+    fn test_should_not_retry_native_icon_hide_when_both_hidden() {
+        assert!(!should_retry_native_icon_hide(true, true));
+    }
+
+    #[test]
+    fn test_should_not_retry_native_icon_hide_when_app_did_not_hide_icons() {
+        assert!(!should_retry_native_icon_hide(false, false));
+        assert!(!should_retry_native_icon_hide(false, true));
+    }
 }
 
 /// 验证分类框名称是否有效（非空且不超过 BOX_NAME_MAX_LEN 字符）
 fn is_box_name_valid(name: &str) -> bool {
     let trimmed = name.trim();
     !trimmed.is_empty() && trimmed.chars().count() <= BOX_NAME_MAX_LEN
+}
+
+/// 判断是否需要重新隐藏原生桌面图标。
+///
+/// Explorer 重启或桌面列表窗口重新可见时，应用运行态仍认为已接管桌面，
+/// 此时需要重新执行隐藏并保持覆盖窗口生命周期。
+fn should_retry_native_icon_hide(state_icons_hidden: bool, native_hidden: bool) -> bool {
+    state_icons_hidden && !native_hidden
 }

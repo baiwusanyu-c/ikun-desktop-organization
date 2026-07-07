@@ -127,7 +127,10 @@ fn init_ole() {
     if hr == 0 || hr == 1 {
         log::info!("OLE 初始化成功");
     } else {
-        log::warn!("OleInitialize 失败: hr={:#010X}，拖拽功能可能不可用", hr as u32);
+        log::warn!(
+            "OleInitialize 失败: hr={:#010X}，拖拽功能可能不可用",
+            hr as u32
+        );
     }
 
     // 检查进程完整性级别（High = 管理员，Medium = 普通用户）
@@ -207,16 +210,9 @@ fn check_integrity_level() {
                     if count > 0 {
                         let rid = *GetSidSubAuthority(label_ptr, count - 1);
                         if rid >= SECURITY_MANDATORY_HIGH_RID {
-                            log::warn!(
-                                "⚠️ 进程运行在高完整性级别（管理员权限, RID={:#X}）",
-                                rid
-                            );
-                            log::warn!(
-                                "⚠️ OLE 拖拽到桌面将被 Windows UIPI 阻止！"
-                            );
-                            log::warn!(
-                                "⚠️ 请关闭管理员权限重新启动应用，或从普通终端运行"
-                            );
+                            log::warn!("⚠️ 进程运行在高完整性级别（管理员权限, RID={:#X}）", rid);
+                            log::warn!("⚠️ OLE 拖拽到桌面将被 Windows UIPI 阻止！");
+                            log::warn!("⚠️ 请关闭管理员权限重新启动应用，或从普通终端运行");
                         } else {
                             log::info!("进程完整性级别: 正常 (RID={:#X})", rid);
                         }

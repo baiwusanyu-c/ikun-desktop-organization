@@ -80,6 +80,7 @@ src/
 │   │   ├── ffi_types.rs       #   Win32 FFI 类型/常量
 │   │   ├── ffi_imports.rs     #   Win32 extern "system" 声明
 │   │   ├── desktop_manager.rs #   桌面图标枚举（文件系统读取）
+│   │   ├── desktop_overlay/   #   桌面覆盖窗口（渲染未管理图标 + 桌面接管生命周期）
 │   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎
 │   │   ├── grid_window.rs     #   窗口创建/销毁/布局收集
 │   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc
@@ -203,17 +204,21 @@ pub trait Plugin: Send {
 | `ai` | enabled、base_url、api_key、model、temperature、timeout、retries |
 | `classification` | 分类规则列表（AI 失败时的兜底规则） |
 | `layout` | 分类框列表（位置/尺寸/锁定/排序/视图/分组/文件列表/样式覆盖） |
+| `overlay` | 桌面覆盖窗口设置（未管理图标逻辑坐标、图标尺寸、排列方向） |
 | `debug` | log_level、log_to_file、show_fps、render_wireframe |
 
 **存储位置**：`~/.ikun_organizer.json`（用户主目录）
 
 **布局持久化流程**：
 ```
-保存: collect_grid_layout() → config.layout.boxes → save() → ~/.ikun_organizer.json
-恢复: load() → config.layout.boxes → restore_layout() → create_grid_window()
+保存: collect_grid_layout() → config.layout.boxes → merge_latest_overlay_config() → save() → ~/.ikun_organizer.json
+恢复: load() → restore_layout() → hide_native_icons() → create_desktop_overlay() → create_grid_window()
 删除: 菜单 CMD_DELETE → destroy_grid_window(hwnd) → AppConfig.retain(id != config_id) → save()
 ```
 
+**桌面覆盖窗口生命周期（阶段 6）**：当 `general.restore_layout_on_start = true` 时，应用启动即接管桌面图标生命周期：先初始化图标仓库并隐藏原生 `SysListView32`，再创建 `DesktopOrgOverlay` 渲染未进入分类框的图标，最后恢复分类框窗口。即使没有保存的分类框，也会创建覆盖窗口以保持桌面接管一致性。退出或“清除 & 恢复”时按顺序保存布局、销毁分类框、销毁覆盖窗口、恢复原生图标并清理桌面右键注册表。运行中如果 Explorer 重启导致原生桌面列表句柄失效或重新可见，`native_icons_hidden()` 会触发重新隐藏并保持覆盖窗口运行。
+
+**覆盖窗口位置持久化**：覆盖窗口图标位置保存在 `config.overlay.icon_positions`，键为文件路径，值为 96 DPI 基准逻辑坐标。覆盖窗口拖动图标后会直接写入配置文件；应用级保存布局前必须先合并磁盘上的最新 `overlay` 配置，避免用旧的内存配置覆盖最新位置。
 **UUID 持久化标识**：每个窗口创建时分配 `config_id: uuid::Uuid`（`GridCreateParams.config_id` → `GridWindowData.config_id`），`collect_grid_layout()` 使用该固定 ID（而非每次 `Uuid::new_v4()`），确保删除操作可按 UUID 精确匹配配置条目。
 
 **DPI 处理**：配置存储逻辑像素（DPI 96 基准），创建/恢复时 `create_grid_window` 按实际 DPI 缩放，`collect_grid_layout` 反向转换回逻辑像素。
@@ -265,7 +270,7 @@ main.rs
 
 **窗口层级**：
 ```
-顶层窗口 > 普通应用 > **分类框窗口** > 桌面图标 (SysListView32) > 壁纸 (Progman/WorkerW)
+顶层窗口 > 普通应用 > **分类框窗口** > **桌面覆盖窗口 DesktopOrgOverlay** > 桌面图标 (SysListView32，隐藏) > 壁纸 (Progman/WorkerW)
 ```
 
 **Shell 右键菜单**：`IShellFolder` + `IContextMenu` + `IShellView::GetItemObject(SVGIO_BACKGROUND)` 获取真实桌面菜单，回退方案用 `ShellExecuteW`
@@ -313,7 +318,7 @@ main.rs
 - [x] 排序方式：名称、类型、修改时间、作者、创建时间、大小、标记、标题 × 递增/递减（引擎已实现，菜单可选）
 - [x] 查看方式：超大、大、中、小、列表、详细信息、平铺、内容（引擎已实现，菜单可选）
 - [x] 分组展示：按名称、类型、修改时间、作者、创建时间、大小、标记、标题（引擎已实现，菜单可选）
-- [ ] 拖拽快捷方式到外部桌面 / 外部桌面快捷方式拖入分类框
+- [x] 拖拽快捷方式到外部桌面 / 外部桌面快捷方式拖入分类框（通过 DesktopOrgOverlay + Vault 无管理员双向移动）
 - [x] 右键功能与原生快捷方式一致（Shell 上下文菜单已实现）
 - [x] 分类框删除（更多菜单 → DestroyWindow + UUID 精确删除配置 + rerender_all 修复分层窗口）
 

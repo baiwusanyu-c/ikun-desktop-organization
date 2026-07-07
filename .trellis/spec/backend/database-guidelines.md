@@ -32,6 +32,7 @@
 | `ai` | enabled、base_url、api_key、model、timeout | `AiConfig` |
 | `classification` | 分类规则列表（兜底规则） | `Vec<CategoryRule>` |
 | `layout` | 分类框布局（位置/尺寸/锁定/排序/视图） | `LayoutConfig` |
+| `overlay` | 桌面覆盖窗口（未管理图标位置、图标尺寸、排列方向） | `OverlayConfig` |
 | `debug` | log_level、log_to_file、show_fps | `DebugConfig` |
 
 ### 存储位置

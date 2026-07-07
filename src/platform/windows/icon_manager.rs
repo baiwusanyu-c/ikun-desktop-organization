@@ -69,8 +69,8 @@ impl DesktopIconManager {
     /// 失败时返回错误（上层应优雅降级）。
     pub fn new() -> Result<Self> {
         let listview_hwnd = super::icon_hider::find_desktop_listview().unwrap_or_else(|_| {
-            let cached = super::ffi_types::SHARED_LISTVIEW_HWND
-                .load(std::sync::atomic::Ordering::SeqCst);
+            let cached =
+                super::ffi_types::SHARED_LISTVIEW_HWND.load(std::sync::atomic::Ordering::SeqCst);
             if cached != 0 {
                 log::info!("使用缓存的 SysListView32 HWND: {:#X}", cached);
                 cached as HWND
@@ -256,7 +256,10 @@ impl DesktopIconManager {
 
         log::info!(
             "set_icon_position_32: index={}, ({}, {}), ret={}",
-            index, x, y, ret
+            index,
+            x,
+            y,
+            ret
         );
 
         Ok(())
@@ -271,8 +274,7 @@ impl DesktopIconManager {
     ///
     /// 将之前隐藏的图标移回到指定的屏幕坐标位置。
     pub fn show_icon_at(&self, index: i32, x: i32, y: i32) -> Result<()> {
-        self.set_icon_position(index, x, y)
-            .context("显示图标失败")
+        self.set_icon_position(index, x, y).context("显示图标失败")
     }
 
     /// 按名称隐藏图标
@@ -282,7 +284,10 @@ impl DesktopIconManager {
         match self.find_icon_by_name(name) {
             Some(index) => self.hide_icon(index),
             None => {
-                log::warn!("hide_icon_by_name: 未找到图标 '{}', 可能 explorer 已重启", name);
+                log::warn!(
+                    "hide_icon_by_name: 未找到图标 '{}', 可能 explorer 已重启",
+                    name
+                );
                 anyhow::bail!("未找到图标 '{}'", name)
             }
         }
@@ -295,7 +300,10 @@ impl DesktopIconManager {
         match self.find_icon_by_name(name) {
             Some(index) => self.show_icon_at(index, x, y),
             None => {
-                log::warn!("show_icon_by_name: 未找到图标 '{}', 可能 explorer 已重启", name);
+                log::warn!(
+                    "show_icon_by_name: 未找到图标 '{}', 可能 explorer 已重启",
+                    name
+                );
                 anyhow::bail!("未找到图标 '{}'", name)
             }
         }
@@ -411,7 +419,8 @@ impl DesktopIconManager {
 
         log::debug!(
             "恢复受保护图标: {} 个已恢复, {} 个未偏移（跳过）",
-            restored, skipped
+            restored,
+            skipped
         );
     }
 
@@ -597,7 +606,10 @@ impl DesktopIconManager {
         }
 
         if result == 0 || read_ok == 0 {
-            anyhow::bail!("LVM_GETITEMPOSITION 或 ReadProcessMemory 失败（index={}）", index);
+            anyhow::bail!(
+                "LVM_GETITEMPOSITION 或 ReadProcessMemory 失败（index={}）",
+                index
+            );
         }
 
         Ok((point.x, point.y))
@@ -631,8 +643,7 @@ impl DesktopIconManager {
         }
 
         // 文本缓冲区在远程内存中的地址
-        let remote_text =
-            (remote_base as usize + lvitem_size) as *mut u16;
+        let remote_text = (remote_base as usize + lvitem_size) as *mut u16;
 
         // 构建本地 LVITEMW
         let lvitem = LVITEMW {
@@ -698,7 +709,10 @@ impl DesktopIconManager {
         }
 
         // 找到 null terminator 并转换为 String
-        let len = text_buf.iter().position(|&c| c == 0).unwrap_or(text_buf.len());
+        let len = text_buf
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(text_buf.len());
         Ok(String::from_utf16_lossy(&text_buf[..len]))
     }
 }
@@ -758,11 +772,7 @@ pub fn diagnose() {
     // 测试 4: 读取第一个图标位置
     if let Some(first_name) = names.first() {
         if let Some(idx) = mgr.find_icon_by_name(first_name) {
-            log::info!(
-                "[诊断] 图标 '{}' index={} 存在",
-                first_name,
-                idx
-            );
+            log::info!("[诊断] 图标 '{}' index={} 存在", first_name, idx);
         }
     }
 
@@ -824,10 +834,7 @@ fn find_desktop_listview() -> Result<HWND> {
                     std::ptr::null(),
                 );
                 if !lv.is_null() {
-                    log::debug!(
-                        "SysListView32 在第 {} 个 WorkerW 下找到",
-                        worker_count
-                    );
+                    log::debug!("SysListView32 在第 {} 个 WorkerW 下找到", worker_count);
                     return Ok(lv);
                 }
             }
@@ -865,8 +872,8 @@ fn find_desktop_listview() -> Result<HWND> {
 
 use windows::core::{Interface as WinInterface, GUID, VARIANT};
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
-    IDispatch, IServiceProvider,
+    CoCreateInstance, CoInitializeEx, CoUninitialize, IDispatch, IServiceProvider, CLSCTX_ALL,
+    COINIT_APARTMENTTHREADED,
 };
 use windows::Win32::UI::Shell::{IFolderView2, IShellBrowser, IShellView, IShellWindows};
 
@@ -895,7 +902,10 @@ pub fn disable_desktop_auto_arrange() -> Option<bool> {
         let sw: IShellWindows = match CoCreateInstance(&CLSID_SHELL_WINDOWS, None, CLSCTX_ALL) {
             Ok(sw) => sw,
             Err(e) => {
-                log::warn!("disable_auto_arrange: CoCreateInstance(IShellWindows) 失败: {}", e);
+                log::warn!(
+                    "disable_auto_arrange: CoCreateInstance(IShellWindows) 失败: {}",
+                    e
+                );
                 CoUninitialize();
                 return None;
             }
@@ -914,7 +924,10 @@ pub fn disable_desktop_auto_arrange() -> Option<bool> {
         let sp: IServiceProvider = match WinInterface::cast::<IServiceProvider>(&dispatch) {
             Ok(sp) => sp,
             Err(e) => {
-                log::warn!("disable_auto_arrange: QueryInterface(IServiceProvider) 失败: {}", e);
+                log::warn!(
+                    "disable_auto_arrange: QueryInterface(IServiceProvider) 失败: {}",
+                    e
+                );
                 CoUninitialize();
                 return None;
             }
@@ -923,7 +936,10 @@ pub fn disable_desktop_auto_arrange() -> Option<bool> {
         let sb: IShellBrowser = match sp.QueryService::<IShellBrowser>(&SID_S_TOP_LEVEL_BROWSER) {
             Ok(sb) => sb,
             Err(e) => {
-                log::warn!("disable_auto_arrange: QueryService(IShellBrowser) 失败: {}", e);
+                log::warn!(
+                    "disable_auto_arrange: QueryService(IShellBrowser) 失败: {}",
+                    e
+                );
                 CoUninitialize();
                 return None;
             }
@@ -941,7 +957,10 @@ pub fn disable_desktop_auto_arrange() -> Option<bool> {
         let fv2: IFolderView2 = match WinInterface::cast::<IFolderView2>(&sv) {
             Ok(fv) => fv,
             Err(e) => {
-                log::warn!("disable_auto_arrange: QueryInterface(IFolderView2) 失败: {}", e);
+                log::warn!(
+                    "disable_auto_arrange: QueryInterface(IFolderView2) 失败: {}",
+                    e
+                );
                 CoUninitialize();
                 return None;
             }
@@ -967,7 +986,8 @@ pub fn disable_desktop_auto_arrange() -> Option<bool> {
             Ok(()) => {
                 log::info!(
                     "桌面自动排列已禁用 (flags: {:#X} → {:#X})",
-                    flags, flags & !FWF_AUTOARRANGE
+                    flags,
+                    flags & !FWF_AUTOARRANGE
                 );
                 // CoUninitialize 在 restore 时调用
                 // 注意：此处故意不调用 CoUninitialize，COM 对象需要保持活跃
@@ -1164,10 +1184,7 @@ pub fn position_icon_at_screen(file_path: &str, screen_x: i32, screen_y: i32) {
         }
 
         let index = index.ok_or_else(|| {
-            anyhow::anyhow!(
-                "SysListView32 中未找到图标（已尝试名称: {:?}）",
-                names
-            )
+            anyhow::anyhow!("SysListView32 中未找到图标（已尝试名称: {:?}）", names)
         })?;
 
         mgr.show_icon_at(index, client_pt.x, client_pt.y)?;
@@ -1186,10 +1203,7 @@ pub fn position_icon_at_screen(file_path: &str, screen_x: i32, screen_y: i32) {
     }
 
     if let Err(e) = result {
-        log::warn!(
-            "桌面图标定位失败（图标应已显示在默认网格位置）: {}",
-            e
-        );
+        log::warn!("桌面图标定位失败（图标应已显示在默认网格位置）: {}", e);
     }
 }
 #[cfg(test)]
@@ -1201,7 +1215,11 @@ mod tests {
         // 64-bit Windows 上 LVITEMW（不含 iGroupId 等扩展字段）应为 56 字节
         let size = std::mem::size_of::<LVITEMW>();
         if cfg!(target_pointer_width = "64") {
-            assert_eq!(size, 56, "LVITEMW 在 64-bit 平台应为 56 字节，实际 {}", size);
+            assert_eq!(
+                size, 56,
+                "LVITEMW 在 64-bit 平台应为 56 字节，实际 {}",
+                size
+            );
         }
     }
 

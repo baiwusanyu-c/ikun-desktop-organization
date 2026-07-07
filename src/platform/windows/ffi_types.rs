@@ -155,6 +155,7 @@ pub const WM_ACTIVATE: u32 = 0x0006;
 
 // ===== Hit Test Constants =====
 pub const HTCLIENT: i32 = 1;
+pub const HTTRANSPARENT: i32 = -1;
 pub const HTCAPTION: i32 = 2;
 pub const HTLEFT: i32 = 10;
 pub const HTRIGHT: i32 = 11;
@@ -187,6 +188,7 @@ pub const SWP_NOZORDER: u32 = 0x0004;
 pub const SWP_NOACTIVATE: u32 = 0x0010;
 pub const SWP_NOMOVE: u32 = 0x0002;
 pub const SWP_NOSIZE: u32 = 0x0001;
+pub const HWND_BOTTOM: HWND = 1isize as *mut c_void;
 pub const GWLP_USERDATA: i32 = -21;
 pub const SM_CXSCREEN: i32 = 0;
 #[allow(dead_code)]

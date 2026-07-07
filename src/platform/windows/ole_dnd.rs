@@ -52,7 +52,8 @@ pub fn get_box_drag_format_id() -> u32 {
 #[allow(non_snake_case)]
 pub(crate) struct IDataObjectVtbl {
     // IUnknown
-    pub(crate) query_interface: unsafe extern "system" fn(*mut c_void, *const u8, *mut *mut c_void) -> HRESULT,
+    pub(crate) query_interface:
+        unsafe extern "system" fn(*mut c_void, *const u8, *mut *mut c_void) -> HRESULT,
     pub(crate) add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
     pub(crate) release: unsafe extern "system" fn(*mut c_void) -> u32,
     // IDataObject
@@ -65,7 +66,8 @@ pub(crate) struct IDataObjectVtbl {
         unsafe extern "system" fn(*mut c_void, *const FORMATETC, *mut FORMATETC) -> HRESULT,
     pub(crate) set_data:
         unsafe extern "system" fn(*mut c_void, *const FORMATETC, *mut STGMEDIUM, i32) -> HRESULT,
-    pub(crate) enum_format_etc: unsafe extern "system" fn(*mut c_void, u32, *mut *mut c_void) -> HRESULT,
+    pub(crate) enum_format_etc:
+        unsafe extern "system" fn(*mut c_void, u32, *mut *mut c_void) -> HRESULT,
     pub(crate) d_advise: unsafe extern "system" fn(
         *mut c_void,
         *const FORMATETC,
@@ -231,11 +233,7 @@ unsafe extern "system" fn data_object_get_data(
                     if !copy.is_null() {
                         let dst = GlobalLock(copy);
                         if !dst.is_null() {
-                            std::ptr::copy_nonoverlapping(
-                                src as *const u8,
-                                dst as *mut u8,
-                                size,
-                            );
+                            std::ptr::copy_nonoverlapping(src as *const u8, dst as *mut u8, size);
                             GlobalUnlock(copy);
                             GlobalUnlock(stored.h_global);
                             (*medium).tymed = TYMED_HGLOBAL as u32;
@@ -443,8 +441,7 @@ unsafe extern "system" fn data_object_enum_format_etc(
 #[repr(C)]
 #[allow(non_snake_case)]
 struct IEnumFORMATETCVtbl {
-    query_interface:
-        unsafe extern "system" fn(*mut c_void, *const u8, *mut *mut c_void) -> HRESULT,
+    query_interface: unsafe extern "system" fn(*mut c_void, *const u8, *mut *mut c_void) -> HRESULT,
     add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
     release: unsafe extern "system" fn(*mut c_void) -> u32,
     next: unsafe extern "system" fn(*mut c_void, u32, *mut FORMATETC, *mut u32) -> HRESULT,
@@ -465,8 +462,7 @@ struct BoxFormatEnum {
 
 // IID_IEnumFORMATETC = {00000103-0000-0000-C000-000000000046}
 const IID_IENUMFORMATETC: [u8; 16] = [
-    0x03, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x46,
+    0x03, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
 ];
 
 static FORMAT_ENUM_VTBL: IEnumFORMATETCVtbl = IEnumFORMATETCVtbl {
@@ -586,10 +582,7 @@ unsafe extern "system" fn data_object_d_advise(
     OLE_E_ADVISENOTSUPPORTED
 }
 
-unsafe extern "system" fn data_object_d_unadvise(
-    _this: *mut c_void,
-    _connection: u32,
-) -> HRESULT {
+unsafe extern "system" fn data_object_d_unadvise(_this: *mut c_void, _connection: u32) -> HRESULT {
     OLE_E_ADVISENOTSUPPORTED
 }
 
@@ -684,10 +677,7 @@ unsafe extern "system" fn drop_source_query_continue_drag(
 /// 设置拖拽光标反馈
 ///
 /// 返回 DRAGDROP_S_USEDEFAULTCURSORS 让系统自动处理光标。
-unsafe extern "system" fn drop_source_give_feedback(
-    _this: *mut c_void,
-    _effect: u32,
-) -> HRESULT {
+unsafe extern "system" fn drop_source_give_feedback(_this: *mut c_void, _effect: u32) -> HRESULT {
     DRAGDROP_S_USEDEFAULTCURSORS
 }
 
@@ -855,14 +845,7 @@ pub fn start_box_drag(
 
     // 调用 DoDragDrop
     let mut effect = DROPEFFECT_NONE;
-    let hr = unsafe {
-        DoDragDrop(
-            data_obj_ptr,
-            drop_src_ptr,
-            DROPEFFECT_MOVE,
-            &mut effect,
-        )
-    };
+    let hr = unsafe { DoDragDrop(data_obj_ptr, drop_src_ptr, DROPEFFECT_MOVE, &mut effect) };
 
     // 根据返回码确定结果
     let result_effect = if hr == DRAGDROP_S_DROP {
@@ -983,7 +966,10 @@ mod tests {
         assert_eq!(parsed.source_hwnd, 0x12345);
         assert_eq!(parsed.source_config_id, "test-uuid");
         assert_eq!(parsed.items.len(), 2);
-        assert_eq!(parsed.items[0].file_path, "C:\\Users\\test\\Desktop\\app.lnk");
+        assert_eq!(
+            parsed.items[0].file_path,
+            "C:\\Users\\test\\Desktop\\app.lnk"
+        );
         assert_eq!(parsed.items[1].display_name, "游戏");
     }
 

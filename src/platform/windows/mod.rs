@@ -16,6 +16,7 @@
 
 mod d2d_render;
 pub mod desktop_manager;
+pub mod desktop_overlay;
 pub mod drag_handler;
 mod drag_image;
 mod drop_target;
@@ -33,6 +34,12 @@ mod wnd_proc;
 
 // Re-export key items
 pub use desktop_manager::DesktopManager;
+pub use desktop_overlay::{create_desktop_overlay, destroy_desktop_overlay};
+pub use drop_target::{
+    register_box_drop_target, take_pending_drop, take_pending_source_removal,
+    unregister_box_drop_target,
+};
+pub use ffi_types::{IkunBoxDragData, IkunDragItemData};
 pub use grid_window::{
     collect_grid_layout, create_grid_window, destroy_all_grid_windows,
     get_cursor_monitor_work_area_phys, get_grid_count, get_screen_resolution,
@@ -40,14 +47,9 @@ pub use grid_window::{
 };
 pub use icon_extract::extract_file_icon;
 pub use icon_hider::{
-    hide_native_icons, icon_exists_for_box, restore_all_hidden_icons, restore_native_icons,
-    resolve_icon_read_path,
+    hide_native_icons, icon_exists_for_box, native_icons_hidden, resolve_icon_read_path,
+    restore_all_hidden_icons, restore_native_icons,
 };
 pub use icon_manager::DesktopIconManager;
 pub use ole_dnd::{get_box_drag_format_id, start_box_drag};
-pub use drop_target::{
-    register_box_drop_target, take_pending_drop, take_pending_source_removal,
-    unregister_box_drop_target,
-};
-pub use ffi_types::{IkunBoxDragData, IkunDragItemData};
 pub use shell_menu::{cleanup_desktop_registry, setup_desktop_registry, take_pending_create_box};

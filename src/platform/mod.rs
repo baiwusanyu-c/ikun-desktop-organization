@@ -27,11 +27,12 @@ pub use windows::DesktopManager;
 // Re-export platform-specific functions that app.rs uses
 #[cfg(windows)]
 pub use windows::{
-    cleanup_desktop_registry, collect_grid_layout, create_grid_window, destroy_all_grid_windows,
-    extract_file_icon, get_cursor_monitor_work_area_phys, get_grid_count, get_screen_resolution,
-    hide_native_icons, icon_exists_for_box, reposition_window_by_title, restore_all_hidden_icons,
-    restore_native_icons, resolve_icon_read_path, setup_desktop_registry, take_pending_create_box,
-    GridCreateParams, GridFileItem,
+    cleanup_desktop_registry, collect_grid_layout, create_desktop_overlay, create_grid_window,
+    destroy_all_grid_windows, destroy_desktop_overlay, extract_file_icon,
+    get_cursor_monitor_work_area_phys, get_grid_count, get_screen_resolution, hide_native_icons,
+    icon_exists_for_box, native_icons_hidden, reposition_window_by_title, resolve_icon_read_path,
+    restore_all_hidden_icons, restore_native_icons, setup_desktop_registry,
+    take_pending_create_box, GridCreateParams, GridFileItem,
 };
 
 /// 桌面管理器 trait（跨平台）

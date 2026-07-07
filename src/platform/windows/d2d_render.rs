@@ -18,6 +18,7 @@ use super::grid_window::GridFileItem;
 
 use std::ffi::c_void;
 
+use windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED;
 use windows::Win32::Graphics::Direct2D::{
     Common::{D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_POINT_2F, D2D_SIZE_U},
     D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
@@ -25,7 +26,6 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
     D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT,
 };
-use windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED;
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL,
     DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL,
@@ -1325,20 +1325,18 @@ pub fn render_drag_overlay_bitmap(
         let old_bmp = SelectObject(mem_dc, dib as HGDIOBJ);
 
         // 创建临时 D2D DC Render Target
-        let d2d_factory = match D2D1CreateFactory::<ID2D1Factory>(
-            D2D1_FACTORY_TYPE_SINGLE_THREADED,
-            None,
-        ) {
-            Ok(f) => f,
-            Err(e) => {
-                log::warn!("拖拽覆盖: D2D Factory 创建失败: {:?}", e);
-                SelectObject(mem_dc, old_bmp);
-                DeleteObject(dib as HGDIOBJ);
-                DeleteDC(mem_dc);
-                ReleaseDC(std::ptr::null_mut(), screen_dc);
-                return std::ptr::null_mut();
-            }
-        };
+        let d2d_factory =
+            match D2D1CreateFactory::<ID2D1Factory>(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) {
+                Ok(f) => f,
+                Err(e) => {
+                    log::warn!("拖拽覆盖: D2D Factory 创建失败: {:?}", e);
+                    SelectObject(mem_dc, old_bmp);
+                    DeleteObject(dib as HGDIOBJ);
+                    DeleteDC(mem_dc);
+                    ReleaseDC(std::ptr::null_mut(), screen_dc);
+                    return std::ptr::null_mut();
+                }
+            };
 
         let rt_props = D2D1_RENDER_TARGET_PROPERTIES {
             r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
@@ -1416,8 +1414,7 @@ pub fn render_drag_overlay_bitmap(
                     windows::core::PCWSTR(locale.as_ptr()),
                 ) {
                     let _ = text_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-                    let _ = text_format
-                        .SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+                    let _ = text_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
                     let _ = text_format.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
 
                     // 标签位置：图标下方 + 间距，两侧各 2px padding
@@ -1450,10 +1447,9 @@ pub fn render_drag_overlay_bitmap(
                         {
                             // 4 方向阴影描边（与分类框一致）
                             let shadow_offset = scale_for_dpi(1, dpi) as f32;
-                            if let Ok(shadow) = target.CreateSolidColorBrush(
-                                &d2d_color(0, 0, 0, 200),
-                                None,
-                            ) {
+                            if let Ok(shadow) =
+                                target.CreateSolidColorBrush(&d2d_color(0, 0, 0, 200), None)
+                            {
                                 for &(dx, dy) in &[
                                     (shadow_offset, 0.0),
                                     (-shadow_offset, 0.0),

@@ -14,6 +14,7 @@
 //! - `debug` — 调试和日志
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// 配置文件名（存放在用户主目录）
@@ -45,6 +46,8 @@ pub struct AppConfig {
     pub classification: Vec<CategoryRule>,
     /// 分类框布局数据
     pub layout: LayoutConfig,
+    /// 桌面覆盖窗口配置
+    pub overlay: OverlayConfig,
     /// 调试配置
     pub debug: DebugConfig,
 }
@@ -61,6 +64,7 @@ impl Default for AppConfig {
             ai: AiConfig::default(),
             classification: default_categories(),
             layout: LayoutConfig::default(),
+            overlay: OverlayConfig::default(),
             debug: DebugConfig::default(),
         }
     }
@@ -516,6 +520,32 @@ pub struct BoxStyleOverrides {
 }
 
 // =============================================================================
+// OverlayConfig — 桌面覆盖窗口配置
+// =============================================================================
+
+/// 桌面覆盖窗口配置。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OverlayConfig {
+    /// 非管理图标位置映射：文件路径 → [x, y]（逻辑像素，96 DPI 基准）。
+    pub icon_positions: HashMap<String, [f32; 2]>,
+    /// 覆盖窗口图标尺寸。
+    pub icon_size: i32,
+    /// 排列方向：right-to-left / left-to-right。
+    pub layout_direction: String,
+}
+
+impl Default for OverlayConfig {
+    fn default() -> Self {
+        Self {
+            icon_positions: HashMap::new(),
+            icon_size: 48,
+            layout_direction: "left-to-right".to_string(),
+        }
+    }
+}
+
+// =============================================================================
 // DebugConfig — 调试配置
 // =============================================================================
 
@@ -745,6 +775,53 @@ mod tests {
         assert_eq!(parsed.box_style.icon_size, config.box_style.icon_size);
         assert_eq!(parsed.ai.model, config.ai.model);
         assert_eq!(parsed.classification.len(), config.classification.len());
+        assert_eq!(parsed.overlay.icon_size, config.overlay.icon_size);
+        assert_eq!(
+            parsed.overlay.layout_direction,
+            config.overlay.layout_direction
+        );
+    }
+
+    #[test]
+    fn test_overlay_config_default() {
+        let overlay = OverlayConfig::default();
+        assert!(overlay.icon_positions.is_empty());
+        assert_eq!(overlay.icon_size, 48);
+        assert_eq!(overlay.layout_direction, "left-to-right");
+    }
+
+    #[test]
+    fn test_overlay_config_roundtrip_preserves_icon_positions() {
+        let mut config = AppConfig::default();
+        config.overlay.icon_positions.insert(
+            r"C:\Users\chenzhihui\Desktop\app.lnk".to_string(),
+            [120.0, 240.0],
+        );
+        config.overlay.icon_size = 64;
+        config.overlay.layout_direction = "right-to-left".to_string();
+
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: AppConfig = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.overlay.icon_size, 64);
+        assert_eq!(parsed.overlay.layout_direction, "right-to-left");
+        assert_eq!(
+            parsed
+                .overlay
+                .icon_positions
+                .get(r"C:\Users\chenzhihui\Desktop\app.lnk"),
+            Some(&[120.0, 240.0])
+        );
+    }
+
+    #[test]
+    fn test_partial_json_uses_overlay_default() {
+        let json = r#"{"version": "3.0", "layout": {"boxes": []}}"#;
+        let config: AppConfig = serde_json::from_str(json).unwrap();
+
+        assert!(config.overlay.icon_positions.is_empty());
+        assert_eq!(config.overlay.icon_size, 48);
+        assert_eq!(config.overlay.layout_direction, "left-to-right");
     }
 
     #[test]

@@ -57,14 +57,29 @@ pub(crate) unsafe fn create_drag_overlay(
 
     // 使用分类框的实际 cell_w，确保标签换行行为与框内一致
     let overlay_w = cell_w;
-    let label_h = if display_name.is_empty() { 0 } else { icon_size * 36 / 48 };
-    let gap = if display_name.is_empty() { 0 } else { icon_size * 6 / 48 };
+    let label_h = if display_name.is_empty() {
+        0
+    } else {
+        icon_size * 36 / 48
+    };
+    let gap = if display_name.is_empty() {
+        0
+    } else {
+        icon_size * 6 / 48
+    };
     let total_w = overlay_w;
     let total_h = icon_size + gap + label_h;
 
     // 使用 D2D + DirectWrite 渲染复合位图（与分类框标签质量一致）
     let hbmp = super::d2d_render::render_drag_overlay_bitmap(
-        icon_handle, icon_size, display_name, total_w, total_h, gap, label_h, dpi,
+        icon_handle,
+        icon_size,
+        display_name,
+        total_w,
+        total_h,
+        gap,
+        label_h,
+        dpi,
     );
     if hbmp.is_null() {
         log::warn!("创建拖拽覆盖: D2D 位图渲染失败");
@@ -99,7 +114,10 @@ pub(crate) unsafe fn create_drag_overlay(
         DRAG_OVERLAY_CLASS.as_ptr(),
         std::ptr::null(),
         WS_POPUP,
-        0, 0, total_w, total_h,
+        0,
+        0,
+        total_w,
+        total_h,
         std::ptr::null_mut(),
         std::ptr::null_mut(),
         GetModuleHandleW(std::ptr::null()),
@@ -118,7 +136,10 @@ pub(crate) unsafe fn create_drag_overlay(
     let old_bmp = SelectObject(hdc_mem, hbmp as HGDIOBJ);
 
     let pt_dst = POINT { x: 0, y: 0 };
-    let sz = SIZE { cx: total_w, cy: total_h };
+    let sz = SIZE {
+        cx: total_w,
+        cy: total_h,
+    };
     let pt_src = POINT { x: 0, y: 0 };
 
     // 70% 不透明度（半透明效果，与原生桌面拖拽一致）
@@ -130,10 +151,15 @@ pub(crate) unsafe fn create_drag_overlay(
     };
 
     UpdateLayeredWindow(
-        hwnd, hdc_screen,
-        &pt_dst, &sz as *const SIZE as *const POINT,
-        hdc_mem, &pt_src,
-        0, &blend, 0x02, // ULW_ALPHA
+        hwnd,
+        hdc_screen,
+        &pt_dst,
+        &sz as *const SIZE as *const POINT,
+        hdc_mem,
+        &pt_src,
+        0,
+        &blend,
+        0x02, // ULW_ALPHA
     );
 
     SelectObject(hdc_mem, old_bmp);
@@ -160,8 +186,10 @@ pub(crate) unsafe fn update_drag_overlay() {
     SetWindowPos(
         OVERLAY_HWND,
         std::ptr::null_mut(),
-        pt.x + 8, pt.y + 8,
-        0, 0,
+        pt.x + 8,
+        pt.y + 8,
+        0,
+        0,
         SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER,
     );
 }
@@ -180,8 +208,10 @@ pub(crate) unsafe fn destroy_drag_overlay() {
 
 /// 覆盖窗口的 WndProc（极简，仅处理默认消息）
 unsafe extern "system" fn overlay_wnd_proc(
-    hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM,
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
 ) -> LRESULT {
     DefWindowProcW(hwnd, msg, wparam, lparam)
 }
-

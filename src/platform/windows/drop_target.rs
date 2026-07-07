@@ -46,7 +46,10 @@ static PENDING_SOURCE_REMOVAL: Mutex<Option<PendingSourceRemoval>> = Mutex::new(
 
 /// 取出待处理的源框移除信息（由 WndProc 调用）
 pub fn take_pending_source_removal() -> Option<PendingSourceRemoval> {
-    PENDING_SOURCE_REMOVAL.lock().ok().and_then(|mut g| g.take())
+    PENDING_SOURCE_REMOVAL
+        .lock()
+        .ok()
+        .and_then(|mut g| g.take())
 }
 
 /// 框→框移动：暂存待添加项信息（由 drag_handler 调用）
@@ -101,9 +104,13 @@ static DROP_TARGET_VTBL: IDropTargetVtbl = IDropTargetVtbl {
 // ----- IUnknown -----
 
 unsafe extern "system" fn drop_target_query_interface(
-    this: *mut c_void, riid: *const u8, ppv: *mut *mut c_void,
+    this: *mut c_void,
+    riid: *const u8,
+    ppv: *mut *mut c_void,
 ) -> HRESULT {
-    if ppv.is_null() { return E_POINTER; }
+    if ppv.is_null() {
+        return E_POINTER;
+    }
     let iid = std::slice::from_raw_parts(riid, 16);
     if iid == IID_IUNKNOWN || iid == IID_IDROPTARGET {
         *ppv = this;
@@ -134,7 +141,11 @@ unsafe extern "system" fn drop_target_release(this: *mut c_void) -> u32 {
 // ----- IDropTarget 方法 -----
 
 unsafe extern "system" fn drop_target_drag_enter(
-    this: *mut c_void, data_obj: *mut c_void, _ks: u32, _pt: i64, effect: *mut u32,
+    this: *mut c_void,
+    data_obj: *mut c_void,
+    _ks: u32,
+    _pt: i64,
+    effect: *mut u32,
 ) -> HRESULT {
     let target = &*(this as *const BoxDropTarget);
     let has_box = query_format(data_obj, target.custom_format_id);
@@ -150,9 +161,14 @@ unsafe extern "system" fn drop_target_drag_enter(
 }
 
 unsafe extern "system" fn drop_target_drag_over(
-    _this: *mut c_void, _ks: u32, _pt: i64, effect: *mut u32,
+    _this: *mut c_void,
+    _ks: u32,
+    _pt: i64,
+    effect: *mut u32,
 ) -> HRESULT {
-    if *effect & DROPEFFECT_MOVE != 0 { *effect = DROPEFFECT_MOVE; }
+    if *effect & DROPEFFECT_MOVE != 0 {
+        *effect = DROPEFFECT_MOVE;
+    }
     S_OK
 }
 
@@ -163,7 +179,11 @@ unsafe extern "system" fn drop_target_drag_leave(this: *mut c_void) -> HRESULT {
 }
 
 unsafe extern "system" fn drop_target_drop(
-    this: *mut c_void, data_obj: *mut c_void, _ks: u32, pt: i64, effect: *mut u32,
+    this: *mut c_void,
+    data_obj: *mut c_void,
+    _ks: u32,
+    pt: i64,
+    effect: *mut u32,
 ) -> HRESULT {
     let target = &*(this as *const BoxDropTarget);
     PostMessageW(target.target_hwnd, WM_USER_DRAG_LEAVE, 0, 0);
@@ -173,7 +193,9 @@ unsafe extern "system" fn drop_target_drop(
 
     let box_data = if target.custom_format_id != 0 {
         read_box_drag_data(data_obj, target.custom_format_id)
-    } else { None };
+    } else {
+        None
+    };
 
     let file_paths = read_drop_files(data_obj);
     if file_paths.is_empty() {
@@ -183,7 +205,12 @@ unsafe extern "system" fn drop_target_drop(
     }
 
     if let Ok(mut g) = PENDING_DROP.lock() {
-        *g = Some(PendingDrop { file_paths: file_paths.clone(), box_data: box_data.clone(), drop_x, drop_y });
+        *g = Some(PendingDrop {
+            file_paths: file_paths.clone(),
+            box_data: box_data.clone(),
+            drop_x,
+            drop_y,
+        });
     }
 
     // 框→框：通知源框移除
@@ -212,17 +239,37 @@ unsafe extern "system" fn drop_target_drop(
 // =============================================================================
 
 unsafe fn query_format(data_obj: *mut c_void, cf: u32) -> bool {
-    if data_obj.is_null() || cf == 0 { return false; }
+    if data_obj.is_null() || cf == 0 {
+        return false;
+    }
     let vtbl = *(data_obj as *const *const IDataObjectVtbl);
-    let fe = FORMATETC { cf_format: cf, ptd: std::ptr::null_mut(), dw_aspect: DVASPECT_CONTENT, lindex: -1, tymed: TYMED_HGLOBAL };
+    let fe = FORMATETC {
+        cf_format: cf,
+        ptd: std::ptr::null_mut(),
+        dw_aspect: DVASPECT_CONTENT,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL,
+    };
     ((*vtbl).query_get_data)(data_obj, &fe) == S_OK
 }
 
 unsafe fn read_drop_files(data_obj: *mut c_void) -> Vec<String> {
-    if data_obj.is_null() { return Vec::new(); }
+    if data_obj.is_null() {
+        return Vec::new();
+    }
     let vtbl = *(data_obj as *const *const IDataObjectVtbl);
-    let fe = FORMATETC { cf_format: CF_HDROP, ptd: std::ptr::null_mut(), dw_aspect: DVASPECT_CONTENT, lindex: -1, tymed: TYMED_HGLOBAL };
-    let mut medium = STGMEDIUM { tymed: 0, h_global: std::ptr::null_mut(), unk_for_release: std::ptr::null_mut() };
+    let fe = FORMATETC {
+        cf_format: CF_HDROP,
+        ptd: std::ptr::null_mut(),
+        dw_aspect: DVASPECT_CONTENT,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL,
+    };
+    let mut medium = STGMEDIUM {
+        tymed: 0,
+        h_global: std::ptr::null_mut(),
+        unk_for_release: std::ptr::null_mut(),
+    };
     if ((*vtbl).get_data)(data_obj, &fe, &mut medium) != S_OK || medium.h_global.is_null() {
         return Vec::new();
     }
@@ -235,10 +282,16 @@ unsafe fn read_drop_files(data_obj: *mut c_void) -> Vec<String> {
             let mut off = 0;
             loop {
                 let mut len = 0;
-                while *text.add(off + len) != 0 { len += 1; }
-                if len == 0 { break; }
+                while *text.add(off + len) != 0 {
+                    len += 1;
+                }
+                if len == 0 {
+                    break;
+                }
                 if let Ok(s) = String::from_utf16(std::slice::from_raw_parts(text.add(off), len)) {
-                    if !s.is_empty() { paths.push(s); }
+                    if !s.is_empty() {
+                        paths.push(s);
+                    }
                 }
                 off += len + 1;
             }
@@ -252,21 +305,38 @@ unsafe fn read_drop_files(data_obj: *mut c_void) -> Vec<String> {
 }
 
 unsafe fn read_box_drag_data(data_obj: *mut c_void, fmt_id: u32) -> Option<IkunBoxDragData> {
-    if data_obj.is_null() || fmt_id == 0 { return None; }
+    if data_obj.is_null() || fmt_id == 0 {
+        return None;
+    }
     let vtbl = *(data_obj as *const *const IDataObjectVtbl);
-    let fe = FORMATETC { cf_format: fmt_id, ptd: std::ptr::null_mut(), dw_aspect: DVASPECT_CONTENT, lindex: -1, tymed: TYMED_HGLOBAL };
-    let mut medium = STGMEDIUM { tymed: 0, h_global: std::ptr::null_mut(), unk_for_release: std::ptr::null_mut() };
+    let fe = FORMATETC {
+        cf_format: fmt_id,
+        ptd: std::ptr::null_mut(),
+        dw_aspect: DVASPECT_CONTENT,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL,
+    };
+    let mut medium = STGMEDIUM {
+        tymed: 0,
+        h_global: std::ptr::null_mut(),
+        unk_for_release: std::ptr::null_mut(),
+    };
     if ((*vtbl).get_data)(data_obj, &fe, &mut medium) != S_OK || medium.h_global.is_null() {
         return None;
     }
     let result = {
         let ptr = GlobalLock(medium.h_global);
-        if ptr.is_null() { None }
-        else {
+        if ptr.is_null() {
+            None
+        } else {
             let bytes = ptr as *const u8;
             let mut len = 0;
-            while *bytes.add(len) != 0 && len < 65536 { len += 1; }
-            let r = serde_json::from_slice::<IkunBoxDragData>(std::slice::from_raw_parts(bytes, len)).ok();
+            while *bytes.add(len) != 0 && len < 65536 {
+                len += 1;
+            }
+            let r =
+                serde_json::from_slice::<IkunBoxDragData>(std::slice::from_raw_parts(bytes, len))
+                    .ok();
             GlobalUnlock(medium.h_global);
             r
         }
@@ -305,7 +375,9 @@ pub fn register_box_drop_target(hwnd: HWND) -> *mut c_void {
 pub fn unregister_box_drop_target(hwnd: HWND, target_ptr: *mut c_void) {
     unsafe {
         RevokeDragDrop(hwnd);
-        if !target_ptr.is_null() { drop_target_release(target_ptr); }
+        if !target_ptr.is_null() {
+            drop_target_release(target_ptr);
+        }
     }
     log::info!("已撤销拖拽目标: hwnd={:?}", hwnd);
 }

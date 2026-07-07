@@ -153,7 +153,11 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
     let target_is_grid = if !target_hwnd.is_null() {
         let mut class_name = [0u16; 64];
         let len = unsafe {
-            GetClassNameW(target_hwnd, class_name.as_mut_ptr(), class_name.len() as i32)
+            GetClassNameW(
+                target_hwnd,
+                class_name.as_mut_ptr(),
+                class_name.len() as i32,
+            )
         };
         if len > 0 {
             let name = String::from_utf16_lossy(&class_name[..len as usize]);
@@ -169,8 +173,9 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
         // === 框→框移动 ===
         handle_box_to_box_move(hwnd, target_hwnd, item_idx as usize);
     } else {
-        // === 框→桌面（从框中移除项）===
-        handle_box_to_desktop(hwnd, item_idx as usize, pt.x, pt.y);
+        // === 框→桌面/覆盖窗口（从框中移除项）===
+        let target_is_overlay = super::desktop_overlay::is_desktop_overlay_window(target_hwnd);
+        handle_box_to_desktop(hwnd, item_idx as usize, pt.x, pt.y, target_is_overlay);
     }
 
     // 清除所有框的高亮
@@ -220,8 +225,14 @@ fn handle_box_to_box_move(source_hwnd: HWND, target_hwnd: HWND, item_index: usiz
     }
 }
 
-/// 框→桌面：从仓库导出到用户桌面并定位
-fn handle_box_to_desktop(hwnd: HWND, item_index: usize, drop_x: i32, drop_y: i32) {
+/// 框→桌面：从仓库导出到用户桌面并定位，同时刷新覆盖窗口。
+fn handle_box_to_desktop(
+    hwnd: HWND,
+    item_index: usize,
+    drop_x: i32,
+    drop_y: i32,
+    target_is_overlay: bool,
+) {
     let data = match unsafe { get_data(hwnd) } {
         Some(d) => d,
         None => return,
@@ -235,7 +246,15 @@ fn handle_box_to_desktop(hwnd: HWND, item_index: usize, drop_x: i32, drop_y: i32
     let display_name = removed.display_name.clone();
     let file_path = removed.file_path.clone();
 
-    log::info!("框→桌面: 导出图标 '{}' (path={})", display_name, file_path);
+    if target_is_overlay {
+        log::info!(
+            "框→覆盖窗口: 释放图标 '{}' (path={})",
+            display_name,
+            file_path
+        );
+    } else {
+        log::info!("框→桌面: 导出图标 '{}' (path={})", display_name, file_path);
+    }
 
     let mut export_path = super::icon_hider::export_desktop_path(&file_path);
     match super::icon_hider::export_icon(&file_path) {
@@ -262,7 +281,23 @@ fn handle_box_to_desktop(hwnd: HWND, item_index: usize, drop_x: i32, drop_y: i32
 
     if export_path.exists() {
         let export_str = export_path.to_string_lossy().to_string();
-        super::icon_manager::position_icon_at_screen(&export_str, drop_x, drop_y);
+        let shown_on_overlay = super::desktop_overlay::add_icon_to_overlay(
+            export_str.clone(),
+            display_name.clone(),
+            drop_x,
+            drop_y,
+        );
+        if shown_on_overlay {
+            log::info!("框→覆盖窗口: '{}' 已交给覆盖窗口渲染", display_name);
+        } else {
+            if target_is_overlay {
+                log::warn!(
+                    "框→覆盖窗口: '{}' 未能刷新覆盖窗口，回退到桌面定位",
+                    display_name
+                );
+            }
+            super::icon_manager::position_icon_at_screen(&export_str, drop_x, drop_y);
+        }
     }
 
     // 从框中移除项
@@ -271,7 +306,10 @@ fn handle_box_to_desktop(hwnd: HWND, item_index: usize, drop_x: i32, drop_y: i32
         None => return,
     };
     if item_index < data.items.len() {
-        data.items.remove(item_index);
+        let removed = data.items.remove(item_index);
+        if !removed.icon_handle.is_null() {
+            super::icon_extract::destroy_icon(removed.icon_handle);
+        }
         if data.selected_item >= data.items.len() as i32 {
             data.selected_item = -1;
         }

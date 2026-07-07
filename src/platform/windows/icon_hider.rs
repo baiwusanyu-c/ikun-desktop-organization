@@ -36,6 +36,7 @@ extern "system" {
     ) -> HWND;
     fn ShowWindow(hWnd: HWND, nCmdShow: i32) -> i32;
     fn IsWindow(hWnd: HWND) -> i32;
+    fn IsWindowVisible(hWnd: HWND) -> i32;
 }
 
 static PROG_CLASS: &[u16] = &[80, 114, 111, 103, 109, 97, 110, 0]; // "Progman"
@@ -123,10 +124,19 @@ pub fn hide_native_icons() -> Result<()> {
     let lv_hwnd = find_desktop_listview()?;
 
     unsafe {
-        ShowWindow(lv_hwnd, SW_HIDE);
+        let before_valid = IsWindow(lv_hwnd);
+        log::info!(
+            "准备隐藏桌面 SysListView32 窗口: hwnd={:?}, valid={}",
+            lv_hwnd,
+            before_valid
+        );
+        let result = ShowWindow(lv_hwnd, SW_HIDE);
+        log::info!(
+            "已隐藏桌面 SysListView32 窗口: hwnd={:?}, ShowWindowResult={}",
+            lv_hwnd,
+            result
+        );
     }
-
-    log::info!("已隐藏桌面 SysListView32 窗口");
 
     let mut guard = ICON_HIDER
         .lock()
@@ -137,6 +147,33 @@ pub fn hide_native_icons() -> Result<()> {
     });
 
     Ok(())
+}
+
+/// 检查原生桌面图标窗口是否仍处于隐藏状态。
+///
+/// Explorer 重启后旧的 SysListView32 句柄会失效，此时返回 false，
+/// 调用方应重新执行 `hide_native_icons()` 绑定新的桌面列表窗口。
+pub fn native_icons_hidden() -> bool {
+    let guard = match ICON_HIDER.lock() {
+        Ok(guard) => guard,
+        Err(e) => {
+            log::warn!("检查桌面图标隐藏状态失败，锁获取失败: {}", e);
+            return false;
+        }
+    };
+
+    let Some(hider) = guard.as_ref() else {
+        return false;
+    };
+    if !hider.hidden {
+        return false;
+    }
+
+    let valid = unsafe { IsWindow(hider.listview_hwnd) } != 0;
+    if !valid {
+        return false;
+    }
+    unsafe { IsWindowVisible(hider.listview_hwnd) == 0 }
 }
 
 /// 恢复原生桌面图标
@@ -155,9 +192,13 @@ pub fn restore_native_icons() -> Result<()> {
         let valid = unsafe { IsWindow(hider.listview_hwnd) };
         if valid != 0 {
             unsafe {
-                ShowWindow(hider.listview_hwnd, SW_SHOW);
+                let result = ShowWindow(hider.listview_hwnd, SW_SHOW);
+                log::info!(
+                    "已恢复桌面 SysListView32 窗口: hwnd={:?}, ShowWindowResult={}",
+                    hider.listview_hwnd,
+                    result
+                );
             }
-            log::info!("已恢复桌面 SysListView32 窗口");
         } else {
             log::warn!("SysListView32 窗口已失效，跳过恢复");
         }
