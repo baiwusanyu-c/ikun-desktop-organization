@@ -1,0 +1,80 @@
+src/platform/macos/desktop_overlay/overlay_window.rs
+  s_bb5e64d01985b9::t_1cbf939c47c10d 2,4,10-12,42-43,46,48,67-68,70-74,77,80,85-86,88-90,95,100,107,140-141
+  s_bb5e64d01985b9::t_ef9ac30612f9e3 79
+  s_bb5e64d01985b9::t_2f36d4d99cb444 5-6,15,19-20,37,66,102,105
+  s_bb5e64d01985b9::t_1b2d88d759dc7d 91
+  s_bb5e64d01985b9::t_2b3ad41b91de31 92-93
+  s_bb5e64d01985b9::t_be15d0f34d86e9 50-51,53-61,96-98,115-118
+  s_bb5e64d01985b9::t_e2353cd89e07d4 1,3,7,9,14,16,24,27-36,38-41,47,52,62-65,76,81-84,87,94,99,101,104,111-114,120-124,133-134,139
+  s_bb5e64d01985b9::t_10e075d95cd253 13,17-18,21-23,25-26,44-45,49,69,75,78,106,108-110,119,125-132,135-138
+  s_bb5e64d01985b9::t_fa2e5ff09be2c8 8
+  s_bb5e64d01985b9::t_cb34547a5205e6 103
+src/platform/macos/desktop_manager.rs
+  s_bb5e64d01985b9::t_76ef100b09c8eb 11,15,21-22
+src/platform/macos/mod.rs
+  s_bb5e64d01985b9::t_7540ce74cf3ad8 1,18-19,29,39-40,52,60,62,68
+  s_bb5e64d01985b9::t_2c252aa0fd2e7c 44
+  s_bb5e64d01985b9::t_ebd70ea2838a28 48,53-55,57,63,71-72
+  s_bb5e64d01985b9::t_ddacb0532960a8 8-12,14,17,28,34-36,38,58
+  s_bb5e64d01985b9::t_8bc82710ce9b2e 61
+  s_bb5e64d01985b9::t_92221d1f5962a7 4-5,13,15-16,20-27,30-33,37,41-43,45-47,49-51,56,59,64-67,69-70
+src/platform/macos/ffi_imports.rs
+  s_bb5e64d01985b9::t_005126a9232f3a 1-15,18-25,27-34,42-125
+  s_bb5e64d01985b9::t_330b50979870b5 16-17,26,35-41
+src/platform/macos/desktop_overlay/mod.rs
+  s_bb5e64d01985b9::t_e54bdce990f0a1 9
+  s_bb5e64d01985b9::t_0ef5a510c9a6cf 1-8
+src/platform/macos/desktop_overlay/overlay_render.rs
+  s_bb5e64d01985b9::t_799c3e9bf5fe94 2
+  s_bb5e64d01985b9::t_13774c59dd4504 37,71
+  s_bb5e64d01985b9::t_edc425665e3bab 9
+  s_bb5e64d01985b9::t_752454b96aae15 1,3,16,20,70
+  s_bb5e64d01985b9::t_44812111f92e87 17
+  s_bb5e64d01985b9::t_6b3d6170bd5ca0 4
+  s_bb5e64d01985b9::t_4f9ad71177a0ab 15,18-19,38
+  s_bb5e64d01985b9::t_0bf3c392b74979 5-8,13-14,21-36,39-49,51-53,55-69
+  s_bb5e64d01985b9::t_1ff26d9af1b8ee 54
+  s_bb5e64d01985b9::t_ade336b31cadf4 10-12,50
+src/platform/mod.rs
+  s_bb5e64d01985b9::t_126c6e996c6301 178-179
+  s_bb5e64d01985b9::t_9489284947e317 38-41,44-45,48-51,99-100,116,122,124,203-205,211-213
+  s_bb5e64d01985b9::t_269ef95ecd4d1b 42-43,46-47,52-53,55,57-58,67-68,70,72,91-98,101-115,118-121,123,125-177,180-186,190-202,206-210,216-217
+  s_bb5e64d01985b9::t_840ceef79a575c 188-189
+  s_bb5e64d01985b9::t_a71b0601e6d8a0 54,56,59-66,69,71,73-90,117,187,214-215
+Cargo.toml
+  s_bb5e64d01985b9::t_8e9e2b0b09a736 60-62
+  s_bb5e64d01985b9::t_e7ddf1b9459afb 64
+  s_bb5e64d01985b9::t_93598db23a87bf 31-44
+  s_bb5e64d01985b9::t_fadb63531dc2a8 63
+  s_bb5e64d01985b9::t_4d5f1c69557a29 71
+src/app.rs
+  s_bb5e64d01985b9::t_14fc34aee55c57 512
+todo/IMPLEMENTATION_PLAN_MACOS.md
+  s_bb5e64d01985b9::t_53583ef61a9e6b 1-518
+Cargo.lock
+  s_c1f509beab2b55::t_17d60790809b58 465-476,1171-1173,1179-1180
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "1b8eac94bb646045695049eaf2d0896b6a57968f",
+  "prompts": {},
+  "sessions": {
+    "s_bb5e64d01985b9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "019f4021-8090-7b02-8e9d-8c31512d0c93",
+        "model": "unknown"
+      },
+      "human_author": "白雾三语 <32354856+baiwusanyu-c@users.noreply.github.com>"
+    },
+    "s_c1f509beab2b55": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4021-8090-7b02-8e9d-8c31512d0c93",
+        "model": "unknown"
+      },
+      "human_author": "白雾三语 <32354856+baiwusanyu-c@users.noreply.github.com>"
+    }
+  }
+}
