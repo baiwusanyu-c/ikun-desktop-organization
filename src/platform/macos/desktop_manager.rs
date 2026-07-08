@@ -8,35 +8,22 @@ use anyhow::Result;
 use std::path::PathBuf;
 
 /// macOS 桌面管理器
-pub struct DesktopManager {
-    /// 桌面路径
-    desktop_path: PathBuf,
-}
+pub struct DesktopManager;
 
 impl Default for DesktopManager {
     fn default() -> Self {
-        Self {
-            desktop_path: dirs::desktop_dir().unwrap_or_else(|| PathBuf::from("~/Desktop")),
-        }
+        Self
     }
 }
 
 impl DesktopManagerTrait for DesktopManager {
     fn new() -> Result<Self> {
-        // 获取桌面路径
-        let desktop_path =
-            dirs::desktop_dir().ok_or_else(|| anyhow::anyhow!("无法获取桌面路径"))?;
-
-        log::info!("macOS DesktopManager 初始化, 桌面路径: {:?}", desktop_path);
-
-        Ok(Self { desktop_path })
+        log::info!("macOS DesktopManager 初始化");
+        Ok(Self)
     }
 
     fn get_desktop_icons(&self) -> Vec<DesktopIcon> {
         // TODO: 实现实际的 macOS 桌面图标读取
-        // 1. 读取 ~/Desktop 文件夹内容
-        // 2. 获取 Finder 图标位置信息（需要特殊权限）
-
         log::info!("获取 macOS 桌面图标...");
 
         // 返回模拟数据（用于 MVP 测试）

@@ -509,6 +509,7 @@ impl eframe::App for MyApp {
             self.initialized = true;
             self.restore_layout();
             // DesktopIconManager 诊断（验证 LVM 方案可行性）
+            #[cfg(windows)]
             crate::platform::windows::icon_manager::diagnose();
             // 先清理旧版残留，再注册新版（退出时清理，保证无残留）
             cleanup_desktop_registry();
