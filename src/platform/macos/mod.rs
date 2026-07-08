@@ -18,7 +18,13 @@ pub fn hide_native_icons() -> Result<()> {
     log::info!("隐藏 macOS 桌面图标...");
 
     let output = Command::new("defaults")
-        .args(&["write", "com.apple.finder", "CreateDesktop", "-bool", "false"])
+        .args(&[
+            "write",
+            "com.apple.finder",
+            "CreateDesktop",
+            "-bool",
+            "false",
+        ])
         .output()?;
 
     if !output.status.success() {
@@ -39,7 +45,13 @@ pub fn restore_native_icons() -> Result<()> {
     log::info!("恢复 macOS 桌面图标...");
 
     let output = Command::new("defaults")
-        .args(&["write", "com.apple.finder", "CreateDesktop", "-bool", "true"])
+        .args(&[
+            "write",
+            "com.apple.finder",
+            "CreateDesktop",
+            "-bool",
+            "true",
+        ])
         .output()?;
 
     if !output.status.success() {
@@ -66,7 +78,9 @@ pub fn get_screen_resolution() -> (i32, i32) {
             return (1920, 1080);
         }
         let frame: NSRect = msg_send![screen, frame];
-        ((frame.size.width as f32 * frame.size.width as f32 / frame.size.width as f32) as i32,
-         frame.size.height as i32)
+        (
+            (frame.size.width as f32 * frame.size.width as f32 / frame.size.width as f32) as i32,
+            frame.size.height as i32,
+        )
     }
 }

@@ -170,6 +170,9 @@ pub fn create_desktop_overlay() -> Result<()> {
     if let Ok(windows) = OVERLAY_WINDOWS.lock() {
         if !windows.is_empty() {
             log::debug!("桌面覆盖窗口已存在，跳过创建");
+            if let Err(e) = super::desktop_watcher::start_desktop_file_watcher() {
+                log::warn!("启动桌面文件监听失败: {}", e);
+            }
             return Ok(());
         }
     }
@@ -251,6 +254,10 @@ pub fn create_desktop_overlay() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("覆盖窗口列表锁获取失败: {}", e))?
         .push(OverlayWindow { hwnd });
 
+    if let Err(e) = super::desktop_watcher::start_desktop_file_watcher() {
+        log::warn!("启动桌面文件监听失败: {}", e);
+    }
+
     log::info!(
         "桌面覆盖窗口已创建: hwnd={:?}, area=({}, {}) {}x{}, dpi={}, icons={}",
         hwnd,
@@ -275,24 +282,78 @@ pub fn destroy_desktop_overlay() {
     };
 
     for window in windows {
-        let data_ptr =
-            unsafe { GetWindowLongPtrW(window.hwnd, GWLP_USERDATA) } as *mut OverlayWindowData;
-        if !data_ptr.is_null() {
-            unsafe {
-                SetWindowLongPtrW(window.hwnd, GWLP_USERDATA, 0);
-                let data = Box::from_raw(data_ptr);
-                for icon in &data.icons {
-                    crate::platform::windows::icon_extract::destroy_icon(icon.icon_handle);
-                }
-                drop(data);
-            }
-        }
+        release_overlay_window_data(window.hwnd);
         unsafe {
             DestroyWindow(window.hwnd);
         }
     }
 
+    super::desktop_watcher::stop_desktop_file_watcher();
     log::info!("所有桌面覆盖窗口已销毁");
+}
+
+/// 请求所有覆盖窗口刷新图标列表。
+pub(crate) fn request_desktop_overlay_refresh() {
+    let windows = match OVERLAY_WINDOWS.lock() {
+        Ok(windows) => windows.iter().map(|window| window.hwnd).collect::<Vec<_>>(),
+        Err(e) => {
+            log::warn!("覆盖窗口列表锁获取失败，无法请求刷新: {}", e);
+            return;
+        }
+    };
+
+    for hwnd in windows {
+        unsafe {
+            PostMessageW(hwnd, WM_USER_REFRESH_OVERLAY, 0, 0);
+        }
+    }
+}
+
+/// 刷新指定覆盖窗口的图标列表。
+pub(crate) fn refresh_desktop_overlay_icons(hwnd: HWND) {
+    let new_icons = collect_overlay_icons();
+    let new_count = new_icons.len();
+    let Some(data) = get_overlay_data(hwnd) else {
+        log::warn!("覆盖窗口刷新失败: hwnd={:?} 缺少运行时数据", hwnd);
+        return;
+    };
+
+    let old_icons = std::mem::replace(&mut data.icons, new_icons);
+    for icon in old_icons {
+        crate::platform::windows::icon_extract::destroy_icon(icon.icon_handle);
+    }
+    reset_overlay_interaction_state(data);
+    let layout = overlay_layout_params(data.width, data.dpi);
+    data.cell_w = layout.cell_w;
+    data.cell_h = layout.cell_h;
+    data.icon_size = layout.icon_size;
+    render_desktop_overlay(hwnd);
+    log::info!("覆盖窗口图标列表已刷新: {} 个", new_count);
+}
+
+fn reset_overlay_interaction_state(data: &mut OverlayWindowData) {
+    data.selected_item = -1;
+    data.hovered_item = -1;
+    data.drag_pending = false;
+    data.drag_active = false;
+    data.drag_item_index = -1;
+    data.drag_start_x = 0;
+    data.drag_start_y = 0;
+}
+
+fn release_overlay_window_data(hwnd: HWND) {
+    let data_ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut OverlayWindowData;
+    if data_ptr.is_null() {
+        return;
+    }
+    unsafe {
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        let data = Box::from_raw(data_ptr);
+        for icon in &data.icons {
+            crate::platform::windows::icon_extract::destroy_icon(icon.icon_handle);
+        }
+        drop(data);
+    }
 }
 
 /// 判断 HWND 是否为桌面覆盖窗口。
@@ -661,5 +722,41 @@ mod tests {
         assert_eq!(data.width, 1920);
         assert_eq!(data.height, 1080);
         assert_eq!(data.dpi, 96);
+    }
+
+    #[test]
+    fn test_reset_overlay_interaction_state_clears_selection_and_drag() {
+        let mut data = OverlayWindowData {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            dpi: 96,
+            icons: Vec::new(),
+            selected_item: 2,
+            hovered_item: 3,
+            drag_pending: true,
+            drag_active: true,
+            drag_item_index: 2,
+            drag_start_x: 10,
+            drag_start_y: 20,
+            cell_w: 80,
+            cell_h: 96,
+            icon_size: 48,
+            d2d_factory: None,
+            dw_factory: None,
+            wic_factory: None,
+            d2d_target: None,
+        };
+
+        reset_overlay_interaction_state(&mut data);
+
+        assert_eq!(data.selected_item, -1);
+        assert_eq!(data.hovered_item, -1);
+        assert!(!data.drag_pending);
+        assert!(!data.drag_active);
+        assert_eq!(data.drag_item_index, -1);
+        assert_eq!(data.drag_start_x, 0);
+        assert_eq!(data.drag_start_y, 0);
     }
 }

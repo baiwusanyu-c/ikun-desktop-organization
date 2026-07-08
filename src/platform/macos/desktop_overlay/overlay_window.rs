@@ -34,7 +34,10 @@ pub(crate) fn get_all_screens() -> Vec<ScreenInfo> {
             let screen: id = msg_send![screens, objectAtIndex: i];
             let frame: NSRect = msg_send![screen, frame];
             let scale_factor: f64 = msg_send![screen, backingScaleFactor];
-            screen_infos.push(ScreenInfo { frame, scale_factor });
+            screen_infos.push(ScreenInfo {
+                frame,
+                scale_factor,
+            });
         }
         screen_infos
     }
@@ -47,7 +50,7 @@ pub fn create_desktop_overlay() -> Result<()> {
         anyhow::bail!("未检测到屏幕");
     }
     log::info!("检测到 {} 个屏幕", screens.len());
-    
+
     // 先销毁旧窗口
     let mut overlays = OVERLAY_WINDOWS.lock().unwrap();
     log::info!("销毁旧的覆盖窗口（{} 个）", overlays.len());
@@ -57,13 +60,16 @@ pub fn create_desktop_overlay() -> Result<()> {
             let _: () = msg_send![overlay.window, close];
         }
     }
-    
+
     // 创建新窗口
     for (index, screen) in screens.iter().enumerate() {
         match create_overlay_for_screen(screen, index) {
             Ok(window) => {
                 log::info!("屏幕 {} 覆盖窗口创建成功", index);
-                overlays.push(OverlayWindow { window, screen_index: index });
+                overlays.push(OverlayWindow {
+                    window,
+                    screen_index: index,
+                });
             }
             Err(e) => {
                 log::error!("屏幕 {} 覆盖窗口创建失败: {}", index, e);
@@ -99,8 +105,20 @@ fn create_overlay_for_screen(screen: &ScreenInfo, index: usize) -> Result<id> {
         let _: () = msg_send![window, setLevel: level];
 
         let actual_level: i64 = msg_send![window, level];
-        log::info!("屏幕 {} 覆盖窗口层级: 设置={}, 实际={}", index, level, actual_level);
-        log::info!("屏幕 {} 覆盖窗口 frame: ({}, {}, {}x{})", index, screen.frame.origin.x, screen.frame.origin.y, screen.frame.size.width, screen.frame.size.height);
+        log::info!(
+            "屏幕 {} 覆盖窗口层级: 设置={}, 实际={}",
+            index,
+            level,
+            actual_level
+        );
+        log::info!(
+            "屏幕 {} 覆盖窗口 frame: ({}, {}, {}x{})",
+            index,
+            screen.frame.origin.x,
+            screen.frame.origin.y,
+            screen.frame.size.width,
+            screen.frame.size.height
+        );
 
         render_overlay_placeholder(window, screen);
         let _: () = msg_send![window, orderFrontRegardless];
@@ -112,9 +130,9 @@ pub fn destroy_desktop_overlay() {
     log::info!("销毁 macOS 覆盖窗口...");
     let mut overlays = OVERLAY_WINDOWS.lock().unwrap();
     for overlay in overlays.drain(..) {
-        unsafe { 
+        unsafe {
             let _: () = msg_send![overlay.window, orderOut: nil];
-            let _: () = msg_send![overlay.window, close]; 
+            let _: () = msg_send![overlay.window, close];
         }
     }
 }

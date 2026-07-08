@@ -2,10 +2,10 @@
 
 use crate::platform::macos::ffi_imports::*;
 use cocoa::base::id;
-use cocoa::foundation::{NSRect, NSPoint, NSSize};
+use cocoa::foundation::{NSPoint, NSRect, NSSize};
 use core_graphics::color_space::CGColorSpace;
 use core_graphics::context::CGContext;
-use core_graphics::geometry::{CGPoint, CGSize, CGRect};
+use core_graphics::geometry::{CGPoint, CGRect, CGSize};
 use objc::{msg_send, sel, sel_impl};
 
 use super::overlay_window::ScreenInfo;
@@ -38,7 +38,10 @@ pub(crate) fn render_overlay_placeholder(window: id, screen_info: &ScreenInfo) {
 
         // 绘制半透明蓝色背景
         ctx.set_rgb_fill_color(0.2, 0.5, 0.8, 0.15);
-        let rect = CGRect::new(&CGPoint::new(0.0, 0.0), &CGSize::new(pixel_w as f64, pixel_h as f64));
+        let rect = CGRect::new(
+            &CGPoint::new(0.0, 0.0),
+            &CGSize::new(pixel_w as f64, pixel_h as f64),
+        );
         ctx.fill_rect(rect);
 
         // 绘制边框

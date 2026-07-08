@@ -221,6 +221,7 @@ pub const WM_APP: u32 = 0x8000;
 pub const WM_USER_SHOW_DESKTOP_MENU: u32 = WM_APP + 1;
 pub const WM_USER_OPEN_MENU: u32 = WM_APP + 2; // 延迟打开分类框菜单
 pub const WM_USER_DELETE_BOX: u32 = WM_APP + 3; // 延迟删除分类框（从菜单 PostMessage 触发）
+pub const WM_USER_REFRESH_OVERLAY: u32 = WM_APP + 4; // 桌面文件变化后刷新覆盖窗口
 pub const WM_QUIT: u32 = 0x0012;
 pub const WM_COMMAND: u32 = 0x0111;
 pub const WM_CREATE: u32 = 0x0001;

@@ -6,7 +6,7 @@
 use super::overlay_render::render_desktop_overlay;
 use super::overlay_window::{
     get_overlay_data, overlay_hit_test, overlay_layout_params, physical_to_logical,
-    save_overlay_icon_positions,
+    refresh_desktop_overlay_icons, save_overlay_icon_positions,
 };
 use crate::platform::windows::ffi_imports::*;
 use crate::platform::windows::ffi_types::*;
@@ -69,6 +69,10 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
         WM_MOUSEACTIVATE => {
             log::debug!("覆盖窗口 WM_MOUSEACTIVATE: 返回 MA_NOACTIVATE");
             MA_NOACTIVATE as LRESULT
+        }
+        WM_USER_REFRESH_OVERLAY => {
+            refresh_desktop_overlay_icons(hwnd);
+            0
         }
         WM_SIZE | WM_DPICHANGED => {
             if let Some(data) = get_overlay_data(hwnd) {

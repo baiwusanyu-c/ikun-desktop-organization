@@ -80,7 +80,7 @@ src/
 │   │   ├── ffi_types.rs       #   Win32 FFI 类型/常量
 │   │   ├── ffi_imports.rs     #   Win32 extern "system" 声明
 │   │   ├── desktop_manager.rs #   桌面图标枚举（文件系统读取）
-│   │   ├── desktop_overlay/   #   桌面覆盖窗口（渲染未管理图标 + 桌面接管生命周期）
+│   │   ├── desktop_overlay/   #   桌面覆盖窗口（渲染未管理图标 + 桌面接管生命周期 + 文件监听刷新）
 │   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎
 │   │   ├── grid_window.rs     #   窗口创建/销毁/布局收集
 │   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc
@@ -216,7 +216,7 @@ pub trait Plugin: Send {
 删除: 菜单 CMD_DELETE → destroy_grid_window(hwnd) → AppConfig.retain(id != config_id) → save()
 ```
 
-**桌面覆盖窗口生命周期（阶段 6）**：当 `general.restore_layout_on_start = true` 时，应用启动即接管桌面图标生命周期：先初始化图标仓库并隐藏原生 `SysListView32`，再创建 `DesktopOrgOverlay` 渲染未进入分类框的图标，最后恢复分类框窗口。即使没有保存的分类框，也会创建覆盖窗口以保持桌面接管一致性。退出或“清除 & 恢复”时按顺序保存布局、销毁分类框、销毁覆盖窗口、恢复原生图标并清理桌面右键注册表。运行中如果 Explorer 重启导致原生桌面列表句柄失效或重新可见，`native_icons_hidden()` 会触发重新隐藏并保持覆盖窗口运行。
+**桌面覆盖窗口生命周期（阶段 6/7）**：当 `general.restore_layout_on_start = true` 时，应用启动即接管桌面图标生命周期：先初始化图标仓库并隐藏原生 `SysListView32`，再创建 `DesktopOrgOverlay` 渲染未进入分类框的图标，最后恢复分类框窗口。即使没有保存的分类框，也会创建覆盖窗口以保持桌面接管一致性。覆盖窗口创建后会启动桌面文件监听，监听用户桌面和公共桌面目录；新增、删除、重命名或修改桌面文件时经过约 500ms debounce 后重新枚举并刷新未管理图标。退出或“清除 & 恢复”时按顺序保存布局、销毁分类框、停止桌面文件监听、销毁覆盖窗口、恢复原生图标并清理桌面右键注册表。运行中如果 Explorer 重启导致原生桌面列表句柄失效或重新可见，`native_icons_hidden()` 会触发重新隐藏并保持覆盖窗口运行。
 
 **覆盖窗口位置持久化**：覆盖窗口图标位置保存在 `config.overlay.icon_positions`，键为文件路径，值为 96 DPI 基准逻辑坐标。覆盖窗口拖动图标后会直接写入配置文件；应用级保存布局前必须先合并磁盘上的最新 `overlay` 配置，避免用旧的内存配置覆盖最新位置。
 **UUID 持久化标识**：每个窗口创建时分配 `config_id: uuid::Uuid`（`GridCreateParams.config_id` → `GridWindowData.config_id`），`collect_grid_layout()` 使用该固定 ID（而非每次 `Uuid::new_v4()`），确保删除操作可按 UUID 精确匹配配置条目。
