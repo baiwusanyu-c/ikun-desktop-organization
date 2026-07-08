@@ -41,11 +41,14 @@ fn main() -> eframe::Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Desktop Organizer - 控制面板")
+            .with_title(app::CONTROL_PANEL_TITLE)
             .with_inner_size([320.0, 380.0])
+            .with_position([-32000.0, -32000.0])
             .with_decorations(true)
             .with_always_on_top()
-            .with_resizable(true),
+            .with_resizable(true)
+            .with_visible(true)
+            .with_taskbar(false),
         ..Default::default()
     };
 

@@ -14,6 +14,7 @@
 //! - `shell_menu`: Shell 上下文菜单 + 注册表管理
 //! - `sys_tray`: 系统托盘（TODO）
 
+mod control_panel_window;
 mod d2d_render;
 pub mod desktop_manager;
 pub mod desktop_overlay;
@@ -33,6 +34,7 @@ mod sys_tray;
 mod wnd_proc;
 
 // Re-export key items
+pub use control_panel_window::{hide_control_panel_window, show_control_panel_window};
 pub use desktop_manager::DesktopManager;
 pub use desktop_overlay::{create_desktop_overlay, destroy_desktop_overlay};
 pub use drop_target::{
@@ -53,3 +55,6 @@ pub use icon_hider::{
 pub use icon_manager::DesktopIconManager;
 pub use ole_dnd::{get_box_drag_format_id, start_box_drag};
 pub use shell_menu::{cleanup_desktop_registry, setup_desktop_registry, take_pending_create_box};
+pub use sys_tray::{
+    cleanup_system_tray, register_tray_action_waker, setup_system_tray, take_pending_tray_action,
+};

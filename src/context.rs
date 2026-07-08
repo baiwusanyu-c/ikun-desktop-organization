@@ -26,7 +26,7 @@ impl Default for AppState {
     fn default() -> Self {
         Self {
             icons_hidden: false,
-            panel_visible: true,
+            panel_visible: false,
             status_message: String::new(),
         }
     }

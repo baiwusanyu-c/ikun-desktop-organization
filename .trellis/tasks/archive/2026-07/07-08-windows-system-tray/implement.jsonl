@@ -1,0 +1,6 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Windows platform module placement"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Rust quality and public API docs"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Graceful tray init errors"}
+{"file": ".trellis/spec/guides/windows-shell-api-guide.md", "reason": "Windows API usage"}

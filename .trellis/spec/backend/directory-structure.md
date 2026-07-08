@@ -42,7 +42,8 @@ src/
 │   │   ├── shell_menu.rs      #   Shell 右键菜单 + 注册表管理（创建分类框）
 │   │   ├── icon_extract.rs    #   图标提取（SHGetFileInfoW + .lnk 解析）
 │   │   ├── icon_hider.rs      #   图标隐藏/恢复（SysListView32）
-│   │   └── sys_tray.rs        #   系统托盘（TODO 占位）
+│   │   ├── control_panel_window.rs # 控制面板 Win32 显示/隐藏辅助（托盘优先生命周期）
+│   │   └── sys_tray.rs        #   系统托盘入口（隐藏消息窗口 + 固定菜单动作队列）
 │   └── macos/
 │       ├── mod.rs             #   macOS 平台入口
 │       └── desktop_manager.rs #   桌面图标枚举（返回模拟数据）
@@ -169,7 +170,8 @@ platform/windows/
 ├── shell_menu.rs      # Shell 右键菜单 + 注册表管理
 ├── icon_extract.rs    # 图标提取
 ├── icon_hider.rs      # 图标隐藏
-└── sys_tray.rs        # 系统托盘
+├── control_panel_window.rs # 控制面板 Win32 显示/隐藏辅助
+└── sys_tray.rs        # 系统托盘入口
 ```
 
 ---
