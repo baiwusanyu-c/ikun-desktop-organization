@@ -1,0 +1,24 @@
+src/platform/macos/desktop_overlay/box_render.rs
+  s_d570965d6861fd::t_8c6b1f87d0d19e 414,467
+  s_d570965d6861fd::t_2cac2c6faedc95 374,382,400,413,416,463-464,473,477
+  s_d570965d6861fd::t_de9757c0bc01c5 392,398,419-422,468-469,474-475
+  s_d570965d6861fd::t_2c8b77434c8ef4 399,401,403-408,415,470-471
+  s_d570965d6861fd::t_2c68286be61a1b 418,466
+  s_d570965d6861fd::t_0f15bd47f54027 397,409-412,417,423-462,465,472,476
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "3db302f5b2ec459a838aa9a9bf123445fd5138f7",
+  "prompts": {},
+  "sessions": {
+    "s_d570965d6861fd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "019f459f-71f7-7631-803f-ad9515c09fc7",
+        "model": "unknown"
+      },
+      "human_author": "白雾三语 <32354856+baiwusanyu-c@users.noreply.github.com>"
+    }
+  }
+}
