@@ -332,7 +332,7 @@ fn render_icon(
     }
 }
 
-/// 渲染标签（使用 NSFileManager 获取显示名称）
+/// 渲染标签（使用 NSAttributedString，最多2行，最后一行截断）
 fn render_label(
     context: &CGContext,
     path: &str,
@@ -343,13 +343,11 @@ fn render_label(
     scale: f64,
     bitmap_height: f64,
 ) {
-    // 使用 NSFileManager 获取显示名称（与 Finder 一致）
     let display_name = unsafe {
         let path_ns = NSString::alloc(nil).init_str(path);
         let file_manager: id = msg_send![class!(NSFileManager), defaultManager];
         let display_name_ns: id = msg_send![file_manager, displayNameAtPath: path_ns];
 
-        // 转换为 Rust 字符串
         let utf8: *const std::os::raw::c_char = msg_send![display_name_ns, UTF8String];
         if utf8.is_null() {
             String::from("Unknown")
@@ -361,17 +359,17 @@ fn render_label(
     };
 
     let font_size = style.label_font_size as f64 * scale;
+    let label_color = style.label_font_color;
+    let line_height = font_size * 1.3;
+    let total_height = line_height * 2.0;
+
     log::info!(
-        "渲染标签: '{}' at ({}, {})",
-        display_name,
-        screen_x,
-        screen_y
+        "render_label: '{}' at screen=({}, {}), width={}, font_size={}",
+        display_name, screen_x, screen_y, width, font_size
     );
 
-    let label_color = style.label_font_color;
-
     unsafe {
-        // 设置 NSGraphicsContext（flipped: false 表示 Y=0 在底部）
+        // 1. 设置 NSGraphicsContext
         let cg_ptr = context.as_ptr() as *mut c_void;
         let graphics_context: id = msg_send![
             class!(NSGraphicsContext),
@@ -379,10 +377,10 @@ fn render_label(
         ];
         let _: () = msg_send![class!(NSGraphicsContext), setCurrentContext: graphics_context];
 
-        let label_ns = NSString::alloc(nil).init_str(&display_name);
-        let attrs: id = msg_send![class!(NSMutableDictionary), dictionary];
-
+        // 2. 创建字体
         let font: id = msg_send![class!(NSFont), systemFontOfSize: font_size];
+
+        // 3. 创建颜色
         let color: id = msg_send![
             class!(NSColor),
             colorWithRed: label_color[0] as f64 / 255.0
@@ -391,27 +389,37 @@ fn render_label(
             alpha: label_color[3] as f64 / 255.0
         ];
 
-        let ns_font_key = NSString::alloc(nil).init_str("NSFont");
-        let ns_color_key = NSString::alloc(nil).init_str("NSColor");
+        // 4. 创建段落样式（居中对齐 + 字符换行 + 中间截断）
+        let para_style: id = msg_send![class!(NSParagraphStyle), defaultParagraphStyle];
+        let para: id = msg_send![para_style, mutableCopy];
+        let _: () = msg_send![para, setAlignment: 2]; // NSTextAlignmentCenter = 2
+        let _: () = msg_send![para, setLineBreakMode: 1]; // NSLineBreakByCharWrapping = 1
 
-        let _: () = msg_send![attrs, setObject: font forKey: ns_font_key];
-        let _: () = msg_send![attrs, setObject: color forKey: ns_color_key];
+        // 5. 创建属性字典
+        let attrs: id = msg_send![class!(NSMutableDictionary), dictionary];
+        let _: () = msg_send![attrs, setObject: font forKey: NSString::alloc(nil).init_str("NSFont")];
+        let _: () = msg_send![attrs, setObject: color forKey: NSString::alloc(nil).init_str("NSColor")];
+        let _: () = msg_send![attrs, setObject: para forKey: NSString::alloc(nil).init_str("NSParagraphStyle")];
 
-        // 文字截断
-        let paragraph_style: id = msg_send![class!(NSParagraphStyle), defaultParagraphStyle];
-        let mutable_para: id = msg_send![paragraph_style, mutableCopy];
-        let _: () = msg_send![mutable_para, setLineBreakMode: 3]; // NSLineBreakByTruncatingTail
-        let ns_para_key = NSString::alloc(nil).init_str("NSParagraphStyle");
-        let _: () = msg_send![attrs, setObject: mutable_para forKey: ns_para_key];
+        // 6. 创建 NSAttributedString（属性在创建时设置）
+        let full_str = NSString::alloc(nil).init_str(&display_name);
+        let attr_str: id = msg_send![class!(NSAttributedString), alloc];
+        let _: () = msg_send![attr_str, initWithString: full_str attributes: attrs];
 
-        // 屏幕坐标转换为 CG 坐标
-        let cg_y = bitmap_height - screen_y - font_size;
+        // 7. 创建绘制矩形（flipped: false，Y=0 在底部）
+        let cg_y = bitmap_height - screen_y - total_height;
         let label_rect = NSRect::new(
             NSPoint::new(screen_x, cg_y),
-            NSSize::new(width, font_size + 4.0),
+            NSSize::new(width, total_height),
         );
 
-        let _: () = msg_send![label_ns, drawInRect: label_rect withAttributes: attrs];
+        log::info!(
+            "Drawing attributed string: rect=({}, {}, {}x{}), text='{}'",
+            screen_x, cg_y, width, total_height, display_name
+        );
+
+        // 8. 使用 NSAttributedString 的 drawInRect: 方法（属性已在创建时设置）
+        let _: () = msg_send![attr_str, drawInRect: label_rect];
 
         let _: () = msg_send![class!(NSGraphicsContext), setCurrentContext: nil];
     }

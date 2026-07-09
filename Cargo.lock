@@ -1166,6 +1166,7 @@ name = "ikun_organizer"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "block",
  "chrono",
  "cocoa",
  "core-foundation",
