@@ -333,6 +333,13 @@ fn render_icon(
 }
 
 /// 渲染标签（使用 NSAttributedString，最多2行，最后一行截断）
+/// 渲染标签（对齐 Finder 桌面图标标签渲染）
+///
+/// Finder 桌面图标设置: iconSize=64, textSize=12, gridSpacing=54
+/// 标签特性:
+/// - 最多 2 行
+/// - 居中对齐
+/// - base name 使用中间截断（保留 extension）
 fn render_label(
     context: &CGContext,
     path: &str,
@@ -343,6 +350,7 @@ fn render_label(
     scale: f64,
     bitmap_height: f64,
 ) {
+    // 1. 获取显示名称（与 Finder 一致）
     let display_name = unsafe {
         let path_ns = NSString::alloc(nil).init_str(path);
         let file_manager: id = msg_send![class!(NSFileManager), defaultManager];
@@ -365,11 +373,23 @@ fn render_label(
 
     log::info!(
         "render_label: '{}' at screen=({}, {}), width={}, font_size={}",
-        display_name, screen_x, screen_y, width, font_size
+        display_name,
+        screen_x,
+        screen_y,
+        width,
+        font_size
     );
 
+    // 2. 拆分 base name 和 extension
+    let (base_name, ext) = match display_name.rfind('.') {
+        Some(dot_pos) if dot_pos > 0 && dot_pos < display_name.len() - 1 => {
+            (&display_name[..dot_pos], Some(&display_name[dot_pos..]))
+        }
+        _ => (display_name.as_str(), None),
+    };
+
     unsafe {
-        // 1. 设置 NSGraphicsContext
+        // 3. 设置 NSGraphicsContext
         let cg_ptr = context.as_ptr() as *mut c_void;
         let graphics_context: id = msg_send![
             class!(NSGraphicsContext),
@@ -377,10 +397,8 @@ fn render_label(
         ];
         let _: () = msg_send![class!(NSGraphicsContext), setCurrentContext: graphics_context];
 
-        // 2. 创建字体
+        // 4. 创建字体和颜色
         let font: id = msg_send![class!(NSFont), systemFontOfSize: font_size];
-
-        // 3. 创建颜色
         let color: id = msg_send![
             class!(NSColor),
             colorWithRed: label_color[0] as f64 / 255.0
@@ -389,24 +407,65 @@ fn render_label(
             alpha: label_color[3] as f64 / 255.0
         ];
 
-        // 4. 创建段落样式（居中对齐 + 字符换行 + 中间截断）
+        // 5. 测量 base name 宽度（使用 NSString 的 sizeWithAttributes）
+        let base_ns = NSString::alloc(nil).init_str(base_name);
+        let measure_attrs: id = msg_send![class!(NSMutableDictionary), dictionary];
+        let _: () = msg_send![measure_attrs, setObject: font forKey: NSString::alloc(nil).init_str("NSFont")];
+        let base_size: cocoa::foundation::NSSize = msg_send![base_ns, sizeWithAttributes: measure_attrs];
+        let base_width = base_size.width;
+
+        // 6. 测量 extension 宽度
+        let ext_str = ext.unwrap_or("");
+        let ext_ns = NSString::alloc(nil).init_str(ext_str);
+        let ext_size: cocoa::foundation::NSSize = msg_send![ext_ns, sizeWithAttributes: measure_attrs];
+        let ext_width = ext_size.width;
+
+        // 7. 判断是否需要截断 base name
+        let max_base_width = (width - ext_width).max(font_size * 3.0);
+
+        let final_display = if base_width > max_base_width {
+            // 需要截断：使用中间截断，保留 extension
+            // 估算省略号 "…" 的宽度（约等于一个中文字符宽度 = font_size * 0.6）
+            let ellipsis_width = font_size * 0.6;
+            let char_count = base_name.chars().count();
+            let avg_char_width = base_width / char_count as f64;
+            // 可用字符数 = (可用宽度 - 省略号宽度) / 平均字符宽度
+            let available_chars = ((max_base_width - ellipsis_width) / avg_char_width).floor() as usize;
+            let half = (available_chars / 2).max(3);  // 每边至少保留 3 个字符
+
+            let chars: Vec<char> = base_name.chars().collect();
+            let prefix: String = chars.iter().take(half).collect();
+            let suffix: String = chars.iter().rev().take(half).rev().collect();
+            format!("{}…{}{}", prefix, suffix, ext_str)
+        } else {
+            display_name.clone()
+        };
+
+        log::info!(
+            "label: base_width={:.1}, max_base_width={:.1}, final='{}'",
+            base_width,
+            max_base_width,
+            final_display
+        );
+
+        // 8. 创建段落样式：居中对齐 + 字符换行
         let para_style: id = msg_send![class!(NSParagraphStyle), defaultParagraphStyle];
         let para: id = msg_send![para_style, mutableCopy];
         let _: () = msg_send![para, setAlignment: 2]; // NSTextAlignmentCenter = 2
         let _: () = msg_send![para, setLineBreakMode: 1]; // NSLineBreakByCharWrapping = 1
 
-        // 5. 创建属性字典
+        // 9. 创建属性字典
         let attrs: id = msg_send![class!(NSMutableDictionary), dictionary];
         let _: () = msg_send![attrs, setObject: font forKey: NSString::alloc(nil).init_str("NSFont")];
         let _: () = msg_send![attrs, setObject: color forKey: NSString::alloc(nil).init_str("NSColor")];
         let _: () = msg_send![attrs, setObject: para forKey: NSString::alloc(nil).init_str("NSParagraphStyle")];
 
-        // 6. 创建 NSAttributedString（属性在创建时设置）
-        let full_str = NSString::alloc(nil).init_str(&display_name);
+        // 10. 创建 NSAttributedString
+        let full_str = NSString::alloc(nil).init_str(&final_display);
         let attr_str: id = msg_send![class!(NSAttributedString), alloc];
         let _: () = msg_send![attr_str, initWithString: full_str attributes: attrs];
 
-        // 7. 创建绘制矩形（flipped: false，Y=0 在底部）
+        // 11. 计算绘制矩形（flipped: false，Y=0 在底部）
         let cg_y = bitmap_height - screen_y - total_height;
         let label_rect = NSRect::new(
             NSPoint::new(screen_x, cg_y),
@@ -415,10 +474,10 @@ fn render_label(
 
         log::info!(
             "Drawing attributed string: rect=({}, {}, {}x{}), text='{}'",
-            screen_x, cg_y, width, total_height, display_name
+            screen_x, cg_y, width, total_height, final_display
         );
 
-        // 8. 使用 NSAttributedString 的 drawInRect: 方法（属性已在创建时设置）
+        // 12. 绘制
         let _: () = msg_send![attr_str, drawInRect: label_rect];
 
         let _: () = msg_send![class!(NSGraphicsContext), setCurrentContext: nil];

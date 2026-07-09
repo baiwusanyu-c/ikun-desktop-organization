@@ -252,8 +252,8 @@ impl Default for BoxStyleConfig {
             title_font_color: [255, 255, 255, 255],
             label_font_size: 13.0,
             label_font_color: [255, 255, 255, 230],
-            icon_size: 48,
-            cell_spacing: 16,
+            icon_size: 64,
+            cell_spacing: 54,
             title_bar_height: 40,
             title_bar_color: [30, 30, 30, 200],
             highlight_color: [60, 80, 120, 120],
@@ -539,7 +539,7 @@ impl Default for OverlayConfig {
     fn default() -> Self {
         Self {
             icon_positions: HashMap::new(),
-            icon_size: 48,
+            icon_size: 64,
             layout_direction: "left-to-right".to_string(),
         }
     }
