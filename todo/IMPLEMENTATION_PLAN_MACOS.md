@@ -662,3 +662,206 @@ core-text = "20"
 
 **文档版本**：v1.0  
 **最后更新**：2026-07-08
+
+---
+
+## 阶段 8：Windows 功能同步（待实现）
+
+### 背景
+
+以下三个提交在 Windows 平台已实现，macOS 平台目前仅有 stub 函数或格式化调整，需要后续补充真正的 macOS 实现。
+
+---
+
+### 8.1 系统托盘（NSStatusItem）
+
+**对应 Windows 提交**：`cf645f92` — `feat(windows): add system tray entry`
+
+**Windows 实现**：
+- 使用 Win32 `Shell_NotifyIcon` 创建系统托盘图标
+- 右键菜单：打开控制面板、创建分类框、一键AI分类、退出
+- 控制面板窗口支持隐藏/显示切换
+- `register_tray_action_waker` 唤醒 egui 重绘
+
+**macOS 当前状态**：
+- `setup_system_tray()` → stub（无操作）
+- `cleanup_system_tray()` → stub（无操作）
+- `register_tray_action_waker()` → stub（无操作）
+- `take_pending_tray_action()` → stub（返回 `None`）
+
+**macOS 实现计划**：
+
+```rust
+// src/platform/macos/sys_tray.rs（新增）
+
+use cocoa::appkit::NSStatusBar;
+use cocoa::base::{id, nil};
+
+pub struct MacStatusItem {
+    status_item: id,        // NSStatusItem
+    menu: id,               // NSMenu
+}
+
+impl MacStatusItem {
+    pub fn new() -> Result<Self> {
+        unsafe {
+            let status_bar: id = msg_send![class!(NSStatusBar), systemStatusBar];
+            let item: id = msg_send![status_bar, statusItemWithLength: -1.0]; // NSVariableStatusItemLength
+            // 设置图标、tooltip、菜单
+            // ...
+        }
+        Ok(Self { status_item, menu })
+    }
+}
+```
+
+**关键实现细节**：
+- 使用 `NSStatusBar.systemStatusBar.statusItemWithLength:` 创建托盘项
+- 使用 `NSMenu` 构建右键菜单（与 Windows 菜单项保持一致）
+- 菜单动作通过 `NSApplication` 的 delegate 或 target-action 传递到 egui
+- `register_tray_action_waker` 使用 `Condvar` 或 `mpsc` channel 唤醒 egui 主循环
+- 控制面板窗口：复用现有的 egui viewport，使用 `show_control_panel_window` / `hide_control_panel_window`
+
+**菜单项（与 Windows 一致）**：
+
+| 菜单项 | SystemTrayAction | 说明 |
+|--------|------------------|------|
+| 打开控制面板 | OpenControlPanel | 显示/聚焦控制面板 viewport |
+| 创建分类框 | CreateBox | 打开创建分类框对话框 |
+| 一键AI分类 | AiClassify | （暂不实现，保留占位） |
+| 退出 | Quit | 清理并退出应用 |
+
+**验收标准**：
+- [ ] 菜单栏右侧显示应用图标
+- [ ] 点击图标弹出菜单
+- [ ] 各菜单项功能与 Windows 一致
+- [ ] 控制面板窗口正确显示/隐藏
+- [ ] 退出应用时托盘图标消失
+
+---
+
+### 8.2 拖拽后图标菜单路径修复
+
+**对应 Windows 提交**：`327637ee` — `fix(windows): 修复拖拽后图标菜单路径`
+
+**Windows 修复内容**：
+- 拖拽图标后，右键菜单使用正确的文件路径（而非旧路径）
+- 修复 `drag_handler.rs` 中的路径同步问题
+- 修复 `shell_menu.rs` 和 `wnd_proc.rs` 中的路径传递
+
+**macOS 当前状态**：
+- 拖拽交互尚未实现（阶段 4），此问题在 macOS 上暂不存在
+- 需要在阶段 4 实现拖拽时，确保图标路径与右键菜单路径一致
+
+**macOS 实现注意事项**（阶段 4 参考）：
+- `context_menu.rs` 中右键菜单的文件路径应从 `ClassificationBox.icon_paths` 实时获取
+- 拖拽完成后，更新图标路径映射，确保后续右键菜单使用新路径
+- 使用 `NSMenuItem.representedObject` 存储文件路径，避免路径过期
+
+---
+
+### 8.3 桌面文件变化监听（FSEvents）
+
+**对应 Windows 提交**：`b11801fe` — `feat: refresh overlay on desktop file changes`
+
+**Windows 实现**：
+- 使用 `notify` crate 监听 `~/Desktop` 和公共桌面目录
+- 文件变化后 debounce 500ms，发送 `WM_USER_REFRESH_OVERLAY` 消息
+- 覆盖窗口收到消息后重新枚举图标并刷新渲染
+- 覆盖窗口销毁时停止监听
+
+**macOS 当前状态**：
+- 无桌面文件监听机制
+- 覆盖窗口渲染完成后不响应文件变化
+
+**macOS 实现计划**：
+
+```rust
+// src/platform/macos/desktop_overlay/desktop_watcher.rs（新增）
+
+use fsevent::StreamFlags;
+use std::path::PathBuf;
+use std::sync::mpsc;
+use std::time::Duration;
+
+pub struct DesktopFileWatcher {
+    // macOS 使用 FSEvents API（通过 fsevent-sys crate）
+    // 或复用 notify crate（内部已支持 FSEvents）
+}
+
+impl DesktopFileWatcher {
+    pub fn start() -> Result<Self> {
+        let desktop = dirs::desktop_dir().context("获取桌面路径失败")?;
+        
+        let (tx, rx) = mpsc::channel();
+        let mut watcher = notify::recommended_watcher(move |event| {
+            if let Ok(event) = event {
+                let _ = tx.send(event);
+            }
+        })?;
+        
+        watcher.watch(&desktop, RecursiveMode::NonRecursive)?;
+        
+        // debounce 线程
+        std::thread::spawn(move || {
+            let mut last_event = Instant::now();
+            loop {
+                match rx.recv_timeout(Duration::from_millis(100)) {
+                    Ok(_) => {
+                        if last_event.elapsed() >= Duration::from_millis(500) {
+                            // 触发覆盖窗口刷新
+                            refresh_overlay();
+                            last_event = Instant::now();
+                        }
+                    }
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        });
+        
+        Ok(Self { /* ... */ })
+    }
+}
+```
+
+**关键实现细节**：
+- 复用 `notify` crate（已在 Cargo.toml），macOS 下自动使用 FSEvents 后端
+- 监听 `~/Desktop` 目录（macOS 没有公共桌面概念）
+- debounce 500ms，与 Windows 保持一致
+- 触发刷新：调用 `create_desktop_overlay()` 重新渲染，或使用 `NSWindow.display()` 刷新
+- 覆盖窗口销毁时停止监听（在 `destroy_desktop_overlay()` 中调用 `stop_watcher()`）
+
+**依赖**：
+```toml
+notify = "6"  # 已在 Cargo.toml
+```
+
+**验收标准**：
+- [ ] 桌面新增文件 → 覆盖窗口自动显示新图标
+- [ ] 桌面删除文件 → 覆盖窗口自动移除图标
+- [ ] 文件重命名 → 覆盖窗口正确更新
+- [ ] 连续快速操作不导致频繁刷新（debounce 生效）
+- [ ] 覆盖窗口销毁后监听停止
+
+---
+
+### 阶段 8 实现顺序
+
+```
+8.1 系统托盘（NSStatusItem）     ← 优先级高，用户体验入口
+  ↓
+8.3 桌面文件监听（FSEvents）     ← 优先级中，覆盖窗口自动更新
+  ↓
+8.2 拖拽菜单路径修复             ← 依赖阶段 4（拖拽交互）完成后实现
+```
+
+**依赖关系**：
+- 8.1 依赖阶段 6（生命周期集成）
+- 8.3 依赖阶段 2（图标渲染）
+- 8.2 依赖阶段 4（拖拽交互）
+
+---
+
+**文档版本**：v1.1  
+**最后更新**：2026-07-09

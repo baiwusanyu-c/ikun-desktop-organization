@@ -235,6 +235,11 @@ mod macos_stubs {
         None
     }
 
+    /// 注册托盘动作唤醒器（macOS stub，无操作）。
+    pub fn register_tray_action_waker(_waker: impl Fn() + Send + Sync + 'static) {
+        log::debug!("macOS: register_tray_action_waker (stub)");
+    }
+
     /// 隐藏控制面板窗口（macOS stub）。
     pub fn hide_control_panel_window(_title: &str) -> bool {
         false
@@ -251,9 +256,10 @@ pub use macos_stubs::{
     cleanup_desktop_registry, cleanup_system_tray, collect_grid_layout, create_grid_window,
     destroy_all_grid_windows, extract_file_icon, get_cursor_monitor_work_area_phys, get_grid_count,
     hide_control_panel_window, icon_exists_for_box, native_icons_hidden,
-    reposition_window_by_title, resolve_icon_read_path, restore_all_hidden_icons,
-    setup_desktop_registry, setup_system_tray, show_control_panel_window, take_pending_create_box,
-    take_pending_tray_action, FileIconInfo, GridCreateParams, GridFileItem, HICON,
+    register_tray_action_waker, reposition_window_by_title, resolve_icon_read_path,
+    restore_all_hidden_icons, setup_desktop_registry, setup_system_tray, show_control_panel_window,
+    take_pending_create_box, take_pending_tray_action, FileIconInfo, GridCreateParams,
+    GridFileItem, HICON,
 };
 
 /// 桌面管理器 trait（跨平台）
