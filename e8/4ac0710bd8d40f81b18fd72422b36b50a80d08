@@ -1,0 +1,28 @@
+src/platform/macos/desktop_overlay/box_render.rs
+  s_d570965d6861fd::t_444f26a9ea3380 481-486
+  s_d570965d6861fd::t_e4ecefb41f7e8b 593-784
+  s_d570965d6861fd::t_fab7055994bdfa 337-418
+CLAUDE.md
+  s_d570965d6861fd::t_513c7ac8e38c3b 349
+  s_d570965d6861fd::t_0cd63ca714f17c 15,94-103,339-348
+.trellis/spec/backend/directory-structure.md
+  s_d570965d6861fd::t_7b971d18700d2b 48-57
+.trellis/spec/backend/index.md
+  s_d570965d6861fd::t_ad137dc5515b42 81
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "e84ac0710bd8d40f81b18fd72422b36b50a80d08",
+  "prompts": {},
+  "sessions": {
+    "s_d570965d6861fd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "019f459f-71f7-7631-803f-ad9515c09fc7",
+        "model": "unknown"
+      },
+      "human_author": "白雾三语 <32354856+baiwusanyu-c@users.noreply.github.com>"
+    }
+  }
+}
