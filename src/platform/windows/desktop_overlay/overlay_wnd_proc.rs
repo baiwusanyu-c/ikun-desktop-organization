@@ -1,12 +1,12 @@
 //! 桌面覆盖窗口消息处理
 //!
 //! 阶段 3 在图标区域接管鼠标事件：hover、选中、双击打开、右键菜单和拖入分类框。
-//! 空白区域继续 `HTTRANSPARENT`，避免遮挡分类框或桌面其他交互。
+//! 空白区域由覆盖窗口处理桌面背景菜单，避免把右键/新建转发给已隐藏的原生桌面。
 
 use super::overlay_render::render_desktop_overlay;
 use super::overlay_window::{
     get_overlay_data, overlay_hit_test, overlay_layout_params, physical_to_logical,
-    save_overlay_icon_positions,
+    refresh_desktop_overlay_icons, save_overlay_icon_positions,
 };
 use crate::platform::windows::ffi_imports::*;
 use crate::platform::windows::ffi_types::*;
@@ -26,11 +26,7 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             let hit = get_overlay_data(hwnd)
                 .map(|data| overlay_hit_test(data, local_x, local_y))
                 .unwrap_or(-1);
-            if hit >= 0 {
-                HTCLIENT as LRESULT
-            } else {
-                HTTRANSPARENT as LRESULT
-            }
+            overlay_nchittest_result(hit)
         }
         WM_SETCURSOR => {
             let cursor = unsafe { LoadCursorW(std::ptr::null_mut(), IDC_ARROW_ID as *const u16) };
@@ -70,6 +66,10 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             log::debug!("覆盖窗口 WM_MOUSEACTIVATE: 返回 MA_NOACTIVATE");
             MA_NOACTIVATE as LRESULT
         }
+        WM_USER_REFRESH_OVERLAY => {
+            refresh_desktop_overlay_icons(hwnd);
+            0
+        }
         WM_SIZE | WM_DPICHANGED => {
             if let Some(data) = get_overlay_data(hwnd) {
                 let layout = overlay_layout_params(data.width, data.dpi);
@@ -96,6 +96,13 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
+}
+
+fn overlay_nchittest_result(_hit: i32) -> LRESULT {
+    // 覆盖窗口已经接管原生桌面图标，空白区域也应由我们处理桌面背景菜单。
+    // 继续返回 HTTRANSPARENT 会把右键/新建转发给已隐藏的 SysListView32，
+    // 在桌面被接管时容易触发 Shell 文件系统错误。
+    HTCLIENT as LRESULT
 }
 
 fn handle_mouse_move(hwnd: HWND, x: i32, y: i32) {
@@ -205,6 +212,7 @@ fn handle_right_click(hwnd: HWND, x: i32, y: i32) {
         Some(data) => {
             let hit = overlay_hit_test(data, x, y);
             if hit < 0 || (hit as usize) >= data.icons.len() {
+                crate::platform::windows::shell_menu::show_desktop_context_menu(hwnd);
                 return;
             }
             data.selected_item = hit;
@@ -357,4 +365,20 @@ fn screen_to_overlay_client(hwnd: HWND, screen_x: i32, screen_y: i32) -> (i32, i
     };
     unsafe { GetWindowRect(hwnd, &mut wr) };
     (screen_x - wr.left, screen_y - wr.top)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_overlay_nchittest_handles_icon_area() {
+        assert_eq!(overlay_nchittest_result(0), HTCLIENT as LRESULT);
+        assert_eq!(overlay_nchittest_result(3), HTCLIENT as LRESULT);
+    }
+
+    #[test]
+    fn test_overlay_nchittest_handles_blank_area_in_overlay() {
+        assert_eq!(overlay_nchittest_result(-1), HTCLIENT as LRESULT);
+    }
 }

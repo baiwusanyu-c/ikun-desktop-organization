@@ -18,6 +18,21 @@ pub mod macos;
 // Re-export cross-platform types
 pub use types::*;
 
+/// 系统托盘菜单动作。
+///
+/// 平台层负责把原生托盘菜单事件转换为这些动作，UI 层负责消费并执行具体行为。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SystemTrayAction {
+    /// 打开控制面板。
+    OpenControlPanel,
+    /// 创建分类框。
+    CreateBox,
+    /// 一键 AI 分类（当前仅占位）。
+    AiClassify,
+    /// 退出应用。
+    Quit,
+}
+
 // Re-export platform-specific DesktopManager
 #[cfg(target_os = "macos")]
 pub use macos::DesktopManager;
@@ -27,12 +42,14 @@ pub use windows::DesktopManager;
 // Re-export platform-specific functions that app.rs uses
 #[cfg(windows)]
 pub use windows::{
-    cleanup_desktop_registry, collect_grid_layout, create_desktop_overlay, create_grid_window,
-    destroy_all_grid_windows, destroy_desktop_overlay, extract_file_icon,
-    get_cursor_monitor_work_area_phys, get_grid_count, get_screen_resolution, hide_native_icons,
-    icon_exists_for_box, native_icons_hidden, reposition_window_by_title, resolve_icon_read_path,
-    restore_all_hidden_icons, restore_native_icons, setup_desktop_registry,
-    take_pending_create_box, GridCreateParams, GridFileItem,
+    cleanup_desktop_registry, cleanup_system_tray, collect_grid_layout, create_desktop_overlay,
+    create_grid_window, destroy_all_grid_windows, destroy_desktop_overlay, extract_file_icon,
+    get_cursor_monitor_work_area_phys, get_grid_count, get_screen_resolution,
+    hide_control_panel_window, hide_native_icons, icon_exists_for_box, native_icons_hidden,
+    register_tray_action_waker, reposition_window_by_title, resolve_icon_read_path,
+    restore_all_hidden_icons, restore_native_icons, setup_desktop_registry, setup_system_tray,
+    show_control_panel_window, take_pending_create_box, take_pending_tray_action, GridCreateParams,
+    GridFileItem,
 };
 
 // =============================================================================
@@ -204,15 +221,39 @@ mod macos_stubs {
     pub fn take_pending_create_box() -> bool {
         false
     }
+
+    /// 初始化系统托盘（macOS stub，无操作）。
+    pub fn setup_system_tray() -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// 清理系统托盘（macOS stub，无操作）。
+    pub fn cleanup_system_tray() {}
+
+    /// 获取待处理的托盘动作（macOS stub）。
+    pub fn take_pending_tray_action() -> Option<super::SystemTrayAction> {
+        None
+    }
+
+    /// 隐藏控制面板窗口（macOS stub）。
+    pub fn hide_control_panel_window(_title: &str) -> bool {
+        false
+    }
+
+    /// 显示控制面板窗口（macOS stub）。
+    pub fn show_control_panel_window(_title: &str) -> bool {
+        false
+    }
 }
 
 #[cfg(target_os = "macos")]
 pub use macos_stubs::{
-    cleanup_desktop_registry, collect_grid_layout, create_grid_window, destroy_all_grid_windows,
-    extract_file_icon, get_cursor_monitor_work_area_phys, get_grid_count, icon_exists_for_box,
-    native_icons_hidden, reposition_window_by_title, resolve_icon_read_path,
-    restore_all_hidden_icons, setup_desktop_registry, take_pending_create_box, FileIconInfo,
-    GridCreateParams, GridFileItem, HICON,
+    cleanup_desktop_registry, cleanup_system_tray, collect_grid_layout, create_grid_window,
+    destroy_all_grid_windows, extract_file_icon, get_cursor_monitor_work_area_phys, get_grid_count,
+    hide_control_panel_window, icon_exists_for_box, native_icons_hidden,
+    reposition_window_by_title, resolve_icon_read_path, restore_all_hidden_icons,
+    setup_desktop_registry, setup_system_tray, show_control_panel_window, take_pending_create_box,
+    take_pending_tray_action, FileIconInfo, GridCreateParams, GridFileItem, HICON,
 };
 
 /// 桌面管理器 trait（跨平台）

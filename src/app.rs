@@ -10,18 +10,22 @@
 use crate::config::app_config::AppConfig;
 use crate::context::AppContext;
 use crate::platform::{
-    cleanup_desktop_registry, collect_grid_layout, create_desktop_overlay, create_grid_window,
-    destroy_all_grid_windows, destroy_desktop_overlay, extract_file_icon,
-    get_cursor_monitor_work_area_phys, get_grid_count, get_screen_resolution, hide_native_icons,
-    icon_exists_for_box, native_icons_hidden, reposition_window_by_title, resolve_icon_read_path,
-    restore_all_hidden_icons, restore_native_icons, setup_desktop_registry,
-    take_pending_create_box, DesktopIcon, DesktopManagerTrait, GridCreateParams, GridFileItem,
+    cleanup_desktop_registry, cleanup_system_tray, collect_grid_layout, create_desktop_overlay,
+    create_grid_window, destroy_all_grid_windows, destroy_desktop_overlay, extract_file_icon,
+    get_cursor_monitor_work_area_phys, get_grid_count, get_screen_resolution,
+    hide_control_panel_window, hide_native_icons, icon_exists_for_box, native_icons_hidden,
+    register_tray_action_waker, reposition_window_by_title, resolve_icon_read_path,
+    restore_all_hidden_icons, restore_native_icons, setup_desktop_registry, setup_system_tray,
+    show_control_panel_window, take_pending_create_box, take_pending_tray_action, DesktopIcon,
+    DesktopManagerTrait, GridCreateParams, GridFileItem, SystemTrayAction,
 };
 use eframe::egui;
 use std::sync::{Arc, Mutex};
 
 /// 新建分类框名称最大长度（字符数）
 const BOX_NAME_MAX_LEN: usize = 16;
+/// 控制面板根窗口标题。
+pub const CONTROL_PANEL_TITLE: &str = "Desktop Organizer 控制面板";
 
 /// 信号文件路径（--create-box 从注册表菜单写入，运行实例轮询消费）
 fn signal_file_path() -> std::path::PathBuf {
@@ -64,6 +68,7 @@ struct DialogState {
 pub struct MyApp {
     ctx: AppContext,
     initialized: bool,
+    quit_requested: bool,
     /// 创建分类框对话框状态（Arc<Mutex> 用于跨 viewport 共享）
     dialog: Arc<Mutex<DialogState>>,
 }
@@ -74,14 +79,59 @@ impl Default for MyApp {
         Self {
             ctx,
             initialized: false,
+            quit_requested: false,
             dialog: Arc::new(Mutex::new(DialogState::default())),
         }
     }
 }
 
 impl MyApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let repaint_ctx = cc.egui_ctx.clone();
+        register_tray_action_waker(move || {
+            repaint_ctx.request_repaint();
+        });
         Self::default()
+    }
+
+    fn open_control_panel(&mut self, egui_ctx: &egui::Context) {
+        log::info!("打开控制面板窗口");
+        self.ctx.state.panel_visible = true;
+        egui_ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize([320.0, 380.0].into()));
+        egui_ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        egui_ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        show_control_panel_window(CONTROL_PANEL_TITLE);
+    }
+
+    fn hide_control_panel(&mut self, egui_ctx: &egui::Context) {
+        log::info!("隐藏控制面板窗口");
+        self.ctx.state.panel_visible = false;
+        egui_ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(
+            [-32000.0, -32000.0].into(),
+        ));
+        hide_control_panel_window(CONTROL_PANEL_TITLE);
+    }
+
+    fn handle_tray_action(&mut self, action: SystemTrayAction, egui_ctx: &egui::Context) {
+        log::info!("消费系统托盘动作: {:?}", action);
+        match action {
+            SystemTrayAction::OpenControlPanel => {
+                self.open_control_panel(egui_ctx);
+            }
+            SystemTrayAction::CreateBox => {
+                log::info!("系统托盘菜单: 创建分类框");
+                self.open_create_box_dialog();
+            }
+            SystemTrayAction::AiClassify => {
+                log::info!("托盘菜单: 一键AI分类暂未实现");
+            }
+            SystemTrayAction::Quit => {
+                log::info!("系统托盘菜单: 退出应用");
+                self.quit_requested = true;
+                cleanup_system_tray();
+                egui_ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
     }
 
     /// 初始化创建分类框对话框状态（设置 Open，计算 Win32 目标位置）
@@ -507,6 +557,11 @@ impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if !self.initialized {
             self.initialized = true;
+            self.hide_control_panel(ctx);
+            if let Err(e) = setup_system_tray() {
+                log::warn!("初始化系统托盘失败: {}", e);
+                self.ctx.set_status(format!("初始化系统托盘失败: {}", e));
+            }
             self.restore_layout();
             // DesktopIconManager 诊断（验证 LVM 方案可行性）
             #[cfg(windows)]
@@ -515,6 +570,16 @@ impl eframe::App for MyApp {
             cleanup_desktop_registry();
             setup_desktop_registry();
             self.ensure_desktop_overlay_running();
+        }
+
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_requested {
+            log::info!("控制面板窗口关闭请求已拦截，改为隐藏窗口");
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.hide_control_panel(ctx);
+        }
+
+        if let Some(action) = take_pending_tray_action() {
+            self.handle_tray_action(action, ctx);
         }
 
         if should_retry_native_icon_hide(self.ctx.state.icons_hidden, native_icons_hidden()) {
@@ -564,38 +629,40 @@ impl eframe::App for MyApp {
         }
 
         // ===== 控制面板主界面 =====
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("📦 Desktop Organizer");
-            ui.separator();
-            ui.horizontal(|ui| {
-                if ui.button("🔄 一键分类").clicked() {
-                    self.perform_auto_classify();
+        if self.ctx.state.panel_visible {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.heading("📦 Desktop Organizer");
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("🔄 一键分类").clicked() {
+                        self.perform_auto_classify();
+                    }
+                    if ui.button("🗑 清除 & 恢复").clicked() {
+                        self.clear_and_restore();
+                    }
+                    if ui.button("💾 保存配置").clicked() {
+                        self.save_layout_and_config();
+                    }
+                    if ui.button("➕ 创建分类框").clicked() {
+                        self.open_create_box_dialog();
+                    }
+                });
+                ui.separator();
+                if !self.ctx.state.status_message.is_empty() {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(0, 200, 0),
+                        &self.ctx.state.status_message,
+                    );
                 }
-                if ui.button("🗑 清除 & 恢复").clicked() {
-                    self.clear_and_restore();
+                if self.ctx.state.icons_hidden {
+                    ui.colored_label(egui::Color32::YELLOW, "⚠ 原生图标已隐藏");
                 }
-                if ui.button("💾 保存配置").clicked() {
-                    self.save_layout_and_config();
-                }
-                if ui.button("➕ 创建分类框").clicked() {
-                    self.open_create_box_dialog();
-                }
+                ui.label(format!("当前格子数: {}", get_grid_count()));
+                ui.separator();
+                ui.label("• 右键分类框空白处 → 桌面菜单 + 创建分类框");
+                ui.label("• 双击图标 → 打开 / 拖动标题栏 → 移动");
             });
-            ui.separator();
-            if !self.ctx.state.status_message.is_empty() {
-                ui.colored_label(
-                    egui::Color32::from_rgb(0, 200, 0),
-                    &self.ctx.state.status_message,
-                );
-            }
-            if self.ctx.state.icons_hidden {
-                ui.colored_label(egui::Color32::YELLOW, "⚠ 原生图标已隐藏");
-            }
-            ui.label(format!("当前格子数: {}", get_grid_count()));
-            ui.separator();
-            ui.label("• 右键分类框空白处 → 桌面菜单 + 创建分类框");
-            ui.label("• 双击图标 → 打开 / 拖动标题栏 → 移动");
-        });
+        }
 
         ctx.request_repaint_after(std::time::Duration::from_millis(300));
     }
@@ -617,6 +684,7 @@ impl Drop for MyApp {
         }
         // 程序退出时清理注册表，确保不运行时桌面菜单完全原生
         cleanup_desktop_registry();
+        cleanup_system_tray();
     }
 }
 

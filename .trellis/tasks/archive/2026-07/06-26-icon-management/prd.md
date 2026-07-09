@@ -180,11 +180,21 @@
 
 - 启动时：初始化 Vault → 隐藏原生 `SysListView32` → 创建 `DesktopOrgOverlay` → 恢复分类框
 - 空布局时仍创建覆盖窗口，保持桌面接管一致性
-- 退出时：保存布局 → 销毁分类框 → 销毁覆盖窗口 → 恢复原生桌面图标 → 清理注册表菜单
+- 退出时：保存布局 → 销毁分类框 → 停止桌面文件监听 → 销毁覆盖窗口 → 恢复原生桌面图标 → 清理注册表菜单
 - 新增 `native_icons_hidden()`，通过 `IsWindow` + `IsWindowVisible` 检测 Explorer 重启或原生图标窗口恢复
 - 运行中检测到原生图标窗口恢复后，重新隐藏并保持覆盖窗口运行
 
-### 阶段 7：后续增强（待实现）
+### 阶段 7：桌面文件监听刷新 ✅ 已完成
+
+**文件**：`desktop_overlay/desktop_watcher.rs`、`desktop_overlay/overlay_window.rs`
+
+- 使用 `notify` 监听用户桌面和公共桌面目录
+- 对新增、删除、重命名、修改事件进行约 500ms debounce
+- debounce 后通过 `WM_USER_REFRESH_OVERLAY` 回到覆盖窗口线程刷新图标列表
+- 刷新时复用 `collect_overlay_icons()` 重新过滤 managed icons，并保留 `overlay.icon_positions` 位置持久化
+- 覆盖窗口销毁时停止监听线程，避免退出后残留后台监听
+
+### 阶段 8：后续增强（待实现）
 
 - 多显示器：为每个显示器创建覆盖窗口并按显示器保存/恢复位置
 - Explorer 重启后重建覆盖窗口图标列表和窗口层级
@@ -199,7 +209,7 @@
 | `platform/mod.rs` | 导出覆盖窗口与原生图标隐藏状态 API |
 | `platform/windows/mod.rs` | 导出 `desktop_overlay`、drop target、拖拽数据和 icon hider API |
 | `platform/windows/icon_hider.rs` | ShowWindow 隐藏/恢复、Vault 仓库、`native_icons_hidden()` 状态检测 |
-| `platform/windows/desktop_overlay/*` | 桌面覆盖窗口创建/销毁、渲染、交互、位置保存 |
+| `platform/windows/desktop_overlay/*` | 桌面覆盖窗口创建/销毁、渲染、交互、位置保存、桌面文件监听刷新 |
 | `platform/windows/drag_handler.rs` | 分类框 ⇄ 覆盖窗口拖拽和 Vault 导入/导出 |
 | `platform/windows/drop_target.rs` | OLE/自定义拖拽数据通道 |
 
@@ -211,6 +221,7 @@
 - [x] 桌面/覆盖窗口图标可拖入分类框（从覆盖窗口消失 + 出现在框内）
 - [x] 分类框图标可拖到桌面覆盖窗口任意位置（出现在释放位置 + 从框消失）
 - [x] 退出应用后销毁覆盖窗口并恢复原生桌面图标
+- [x] 运行期新增/删除/重命名桌面文件后覆盖窗口自动刷新
 - [ ] 一键 AI 分类：所有图标分到对应框，全部从桌面隐藏
 - [ ] 多显示器每屏覆盖窗口
 - [x] 不需要管理员权限

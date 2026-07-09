@@ -346,8 +346,7 @@ pub(crate) fn handle_drag_leave(hwnd: HWND) {
 
 /// 处理 WM_USER_DRAG_ITEM_ADDED（框→框移动 或 桌面→框 时，目标框添加项）
 pub(crate) fn handle_drag_item_added(hwnd: HWND) {
-    if let Some((file_path, display_name)) = unsafe { super::drop_target::take_pending_add_item() }
-    {
+    if let Some((file_path, display_name)) = super::drop_target::take_pending_add_item() {
         // 检查是否已存在
         if let Some(data) = unsafe { get_data(hwnd) } {
             if data.items.iter().any(|i| i.file_path == file_path) {
@@ -355,25 +354,25 @@ pub(crate) fn handle_drag_item_added(hwnd: HWND) {
                 return;
             }
 
-            // 提取图标
-            let icon_info = unsafe { super::icon_extract::extract_file_icon(&file_path) };
-            let (icon_handle, actual_name) = match icon_info {
-                Some(info) => (info.hicon, info.display_name),
-                None => {
-                    let name = std::path::Path::new(&file_path)
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_else(|| file_path.clone());
-                    (std::ptr::null_mut(), name)
-                }
-            };
+            // 提取图标。分类框中保存的是“逻辑桌面路径”，图标可能已经被移动/复制到
+            // managed_icons 仓库；读取时必须解析到实际存在的路径，否则框→框拖拽后
+            // 目标框只能得到名称，图标句柄为空，右键菜单也会因为原路径不存在而降级。
+            let read_path = resolve_drag_item_read_path(&file_path);
+            let read_path_str = read_path.to_string_lossy().to_string();
+            let icon_handle = super::icon_extract::extract_file_icon(&read_path_str)
+                .map(|info| info.hicon)
+                .unwrap_or(std::ptr::null_mut());
 
             data.items.push(super::grid_window::GridFileItem {
                 file_path: file_path.clone(),
-                display_name: actual_name.clone(),
+                display_name: display_name.clone(),
                 icon_handle,
             });
-            log::info!("项已添加到框: '{}'", actual_name);
+            log::info!(
+                "项已添加到框: '{}' (read_path={})",
+                display_name,
+                read_path_str
+            );
             render_layered_window(hwnd);
             save_config();
         }
@@ -381,6 +380,17 @@ pub(crate) fn handle_drag_item_added(hwnd: HWND) {
         // ★ 隐藏桌面原始图标（该图标已在分类框中管理，桌面不应再显示）
         hide_single_desktop_icon(&file_path, &display_name);
     }
+}
+
+fn resolve_drag_item_read_path(file_path: &str) -> std::path::PathBuf {
+    resolve_drag_item_read_path_with(file_path, super::icon_hider::resolve_icon_read_path)
+}
+
+fn resolve_drag_item_read_path_with(
+    file_path: &str,
+    resolve_read_path: impl Fn(&str) -> Option<std::path::PathBuf>,
+) -> std::path::PathBuf {
+    resolve_read_path(file_path).unwrap_or_else(|| std::path::PathBuf::from(file_path))
 }
 
 fn hide_single_desktop_icon(file_path: &str, display_name: &str) {
@@ -397,7 +407,7 @@ fn hide_single_desktop_icon(file_path: &str, display_name: &str) {
 }
 
 /// 拖拽操作后保存配置
-fn save_config() {
+pub(crate) fn save_config() {
     let layouts = super::grid_window::collect_grid_layout();
     if let Ok(mut config) = crate::config::AppConfig::load() {
         config.layout.boxes = layouts;
@@ -406,6 +416,34 @@ fn save_config() {
         } else {
             log::info!("拖拽后配置已保存");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_drag_item_read_path_uses_resolved_vault_path() {
+        let logical = r"C:\Users\chenzhihui\Desktop\CC Switch.lnk";
+        let vault = std::path::PathBuf::from(
+            r"C:\Users\chenzhihui\.ikun_organizer\managed_icons\user__CC Switch.lnk",
+        );
+
+        assert_eq!(
+            resolve_drag_item_read_path_with(logical, |_| Some(vault.clone())),
+            vault
+        );
+    }
+
+    #[test]
+    fn test_resolve_drag_item_read_path_falls_back_to_logical_path() {
+        let path = r"Z:\ikun-organizer-test\missing-shortcut.lnk";
+
+        assert_eq!(
+            resolve_drag_item_read_path_with(path, |_| None),
+            std::path::PathBuf::from(path)
+        );
     }
 }
 

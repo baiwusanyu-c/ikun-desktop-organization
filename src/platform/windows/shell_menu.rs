@@ -26,12 +26,40 @@ pub fn take_pending_create_box() -> bool {
 
 /// 显示文件的 Shell 右键菜单（尝试 windows crate 高级绑定 → ShellExecuteW 回退）
 pub fn show_shell_context_menu(hwnd: HWND, file_path: &str) {
+    let menu_path = resolve_shell_menu_path(file_path);
+
+    if menu_path != file_path {
+        log::debug!("Shell 菜单路径已解析: {} → {}", file_path, menu_path);
+    }
+
     // 尝试使用 windows crate 获取完整 Shell 上下文菜单
-    if try_windows_crate_context_menu(hwnd, file_path) {
+    if try_windows_crate_context_menu(hwnd, &menu_path) {
         return;
     }
     // 回退：ShellExecuteW 增强菜单
-    show_shell_fallback_menu(hwnd, file_path);
+    show_shell_fallback_menu(hwnd, &menu_path);
+}
+
+fn resolve_shell_menu_path(file_path: &str) -> String {
+    resolve_shell_menu_path_with(
+        file_path,
+        |path| std::path::Path::new(path).exists(),
+        |path| {
+            crate::platform::windows::icon_hider::resolve_icon_read_path(path)
+                .map(|p| p.to_string_lossy().to_string())
+        },
+    )
+}
+
+fn resolve_shell_menu_path_with(
+    file_path: &str,
+    exists: impl Fn(&str) -> bool,
+    resolve_read_path: impl Fn(&str) -> Option<String>,
+) -> String {
+    if exists(file_path) {
+        return file_path.to_string();
+    }
+    resolve_read_path(file_path).unwrap_or_else(|| file_path.to_string())
 }
 
 /// 使用 windows crate 高级 COM 绑定获取完整 Shell 菜单
@@ -586,5 +614,51 @@ mod tests {
         assert!(!take_pending_create_box());
         assert!(!take_pending_create_box());
         assert!(!take_pending_create_box());
+    }
+
+    #[test]
+    fn test_resolve_shell_menu_path_keeps_existing_logical_path() {
+        let resolved = resolve_shell_menu_path_with(
+            r"C:\Users\chenzhihui\Desktop\CC Switch.lnk",
+            |_| true,
+            |_| {
+                Some(
+                    r"C:\Users\chenzhihui\.ikun_organizer\managed_icons\user__CC Switch.lnk"
+                        .to_string(),
+                )
+            },
+        );
+
+        assert_eq!(resolved, r"C:\Users\chenzhihui\Desktop\CC Switch.lnk");
+    }
+
+    #[test]
+    fn test_resolve_shell_menu_path_uses_vault_when_logical_path_missing() {
+        let resolved = resolve_shell_menu_path_with(
+            r"C:\Users\chenzhihui\Desktop\CC Switch.lnk",
+            |_| false,
+            |_| {
+                Some(
+                    r"C:\Users\chenzhihui\.ikun_organizer\managed_icons\user__CC Switch.lnk"
+                        .to_string(),
+                )
+            },
+        );
+
+        assert_eq!(
+            resolved,
+            r"C:\Users\chenzhihui\.ikun_organizer\managed_icons\user__CC Switch.lnk"
+        );
+    }
+
+    #[test]
+    fn test_resolve_shell_menu_path_falls_back_to_logical_path() {
+        let resolved = resolve_shell_menu_path_with(
+            r"C:\Users\chenzhihui\Desktop\Missing.lnk",
+            |_| false,
+            |_| None,
+        );
+
+        assert_eq!(resolved, r"C:\Users\chenzhihui\Desktop\Missing.lnk");
     }
 }

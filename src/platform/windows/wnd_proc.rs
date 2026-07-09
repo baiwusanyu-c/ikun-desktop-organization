@@ -23,6 +23,39 @@ use super::grid_window::{
 use super::menu_window::show_menu_window;
 use super::shell_menu::{show_desktop_context_menu, show_shell_context_menu};
 
+fn remove_grid_item_if_missing_after_shell_menu(hwnd: HWND, logical_path: &str) {
+    if super::icon_hider::icon_exists_for_box(logical_path) {
+        return;
+    }
+
+    let Some(data) = (unsafe { get_data(hwnd) }) else {
+        return;
+    };
+    let Some(index) = data
+        .items
+        .iter()
+        .position(|item| item.file_path == logical_path)
+    else {
+        return;
+    };
+
+    let removed = data.items.remove(index);
+    if !removed.icon_handle.is_null() {
+        super::icon_extract::destroy_icon(removed.icon_handle);
+    }
+    if data.selected_item >= data.items.len() as i32 {
+        data.selected_item = -1;
+    }
+    if data.hovered_item >= data.items.len() as i32 {
+        data.hovered_item = -1;
+    }
+    log::info!(
+        "右键菜单操作后图标文件不存在，已从分类框移除: {}",
+        removed.display_name
+    );
+    render_layered_window(hwnd);
+    super::drag_handler::save_config();
+}
 /// 格子窗口消息处理过程
 ///
 /// 处理标题栏拖拽、边缘缩放、锁定按钮、图标选中、双击打开、右键菜单等。
@@ -678,11 +711,11 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 if idx >= 0 && (idx as usize) < data.items.len() {
                     let item = &data.items[idx as usize];
                     let op: Vec<u16> = "open\0".encode_utf16().collect();
-                    let path: Vec<u16> = item
-                        .file_path
-                        .encode_utf16()
-                        .chain(std::iter::once(0))
-                        .collect();
+                    let open_path = super::icon_hider::resolve_icon_read_path(&item.file_path)
+                        .map(|path| path.to_string_lossy().to_string())
+                        .unwrap_or_else(|| item.file_path.clone());
+                    let path: Vec<u16> =
+                        open_path.encode_utf16().chain(std::iter::once(0)).collect();
                     ShellExecuteW(
                         hwnd,
                         op.as_ptr(),
@@ -920,6 +953,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
 
             if let Some(ref path) = file_path {
                 show_shell_context_menu(hwnd, path);
+                remove_grid_item_if_missing_after_shell_menu(hwnd, path);
             } else {
                 show_desktop_context_menu(hwnd);
                 // shell_menu.rs 会在用户点击「创建分类框」时设置 PENDING_CREATE_BOX 标志，
