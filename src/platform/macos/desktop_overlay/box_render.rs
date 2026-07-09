@@ -334,10 +334,8 @@ fn render_icon(
 }
 /// 渲染标签（对齐 Finder 桌面图标标签）
 ///
-/// 核心策略：
-/// 1. 使用完整文件名 + NSLineBreakByTruncatingMiddle
-/// 2. 标签宽度 = 图标宽度（64pt），与图标居中对齐
-/// 3. 最多 2 行，系统自动处理截断和换行
+/// 使用 NSLineBreakByCharWrapping 让文字自然换行，居中对齐。
+/// 最多 2 行（超出自动裁切）。
 fn render_label(
     context: &CGContext,
     path: &str,
@@ -365,7 +363,7 @@ fn render_label(
 
     let font_size = style.label_font_size as f64 * scale;
     let label_color = style.label_font_color;
-    let line_height = font_size * 1.2;
+    let line_height = font_size * 1.3;
     let total_height = line_height * 2.0;
 
     log::info!(
@@ -374,7 +372,7 @@ fn render_label(
     );
 
     unsafe {
-        // 1. 设置 NSGraphicsContext（flipped: false, Y=0 在底部）
+        // 1. NSGraphicsContext (flipped: false, Y=0 在底部)
         let cg_ptr = context.as_ptr() as *mut c_void;
         let graphics_context: id = msg_send![
             class!(NSGraphicsContext),
@@ -382,7 +380,7 @@ fn render_label(
         ];
         let _: () = msg_send![class!(NSGraphicsContext), setCurrentContext: graphics_context];
 
-        // 2. 字体（系统字体，与 Finder 一致）
+        // 2. 字体
         let font: id = msg_send![class!(NSFont), systemFontOfSize: font_size];
 
         // 3. 颜色
@@ -394,13 +392,13 @@ fn render_label(
             alpha: label_color[3] as f64 / 255.0
         ];
 
-        // 4. 段落样式
-        //    - NSTextAlignmentCenter = 2: 居中对齐
-        //    - NSLineBreakByTruncatingMiddle = 5: 中间截断（系统自动在中间加 …）
-        let para_style: id = msg_send![class!(NSParagraphStyle), defaultParagraphStyle];
-        let para: id = msg_send![para_style, mutableCopy];
-        let _: () = msg_send![para, setAlignment: 2];
-        let _: () = msg_send![para, setLineBreakMode: 5]; // NSLineBreakByTruncatingMiddle
+        // 4. NSMutableParagraphStyle (alloc+init, 确保可变)
+        let para: id = msg_send![class!(NSMutableParagraphStyle), alloc];
+        let para: id = msg_send![para, init];
+        // NSTextAlignmentCenter = 2
+        let _: () = msg_send![para, setAlignment: 2usize];
+        // NSLineBreakByCharWrapping = 1
+        let _: () = msg_send![para, setLineBreakMode: 1usize];
 
         // 5. 属性字典
         let attrs: id = msg_send![class!(NSMutableDictionary), dictionary];
@@ -408,13 +406,12 @@ fn render_label(
         let _: () = msg_send![attrs, setObject: color forKey: NSString::alloc(nil).init_str("NSColor")];
         let _: () = msg_send![attrs, setObject: para forKey: NSString::alloc(nil).init_str("NSParagraphStyle")];
 
-        // 6. 使用完整文件名创建 NSAttributedString
-        //    系统会根据 NSLineBreakByTruncatingMiddle 自动截断
+        // 6. NSAttributedString（完整文件名，系统自动换行）
         let full_str = NSString::alloc(nil).init_str(&display_name);
         let attr_str: id = msg_send![class!(NSAttributedString), alloc];
         let _: () = msg_send![attr_str, initWithString: full_str attributes: attrs];
 
-        // 7. 绘制矩形（与图标等宽，居中对齐）
+        // 7. 绘制矩形
         let cg_y = bitmap_height - screen_y - total_height;
         let label_rect = NSRect::new(
             NSPoint::new(screen_x, cg_y),
@@ -427,7 +424,6 @@ fn render_label(
         let _: () = msg_send![class!(NSGraphicsContext), setCurrentContext: nil];
     }
 }
-
 
 pub fn get_boxes_from_config(config: &AppConfig, screen_index: usize) -> Vec<ClassificationBox> {
     if screen_index != 0 {
