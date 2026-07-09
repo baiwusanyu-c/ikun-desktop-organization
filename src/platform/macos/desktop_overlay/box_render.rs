@@ -334,6 +334,88 @@ fn render_icon(
         let _: () = msg_send![class!(NSGraphicsContext), setCurrentContext: nil];
     }
 }
+
+/// 标签文本分割算法（Finder 风格）
+/// 
+/// 策略：
+/// - 第一行：最大前缀（无省略号），尽量填满 width
+/// - 第二行：剩余内容，超出则中间截断（保留 extension）
+/// 
+/// # Arguments
+/// * `text` - 原始文本
+/// * `width` - 可用宽度（像素）
+/// * `measure_fn` - 测量函数：给定文本返回宽度（像素）
+/// 
+/// # Returns
+/// 返回 1-2 行的 Vec<String>
+pub fn split_label_lines<F>(text: &str, width: f64, measure_fn: F) -> Vec<String>
+where
+    F: Fn(&str) -> f64,
+{
+    let chars: Vec<char> = text.chars().collect();
+    let total_chars = chars.len();
+    
+    // 测量整段文字宽度
+    let full_width = measure_fn(text);
+    
+    if full_width <= width {
+        // 单行即可放下
+        return vec![text.to_string()];
+    }
+    
+    // 找第一行的最大前缀（不超过 width）
+    let mut line1_end = 0;
+    for i in 1..=total_chars {
+        let test_str: String = chars[..i].iter().collect();
+        let test_width = measure_fn(&test_str);
+        
+        if test_width > width {
+            line1_end = i - 1;
+            break;
+        }
+    }
+    if line1_end == 0 {
+        line1_end = total_chars / 2;
+    }
+    
+    let line1: String = chars[..line1_end].iter().collect();
+    
+    // 第二行：从 line1_end 到结尾
+    let remaining: String = chars[line1_end..].iter().collect();
+    let remaining_width = measure_fn(&remaining);
+    
+    let line2 = if remaining_width <= width {
+        // 第二行能放下，不需要截断
+        remaining
+    } else {
+        // 第二行超出，使用中间截断（保留 extension）
+        let rem_chars: Vec<char> = remaining.chars().collect();
+        let rem_count = rem_chars.len();
+        
+        // 找最大的 prefix+suffix 组合，使 prefix+"…"+suffix <= width
+        let mut best_keep = 3;
+        for keep in 3..rem_count {
+            let half = keep / 2;
+            let prefix: String = rem_chars[..half].iter().collect();
+            let suffix: String = rem_chars[rem_count - half..].iter().collect();
+            let test_str = format!("{}…{}", prefix, suffix);
+            let test_width = measure_fn(&test_str);
+            
+            if test_width > width {
+                break;
+            }
+            best_keep = keep;
+        }
+        
+        let half = best_keep / 2;
+        let prefix: String = rem_chars[..half].iter().collect();
+        let suffix: String = rem_chars[rem_count - half..].iter().collect();
+        format!("{}…{}", prefix, suffix)
+    };
+    
+    vec![line1, line2]
+}
+
 /// 渲染标签（对齐 Finder 桌面图标标签）
 ///
 /// 使用 NSLineBreakByCharWrapping 让文字自然换行，居中对齐。
@@ -396,75 +478,12 @@ fn render_label(
         let _: () = msg_send![attrs, setObject: font forKey: NSString::alloc(nil).init_str("NSFont")];
         let _: () = msg_send![attrs, setObject: color forKey: NSString::alloc(nil).init_str("NSColor")];
 
-        // 4. 分割文字（Finder 风格）
-        //    - 第一行：最大前缀（无省略号）
-        //    - 第二行：剩余内容，超出则中间截断
-        let chars: Vec<char> = display_name.chars().collect();
-        let total_chars = chars.len();
-        
-        // 测量整段文字宽度
-        let full_str = NSString::alloc(nil).init_str(&display_name);
-        let full_size: cocoa::foundation::NSSize = msg_send![full_str, sizeWithAttributes: attrs];
-        
-        let lines: Vec<String> = if full_size.width <= width {
-            // 单行即可放下
-            vec![display_name.clone()]
-        } else {
-            // 找第一行的最大前缀（不超过 width）
-            let mut line1_end = 0;
-            for i in 1..=total_chars {
-                let test_str: String = chars[..i].iter().collect();
-                let test_ns = NSString::alloc(nil).init_str(&test_str);
-                let test_size: cocoa::foundation::NSSize = msg_send![test_ns, sizeWithAttributes: attrs];
-                
-                if test_size.width > width {
-                    line1_end = i - 1;
-                    break;
-                }
-            }
-            if line1_end == 0 {
-                line1_end = total_chars / 2;
-            }
-            
-            let line1: String = chars[..line1_end].iter().collect();
-            
-            // 第二行：从 line1_end 到结尾
-            let remaining: String = chars[line1_end..].iter().collect();
-            let remaining_str = NSString::alloc(nil).init_str(&remaining);
-            let remaining_size: cocoa::foundation::NSSize = msg_send![remaining_str, sizeWithAttributes: attrs];
-            
-            let line2 = if remaining_size.width <= width {
-                // 第二行能放下，不需要截断
-                remaining
-            } else {
-                // 第二行超出，使用中间截断（保留 extension）
-                let rem_chars: Vec<char> = remaining.chars().collect();
-                let rem_count = rem_chars.len();
-                
-                // 找最大的 prefix+suffix 组合，使 prefix+"…"+suffix <= width
-                let mut best_keep = 3;
-                for keep in 3..rem_count {
-                    let half = keep / 2;
-                    let prefix: String = rem_chars[..half].iter().collect();
-                    let suffix: String = rem_chars[rem_count - half..].iter().collect();
-                    let test_str = format!("{}…{}", prefix, suffix);
-                    let test_ns = NSString::alloc(nil).init_str(&test_str);
-                    let test_size: cocoa::foundation::NSSize = msg_send![test_ns, sizeWithAttributes: attrs];
-                    
-                    if test_size.width > width {
-                        break;
-                    }
-                    best_keep = keep;
-                }
-                
-                let half = best_keep / 2;
-                let prefix: String = rem_chars[..half].iter().collect();
-                let suffix: String = rem_chars[rem_count - half..].iter().collect();
-                format!("{}…{}", prefix, suffix)
-            };
-            
-            vec![line1, line2]
-        };
+        // 4. 分割文字（Finder 风格，使用纯函数）
+        let lines = split_label_lines(&display_name, width, |text| {
+            let ns = NSString::alloc(nil).init_str(text);
+            let size: cocoa::foundation::NSSize = msg_send![ns, sizeWithAttributes: attrs];
+            size.width
+        });
 
         // 5. 逐行绘制（居中对齐）
         log::info!("render_label: split into {} lines", lines.len());
@@ -570,4 +589,196 @@ fn get_default_test_boxes() -> Vec<ClassificationBox> {
     }
 
     vec![box1, box2]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 模拟等宽字体测量：每个字符 10px
+    fn mock_measure_monospace(text: &str) -> f64 {
+        text.chars().count() as f64 * 10.0
+    }
+
+    /// 模拟测量：ASCII 字符 8px，非 ASCII（中文等）16px，省略号 12px
+    fn mock_measure_mixed(text: &str) -> f64 {
+        text.chars()
+            .map(|c| {
+                if c == '…' {
+                    12.0
+                } else if c.is_ascii() {
+                    8.0
+                } else {
+                    16.0
+                }
+            })
+            .sum()
+    }
+
+    // =========================================================================
+    // split_label_lines 单元测试
+    // =========================================================================
+
+    #[test]
+    fn test_short_text_single_line() {
+        let result = split_label_lines("hello", 100.0, mock_measure_monospace);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "hello");
+    }
+
+    #[test]
+    fn test_exact_width_single_line() {
+        // "hello" = 5 chars * 10px = 50px, width = 50
+        let result = split_label_lines("hello", 50.0, mock_measure_monospace);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "hello");
+    }
+
+    #[test]
+    fn test_two_lines_no_truncation() {
+        // "abcdefghij" = 10 chars * 10px = 100px, width = 60
+        // line1: first 6 chars = "abcdef" (60px)
+        // line2: remaining "ghij" (40px) <= 60, no truncation
+        let result = split_label_lines("abcdefghij", 60.0, mock_measure_monospace);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], "abcdef");
+        assert_eq!(result[1], "ghij");
+    }
+
+    #[test]
+    fn test_two_lines_with_middle_truncation() {
+        // "abcdefghijklmnopqrstuvwxyz" = 26 chars * 10px = 260px, width = 80
+        // line1: first 8 chars = "abcdefgh" (80px)
+        // line2: remaining "ijklmnopqrstuvwxyz" (18 chars * 10px = 180px) > 80
+        //   → middle truncation: keep best_keep chars, prefix…suffix
+        let result = split_label_lines("abcdefghijklmnopqrstuvwxyz", 80.0, mock_measure_monospace);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], "abcdefgh");
+        // line2 should contain "…" (middle truncation)
+        assert!(result[1].contains('…'), "line2 should have middle truncation: {}", result[1]);
+        // line2 should start with some prefix of "ijklmnopqrstuvwxyz"
+        assert!(result[1].starts_with('i'), "line2 should start with 'i': {}", result[1]);
+        // line2 should end with some suffix
+        assert!(result[1].ends_with("yz"), "line2 should end with 'yz': {}", result[1]);
+    }
+
+    #[test]
+    fn test_chinese_text_single_line() {
+        // "股市" = 2 chars * 16px = 32px, width = 100
+        let result = split_label_lines("股市", 100.0, mock_measure_mixed);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "股市");
+    }
+
+    #[test]
+    fn test_chinese_text_two_lines() {
+        // "PandaClaw 架构分析" mixed width
+        // P(8)+a(8)+n(8)+d(8)+a(8)+C(8)+l(8)+a(8)+w(8)+space(8)+架(16)+构(16)+分(16)+析(16) = 80+64 = 144px
+        // width = 100
+        let result = split_label_lines("PandaClaw 架构分析", 100.0, mock_measure_mixed);
+        assert_eq!(result.len(), 2);
+        // line1 should be a prefix that fits in 100px
+        let line1_width = mock_measure_mixed(&result[0]);
+        assert!(line1_width <= 100.0, "line1 width {} should be <= 100", line1_width);
+    }
+
+    #[test]
+    fn test_long_filename_finder_style() {
+        // Simulate: alert-message-notification-统计报告与实现计划.md
+        let text = "alert-message-notification-统计报告与实现计划.md";
+        let width = 179.0; // icon_size * 1.4
+
+        let result = split_label_lines(text, width, mock_measure_mixed);
+        assert_eq!(result.len(), 2, "should split into 2 lines");
+
+        // line1: should be a prefix without "…"
+        assert!(!result[0].contains('…'), "line1 should NOT have ellipsis: {}", result[0]);
+        let line1_width = mock_measure_mixed(&result[0]);
+        assert!(line1_width <= width, "line1 width {} should be <= {}", line1_width, width);
+
+        // line2: should contain "…" if it needs truncation
+        let remaining: String = text.chars().skip(result[0].chars().count()).collect();
+        let remaining_width = mock_measure_mixed(&remaining);
+        if remaining_width > width {
+            assert!(result[1].contains('…'), "line2 should have middle truncation: {}", result[1]);
+            // Should preserve extension (.md)
+            assert!(result[1].ends_with(".md"), "line2 should end with .md: {}", result[1]);
+        }
+    }
+
+    #[test]
+    fn test_first_line_no_ellipsis() {
+        // Verify first line never contains ellipsis (Finder style)
+        let texts = vec![
+            "xmind2md.py",
+            "Windows 11",
+            "PENDING_FEATURES.md",
+            "alert-message-notification-统计报告.md",
+        ];
+
+        for text in texts {
+            let result = split_label_lines(text, 128.0, mock_measure_mixed);
+            assert!(!result[0].contains('…'), 
+                "First line should never have ellipsis: '{}' for input '{}'", result[0], text);
+        }
+    }
+
+    #[test]
+    fn test_extension_preserved_in_truncation() {
+        // Long filename with .md extension
+        let text = "very-long-filename-with-many-dashes-and-chinese-字符-统计报告与实现计划.md";
+        let result = split_label_lines(text, 100.0, mock_measure_mixed);
+        
+        if result.len() == 2 {
+            let line2_width = mock_measure_mixed(&result[1]);
+            if line2_width > 100.0 || result[1].contains('…') {
+                // If truncated, should preserve extension
+                assert!(result[1].ends_with(".md"), 
+                    "Truncated line2 should preserve .md extension: '{}'", result[1]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_empty_string() {
+        let result = split_label_lines("", 100.0, mock_measure_monospace);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "");
+    }
+
+    #[test]
+    fn test_single_char() {
+        let result = split_label_lines("a", 100.0, mock_measure_monospace);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "a");
+    }
+
+    #[test]
+    fn test_very_narrow_width() {
+        // Width smaller than a single character
+        let result = split_label_lines("hello", 5.0, mock_measure_monospace);
+        assert_eq!(result.len(), 2);
+        // Should still produce 2 lines without panicking
+    }
+
+    #[test]
+    fn test_line2_width_within_bounds() {
+        // Verify that line2 width never exceeds the given width
+        let texts = vec![
+            "abcdefghijklmnopqrstuvwxyz",
+            "alert-message-notification-统计报告与实现计划.md",
+            "PENDING_FEATURES.md",
+            "very-long-filename-that-needs-truncation.txt",
+        ];
+
+        for text in texts {
+            let result = split_label_lines(text, 128.0, mock_measure_mixed);
+            for (i, line) in result.iter().enumerate() {
+                let w = mock_measure_mixed(line);
+                // Allow small tolerance for the "…" character
+                assert!(w <= 128.0 + 1.0, 
+                    "Line {} width {} exceeds 128 for '{}': '{}'", i, w, text, line);
+            }
+        }
+    }
 }

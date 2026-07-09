@@ -45,8 +45,16 @@ src/
 │   │   ├── control_panel_window.rs # 控制面板 Win32 显示/隐藏辅助（托盘优先生命周期）
 │   │   └── sys_tray.rs        #   系统托盘入口（隐藏消息窗口 + 固定菜单动作队列）
 │   └── macos/
-│       ├── mod.rs             #   macOS 平台入口
-│       └── desktop_manager.rs #   桌面图标枚举（返回模拟数据）
+│       ├── mod.rs             #   macOS 平台入口 + stub 函数
+│       ├── desktop_manager.rs #   桌面图标枚举（NSWorkspace + FileManager）
+│       ├── ffi_imports.rs     #   macOS FFI 声明（CoreGraphics 等）
+│       ├── icon_extract.rs    #   图标提取（NSWorkspace iconForFile）
+│       └── desktop_overlay/   #   桌面覆盖窗口
+│           ├── mod.rs             #   模块导出
+│           ├── overlay_window.rs  #   NSWindow 创建/销毁 + 鼠标穿透
+│           ├── overlay_render.rs  #   渲染编排（分类框 + 图标）
+│           ├── box_render.rs      #   分类框渲染（背景/标题/图标网格/标签）
+│           └── icon_layout.rs     #   图标网格布局计算
 │
 ├── box_core/                  # 分类框核心业务逻辑（平台无关）
 │   ├── mod.rs                 #   模块导出

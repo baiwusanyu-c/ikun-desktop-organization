@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **平台支持**：
 - ✅ **Windows 10/11**：主要平台（Shell COM API + Direct2D/DirectWrite 渲染）
-- ⚠️ **macOS**：实验性（返回模拟数据，待完善）
+- 🔧 **macOS**：开发中（桌面覆盖窗口 + 分类框渲染 + 图标提取已实现，拖拽/菜单待完善）
 
 ---
 
@@ -91,8 +91,16 @@ src/
 │   │   ├── control_panel_window.rs # 控制面板 Win32 显示/隐藏辅助（托盘优先生命周期）
 │   │   └── sys_tray.rs        #   系统托盘入口（隐藏消息窗口 + 固定菜单动作队列）
 │   └── macos/
-│       ├── mod.rs             #   macOS 平台入口
-│       └── desktop_manager.rs #   桌面图标枚举（返回模拟数据）
+│       ├── mod.rs             #   macOS 平台入口 + stub 函数
+│       ├── desktop_manager.rs #   桌面图标枚举（NSWorkspace + FileManager）
+│       ├── ffi_imports.rs     #   macOS FFI 声明（CoreGraphics 等）
+│       ├── icon_extract.rs    #   图标提取（NSWorkspace iconForFile）
+│       └── desktop_overlay/   #   桌面覆盖窗口
+│           ├── mod.rs             #   模块导出
+│           ├── overlay_window.rs  #   NSWindow 创建/销毁 + 鼠标穿透
+│           ├── overlay_render.rs  #   渲染编排（分类框 + 图标）
+│           ├── box_render.rs      #   分类框渲染（背景/标题/图标网格/标签）
+│           └── icon_layout.rs     #   图标网格布局计算
 │
 ├── box_core/                  # 分类框核心业务逻辑（平台无关）
 │   ├── mod.rs                 #   模块导出
@@ -327,6 +335,17 @@ main.rs
 - [x] 创建桌面分类框（注册表注入 + 信号文件 IPC + egui viewport 对话框）
 - [ ] 一键 AI 桌面分类
 - [ ] 退出桌面分类
+
+### macOS 平台（开发中）
+- [x] 桌面图标枚举（NSWorkspace + FileManager API）
+- [x] 图标提取（NSWorkspace iconForFile + NSImage → CGImage）
+- [x] 桌面覆盖窗口（NSWindow + 透明 + 鼠标穿透）
+- [x] 分类框渲染（圆角背景 + 标题 + 图标网格 + Finder 风格标签）
+- [x] 标签截断（第一行最大前缀 + 第二行中间截断保留扩展名）
+- [ ] 分类框拖拽/缩放
+- [ ] 右键菜单
+- [ ] 图标拖拽到分类框
+- [ ] 布局持久化
 
 ### 控制台（控制面板）
 - [ ] 键盘快捷键呼出

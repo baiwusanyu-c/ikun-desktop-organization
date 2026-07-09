@@ -78,7 +78,7 @@ UI 层 (app.rs, ui/)             → egui 控制面板，通过 AppContext 交�
 | `uuid` | 分类框 / 图标唯一 ID |
 | `chrono` | 时间处理 |
 | `windows` (Windows) | Windows Shell API、Direct2D/DirectWrite、GDI |
-| `cocoa/objc` (macOS) | macOS API（实验性） |
+| `cocoa/objc` (macOS) | macOS API（NSWindow/NSWorkspace/CGContext 渲染） |
 
 ---
 
