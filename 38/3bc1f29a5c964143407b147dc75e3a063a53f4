@@ -1,0 +1,22 @@
+src/platform/mod.rs
+  s_bb5e64d01985b9::t_3c0b12bfe43897 238-242,259
+  s_bb5e64d01985b9::t_4747b42af97bda 260-262
+todo/IMPLEMENTATION_PLAN_MACOS.md
+  s_bb5e64d01985b9::t_bfbb5ee827d6f6 665-867
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "383bc1f29a5c964143407b147dc75e3a063a53f4",
+  "prompts": {},
+  "sessions": {
+    "s_bb5e64d01985b9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "019f4021-8090-7b02-8e9d-8c31512d0c93",
+        "model": "unknown"
+      },
+      "human_author": "白雾三语 <32354856+baiwusanyu-c@users.noreply.github.com>"
+    }
+  }
+}
