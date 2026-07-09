@@ -310,7 +310,7 @@ pub fn show_desktop_context_menu(hwnd: HWND) {
         };
 
         // 3. 从 shell 视图获取背景区域的 IContextMenu
-        //    QueryContextMenu 填充原生菜单后，通过 InsertMenuW 编程式追加「创建分类框」。
+        //    QueryContextMenu 填充原生菜单后，注册表注入的 IkunXxx 项会自动合并。
         let result: Result<IContextMenu, _> = view.GetItemObject(SVGIO_BACKGROUND);
         match result {
             Ok(cm) => {
@@ -325,9 +325,9 @@ pub fn show_desktop_context_menu(hwnd: HWND) {
                     Ok(()) => {
                         log::debug!("桌面菜单: QueryContextMenu 成功");
 
-                        // 注：注册表项 IkunCreateBox 会被 Shell 自动合并到 QueryContextMenu 结果中，
-                        // 覆盖初始菜单和"显示更多选项"legacy 菜单，无需编程式追加。
-                        // 程序退出时 cleanup_desktop_registry() 清理注册表，确保不运行时无残留。
+                        // 注册表注入的 IkunOpenPanel/IkunCreateBox/IkunAiClassify/IkunQuit
+                        // 会被 Shell 自动合并到 QueryContextMenu 结果中，无需编程式追加。
+                        // 程序退出时 cleanup_desktop_registry() 清理注册表。
 
                         let cmd = TrackPopupMenu(
                             menu,
@@ -376,84 +376,56 @@ pub fn show_desktop_context_menu(hwnd: HWND) {
 
 /// 桌面背景右键菜单回退方案（ShellExecuteW 自定义菜单）
 fn show_desktop_fallback_menu(hwnd: HWND) {
-    /// 回退菜单中"创建分类框"的命令 ID（不与 CMD_CREATE_BOX 共享作用域）
-    const FALLBACK_CMD_CREATE_BOX: i32 = 4;
+    use crate::platform::SystemTrayAction;
+
+    const CMD_OPEN_PANEL: usize = 10;
+    const CMD_CREATE_BOX: usize = 11;
+    const CMD_AI_CLASSIFY: usize = 12;
+    const CMD_QUIT: usize = 13;
 
     unsafe {
         let mut pt = POINT { x: 0, y: 0 };
         GetCursorPos(&mut pt);
         let menu = CreatePopupMenu();
 
-        let create_box: Vec<u16> = "➕ 创建分类框(&N)\0".encode_utf16().collect();
-        let open_desktop: Vec<u16> = "打开桌面文件夹(&O)\0".encode_utf16().collect();
-        let display: Vec<u16> = "显示设置(&D)\0".encode_utf16().collect();
-        let personalize: Vec<u16> = "个性化(&P)\0".encode_utf16().collect();
+        let open_panel: Vec<u16> = "打开控制面板(&O)\0".encode_utf16().collect();
+        let create_box: Vec<u16> = "创建分类框(&N)\0".encode_utf16().collect();
+        let ai_classify: Vec<u16> = "一键AI分类(&A)\0".encode_utf16().collect();
+        let quit: Vec<u16> = "退出应用(&Q)\0".encode_utf16().collect();
 
-        AppendMenuW(
+        AppendMenuW(menu, MF_STRING, CMD_OPEN_PANEL, open_panel.as_ptr());
+        AppendMenuW(menu, MF_STRING, CMD_CREATE_BOX, create_box.as_ptr());
+        AppendMenuW(menu, MF_STRING, CMD_AI_CLASSIFY, ai_classify.as_ptr());
+        AppendMenuW(menu, MF_STRING, CMD_QUIT, quit.as_ptr());
+
+        // 为每个菜单项添加项目图标
+        if let Some(hbmp) = super::app_icon::get_menu_bitmap() {
+            let count = GetMenuItemCount(menu);
+            for i in 0..count {
+                SetMenuItemBitmaps(menu, i as u32, MF_BYPOSITION, hbmp, hbmp);
+            }
+        }
+
+        SetForegroundWindow(hwnd);
+        let cmd = TrackPopupMenu(
             menu,
-            MF_STRING,
-            FALLBACK_CMD_CREATE_BOX as usize,
-            create_box.as_ptr(),
+            TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON,
+            pt.x,
+            pt.y,
+            0,
+            hwnd,
+            std::ptr::null(),
         );
-        AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
-        AppendMenuW(menu, MF_STRING, 1, open_desktop.as_ptr());
-        AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
-        AppendMenuW(menu, MF_STRING, 2, display.as_ptr());
-        AppendMenuW(menu, MF_STRING, 3, personalize.as_ptr());
+        PostMessageW(hwnd, WM_NULL, 0, 0);
+        DestroyMenu(menu);
 
-        let cmd = TrackPopupMenu(menu, TPM_RETURNCMD, pt.x, pt.y, 0, hwnd, std::ptr::null());
-        match cmd {
-            c if c == FALLBACK_CMD_CREATE_BOX => {
-                log::info!("桌面菜单（回退）: 用户点击「创建分类框」");
-                PENDING_CREATE_BOX.store(true, Ordering::SeqCst);
-            }
-            1 => {
-                // 打开桌面文件夹
-                let desktop_path = dirs::desktop_dir().unwrap_or_default();
-                let path_wide: Vec<u16> = desktop_path
-                    .to_string_lossy()
-                    .encode_utf16()
-                    .chain(std::iter::once(0))
-                    .collect();
-                let op: Vec<u16> = "explore\0".encode_utf16().collect();
-                ShellExecuteW(
-                    hwnd,
-                    op.as_ptr(),
-                    path_wide.as_ptr(),
-                    std::ptr::null(),
-                    std::ptr::null(),
-                    SW_SHOW,
-                );
-            }
-            2 => {
-                // 显示设置
-                let uri: Vec<u16> = "ms-settings:display\0".encode_utf16().collect();
-                let op: Vec<u16> = "open\0".encode_utf16().collect();
-                ShellExecuteW(
-                    hwnd,
-                    op.as_ptr(),
-                    uri.as_ptr(),
-                    std::ptr::null(),
-                    std::ptr::null(),
-                    SW_SHOW,
-                );
-            }
-            3 => {
-                // 个性化
-                let uri: Vec<u16> = "ms-settings:personalization\0".encode_utf16().collect();
-                let op: Vec<u16> = "open\0".encode_utf16().collect();
-                ShellExecuteW(
-                    hwnd,
-                    op.as_ptr(),
-                    uri.as_ptr(),
-                    std::ptr::null(),
-                    std::ptr::null(),
-                    SW_SHOW,
-                );
-            }
+        match cmd as usize {
+            CMD_OPEN_PANEL => super::sys_tray::set_pending_action(SystemTrayAction::OpenControlPanel),
+            CMD_CREATE_BOX => super::sys_tray::set_pending_action(SystemTrayAction::CreateBox),
+            CMD_AI_CLASSIFY => super::sys_tray::set_pending_action(SystemTrayAction::AiClassify),
+            CMD_QUIT => super::sys_tray::set_pending_action(SystemTrayAction::Quit),
             _ => {}
         }
-        DestroyMenu(menu);
     }
 }
 
@@ -475,77 +447,109 @@ pub fn setup_desktop_registry() {
         }
     };
 
-    let key_path: Vec<u16> = "Software\\Classes\\Directory\\Background\\shell\\IkunCreateBox\0"
-        .encode_utf16()
-        .collect();
-    let cmd_key_path: Vec<u16> =
-        "Software\\Classes\\Directory\\Background\\shell\\IkunCreateBox\\command\0"
-            .encode_utf16()
-            .collect();
+    // 图标路径：使用可执行文件本身（内嵌 logo.ico 资源）
+    let icon_path = format!("\"{}\",0", exe_path);
 
-    let menu_text: Vec<u16> = "创建分类框(&N)\0".encode_utf16().collect();
-    let command: Vec<u16> = format!("\"{}\" --create-box\0", exe_path)
-        .encode_utf16()
-        .collect();
+    // 定义 4 个菜单项：(注册表键名, 显示文本, 命令行参数)
+    let menu_items = [
+        ("IkunOpenPanel", "打开控制面板(&O)", "--open-panel"),
+        ("IkunCreateBox", "创建分类框(&N)", "--create-box"),
+        ("IkunAiClassify", "一键AI分类(&A)", "--ai-classify"),
+        ("IkunQuit", "退出应用(&Q)", "--quit"),
+    ];
 
     unsafe {
-        // 1. 创建菜单项键
-        let mut hkey: isize = 0;
-        let ret = RegCreateKeyExW(
-            HKEY_CURRENT_USER,
-            key_path.as_ptr(),
-            0,
-            std::ptr::null(),
-            REG_OPTION_NON_VOLATILE,
-            KEY_WRITE,
-            std::ptr::null_mut(),
-            &mut hkey,
-            std::ptr::null_mut(),
-        );
-        if ret != 0 {
-            log::error!("注册表: RegCreateKeyExW 失败, 错误码={}", ret);
-            return;
+        for (key_name, menu_text, cmd_arg) in &menu_items {
+            let base_path = format!(
+                "Software\\Classes\\Directory\\Background\\shell\\{}\0",
+                key_name
+            );
+            let cmd_path = format!(
+                "Software\\Classes\\Directory\\Background\\shell\\{}\\command\0",
+                key_name
+            );
+
+            let key_path: Vec<u16> = base_path.encode_utf16().collect();
+            let cmd_key_path: Vec<u16> = cmd_path.encode_utf16().collect();
+            let text: Vec<u16> = format!("{}\0", menu_text).encode_utf16().collect();
+            let icon: Vec<u16> = format!("{}\0", icon_path).encode_utf16().collect();
+            let command: Vec<u16> = format!("\"{}\" {}\0", exe_path, cmd_arg)
+                .encode_utf16()
+                .collect();
+
+            // 1. 创建菜单项键并设置显示文本
+            let mut hkey: isize = 0;
+            let ret = RegCreateKeyExW(
+                HKEY_CURRENT_USER,
+                key_path.as_ptr(),
+                0,
+                std::ptr::null(),
+                REG_OPTION_NON_VOLATILE,
+                KEY_WRITE,
+                std::ptr::null_mut(),
+                &mut hkey,
+                std::ptr::null_mut(),
+            );
+            if ret != 0 {
+                log::error!("注册表: {} 创建失败, 错误码={}", key_name, ret);
+                continue;
+            }
+
+            // 设置默认值（显示文本）
+            RegSetValueExW(
+                hkey,
+                std::ptr::null(),
+                0,
+                REG_SZ,
+                text.as_ptr() as *const u8,
+                (text.len() * 2) as u32,
+            );
+
+            // 设置图标（Icon 值指向嵌入图标的 exe）
+            let icon_name: Vec<u16> = "Icon\0".encode_utf16().collect();
+            RegSetValueExW(
+                hkey,
+                icon_name.as_ptr(),
+                0,
+                REG_SZ,
+                icon.as_ptr() as *const u8,
+                (icon.len() * 2) as u32,
+            );
+
+            RegCloseKey(hkey);
+
+            // 2. 创建 command 子键
+            let mut cmd_hkey: isize = 0;
+            let ret = RegCreateKeyExW(
+                HKEY_CURRENT_USER,
+                cmd_key_path.as_ptr(),
+                0,
+                std::ptr::null(),
+                REG_OPTION_NON_VOLATILE,
+                KEY_WRITE,
+                std::ptr::null_mut(),
+                &mut cmd_hkey,
+                std::ptr::null_mut(),
+            );
+            if ret != 0 {
+                log::error!("注册表: {} command 子键创建失败, 错误码={}", key_name, ret);
+                continue;
+            }
+
+            RegSetValueExW(
+                cmd_hkey,
+                std::ptr::null(),
+                0,
+                REG_SZ,
+                command.as_ptr() as *const u8,
+                (command.len() * 2) as u32,
+            );
+            RegCloseKey(cmd_hkey);
+
+            log::info!("注册表: {} 已注册", key_name);
         }
 
-        RegSetValueExW(
-            hkey,
-            std::ptr::null(),
-            0,
-            REG_SZ,
-            menu_text.as_ptr() as *const u8,
-            (menu_text.len() * 2) as u32,
-        );
-        RegCloseKey(hkey);
-
-        // 2. 创建 command 子键
-        let mut cmd_hkey: isize = 0;
-        let ret = RegCreateKeyExW(
-            HKEY_CURRENT_USER,
-            cmd_key_path.as_ptr(),
-            0,
-            std::ptr::null(),
-            REG_OPTION_NON_VOLATILE,
-            KEY_WRITE,
-            std::ptr::null_mut(),
-            &mut cmd_hkey,
-            std::ptr::null_mut(),
-        );
-        if ret != 0 {
-            log::error!("注册表: command 子键创建失败, 错误码={}", ret);
-            return;
-        }
-
-        RegSetValueExW(
-            cmd_hkey,
-            std::ptr::null(),
-            0,
-            REG_SZ,
-            command.as_ptr() as *const u8,
-            (command.len() * 2) as u32,
-        );
-        RegCloseKey(cmd_hkey);
-
-        log::info!("注册表: 桌面右键菜单已注册 ({})", exe_path);
+        log::info!("注册表: 桌面右键菜单已注册 ({} 项)", menu_items.len());
     }
 }
 
@@ -558,23 +562,31 @@ pub fn setup_desktop_registry() {
 /// - 程序启动时（清理上次崩溃残留）
 /// - 程序退出时（确保不运行时无残留）
 pub fn cleanup_desktop_registry() {
-    let cmd_key: Vec<u16> =
-        "Software\\Classes\\Directory\\Background\\shell\\IkunCreateBox\\command\0"
-            .encode_utf16()
-            .collect();
-    let key: Vec<u16> = "Software\\Classes\\Directory\\Background\\shell\\IkunCreateBox\0"
-        .encode_utf16()
-        .collect();
+    let key_names = ["IkunOpenPanel", "IkunCreateBox", "IkunAiClassify", "IkunQuit"];
 
     unsafe {
-        let ret1 = RegDeleteKeyW(HKEY_CURRENT_USER, cmd_key.as_ptr());
-        let ret2 = RegDeleteKeyW(HKEY_CURRENT_USER, key.as_ptr());
+        for key_name in &key_names {
+            let cmd_key: Vec<u16> = format!(
+                "Software\\Classes\\Directory\\Background\\shell\\{}\\command\0",
+                key_name
+            )
+            .encode_utf16()
+            .collect();
+            let key: Vec<u16> = format!(
+                "Software\\Classes\\Directory\\Background\\shell\\{}\0",
+                key_name
+            )
+            .encode_utf16()
+            .collect();
 
-        if ret1 == 0 || ret2 == 0 {
-            log::info!("已清理注册表项 IkunCreateBox");
-        } else {
-            log::debug!("注册表清理: 无注册表项（正常）");
+            let ret1 = RegDeleteKeyW(HKEY_CURRENT_USER, cmd_key.as_ptr());
+            let ret2 = RegDeleteKeyW(HKEY_CURRENT_USER, key.as_ptr());
+
+            if ret1 == 0 || ret2 == 0 {
+                log::info!("已清理注册表项: {}", key_name);
+            }
         }
+        log::debug!("注册表清理完成");
     }
 }
 

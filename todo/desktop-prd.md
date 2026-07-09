@@ -42,4 +42,4 @@ gpui-component
 根据当前隐藏桌面图标的代码实现，和你
 腾讯桌面整理 (DeskGo) 和 Stardock Fences 都使用覆盖窗口方式的研究调研，重新指定实现方案，重新编写 prd 内容，当前prd 里有很多过时的东西了
 
-[$finish-task](D:\\github-project\\ikun_organizer\\.agents\\skills\\finish-task\\SKILL.md) 结束任务，归档，提交代码（包括 desltop-prd.md）
+使用技能‘/D:/github-project/ikun_organizer/.claude/commands/trellis/finish-work.md’帮我实现需求

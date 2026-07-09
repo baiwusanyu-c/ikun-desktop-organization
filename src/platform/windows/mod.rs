@@ -31,6 +31,7 @@ mod menu_window;
 pub mod ole_dnd;
 pub mod shell_menu;
 mod sys_tray;
+pub mod app_icon;
 mod wnd_proc;
 
 // Re-export key items

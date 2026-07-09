@@ -7,8 +7,8 @@ use crate::platform::SystemTrayAction;
 
 use super::ffi_imports::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    GetCursorPos, GetModuleHandleW, KillTimer, PostMessageW, RegisterClassExW, SetForegroundWindow,
-    SetTimer, TrackPopupMenu,
+    GetCursorPos, GetModuleHandleW, KillTimer, PostMessageW, RegisterClassExW,
+    SetForegroundWindow, SetTimer, TrackPopupMenu,
 };
 use super::ffi_types::{
     HWND, HWND_MESSAGE, LPARAM, LRESULT, MF_STRING, POINT, TPM_LEFTALIGN, TPM_LEFTBUTTON,
@@ -263,7 +263,8 @@ fn append_menu_item(menu: *mut c_void, id: usize, text: &str) {
     }
 }
 
-fn set_pending_action(action: SystemTrayAction) {
+
+pub(crate) fn set_pending_action(action: SystemTrayAction) {
     log::info!("系统托盘动作已入队: {:?}", action);
     PENDING_ACTION.store(action_to_u8(action), Ordering::SeqCst);
     wake_action_consumer();
@@ -302,7 +303,10 @@ unsafe fn add_tray_icon(hwnd: HWND) -> anyhow::Result<()> {
     let mut data = notify_data(hwnd);
     data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     data.uCallbackMessage = WM_TRAY_ICON;
-    data.hIcon = LoadIconW(None, IDI_APPLICATION).unwrap_or(WinHicon::default());
+    // 优先使用配置的项目图标，回退到系统默认图标
+    data.hIcon = super::app_icon::get_tray_icon()
+        .map(|h| WinHicon(h as _))
+        .unwrap_or_else(|| LoadIconW(None, IDI_APPLICATION).unwrap_or(WinHicon::default()));
     copy_wide(&mut data.szTip, "Ikun Organizer");
 
     if !Shell_NotifyIconW(NIM_ADD, &data).as_bool() {

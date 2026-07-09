@@ -587,12 +587,33 @@ impl eframe::App for MyApp {
             self.ensure_desktop_overlay_running();
         }
 
-        // 信号文件（--create-box 从注册表菜单写入）→ 打开对话框
+        // 信号文件（桌面右键菜单注册表项触发新实例写入）→ 执行对应操作
         let signal_path = signal_file_path();
         if signal_path.exists() {
             let _ = std::fs::remove_file(&signal_path);
             self.open_create_box_dialog();
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+
+        let open_panel_signal = std::env::temp_dir().join("ikun_open_panel.signal");
+        if open_panel_signal.exists() {
+            let _ = std::fs::remove_file(&open_panel_signal);
+            self.open_control_panel(ctx);
+        }
+
+        let ai_classify_signal = std::env::temp_dir().join("ikun_ai_classify.signal");
+        if ai_classify_signal.exists() {
+            let _ = std::fs::remove_file(&ai_classify_signal);
+            log::info!("桌面右键菜单: 一键AI分类暂未实现");
+        }
+
+        let quit_signal = std::env::temp_dir().join("ikun_quit.signal");
+        if quit_signal.exists() {
+            let _ = std::fs::remove_file(&quit_signal);
+            log::info!("桌面右键菜单: 退出应用");
+            self.quit_requested = true;
+            cleanup_system_tray();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
 
         // 格子窗口右键菜单 → 打开对话框

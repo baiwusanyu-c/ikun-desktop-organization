@@ -260,31 +260,8 @@ pub fn extract_file_icon(file_path: &str) -> Option<FileIconInfo> {
     let type_len = info.sz_type_name.iter().position(|&c| c == 0).unwrap_or(0);
     let type_name = String::from_utf16_lossy(&info.sz_type_name[..type_len]);
 
-    // 对 .lnk 优先使用 Shell 缓存图标。解析快捷方式目标再调用 SHDefExtractIconW
-    // 可能被第三方程序/网络路径卡住，启动恢复布局时会阻塞 UI 并导致桌面已隐藏但
-    // 分类框尚未绘制完成。Shell 缓存图标质量略低，但响应更稳定。
-    if file_path.to_lowercase().ends_with(".lnk") {
-        let mut shortcut_info = SHFILEINFOW::default();
-        let result = unsafe {
-            SHGetFileInfoW(
-                display_path_wide.as_ptr(),
-                0,
-                &mut shortcut_info,
-                std::mem::size_of::<SHFILEINFOW>() as u32,
-                SHGFI_ICON | SHGFI_LARGEICON,
-            )
-        };
-        if result != 0 && !shortcut_info.h_icon.is_null() {
-            log::debug!("使用 Shell 缓存图标: {}", file_path);
-            return Some(FileIconInfo {
-                hicon: shortcut_info.h_icon,
-                display_name,
-                type_name,
-            });
-        }
-    }
-
-    // 如果是 .lnk 快捷方式，先解析目标路径用于高清图标提取
+    // 对 .lnk 快捷方式，始终解析目标路径并提取目标图标，避免 Shell 缓存图标
+    // 自带的"快捷方式"小箭头覆层。
     let resolved_path = if file_path.to_lowercase().ends_with(".lnk") {
         let target = resolve_shortcut_target(file_path);
         if let Some(ref t) = target {

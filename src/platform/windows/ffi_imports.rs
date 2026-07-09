@@ -150,6 +150,13 @@ extern "system" {
     ) -> i32;
     pub fn DestroyMenu(hMenu: HMENU) -> i32;
     pub fn GetMenuItemCount(hMenu: HMENU) -> i32;
+    pub fn SetMenuItemBitmaps(
+        hMenu: HMENU,
+        uPosition: u32,
+        uFlags: u32,
+        hbmUnchecked: HBITMAP,
+        hbmChecked: HBITMAP,
+    ) -> i32;
 
     // GDI drawing (for owner-draw menu)
     pub fn SetTextColor(hdc: HDC, color: u32) -> u32;

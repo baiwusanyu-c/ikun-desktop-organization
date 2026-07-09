@@ -134,6 +134,7 @@ pub const CS_VREDRAW: u32 = 0x0001;
 pub const CS_DBLCLKS: u32 = 0x0008;
 
 // ===== Window Messages =====
+pub const WM_NULL: u32 = 0x0000;
 pub const WM_SETREDRAW: u32 = 0x000B;
 pub const WM_PAINT: u32 = 0x000F;
 pub const WM_DESTROY: u32 = 0x0002;

@@ -31,12 +31,21 @@ fn main() -> eframe::Result<()> {
         init_ole();
     }
 
-    // --create-box: 桌面右键菜单注册表项触发
-    // 写入信号文件后立即退出，运行中的实例检测到信号后打开 egui 对话框
-    if std::env::args().any(|a| a == "--create-box") {
-        let signal = std::env::temp_dir().join("ikun_create_box.signal");
-        let _ = std::fs::write(&signal, "1");
-        return Ok(());
+    // 桌面右键菜单注册表项触发：通过信号文件与运行中的实例通信
+    // 写入信号文件后立即退出，运行中的实例轮询检测到信号后执行对应操作
+    if let Some(arg) = std::env::args().nth(1) {
+        let signal_name = match arg.as_str() {
+            "--create-box" => Some("ikun_create_box.signal"),
+            "--open-panel" => Some("ikun_open_panel.signal"),
+            "--ai-classify" => Some("ikun_ai_classify.signal"),
+            "--quit" => Some("ikun_quit.signal"),
+            _ => None,
+        };
+        if let Some(name) = signal_name {
+            let signal = std::env::temp_dir().join(name);
+            let _ = std::fs::write(&signal, "1");
+            return Ok(());
+        }
     }
 
     let options = eframe::NativeOptions {
