@@ -364,7 +364,6 @@ fn render_label(
     let font_size = style.label_font_size as f64 * scale;
     let label_color = style.label_font_color;
     let line_height = font_size * 1.3;
-    let total_height = line_height * 2.0;
 
     log::info!(
         "render_label: '{}' x={}, y={}, w={}, fs={}",
@@ -372,7 +371,7 @@ fn render_label(
     );
 
     unsafe {
-        // 1. NSGraphicsContext (flipped: false, Y=0 在底部)
+        // 1. NSGraphicsContext
         let cg_ptr = context.as_ptr() as *mut c_void;
         let graphics_context: id = msg_send![
             class!(NSGraphicsContext),
@@ -380,10 +379,8 @@ fn render_label(
         ];
         let _: () = msg_send![class!(NSGraphicsContext), setCurrentContext: graphics_context];
 
-        // 2. 字体
+        // 2. 字体和颜色
         let font: id = msg_send![class!(NSFont), systemFontOfSize: font_size];
-
-        // 3. 颜色
         let color: id = msg_send![
             class!(NSColor),
             colorWithRed: label_color[0] as f64 / 255.0
@@ -392,34 +389,92 @@ fn render_label(
             alpha: label_color[3] as f64 / 255.0
         ];
 
-        // 4. NSMutableParagraphStyle (alloc+init, 确保可变)
-        let para: id = msg_send![class!(NSMutableParagraphStyle), alloc];
-        let para: id = msg_send![para, init];
-        // NSTextAlignmentCenter = 2
-        let _: () = msg_send![para, setAlignment: 2usize];
-        // NSLineBreakByCharWrapping = 1
-        let _: () = msg_send![para, setLineBreakMode: 1usize];
-
-        // 5. 属性字典
+        // 3. 属性字典
         let attrs: id = msg_send![class!(NSMutableDictionary), dictionary];
         let _: () = msg_send![attrs, setObject: font forKey: NSString::alloc(nil).init_str("NSFont")];
         let _: () = msg_send![attrs, setObject: color forKey: NSString::alloc(nil).init_str("NSColor")];
-        let _: () = msg_send![attrs, setObject: para forKey: NSString::alloc(nil).init_str("NSParagraphStyle")];
 
-        // 6. NSAttributedString（完整文件名，系统自动换行）
+        // 4. 平衡分割：两行各用大约一半的字符数
+        let chars: Vec<char> = display_name.chars().collect();
+        let total_chars = chars.len();
+        
+        // 测量整段文字宽度
         let full_str = NSString::alloc(nil).init_str(&display_name);
-        let attr_str: id = msg_send![class!(NSAttributedString), alloc];
-        let _: () = msg_send![attr_str, initWithString: full_str attributes: attrs];
+        let full_size: cocoa::foundation::NSSize = msg_send![full_str, sizeWithAttributes: attrs];
+        
+        let lines: Vec<String> = if full_size.width <= width {
+            // 单行即可放下
+            vec![display_name.clone()]
+        } else {
+            // 需要两行：各用一半字符数
+            let half = total_chars / 2;
+            let line1: String = chars[..half].iter().collect();
+            let line2: String = chars[half..].iter().collect();
+            
+            vec![line1, line2]
+        };
 
-        // 7. 绘制矩形
-        let cg_y = bitmap_height - screen_y - total_height;
-        let label_rect = NSRect::new(
-            NSPoint::new(screen_x, cg_y),
-            NSSize::new(width, total_height),
-        );
-
-        // 8. 绘制
-        let _: () = msg_send![attr_str, drawInRect: label_rect];
+        // 5. 逐行绘制（居中对齐，如果超出 width 则中间截断）
+        log::info!("render_label: split into {} lines", lines.len());
+        for (line_idx, line_text) in lines.iter().enumerate() {
+            // 测量行宽
+            let line_str = NSString::alloc(nil).init_str(line_text);
+            let size: cocoa::foundation::NSSize = msg_send![line_str, sizeWithAttributes: attrs];
+            
+            // 如果超出 width，使用中间截断
+            let display_text = if size.width > width {
+                let line_chars: Vec<char> = line_text.chars().collect();
+                let char_count = line_chars.len();
+                
+                // 逐步减少字符数，直到宽度 <= width
+                let mut keep_chars = char_count;
+                loop {
+                    if keep_chars <= 3 {
+                        // 至少保留 3 个字符（如 "a…b"）
+                        break;
+                    }
+                    
+                    let half_keep = keep_chars / 2;
+                    let prefix: String = line_chars[..half_keep].iter().collect();
+                    let suffix: String = line_chars[char_count - half_keep..].iter().collect();
+                    let test_str = format!("{}…{}", prefix, suffix);
+                    
+                    let test_ns = NSString::alloc(nil).init_str(&test_str);
+                    let test_size: cocoa::foundation::NSSize = msg_send![test_ns, sizeWithAttributes: attrs];
+                    
+                    if test_size.width <= width {
+                        break;
+                    }
+                    
+                    keep_chars -= 1;
+                }
+                
+                let half_keep = keep_chars / 2;
+                let prefix: String = line_chars[..half_keep].iter().collect();
+                let suffix: String = line_chars[char_count - half_keep..].iter().collect();
+                format!("{}…{}", prefix, suffix)
+            } else {
+                line_text.clone()
+            };
+            
+            // 重新测量显示文本的宽度
+            let display_str = NSString::alloc(nil).init_str(&display_text);
+            let display_size: cocoa::foundation::NSSize = msg_send![display_str, sizeWithAttributes: attrs];
+            
+            // 计算居中 X 位置
+            let line_x = screen_x + (width - display_size.width) / 2.0;
+            
+            // 计算 Y 位置
+            let line_screen_y = screen_y + (line_idx as f64) * line_height;
+            let line_cg_y = bitmap_height - line_screen_y - line_height;
+            
+            log::info!("  line {}: '{}' w={}, x={:.1}, y={:.1}", 
+                       line_idx, display_text, display_size.width, line_x, line_cg_y);
+            
+            // 绘制
+            let point = NSPoint::new(line_x, line_cg_y);
+            let _: () = msg_send![display_str, drawAtPoint: point withAttributes: attrs];
+        }
 
         let _: () = msg_send![class!(NSGraphicsContext), setCurrentContext: nil];
     }
