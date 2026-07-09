@@ -1,0 +1,21 @@
+src/platform/macos/desktop_overlay/box_render.rs
+  s_d570965d6861fd::t_ce827cc94176fd 338,375,395-401,409
+  s_d570965d6861fd::t_6487cf2e92ed23 366,383,414
+  s_d570965d6861fd::t_dde37aca0dbd99 337
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "b35fbc90850584761e81fbcc3763733e3d34912a",
+  "prompts": {},
+  "sessions": {
+    "s_d570965d6861fd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "019f459f-71f7-7631-803f-ad9515c09fc7",
+        "model": "unknown"
+      },
+      "human_author": "白雾三语 <32354856+baiwusanyu-c@users.noreply.github.com>"
+    }
+  }
+}
