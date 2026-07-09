@@ -1,0 +1,23 @@
+src/platform/macos/icon_extract.rs
+  s_d570965d6861fd::t_e572d2455b6592 3-4,11,15,17-25,27-30,32-35,37-42,63-64,66-69,71,73-76,78-84,86-87,90-95,98-119,126-127,129-133,136-141,143,145,160-166
+  s_d570965d6861fd::t_2a2d9311f1e71e 6-8
+  s_d570965d6861fd::t_f06d9c5bd8cdc8 31,36,44-61,65,72,85,88-89,97,123,128
+  s_d570965d6861fd::t_5886528fbc8774 12,43,62,70,77,96,120-122,124-125,134-135
+  s_d570965d6861fd::t_20a7f9c32a4378 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "cfbafe0ca9b7c2297c4681816a49a38dcb77f533",
+  "prompts": {},
+  "sessions": {
+    "s_d570965d6861fd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "019f459f-71f7-7631-803f-ad9515c09fc7",
+        "model": "unknown"
+      },
+      "human_author": "白雾三语 <32354856+baiwusanyu-c@users.noreply.github.com>"
+    }
+  }
+}
