@@ -129,6 +129,150 @@ pub fn render_overlay(window: id);
 
 ---
 
+## 阶段 1.5：分类框渲染（对标 Windows 版本）
+
+### 目标
+在 macOS 覆盖窗口上渲染分类框，外观和功能对标 Windows 版本 `d2d_render.rs` 的 `render_layered_window` 实现。
+
+### 当前实现问题（与 Windows 版本的差异）
+
+#### 1. 圆角背景
+- **Windows**: 使用 `D2D1_ROUNDED_RECT` + `FillRoundedRectangle`，圆角半径 16px，背景色 `RGBA(1,1,1,38/255)`
+- **macOS 当前**: 使用 bezier curve 绘制矩形，但圆角实现可能不完整（curve_to_point 参数需要验证）
+- **修复**: 使用 `CGPathAddArcToPoint` 或 `NSBezierPath` 的 `bezierPathWithRoundedRect` 绘制正确的圆角
+
+#### 2. 标题栏分隔线
+- **Windows**: 在标题栏底部绘制 1px 分隔线，颜色 `RGBA(100,100,100,100/255)`
+- **macOS 当前**: 已实现，但需要验证颜色和位置是否正确
+
+#### 3. 标题文字渲染
+- **Windows**: 使用 DirectWrite，15pt Microsoft YaHei UI 粗体，白色，4 方向阴影描边（上下左右各 1px 偏移）
+- **macOS 当前**: 使用 `NSAttributedString` + `NSShadow`，但 NSShadow 只支持单方向阴影
+- **修复**: 需要手动绘制 4 次文字（偏移 1px 上下左右）来模拟描边效果
+
+#### 4. 锁定按钮（🔒/🔓）
+- **Windows**: 标题栏右侧显示锁定/解锁按钮，14pt Segoe UI Emoji，hover 时显示半透明白色背景（`RGBA(255,255,255,40/255)`）
+- **macOS 当前**: **未实现**
+- **实现**:
+  - 在标题栏右侧绘制 🔒 或 🔓 emoji（根据 `locked` 状态）
+  - 添加 hover 检测（需要鼠标事件跟踪）
+  - Hover 时绘制圆角背景高亮
+
+#### 5. 更多按钮（⋮）
+- **Windows**: 锁定按钮右侧显示三个竖点按钮（U+22EE），16pt Segoe UI Symbol 粗体，hover 高亮
+- **macOS 当前**: **未实现**
+- **实现**:
+  - 绘制 ⋮ 符号
+  - 添加 hover 检测和高亮效果
+  - 点击后弹出菜单（需要 NSMenu 实现）
+
+#### 6. 编辑模式输入框
+- **Windows**: 编辑模式下显示输入框 + 清除按钮（X）+ 保存按钮（✓），使用 DirectWrite 渲染
+- **macOS 当前**: **未实现**
+- **实现**:
+  - 绘制输入框背景（深色半透明）
+  - 绘制光标（闪烁的白色竖线）
+  - 绘制清除和保存按钮（圆形背景 + 符号）
+  - 添加按钮 hover 高亮
+
+#### 7. 图标网格布局
+- **Windows**: 使用 `box_core::layout_calc::GridLayout` 计算布局，支持动态列数
+- **macOS 当前**: 硬编码 4 列，80x100 单元格
+- **修复**: 复用 `box_core::GridLayout`，根据窗口宽度动态计算列数
+
+#### 8. 多视图模式
+- **Windows**: 支持 ExtraLarge（128px）、Large（96px）、Medium（48px）、Small（32px）四种视图
+- **macOS 当前**: **未实现**，固定 48px 图标
+- **实现**:
+  - 添加 `ViewMode` 枚举和参数结构
+  - 根据视图模式调整图标大小、单元格尺寸、行高
+  - 在更多菜单中提供视图切换选项
+
+#### 9. Hover 高亮效果
+- **Windows**: 鼠标悬停在图标上时显示半透明白色背景
+- **macOS 当前**: **未实现**
+- **实现**:
+  - 添加鼠标移动事件跟踪
+  - 计算当前 hover 的图标索引
+  - 绘制 hover 背景高亮（圆角矩形）
+
+#### 10. 选中状态
+- **Windows**: 点击图标后显示选中状态（更深的半透明背景）
+- **macOS 当前**: **未实现**
+- **实现**:
+  - 添加鼠标点击事件处理
+  - 记录选中图标索引
+  - 绘制选中背景高亮
+
+#### 11. 文件名截断和 Tooltip
+- **Windows**: 长文件名截断显示（...），鼠标悬停时显示完整名称的 Tooltip 窗口
+- **macOS 当前**: 未截断，无 Tooltip
+- **实现**:
+  - 使用 `NSString.drawInRect` 的截断模式（`NSLineBreakByTruncatingTail`）
+  - 创建独立的 Tooltip NSWindow（小尺寸、半透明背景）
+  - 鼠标悬停 500ms 后显示 Tooltip
+
+#### 12. 排序和分组
+- **Windows**: 支持按名称/类型/大小/修改时间排序，支持升序/降序切换
+- **macOS 当前**: **未实现**
+- **实现**:
+  - 添加 `SortMode` 和 `sort_ascending` 状态
+  - 在更多菜单中提供排序选项
+  - 实现排序逻辑（可按 `box_core` 中的工具函数复用）
+
+#### 13. 上下文菜单系统
+- **Windows**: 完整的右键菜单（查看、排序、刷新、锁定、删除分类框等）
+- **macOS 当前**: **未实现**
+- **实现**:
+  - 使用 `NSMenu` + `NSMenuItem` 创建菜单
+  - 实现菜单项点击回调
+  - 菜单项包括：查看模式、排序方式、锁定、重命名、删除
+
+#### 14. 边缘检测和拖拽调整
+- **Windows**: 鼠标靠近窗口边缘时改变光标为调整大小光标，可拖拽调整窗口大小
+- **macOS 当前**: **未实现**
+- **实现**:
+  - 检测鼠标是否在窗口边缘（上下左右各 4px）
+  - 改变光标形状（`NSCursor.resizeLeft` 等）
+  - 实现边缘拖拽调整窗口大小
+
+#### 15. 图标绘制方式
+- **Windows**: 使用 WIC 解码图标 → D2D Bitmap → DrawBitmap，支持透明度混合
+- **macOS 当前**: 使用 `NSImage.drawInRect` 通过 `NSGraphicsContext` 绘制到 CGContext
+- **验证**: 需要确认图标透明度是否正确渲染，是否与 Windows 视觉效果一致
+
+#### 16. Retina/DPI 适配
+- **Windows**: 使用 `GetDpiForWindow` + `scale_for_dpi` 函数适配所有尺寸
+- **macOS 当前**: 使用 `backingScaleFactor`，但需要验证所有元素（文字、图标、按钮）是否正确缩放
+- **修复**: 添加统一的 `scale_value(value: f64, scale: f64) -> f64` 工具函数
+
+### 实现优先级
+
+**P0 - 必须立即修复（影响基本可用性）**:
+1. 圆角背景渲染正确性
+2. 图标绘制透明度验证
+3. Retina/DPI 适配
+
+**P1 - 重要功能（对标 Windows 核心体验）**:
+4. 锁定按钮 + hover
+5. 更多按钮 + hover
+6. 标题文字描边效果
+7. 图标 hover 高亮
+8. 文件名截断
+
+**P2 - 增强功能（提升用户体验）**:
+9. 编辑模式输入框
+10. 多视图模式
+11. 上下文菜单
+12. Tooltip
+
+**P3 - 高级功能（后续迭代）**:
+13. 选中状态
+14. 排序和分组
+15. 边缘拖拽调整
+
+---
+
 ## 阶段 2：图标渲染
 
 ### 目标
@@ -389,6 +533,8 @@ fn drop(&mut self) {
 ```
 阶段 1（覆盖窗口基础）
   ↓
+阶段 1.5（分类框渲染 - 对标 Windows）← 当前阶段
+  ↓
 阶段 2（图标渲染）
   ↓
 阶段 3（图标交互：双击/右键）
@@ -402,8 +548,8 @@ fn drop(&mut self) {
 阶段 7（文件监听）
 ```
 
-**MVP（最小可用版本）= 阶段 1 + 2 + 3 + 6**
-- 启动后：原生图标隐藏 → 覆盖窗口显示非管理图标 → 双击/右键正常
+**MVP（最小可用版本）= 阶段 1 + 1.5 + 2 + 3 + 6**
+- 启动后：原生图标隐藏 → 分类框渲染（对标 Windows）→ 覆盖窗口显示非管理图标 → 双击/右键正常
 - 退出后：覆盖窗口销毁 → 原生图标恢复
 
 ---

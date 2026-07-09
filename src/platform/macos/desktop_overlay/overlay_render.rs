@@ -1,71 +1,105 @@
-//! macOS 覆盖窗口渲染
+//! 覆盖窗口渲染
 
-use crate::platform::macos::ffi_imports::*;
+use crate::config::AppConfig;
+use crate::platform::macos::desktop_overlay::box_render::{get_boxes_from_config, render_box};
+use crate::platform::macos::desktop_overlay::overlay_window::ScreenInfo;
 use cocoa::base::id;
-use cocoa::foundation::{NSRect, NSPoint, NSSize};
+use cocoa::foundation::{NSPoint, NSRect, NSSize};
 use core_graphics::color_space::CGColorSpace;
 use core_graphics::context::CGContext;
-use core_graphics::geometry::{CGPoint, CGSize, CGRect};
-use objc::{msg_send, sel, sel_impl};
+use core_graphics::geometry::{CGPoint, CGRect, CGSize};
+use foreign_types_shared::ForeignType;
+use objc::{class, msg_send, sel, sel_impl};
 
-use super::overlay_window::ScreenInfo;
+pub(crate) fn render_overlay_placeholder(
+    window: id,
+    screen_info: &ScreenInfo,
+    screen_index: usize,
+) {
+    log::info!("渲染桌面分类框和图标 (屏幕 {})", screen_index);
 
-const K_CG_BITMAP_INFO: u32 = 2 | 0x2000;
+    let config = AppConfig::load().unwrap_or_default();
+    let style = &config.box_style;
+    let boxes = get_boxes_from_config(&config, screen_index);
 
-/// 渲染覆盖窗口内容
-pub(crate) fn render_overlay_placeholder(window: id, screen_info: &ScreenInfo) {
+    if boxes.is_empty() {
+        log::info!("屏幕 {} 没有分类框，跳过渲染", screen_index);
+        render_empty(window, screen_info);
+        return;
+    }
+
+    log::info!("开始渲染 {} 个分类框 (屏幕 {})", boxes.len(), screen_index);
+
     unsafe {
-        let width = screen_info.frame.size.width;
-        let height = screen_info.frame.size.height;
+        let screen_width = screen_info.frame.size.width;
+        let screen_height = screen_info.frame.size.height;
         let scale = screen_info.scale_factor;
-        let pixel_w = (width * scale) as usize;
-        let pixel_h = (height * scale) as usize;
 
-        log::info!("渲染覆盖窗口占位符: {}x{} @ {:.1}x", width, height, scale);
+        let bitmap_width = (screen_width * scale) as usize;
+        let bitmap_height = (screen_height * scale) as usize;
 
-        // 创建位图上下文
+        // 创建位图上下文（Y=0 在底部，标准 CG 坐标系）
         let color_space = CGColorSpace::create_device_rgb();
-        let bytes_per_row = pixel_w * 4;
-        let ctx = CGContext::create_bitmap_context(
+        let context = CGContext::create_bitmap_context(
             None,
-            pixel_w,
-            pixel_h,
+            bitmap_width,
+            bitmap_height,
             8,
-            bytes_per_row,
+            bitmap_width * 4,
             &color_space,
-            K_CG_BITMAP_INFO,
+            0x2000 | 0x02, // kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big
         );
 
-        // 绘制半透明蓝色背景
-        ctx.set_rgb_fill_color(0.2, 0.5, 0.8, 0.15);
-        let rect = CGRect::new(&CGPoint::new(0.0, 0.0), &CGSize::new(pixel_w as f64, pixel_h as f64));
-        ctx.fill_rect(rect);
+        // 清空为全透明
+        context.set_rgb_fill_color(0.0, 0.0, 0.0, 0.0);
+        context.fill_rect(CGRect::new(
+            &CGPoint::new(0.0, 0.0),
+            &CGSize::new(bitmap_width as f64, bitmap_height as f64),
+        ));
 
-        // 绘制边框
-        ctx.set_rgb_stroke_color(0.0, 0.4, 0.8, 0.3);
-        ctx.set_line_width(2.0 * scale);
-        let border_rect = CGRect::new(
-            &CGPoint::new(1.0, 1.0),
-            &CGSize::new(pixel_w as f64 - 2.0, pixel_h as f64 - 2.0),
-        );
-        ctx.stroke_rect(border_rect);
+        // 渲染每个分类框
+        for item in &boxes {
+            render_box(&context, item, style, scale, bitmap_height as f64);
+        }
 
-        // 创建 NSImage
-        let image = ctx.create_image().expect("Failed to create image");
+        // 创建 CGImage
+        let cg_image = match context.create_image() {
+            Some(img) => img,
+            None => {
+                log::error!("创建 CGImage 失败");
+                return;
+            }
+        };
+
+        // 创建 NSImage 和 NSImageView
         let ns_image: id = msg_send![class!(NSImage), alloc];
-        let size = NSSize::new(width, height);
-        let ns_image: id = msg_send![ns_image, initWithCGImage:image.as_ptr() size:size];
+        let ns_image: id = msg_send![ns_image, initWithCGImage: cg_image.as_ptr()
+                                                       size: NSSize::new(screen_width, screen_height)];
 
-        // 创建 NSImageView
-        let frame = NSRect::new(NSPoint::new(0.0, 0.0), size);
         let image_view: id = msg_send![class!(NSImageView), alloc];
-        let image_view: id = msg_send![image_view, initWithFrame:frame];
-        let _: () = msg_send![image_view, setImage:ns_image];
-        let _: () = msg_send![image_view, setImageScaling:0]; // NSImageScaleNone
+        let image_view: id = msg_send![image_view, initWithFrame: NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(screen_width, screen_height)
+        )];
 
-        // 设置为窗口的内容视图
-        let _: () = msg_send![window, setContentView:image_view];
+        let _: () = msg_send![image_view, setImage: ns_image];
+        let _: () = msg_send![window, setContentView: image_view];
 
-        log::info!("覆盖窗口占位符渲染完成");
+        log::info!("分类框渲染完成 (屏幕 {})", screen_index);
+    }
+}
+
+fn render_empty(window: id, screen_info: &ScreenInfo) {
+    unsafe {
+        let screen_width = screen_info.frame.size.width;
+        let screen_height = screen_info.frame.size.height;
+
+        let view: id = msg_send![class!(NSView), alloc];
+        let view: id = msg_send![view, initWithFrame: NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(screen_width, screen_height)
+        )];
+
+        let _: () = msg_send![window, setContentView: view];
     }
 }
