@@ -269,14 +269,16 @@ fn render_icon_grid(
             bitmap_height,
         );
 
-        // 标签宽度与图标等宽（对齐 Finder：label 宽度 = icon_size，不含 cell_spacing）
+        // 标签宽度 = 1.4 倍图标宽度（对齐 Finder：label 略微超出 icon 边界，居中对齐）
+        let label_width = icon_size * 1.4;
+        let label_screen_x = icon_screen_x + icon_size / 2.0 - label_width / 2.0;
         let label_screen_y = icon_screen_y + icon_size + 6.0 * scale;
         render_label(
             context,
             path,
-            icon_screen_x,
+            label_screen_x,
             label_screen_y,
-            icon_size,
+            label_width,
             style,
             scale,
             bitmap_height,
@@ -394,7 +396,9 @@ fn render_label(
         let _: () = msg_send![attrs, setObject: font forKey: NSString::alloc(nil).init_str("NSFont")];
         let _: () = msg_send![attrs, setObject: color forKey: NSString::alloc(nil).init_str("NSColor")];
 
-        // 4. 平衡分割：两行各用大约一半的字符数
+        // 4. 分割文字（Finder 风格）
+        //    - 第一行：最大前缀（无省略号）
+        //    - 第二行：剩余内容，超出则中间截断
         let chars: Vec<char> = display_name.chars().collect();
         let total_chars = chars.len();
         
@@ -406,74 +410,76 @@ fn render_label(
             // 单行即可放下
             vec![display_name.clone()]
         } else {
-            // 需要两行：各用一半字符数
-            let half = total_chars / 2;
-            let line1: String = chars[..half].iter().collect();
-            let line2: String = chars[half..].iter().collect();
+            // 找第一行的最大前缀（不超过 width）
+            let mut line1_end = 0;
+            for i in 1..=total_chars {
+                let test_str: String = chars[..i].iter().collect();
+                let test_ns = NSString::alloc(nil).init_str(&test_str);
+                let test_size: cocoa::foundation::NSSize = msg_send![test_ns, sizeWithAttributes: attrs];
+                
+                if test_size.width > width {
+                    line1_end = i - 1;
+                    break;
+                }
+            }
+            if line1_end == 0 {
+                line1_end = total_chars / 2;
+            }
+            
+            let line1: String = chars[..line1_end].iter().collect();
+            
+            // 第二行：从 line1_end 到结尾
+            let remaining: String = chars[line1_end..].iter().collect();
+            let remaining_str = NSString::alloc(nil).init_str(&remaining);
+            let remaining_size: cocoa::foundation::NSSize = msg_send![remaining_str, sizeWithAttributes: attrs];
+            
+            let line2 = if remaining_size.width <= width {
+                // 第二行能放下，不需要截断
+                remaining
+            } else {
+                // 第二行超出，使用中间截断（保留 extension）
+                let rem_chars: Vec<char> = remaining.chars().collect();
+                let rem_count = rem_chars.len();
+                
+                // 找最大的 prefix+suffix 组合，使 prefix+"…"+suffix <= width
+                let mut best_keep = 3;
+                for keep in 3..rem_count {
+                    let half = keep / 2;
+                    let prefix: String = rem_chars[..half].iter().collect();
+                    let suffix: String = rem_chars[rem_count - half..].iter().collect();
+                    let test_str = format!("{}…{}", prefix, suffix);
+                    let test_ns = NSString::alloc(nil).init_str(&test_str);
+                    let test_size: cocoa::foundation::NSSize = msg_send![test_ns, sizeWithAttributes: attrs];
+                    
+                    if test_size.width > width {
+                        break;
+                    }
+                    best_keep = keep;
+                }
+                
+                let half = best_keep / 2;
+                let prefix: String = rem_chars[..half].iter().collect();
+                let suffix: String = rem_chars[rem_count - half..].iter().collect();
+                format!("{}…{}", prefix, suffix)
+            };
             
             vec![line1, line2]
         };
 
-        // 5. 逐行绘制（居中对齐，如果超出 width 则中间截断）
+        // 5. 逐行绘制（居中对齐）
         log::info!("render_label: split into {} lines", lines.len());
         for (line_idx, line_text) in lines.iter().enumerate() {
-            // 测量行宽
             let line_str = NSString::alloc(nil).init_str(line_text);
             let size: cocoa::foundation::NSSize = msg_send![line_str, sizeWithAttributes: attrs];
             
-            // 如果超出 width，使用中间截断
-            let display_text = if size.width > width {
-                let line_chars: Vec<char> = line_text.chars().collect();
-                let char_count = line_chars.len();
-                
-                // 逐步减少字符数，直到宽度 <= width
-                let mut keep_chars = char_count;
-                loop {
-                    if keep_chars <= 3 {
-                        // 至少保留 3 个字符（如 "a…b"）
-                        break;
-                    }
-                    
-                    let half_keep = keep_chars / 2;
-                    let prefix: String = line_chars[..half_keep].iter().collect();
-                    let suffix: String = line_chars[char_count - half_keep..].iter().collect();
-                    let test_str = format!("{}…{}", prefix, suffix);
-                    
-                    let test_ns = NSString::alloc(nil).init_str(&test_str);
-                    let test_size: cocoa::foundation::NSSize = msg_send![test_ns, sizeWithAttributes: attrs];
-                    
-                    if test_size.width <= width {
-                        break;
-                    }
-                    
-                    keep_chars -= 1;
-                }
-                
-                let half_keep = keep_chars / 2;
-                let prefix: String = line_chars[..half_keep].iter().collect();
-                let suffix: String = line_chars[char_count - half_keep..].iter().collect();
-                format!("{}…{}", prefix, suffix)
-            } else {
-                line_text.clone()
-            };
-            
-            // 重新测量显示文本的宽度
-            let display_str = NSString::alloc(nil).init_str(&display_text);
-            let display_size: cocoa::foundation::NSSize = msg_send![display_str, sizeWithAttributes: attrs];
-            
-            // 计算居中 X 位置
-            let line_x = screen_x + (width - display_size.width) / 2.0;
-            
-            // 计算 Y 位置
+            let line_x = screen_x + (width - size.width) / 2.0;
             let line_screen_y = screen_y + (line_idx as f64) * line_height;
             let line_cg_y = bitmap_height - line_screen_y - line_height;
             
-            log::info!("  line {}: '{}' w={}, x={:.1}, y={:.1}", 
-                       line_idx, display_text, display_size.width, line_x, line_cg_y);
+            log::info!("  line {}: '{}' w={:.1}, x={:.1}", line_idx, line_text, size.width, line_x);
             
-            // 绘制
             let point = NSPoint::new(line_x, line_cg_y);
-            let _: () = msg_send![display_str, drawAtPoint: point withAttributes: attrs];
+            let _: () = msg_send![line_str, drawAtPoint: point withAttributes: attrs];
         }
 
         let _: () = msg_send![class!(NSGraphicsContext), setCurrentContext: nil];
