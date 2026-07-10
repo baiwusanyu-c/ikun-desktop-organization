@@ -34,7 +34,8 @@ pub fn extract_icon(path: &Path) -> Option<id> {
 /// 解析 Alias 文件，返回目标路径
 fn resolve_alias(path_str: &str) -> Option<String> {
     unsafe {
-        let url: id = msg_send![class!(NSURL), fileURLWithPath: NSString::alloc(nil).init_str(path_str)];
+        let url: id =
+            msg_send![class!(NSURL), fileURLWithPath: NSString::alloc(nil).init_str(path_str)];
         if url.is_null() {
             return None;
         }

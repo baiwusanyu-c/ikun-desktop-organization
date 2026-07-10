@@ -7,8 +7,8 @@ use crate::platform::SystemTrayAction;
 
 use super::ffi_imports::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    GetCursorPos, GetModuleHandleW, KillTimer, PostMessageW, RegisterClassExW,
-    SetForegroundWindow, SetTimer, TrackPopupMenu,
+    GetCursorPos, GetModuleHandleW, KillTimer, PostMessageW, RegisterClassExW, SetForegroundWindow,
+    SetTimer, TrackPopupMenu,
 };
 use super::ffi_types::{
     HWND, HWND_MESSAGE, LPARAM, LRESULT, MF_STRING, POINT, TPM_LEFTALIGN, TPM_LEFTBUTTON,
@@ -262,7 +262,6 @@ fn append_menu_item(menu: *mut c_void, id: usize, text: &str) {
         log::warn!("添加托盘菜单项失败: {}", text);
     }
 }
-
 
 pub(crate) fn set_pending_action(action: SystemTrayAction) {
     log::info!("系统托盘动作已入队: {:?}", action);

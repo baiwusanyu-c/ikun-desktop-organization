@@ -14,6 +14,7 @@
 //! - `shell_menu`: Shell 上下文菜单 + 注册表管理
 //! - `sys_tray`: 系统托盘（TODO）
 
+pub mod app_icon;
 mod control_panel_window;
 mod d2d_render;
 pub mod desktop_manager;
@@ -31,7 +32,6 @@ mod menu_window;
 pub mod ole_dnd;
 pub mod shell_menu;
 mod sys_tray;
-pub mod app_icon;
 mod wnd_proc;
 
 // Re-export key items

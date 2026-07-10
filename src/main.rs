@@ -15,9 +15,10 @@ mod plugin;
 mod ui;
 mod utils;
 
-use eframe::egui;
+#[cfg(windows)]
+mod gpui_app;
 
-fn main() -> eframe::Result<()> {
+fn main() -> anyhow::Result<()> {
     utils::init_logger();
     log::info!("========================================");
     log::info!("启动 Desktop Organizer (重写版)");
@@ -48,6 +49,31 @@ fn main() -> eframe::Result<()> {
         }
     }
 
+    // Windows 平台使用 GPUI（默认）
+    #[cfg(all(target_os = "windows", not(feature = "eframe-ui")))]
+    {
+        gpui_app::windows_main::run_gpui_app();
+        return Ok(());
+    }
+
+    // eframe 回退（仅当启用 eframe-ui feature 时）
+    #[cfg(feature = "eframe-ui")]
+    {
+        run_eframe_app()?;
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "windows", feature = "eframe-ui")))]
+    {
+        anyhow::bail!("当前平台不支持 GPUI，请使用 Windows");
+    }
+}
+
+/// 运行 eframe 应用（回退 UI 运行时）
+#[cfg(feature = "eframe-ui")]
+fn run_eframe_app() -> anyhow::Result<()> {
+    use eframe::egui;
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(app::CONTROL_PANEL_TITLE)
@@ -69,10 +95,14 @@ fn main() -> eframe::Result<()> {
             Box::new(app::MyApp::new(cc))
         }),
     )
+    .map_err(|e| anyhow::anyhow!("eframe 运行失败: {}", e))?;
+
+    Ok(())
 }
 
-fn setup_chinese_fonts(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
+#[cfg(feature = "eframe-ui")]
+fn setup_chinese_fonts(ctx: &eframe::egui::Context) {
+    let mut fonts = eframe::egui::FontDefinitions::default();
 
     let font_paths = [
         "C:\\Windows\\Fonts\\msyh.ttc",
@@ -84,13 +114,17 @@ fn setup_chinese_fonts(ctx: &egui::Context) {
     for path in &font_paths {
         if let Ok(font_data) = std::fs::read(path) {
             log::info!("加载中文字体: {}", path);
-            fonts
-                .font_data
-                .insert("chinese".to_owned(), egui::FontData::from_owned(font_data));
-            if let Some(f) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+            fonts.font_data.insert(
+                "chinese".to_owned(),
+                eframe::egui::FontData::from_owned(font_data),
+            );
+            if let Some(f) = fonts
+                .families
+                .get_mut(&eframe::egui::FontFamily::Proportional)
+            {
                 f.insert(0, "chinese".to_owned());
             }
-            if let Some(f) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+            if let Some(f) = fonts.families.get_mut(&eframe::egui::FontFamily::Monospace) {
                 f.insert(0, "chinese".to_owned());
             }
             ctx.set_fonts(fonts);

@@ -1,0 +1,9 @@
+{"file": ".claude/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".claude/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "检查模块边界与条件编译"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "检查 Rust 质量与测试要求"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "检查错误处理与日志"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "检查跨层数据流和单一校验入口"}
+{"file": "todo/GPUI_COMPONENT_WINDOWS_POPUP_REFACTOR_PLAN.md", "reason": "按阶段验收迁移行为"}
+{"file": "src/app.rs", "reason": "对照旧行为"}
+{"file": "src/gpui_app/", "type": "directory", "reason": "检查 GPUI 实现"}

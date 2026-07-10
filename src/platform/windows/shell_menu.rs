@@ -420,7 +420,9 @@ fn show_desktop_fallback_menu(hwnd: HWND) {
         DestroyMenu(menu);
 
         match cmd as usize {
-            CMD_OPEN_PANEL => super::sys_tray::set_pending_action(SystemTrayAction::OpenControlPanel),
+            CMD_OPEN_PANEL => {
+                super::sys_tray::set_pending_action(SystemTrayAction::OpenControlPanel)
+            }
             CMD_CREATE_BOX => super::sys_tray::set_pending_action(SystemTrayAction::CreateBox),
             CMD_AI_CLASSIFY => super::sys_tray::set_pending_action(SystemTrayAction::AiClassify),
             CMD_QUIT => super::sys_tray::set_pending_action(SystemTrayAction::Quit),
@@ -562,7 +564,12 @@ pub fn setup_desktop_registry() {
 /// - 程序启动时（清理上次崩溃残留）
 /// - 程序退出时（确保不运行时无残留）
 pub fn cleanup_desktop_registry() {
-    let key_names = ["IkunOpenPanel", "IkunCreateBox", "IkunAiClassify", "IkunQuit"];
+    let key_names = [
+        "IkunOpenPanel",
+        "IkunCreateBox",
+        "IkunAiClassify",
+        "IkunQuit",
+    ];
 
     unsafe {
         for key_name in &key_names {

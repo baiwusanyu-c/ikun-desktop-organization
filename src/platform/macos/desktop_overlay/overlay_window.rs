@@ -211,8 +211,7 @@ fn setup_mouse_monitor() {
     // 创建事件处理块
     let handler_block = ConcreteBlock::new(|event: id| -> id {
         unsafe {
-            let mouse_loc: cocoa::foundation::NSPoint =
-                msg_send![class!(NSEvent), mouseLocation];
+            let mouse_loc: cocoa::foundation::NSPoint = msg_send![class!(NSEvent), mouseLocation];
 
             let overlays = OVERLAY_WINDOWS.lock().unwrap();
             for overlay in overlays.iter() {
@@ -226,8 +225,7 @@ fn setup_mouse_monitor() {
                     && mouse_loc.y < frame.origin.y + frame.size.height
                 {
                     let is_opaque = is_pixel_opaque(window, mouse_loc, frame);
-                    let current_ignores: cocoa::base::BOOL =
-                        msg_send![window, ignoresMouseEvents];
+                    let current_ignores: cocoa::base::BOOL = msg_send![window, ignoresMouseEvents];
 
                     if is_opaque && current_ignores != NO {
                         let _: () = msg_send![window, setIgnoresMouseEvents: NO];

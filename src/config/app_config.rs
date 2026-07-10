@@ -681,7 +681,7 @@ mod tests {
         let style = BoxStyleConfig::default();
         assert_eq!(style.background_alpha, 38);
         assert_eq!(style.border_radius, 16.0);
-        assert_eq!(style.icon_size, 48);
+        assert_eq!(style.icon_size, 64);
         assert_eq!(style.columns, 0);
         assert!(style.lock_button_visible);
         assert!(style.close_button_visible);
@@ -786,7 +786,7 @@ mod tests {
     fn test_overlay_config_default() {
         let overlay = OverlayConfig::default();
         assert!(overlay.icon_positions.is_empty());
-        assert_eq!(overlay.icon_size, 48);
+        assert_eq!(overlay.icon_size, 64);
         assert_eq!(overlay.layout_direction, "left-to-right");
     }
 
@@ -820,7 +820,7 @@ mod tests {
         let config: AppConfig = serde_json::from_str(json).unwrap();
 
         assert!(config.overlay.icon_positions.is_empty());
-        assert_eq!(config.overlay.icon_size, 48);
+        assert_eq!(config.overlay.icon_size, 64);
         assert_eq!(config.overlay.layout_direction, "left-to-right");
     }
 
@@ -862,7 +862,7 @@ mod tests {
         let config: AppConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.version, "3.0");
         assert_eq!(config.general.language, "zh-CN");
-        assert_eq!(config.box_style.icon_size, 48);
+        assert_eq!(config.box_style.icon_size, 64);
     }
 
     #[test]

@@ -34,11 +34,7 @@ pub(crate) fn render_overlay_placeholder(
         return (Vec::new(), cocoa::base::nil);
     }
 
-    log::info!(
-        "开始渲染 {} 个分类框 (屏幕 {})",
-        boxes.len(),
-        screen_index
-    );
+    log::info!("开始渲染 {} 个分类框 (屏幕 {})", boxes.len(), screen_index);
 
     let screen_width = screen_info.frame.size.width;
     let screen_height = screen_info.frame.size.height;

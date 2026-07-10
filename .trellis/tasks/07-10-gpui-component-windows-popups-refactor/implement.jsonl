@@ -1,0 +1,14 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend development guide"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "模块边界、条件编译、UI/platform 单向依赖"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Rust 质量要求、公开 API 文档、禁止 unwrap/expect"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "anyhow 和中文错误处理/日志规范"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "本任务跨 UI/runtime/platform/config 层"}
+{"file": "todo/GPUI_COMPONENT_WINDOWS_POPUP_REFACTOR_PLAN.md", "reason": "迁移阶段、行为约束和验收标准"}
+{"file": "src/app.rs", "reason": "旧 egui 行为与业务逻辑源"}
+{"file": "src/gpui_app/app_runtime.rs", "reason": "现有未提交 GPUI runtime/command 抽离尝试"}
+{"file": "src/gpui_app/control_panel.rs", "reason": "现有 GPUI 控制面板视图"}
+{"file": "src/gpui_app/create_box_dialog.rs", "reason": "现有 GPUI 创建分类框视图"}
+{"file": "src/gpui_app/windows_main.rs", "reason": "现有 GPUI Windows 入口"}
+{"file": "src/platform/windows/control_panel_window.rs", "reason": "Win32 tool window 定位/隐藏辅助"}
