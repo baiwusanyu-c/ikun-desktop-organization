@@ -10,11 +10,13 @@
 
 **核心设计原则**：
 - **AppContext 上下文注入**：所有模块通过 `AppContext` 共享状态
+- **GPUI 默认 UI shell（Windows）**：`gpui_app/` 的 View 层只负责渲染和派发命令，业务/平台调用集中在 `AppRuntime`
+- **legacy eframe 回退**：`app.rs` + `ui/` 仅作为 `eframe-ui` feature 回退路径
 - **平台抽象**：`platform/` 通过 trait 统一接口，各平台独立实现
 - **业务解耦**：`box_core/` 分类框业务逻辑与平台渲染完全分离
 - **插件化**：`plugin/` 功能模块作为插件注册
 - **条件编译隔离**：平台特定代码使用 `#[cfg(...)]` 隔离
-- **层次清晰**：UI → AppContext → 业务/平台，单向依赖
+- **层次清晰**：UI View → AppRuntime/AppContext → 业务/平台，单向依赖
 
 ---
 
@@ -22,9 +24,16 @@
 
 ```
 src/
-├── main.rs                    # 入口：初始化日志（文件）、DPI 感知、启动 egui
-├── app.rs                     # eframe::App 控制面板（已接入 AppContext）
+├── main.rs                    # 入口：初始化日志、DPI/OLE、启动 GPUI 或 legacy eframe
+├── app.rs                     # legacy eframe::App 控制面板（eframe-ui feature）
 ├── context.rs                 # AppContext 核心上下文对象
+│
+├── gpui_app/                  # Windows 默认 GPUI UI shell
+│   ├── mod.rs                 #   模块导出
+│   ├── app_runtime.rs         #   UI 框架无关运行时/命令层（持有 AppContext）
+│   ├── control_panel.rs       #   GPUI 控制面板视图
+│   ├── create_box_dialog.rs   #   独立 GPUI 创建分类框窗口
+│   └── windows_main.rs        #   GPUI Application 事件循环
 │
 ├── platform/                  # 平台抽象层
 │   ├── mod.rs                 #   DesktopManagerTrait + re-exports
@@ -39,8 +48,9 @@ src/
 │   │   ├── grid_window.rs     #   窗口创建/销毁/布局收集
 │   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc
 │   │   ├── menu_window.rs     #   自定义分层窗口深色菜单（D2D/DirectWrite）
-│   │   ├── shell_menu.rs      #   Shell 右键菜单 + 注册表管理（创建分类框）
-│   │   ├── icon_extract.rs    #   图标提取（SHGetFileInfoW + .lnk 解析）
+│   │   ├── shell_menu.rs      #   Shell 右键菜单 + 桌面背景注册表菜单
+│   │   ├── app_icon.rs        #   嵌入 logo.ico 项目图标（托盘/菜单）
+│   │   ├── icon_extract.rs    #   图标提取（SHDefExtractIconW + .lnk 解析目标图标）
 │   │   ├── icon_hider.rs      #   图标隐藏/恢复（SysListView32）
 │   │   ├── control_panel_window.rs # 控制面板 Win32 显示/隐藏辅助（托盘优先生命周期）
 │   │   └── sys_tray.rs        #   系统托盘入口（隐藏消息窗口 + 固定菜单动作队列）
@@ -83,7 +93,7 @@ src/
 │       ├── classification_plugin.rs  #   分类功能插件
 │       └── style_plugin.rs    #   样式设置插件
 │
-├── ui/                        # UI 层（egui 组件）
+├── ui/                        # legacy eframe UI 层（eframe-ui feature）
 │   ├── mod.rs                 #   模块导出
 │   ├── control_panel.rs       #   控制面板主界面
 │   ├── settings_panel.rs      #   设置面板（样式/AI/热键/调试）
@@ -126,7 +136,8 @@ build/
 | **分类层** | `classification/` | 分类规则匹配、AI 分类 |
 | **配置层** | `config/` | 统一 JSON 配置管理 |
 | **插件层** | `plugin/` | 功能插件注册和分发 |
-| **UI 层** | `ui/`, `app.rs` | egui 控制面板渲染 |
+| **UI 层（Windows 默认）** | `gpui_app/` | GPUI 控制面板/弹窗 View + AppRuntime 命令调度 |
+| **UI 层（legacy）** | `app.rs`, `ui/` | eframe 控制面板回退路径（`eframe-ui` feature） |
 | **工具层** | `utils/` | 通用辅助函数 |
 
 **步骤 2：创建模块结构**
@@ -171,14 +182,16 @@ platform/windows/
 ├── ffi_types.rs       # FFI 类型定义
 ├── ffi_imports.rs     # FFI 函数声明
 ├── desktop_manager.rs # DesktopManagerTrait 实现
+├── desktop_overlay/   # 桌面覆盖窗口
 ├── d2d_render.rs      # D2D/DirectWrite 渲染
 ├── grid_window.rs     # 窗口管理
 ├── wnd_proc.rs        # 窗口消息处理
 ├── menu_window.rs     # 自定义分层窗口深色菜单（D2D/DirectWrite）
-├── shell_menu.rs      # Shell 右键菜单 + 注册表管理
-├── icon_extract.rs    # 图标提取
-├── icon_hider.rs      # 图标隐藏
-├── control_panel_window.rs # 控制面板 Win32 显示/隐藏辅助
+├── shell_menu.rs      # Shell 右键菜单 + 注册表菜单动作
+├── app_icon.rs        # 项目图标资源加载
+├── icon_extract.rs    # 图标提取（含 .lnk 目标解析）
+├── icon_hider.rs      # 图标隐藏 / managed_icons vault
+├── control_panel_window.rs # GPUI/eframe 控制面板 Win32 显示/隐藏辅助
 └── sys_tray.rs        # 系统托盘入口
 ```
 
@@ -216,13 +229,15 @@ platform/windows/
 
 ```
 main.rs → 所有模块
-app.rs → context, platform, ui
+gpui_app/*_view.rs → gpui_app::app_runtime（View 只渲染/派发命令）
+gpui_app::app_runtime → context, platform
+app.rs → context, platform, ui（仅 eframe-ui feature）
 context.rs → config, platform, classification, (plugin, box_core)
-ui/ → context (通过参数传递)
+ui/ → context (通过参数传递，仅 legacy eframe)
 plugin/ → context (通过参数传递)
 box_core/ → config (枚举类型)
 classification/ → platform (仅 DesktopIcon 类型)
-platform/ → (无内部依赖，仅外部 crate)
+platform/ → (无 UI/业务反向依赖，仅外部 crate 或平台子模块)
 utils/ → (无内部依赖)
 ```
 

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **桌面图标智能分类管理工具** — Desktop Organizer
 
-基于 Rust + egui 的跨平台 GUI 应用，智能分类和管理桌面图标。
+基于 Rust 的跨平台桌面图标智能分类和管理工具。Windows 默认控制面板/弹窗入口已迁移到 **GPUI + gpui-component**，legacy `eframe/egui` 控制面板仅作为显式 `eframe-ui` feature 回退路径保留；分类框与桌面覆盖窗口继续使用平台原生窗口 + Direct2D/DirectWrite 渲染。
 
 **核心特性**：智能分类桌面图标、可视化分类框（拖拽/缩放/锁定/样式自定义）、一键 AI 分类、布局记忆持久化、统一 JSON 配置导入导出。
 
@@ -39,7 +39,8 @@ cargo watch -x check             # 自动检查（需 cargo install cargo-watch�
 
 | Crate | 版本 | 用途 |
 |-------|------|------|
-| egui / eframe / epaint | 0.27 | GUI 框架（控制面板窗口） |
+| gpui / gpui-component | 0.2.2 / 0.5.1 | Windows 默认控制面板与独立创建分类框窗口 |
+| egui / eframe / epaint | 0.27 | legacy 控制面板回退路径（`eframe-ui` feature） |
 | windows | 0.58 | Windows API（Shell COM、Direct2D、DirectWrite、GDI、窗口管理） |
 | cocoa / objc | 0.25 | macOS API（实验性） |
 | serde / serde_json | 1.0 | 统一 JSON 配置序列化 |
@@ -68,9 +69,16 @@ cargo watch -x check             # 自动检查（需 cargo install cargo-watch�
 
 ```
 src/
-├── main.rs                    # 入口：初始化日志、DPI 感知、启动 egui
-├── app.rs                     # eframe::App 控制面板（已接入 AppContext）
+├── main.rs                    # 入口：初始化日志、DPI/OLE、分发 GPUI 或 legacy eframe
+├── app.rs                     # legacy eframe::App 控制面板（仅 eframe-ui 回退路径）
 ├── context.rs                 # AppContext 核心上下文对象
+│
+├── gpui_app/                  # Windows 默认 GPUI 控制面板与独立弹窗
+│   ├── mod.rs                 #   模块导出
+│   ├── app_runtime.rs         #   UI 框架无关运行时/命令层（AppContext + 平台服务）
+│   ├── control_panel.rs       #   GPUI 控制面板视图
+│   ├── create_box_dialog.rs   #   GPUI 独立“创建分类框”窗口
+│   └── windows_main.rs        #   GPUI Application 事件循环与轮询调度
 │
 ├── platform/                  # 平台抽象层
 │   ├── mod.rs                 #   DesktopManagerTrait + re-exports
@@ -85,8 +93,9 @@ src/
 │   │   ├── grid_window.rs     #   窗口创建/销毁/布局收集
 │   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc
 │   │   ├── menu_window.rs     #   自定义分层窗口深色菜单（D2D/DirectWrite 渲染）
-│   │   ├── shell_menu.rs      #   Shell 右键菜单 + 注册表管理
-│   │   ├── icon_extract.rs    #   图标提取（SHGetFileInfoW + .lnk 解析）
+│   │   ├── shell_menu.rs      #   Shell 右键菜单 + 桌面背景注册表菜单（打开面板/创建分类框/AI分类/退出）
+│   │   ├── app_icon.rs        #   嵌入 logo.ico 资源加载（托盘/菜单图标）
+│   │   ├── icon_extract.rs    #   图标提取（SHDefExtractIconW + .lnk 解析目标图标）
 │   │   ├── icon_hider.rs      #   图标隐藏/恢复（SysListView32）
 │   │   ├── control_panel_window.rs # 控制面板 Win32 显示/隐藏辅助（托盘优先生命周期）
 │   │   └── sys_tray.rs        #   系统托盘入口（隐藏消息窗口 + 固定菜单动作队列）
@@ -129,7 +138,7 @@ src/
 │       ├── classification_plugin.rs  #   分类功能插件
 │       └── style_plugin.rs    #   样式设置插件
 │
-├── ui/                        # UI 层（egui 组件）
+├── ui/                        # legacy eframe UI 层（仅 eframe-ui 回退路径）
 │   ├── mod.rs                 #   模块导出
 │   ├── control_panel.rs       #   控制面板主界面
 │   ├── settings_panel.rs      #   设置面板（样式/AI/热键/调试）
@@ -245,20 +254,25 @@ main.rs
   ├── context.rs (AppContext)
   │     ├── config/app_config.rs (AppConfig 统一配置)
   │     ├── platform/ (DesktopManagerTrait + 平台实现)
-  │     │     ├── windows/ (D2D渲染 + Win32窗口 + Shell菜单)
-  │     │     └── macos/ (模拟数据)
+  │     │     ├── windows/ (D2D渲染 + Win32窗口 + Shell/注册表菜单 + GPUI 窗口辅助)
+  │     │     └── macos/ (桌面覆盖窗口 + 分类框渲染 + stub/实验性功能)
   │     ├── box_core/ (分类框业务逻辑 — 平台无关)
   │     ├── classification/ (分类规则 + AI分类)
   │     └── plugin/ (Plugin trait + Registry)
-  ├── app.rs (eframe::App) → 通过 AppContext 交互
-  ├── ui/ (控制面板/设置面板/托盘菜单)
+  ├── gpui_app/ (Windows 默认 UI shell)
+  │     ├── app_runtime.rs (UI 框架无关命令/运行时层，持有 AppContext)
+  │     ├── control_panel.rs (GPUI 控制面板视图)
+  │     ├── create_box_dialog.rs (独立 GPUI 创建分类框窗口)
+  │     └── windows_main.rs (GPUI 事件循环)
+  ├── app.rs + ui/ (legacy eframe 回退，仅 eframe-ui feature)
   └── utils/ (日志、DPI、字符串)
 ```
 
 **约束**：
 - `box_core/` 不直接调用 `platform/` — 通过 trait 间接调用
 - `classification/` 不依赖 `platform/` — 纯业务逻辑
-- `ui/` 只通过 `AppContext` 与后端交互
+- `ui/` 只通过 `AppContext` 或 `gpui_app::AppRuntime` 与后端交互
+- `gpui_app/` 属于 Windows UI shell：View 层只渲染和派发命令，业务/平台调用集中在 `AppRuntime`
 - `platform/` 各平台实现通过 `#[cfg]` 隔离
 
 ---
@@ -282,11 +296,11 @@ main.rs
 顶层窗口 > 普通应用 > **分类框窗口** > **桌面覆盖窗口 DesktopOrgOverlay** > 桌面图标 (SysListView32，隐藏) > 壁纸 (Progman/WorkerW)
 ```
 
-**Shell 右键菜单**：`IShellFolder` + `IContextMenu` + `IShellView::GetItemObject(SVGIO_BACKGROUND)` 获取真实桌面菜单，回退方案用 `ShellExecuteW`
+**Shell 右键菜单**：文件菜单使用 `SHParseDisplayName → SHBindToParent → IShellFolder::GetUIObjectOf(IContextMenu)`，桌面背景菜单使用 `IShellFolder → IShellView::GetItemObject(SVGIO_BACKGROUND)` 获取真实 Shell 菜单；`InvokeCommand` 使用 `cmd - FCIDM_SHVIEWFIRST` 作为 verb 偏移，避免绝对/相对 PIDL 混用。COM 菜单链优先使用 `windows` crate 类型，失败时回退到自定义 `ShellExecuteW` 菜单。
 
-**桌面右键创建分类框**：通过 Windows 注册表 (`HKCU\...\Directory\Background\shell\IkunCreateBox`) 注入菜单项，Shell 自动合并到 `QueryContextMenu` 结果（覆盖初始菜单和"显示更多选项"legacy 菜单）。程序启动时注册，退出时清理（`Drop` trait），确保不运行时无残留。用户点击时通过 `--create-box` 参数 → 信号文件 IPC → 运行实例检测 → egui viewport 对话框（immediate 模式）。多屏定位通过 Win32 `FindWindowW` + `SetWindowPos` 物理像素坐标实现（绕过 egui `with_position` 在高 DPI 多屏下的坐标转换缺陷）。
+**桌面右键动作**：通过 Windows 注册表 (`HKCU\...\Directory\Background\shell\IkunOpenPanel` / `IkunCreateBox` / `IkunAiClassify` / `IkunQuit`) 注入菜单项，Shell 自动合并到 `QueryContextMenu` 结果（覆盖初始菜单和“显示更多选项”legacy 菜单）。程序启动时先清理旧残留再注册，退出时清理，确保不运行时无残留。用户点击时通过命令行参数（如 `--create-box`）写入临时信号文件；运行实例由 `AppRuntime::tick()` 轮询消费后打开 GPUI 控制面板、独立创建分类框窗口、执行 AI 分类或退出。多屏定位通过 Win32 `FindWindowW` + `SetWindowPos` 物理像素坐标实现。
 
-**图标提取**：`SHDefExtractIconW` 提取 128×128 高清图标，`.lnk` 先通过 `IShellLink` + `IPersistFile` 解析目标
+**图标提取与项目图标**：`SHDefExtractIconW` 优先提取 128×128 高清图标，`.lnk` 先通过 `IShellLink` + `IPersistFile` 解析目标后提取目标图标，避免快捷方式箭头覆层污染分类框图标。应用项目图标从 `logo.ico` 经 `build.rs` 嵌入可执行文件，供系统托盘和菜单项图标使用。
 
 **DPI 适配**：manifest + 运行时 `SetProcessDpiAwarenessContext(PER_MONITOR_V2)`，`GetDpiForWindow` + `WM_DPICHANGED` 动态响应
 
@@ -332,9 +346,10 @@ main.rs
 - [x] 分类框删除（更多菜单 → DestroyWindow + UUID 精确删除配置 + rerender_all 修复分层窗口）
 
 ### 桌面右键菜单
-- [x] 创建桌面分类框（注册表注入 + 信号文件 IPC + egui viewport 对话框）
-- [ ] 一键 AI 桌面分类
-- [ ] 退出桌面分类
+- [x] 打开控制面板（注册表注入 + 信号文件 IPC + GPUI 控制面板显示）
+- [x] 创建桌面分类框（注册表注入 + 信号文件 IPC + 独立 GPUI 创建分类框窗口）
+- [x] 一键 AI 桌面分类（注册表注入 + 信号文件 IPC + 运行时分类入口）
+- [x] 退出桌面分类（注册表注入 + 信号文件 IPC + 清理退出）
 
 ### macOS 平台（开发中）
 - [x] 桌面图标枚举（NSWorkspace + FileManager API）

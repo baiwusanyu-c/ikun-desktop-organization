@@ -9,9 +9,9 @@ build = "build/build.rs"
 
 [dependencies]
 # ===== GUI 框架 =====
-egui = "0.27"
-eframe = { version = "0.27", default-features = false, features = ["glow"] }
-epaint = "0.27"
+egui = { version = "0.27", optional = true }
+eframe = { version = "0.27", default-features = false, features = ["glow"], optional = true }
+epaint = { version = "0.27", optional = true }
 
 # ===== 通用库 =====
 serde = { version = "1.0", features = ["derive"] }
@@ -76,4 +76,4 @@ lto = true
 
 [features]
 default = []
-eframe-ui = []
+eframe-ui = ["dep:egui", "dep:eframe", "dep:epaint"]

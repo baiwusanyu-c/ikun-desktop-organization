@@ -3,6 +3,7 @@
 // 使用 windows 子系统（无控制台窗口），日志写入文件
 #![windows_subsystem = "windows"]
 
+#[cfg(feature = "eframe-ui")]
 mod app;
 mod box_core;
 mod classification;
@@ -12,6 +13,7 @@ mod context;
 mod ipc;
 mod platform;
 mod plugin;
+#[cfg(feature = "eframe-ui")]
 mod ui;
 mod utils;
 

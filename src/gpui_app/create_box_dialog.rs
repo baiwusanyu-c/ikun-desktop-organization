@@ -3,7 +3,7 @@
 //! 完整移植自原 eframe 版本的创建分类框对话框。
 //! 输入验证、键盘快捷键（Enter/Escape）、按钮状态完全对齐原版。
 
-use crate::gpui_app::app_runtime::{is_box_name_valid, AppRuntime, BOX_NAME_MAX_LEN};
+use crate::gpui_app::app_runtime::{validate_box_name, AppRuntime};
 use gpui::{
     div, px, rgb, AppContext, Context, Entity, InteractiveElement, IntoElement, KeyDownEvent,
     ParentElement, Render, Styled, Window,
@@ -32,10 +32,11 @@ impl CreateBoxDialogView {
             move |_this, input, event: &InputEvent, window, cx| match event {
                 InputEvent::Change => cx.notify(),
                 InputEvent::PressEnter { .. } => {
-                    let name = input.read(cx).value().trim().to_string();
-                    if is_box_name_valid(&name) {
+                    let name = input.read(cx).value().to_string();
+                    let validation = validate_box_name(&name);
+                    if validation.is_valid {
                         runtime_for_enter.update(cx, |rt, cx| {
-                            rt.dialog_name = name;
+                            rt.dialog_name = validation.trimmed;
                             rt.confirm_create_box();
                             cx.notify();
                         });
@@ -59,9 +60,7 @@ impl Render for CreateBoxDialogView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // 读取输入值
         let value = self.input_state.read(cx).value().to_string();
-        let char_count = value.chars().count();
-        let is_valid = is_box_name_valid(&value);
-        let is_empty = value.trim().is_empty();
+        let validation = validate_box_name(&value);
 
         let runtime = self.runtime.clone();
         let input_state = self.input_state.clone();
@@ -101,7 +100,7 @@ impl Render for CreateBoxDialogView {
                     .child(div().flex_1().child(Input::new(&input_state.clone()))),
             )
             // 验证标签
-            .child(render_validation(char_count, is_valid, is_empty))
+            .child(render_validation(&validation))
             // 分割线
             .child(div().h(px(1.0)).bg(rgb(0xcccccc)))
             // 按钮行
@@ -112,16 +111,16 @@ impl Render for CreateBoxDialogView {
                         Button::new("confirm")
                             .primary()
                             .label("✓ 确定")
-                            .disabled(!is_valid)
+                            .disabled(!validation.is_valid)
                             .on_click({
                                 let rt = runtime.clone();
                                 let inp = input_state.clone();
                                 move |_, win, cx| {
                                     let name = inp.read(cx).value().to_string();
-                                    let trimmed = name.trim().to_string();
-                                    if is_box_name_valid(&trimmed) {
+                                    let validation = validate_box_name(&name);
+                                    if validation.is_valid {
                                         rt.update(cx, |rt, cx| {
-                                            rt.dialog_name = trimmed;
+                                            rt.dialog_name = validation.trimmed;
                                             rt.confirm_create_box();
                                             cx.notify();
                                         });
@@ -145,24 +144,19 @@ impl Render for CreateBoxDialogView {
 }
 
 /// 渲染验证标签
-fn render_validation(char_count: usize, is_valid: bool, is_empty: bool) -> impl IntoElement {
-    let (text, color) = if is_empty {
-        ("名称不能为空".to_string(), rgb(0x888888))
-    } else if !is_valid {
-        if char_count > BOX_NAME_MAX_LEN {
-            (
-                format!("⚠ 最多 {} 字符（当前 {}）", BOX_NAME_MAX_LEN, char_count),
-                rgb(0xff5050),
-            )
-        } else {
-            ("名称无效".to_string(), rgb(0xff5050))
-        }
+fn render_validation(
+    validation: &crate::gpui_app::app_runtime::BoxNameValidation,
+) -> impl IntoElement {
+    let color = if validation.is_empty {
+        rgb(0x888888)
+    } else if validation.is_too_long {
+        rgb(0xff5050)
     } else {
-        (
-            format!("✓ {}/{}", char_count, BOX_NAME_MAX_LEN),
-            rgb(0x64c864),
-        )
+        rgb(0x64c864)
     };
 
-    div().text_sm().text_color(color).child(text)
+    div()
+        .text_sm()
+        .text_color(color)
+        .child(validation.message())
 }

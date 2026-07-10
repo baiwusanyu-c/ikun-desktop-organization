@@ -19,6 +19,40 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// （仅在 COM 失败的回退菜单路径中使用）
 static PENDING_CREATE_BOX: AtomicBool = AtomicBool::new(false);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DesktopRegistryMenuItem {
+    key_name: &'static str,
+    menu_text: &'static str,
+    cmd_arg: &'static str,
+}
+
+const DESKTOP_REGISTRY_MENU_ITEMS: [DesktopRegistryMenuItem; 4] = [
+    DesktopRegistryMenuItem {
+        key_name: "IkunOpenPanel",
+        menu_text: "打开控制面板(&O)",
+        cmd_arg: "--open-panel",
+    },
+    DesktopRegistryMenuItem {
+        key_name: "IkunCreateBox",
+        menu_text: "创建分类框(&N)",
+        cmd_arg: "--create-box",
+    },
+    DesktopRegistryMenuItem {
+        key_name: "IkunAiClassify",
+        menu_text: "一键AI分类(&A)",
+        cmd_arg: "--ai-classify",
+    },
+    DesktopRegistryMenuItem {
+        key_name: "IkunQuit",
+        menu_text: "退出应用(&Q)",
+        cmd_arg: "--quit",
+    },
+];
+
+fn desktop_registry_menu_items() -> &'static [DesktopRegistryMenuItem] {
+    &DESKTOP_REGISTRY_MENU_ITEMS
+}
+
 /// 查询是否有待处理的"创建分类框"请求（消费标志，读取后自动清除）
 pub fn take_pending_create_box() -> bool {
     PENDING_CREATE_BOX.swap(false, Ordering::SeqCst)
@@ -452,16 +486,11 @@ pub fn setup_desktop_registry() {
     // 图标路径：使用可执行文件本身（内嵌 logo.ico 资源）
     let icon_path = format!("\"{}\",0", exe_path);
 
-    // 定义 4 个菜单项：(注册表键名, 显示文本, 命令行参数)
-    let menu_items = [
-        ("IkunOpenPanel", "打开控制面板(&O)", "--open-panel"),
-        ("IkunCreateBox", "创建分类框(&N)", "--create-box"),
-        ("IkunAiClassify", "一键AI分类(&A)", "--ai-classify"),
-        ("IkunQuit", "退出应用(&Q)", "--quit"),
-    ];
-
     unsafe {
-        for (key_name, menu_text, cmd_arg) in &menu_items {
+        for item in desktop_registry_menu_items() {
+            let key_name = item.key_name;
+            let menu_text = item.menu_text;
+            let cmd_arg = item.cmd_arg;
             let base_path = format!(
                 "Software\\Classes\\Directory\\Background\\shell\\{}\0",
                 key_name
@@ -551,7 +580,10 @@ pub fn setup_desktop_registry() {
             log::info!("注册表: {} 已注册", key_name);
         }
 
-        log::info!("注册表: 桌面右键菜单已注册 ({} 项)", menu_items.len());
+        log::info!(
+            "注册表: 桌面右键菜单已注册 ({} 项)",
+            desktop_registry_menu_items().len()
+        );
     }
 }
 
@@ -564,15 +596,12 @@ pub fn setup_desktop_registry() {
 /// - 程序启动时（清理上次崩溃残留）
 /// - 程序退出时（确保不运行时无残留）
 pub fn cleanup_desktop_registry() {
-    let key_names = [
-        "IkunOpenPanel",
-        "IkunCreateBox",
-        "IkunAiClassify",
-        "IkunQuit",
-    ];
+    let key_names = desktop_registry_menu_items()
+        .iter()
+        .map(|item| item.key_name);
 
     unsafe {
-        for key_name in &key_names {
+        for key_name in key_names {
             let cmd_key: Vec<u16> = format!(
                 "Software\\Classes\\Directory\\Background\\shell\\{}\\command\0",
                 key_name
@@ -633,6 +662,47 @@ mod tests {
         assert!(!take_pending_create_box());
         assert!(!take_pending_create_box());
         assert!(!take_pending_create_box());
+    }
+
+    #[test]
+    fn test_desktop_registry_menu_items_cover_all_signal_actions() {
+        let items = desktop_registry_menu_items();
+        assert_eq!(items.len(), 4);
+
+        let key_names: Vec<&str> = items.iter().map(|item| item.key_name).collect();
+        assert_eq!(
+            key_names,
+            vec![
+                "IkunOpenPanel",
+                "IkunCreateBox",
+                "IkunAiClassify",
+                "IkunQuit"
+            ]
+        );
+
+        let cmd_args: Vec<&str> = items.iter().map(|item| item.cmd_arg).collect();
+        assert_eq!(
+            cmd_args,
+            vec!["--open-panel", "--create-box", "--ai-classify", "--quit"]
+        );
+    }
+
+    #[test]
+    fn test_desktop_registry_menu_text_is_localized() {
+        let labels: Vec<&str> = desktop_registry_menu_items()
+            .iter()
+            .map(|item| item.menu_text)
+            .collect();
+
+        assert_eq!(
+            labels,
+            vec![
+                "打开控制面板(&O)",
+                "创建分类框(&N)",
+                "一键AI分类(&A)",
+                "退出应用(&Q)"
+            ]
+        );
     }
 
     #[test]

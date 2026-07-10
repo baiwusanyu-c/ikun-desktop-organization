@@ -23,6 +23,62 @@ pub const BOX_NAME_MAX_LEN: usize = 16;
 /// 控制面板标题（Win32 窗口查找用）
 pub const CONTROL_PANEL_TITLE: &str = "Desktop Organizer 控制面板";
 
+/// 分类框名称校验结果。
+///
+/// GPUI 创建分类框窗口、legacy eframe 回退路径迁移测试均应复用该纯逻辑，
+/// 避免 UI 层重复实现 trim / Unicode 字符计数规则。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoxNameValidation {
+    /// 去除首尾空白后的名称。
+    pub trimmed: String,
+    /// 原始输入按 Unicode scalar value 统计的字符数。
+    pub char_count: usize,
+    /// trim 后是否为空。
+    pub is_empty: bool,
+    /// 原始输入字符数是否超过上限。
+    pub is_too_long: bool,
+    /// 是否可用于创建分类框。
+    pub is_valid: bool,
+}
+
+impl Default for BoxNameValidation {
+    fn default() -> Self {
+        Self::new("")
+    }
+}
+
+impl BoxNameValidation {
+    /// 根据用户输入构造分类框名称校验结果。
+    pub fn new(input: &str) -> Self {
+        let trimmed = input.trim().to_string();
+        let char_count = input.chars().count();
+        let is_empty = trimmed.is_empty();
+        let is_too_long = char_count > BOX_NAME_MAX_LEN;
+        let is_valid = !is_empty && !is_too_long;
+        Self {
+            trimmed,
+            char_count,
+            is_empty,
+            is_too_long,
+            is_valid,
+        }
+    }
+
+    /// 返回与旧 eframe 对话框一致的校验提示文案。
+    pub fn message(&self) -> String {
+        if self.is_empty {
+            "名称不能为空".to_string()
+        } else if self.is_too_long {
+            format!(
+                "⚠ 最多 {} 字符（当前 {}）",
+                BOX_NAME_MAX_LEN, self.char_count
+            )
+        } else {
+            format!("✓ {}/{}", self.char_count, BOX_NAME_MAX_LEN)
+        }
+    }
+}
+
 /// 线程安全的共享运行时
 pub type SharedAppRuntime = Arc<Mutex<AppRuntime>>;
 
@@ -52,8 +108,17 @@ fn quit_signal_path() -> std::path::PathBuf {
 
 /// 验证分类框名称是否有效（非空且不超过 BOX_NAME_MAX_LEN 字符）
 pub fn is_box_name_valid(name: &str) -> bool {
-    let trimmed = name.trim();
-    !trimmed.is_empty() && trimmed.chars().count() <= BOX_NAME_MAX_LEN
+    BoxNameValidation::new(name).is_valid
+}
+
+/// 标准化分类框名称（去除首尾空白）。
+pub fn normalized_box_name(name: &str) -> String {
+    BoxNameValidation::new(name).trimmed
+}
+
+/// 返回分类框名称校验结果。
+pub fn validate_box_name(name: &str) -> BoxNameValidation {
+    BoxNameValidation::new(name)
 }
 
 /// 计算创建分类框对话框目标位置。
@@ -622,6 +687,63 @@ mod tests {
     fn test_box_name_valid_basic() {
         assert!(is_box_name_valid("测试"));
         assert!(is_box_name_valid("abc"));
+    }
+
+    #[test]
+    fn test_box_name_validation_trims_and_counts_original_input() {
+        let validation = validate_box_name("  测试框  ");
+        assert_eq!(validation.trimmed, "测试框");
+        assert_eq!(validation.char_count, 7);
+        assert!(!validation.is_empty);
+        assert!(!validation.is_too_long);
+        assert!(validation.is_valid);
+        assert_eq!(normalized_box_name("  测试框  "), "测试框");
+    }
+
+    #[test]
+    fn test_box_name_validation_empty_and_whitespace() {
+        let empty = validate_box_name("");
+        assert!(empty.is_empty);
+        assert!(!empty.is_too_long);
+        assert!(!empty.is_valid);
+        assert_eq!(empty.message(), "名称不能为空");
+
+        let spaces = validate_box_name("   ");
+        assert!(spaces.is_empty);
+        assert!(!spaces.is_valid);
+        assert_eq!(spaces.message(), "名称不能为空");
+    }
+
+    #[test]
+    fn test_box_name_validation_ascii_limit() {
+        let valid = validate_box_name("1234567890123456");
+        assert_eq!(valid.char_count, BOX_NAME_MAX_LEN);
+        assert!(valid.is_valid);
+        assert_eq!(valid.message(), "✓ 16/16");
+
+        let invalid = validate_box_name("12345678901234567");
+        assert_eq!(invalid.char_count, BOX_NAME_MAX_LEN + 1);
+        assert!(invalid.is_too_long);
+        assert!(!invalid.is_valid);
+        assert_eq!(invalid.message(), "⚠ 最多 16 字符（当前 17）");
+    }
+
+    #[test]
+    fn test_box_name_validation_unicode_limit() {
+        let valid = validate_box_name("一二三四五六七八九十甲乙丙丁戊己");
+        assert_eq!(valid.char_count, BOX_NAME_MAX_LEN);
+        assert!(valid.is_valid);
+
+        let invalid = validate_box_name("一二三四五六七八九十甲乙丙丁戊己庚");
+        assert_eq!(invalid.char_count, BOX_NAME_MAX_LEN + 1);
+        assert!(!invalid.is_valid);
+    }
+
+    #[test]
+    fn test_box_name_validation_default_is_invalid_empty() {
+        let validation = BoxNameValidation::default();
+        assert!(validation.is_empty);
+        assert!(!validation.is_valid);
     }
 
     #[test]

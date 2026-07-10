@@ -9,16 +9,19 @@
 本项目是一个 Rust 桌面应用，使用模块化架构和 trait-based 跨平台设计。
 
 **核心架构原则**：
-- **Rust + egui**：纯 Rust GUI，即时模式渲染
-- **AppContext 上下文注入**：所有模块通过中心上下文共享状态和配置
+- **Rust + GPUI / egui**：Windows 默认 UI shell 使用 GPUI + gpui-component；legacy `eframe/egui` 仅作为显式 `eframe-ui` feature 回退路径
+- **AppContext 上下文注入**：所有模块通过中心上下文共享状态和配置，GPUI 路径由 `gpui_app::AppRuntime` 持有并调度 `AppContext`
 - **Trait-based 设计**：跨平台功能通过 trait 统一接口
-- **条件编译**：平台特定代码使用 `#[cfg(...)]` 隔离
+- **条件编译**：平台特定代码和 legacy UI 使用 `#[cfg(...)]` 隔离
 - **插件化**：功能模块作为 Plugin 注册，灵活扩展
 - **统一配置**：单一 JSON 文件管理所有设置
-- **单向依赖**：UI → AppContext → 业务/平台，禁止反向依赖
+- **单向依赖**：UI View → AppRuntime/AppContext → 业务/平台，禁止反向依赖
 
 **架构层次**：
 ```
+UI 层
+  ├── gpui_app/ (Windows 默认) → View 只渲染/派发命令，AppRuntime 持有 AppContext
+  └── app.rs + ui/ (legacy eframe-ui) → eframe 回退路径
 上下文层 (context.rs)           → AppContext 中心依赖注入对象
   ├── 平台层 (platform/)        → 平台抽象 trait + Windows/macOS 实现
   ├── 业务层 (box_core/)        → 分类框业务逻辑（平台无关）
@@ -70,7 +73,8 @@ UI 层 (app.rs, ui/)             → egui 控制面板，通过 AppContext 交�
 
 | Crate | 用途 |
 |-------|------|
-| `egui + eframe` | GUI 框架（控制面板窗口） |
+| `gpui + gpui-component` (Windows) | Windows 默认控制面板和独立创建分类框窗口 |
+| `egui + eframe` | legacy 控制面板回退路径（`eframe-ui` feature） |
 | `anyhow` | 错误处理（统一使用 `anyhow::Result`） |
 | `log + env_logger` | 日志系统 |
 | `serde + serde_json/yaml` | 数据序列化 |
@@ -86,8 +90,8 @@ UI 层 (app.rs, ui/)             → egui 控制面板，通过 AppContext 交�
 
 1. **安全优先**：避免 `unsafe`，不使用 `panic/unwrap/expect`
 2. **优雅降级**：关键功能失败时使用默认值，不阻塞应用
-3. **上下文注入**：通过 AppContext 传递依赖，不散落全局变量
-4. **单向依赖**：UI → AppContext → 业务/平台，禁止反向依赖
+3. **上下文注入**：通过 AppContext 传递依赖；Windows GPUI View 通过 `gpui_app::AppRuntime` 间接访问 AppContext，不直接散落平台调用
+4. **单向依赖**：UI View → AppRuntime/AppContext → 业务/平台，禁止反向依赖
 5. **条件编译**：平台特定代码使用 `#[cfg(...)]` 隔离
 6. **文档完整**：所有公开 API 必须有文档注释
 7. **中文日志**：日志消息使用中文
