@@ -1,4 +1,6 @@
-//! GPUI 应用运行时 — 与 UI 框架无关的业务逻辑层
+﻿//! GPUI 应用运行时 — 与 UI 框架无关的业务逻辑层
+
+#![allow(dead_code)] // GPUI 应用运行时，部分方法/类型预留
 //!
 //! 完整移植自 app.rs（eframe 版本）的所有业务逻辑。
 //! 使用 Arc<Mutex<>> 保护状态，避免 GPUI RefCell 借用冲突。

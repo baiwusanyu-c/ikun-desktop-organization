@@ -1,4 +1,4 @@
-//! Windows 平台模块
+﻿//! Windows 平台模块
 //!
 //! 提供 Windows 平台的桌面管理、窗口管理和渲染功能。
 //!
@@ -38,10 +38,12 @@ mod wnd_proc;
 pub use control_panel_window::{hide_control_panel_window, show_control_panel_window};
 pub use desktop_manager::DesktopManager;
 pub use desktop_overlay::{create_desktop_overlay, destroy_desktop_overlay};
+#[allow(unused_imports)] // 公共 API 预留
 pub use drop_target::{
     register_box_drop_target, take_pending_drop, take_pending_source_removal,
     unregister_box_drop_target,
 };
+#[allow(unused_imports)] // 公共 API 预留
 pub use ffi_types::{IkunBoxDragData, IkunDragItemData};
 pub use grid_window::{
     collect_grid_layout, create_grid_window, destroy_all_grid_windows,
@@ -53,9 +55,12 @@ pub use icon_hider::{
     hide_native_icons, icon_exists_for_box, native_icons_hidden, resolve_icon_read_path,
     restore_all_hidden_icons, restore_native_icons,
 };
+#[allow(unused_imports)] // 公共 API 预留
 pub use icon_manager::DesktopIconManager;
+#[allow(unused_imports)] // 公共 API 预留
 pub use ole_dnd::{get_box_drag_format_id, start_box_drag};
 pub use shell_menu::{cleanup_desktop_registry, setup_desktop_registry, take_pending_create_box};
+#[allow(unused_imports)] // 公共 API 预留
 pub use sys_tray::{
     cleanup_system_tray, register_tray_action_waker, setup_system_tray, take_pending_tray_action,
 };

@@ -1,9 +1,11 @@
-//! Win32 FFI 类型定义、C 结构体和常量
+﻿//! Win32 FFI 类型定义、C 结构体和常量
 //!
 //! 本模块包含所有 Win32 FFI 所需的类型别名、结构体定义和常量。
 //! 被 grid_window、win32_ffi、shell_menu、d2d_render 等模块共享使用。
 
 #![allow(clippy::upper_case_acronyms)]
+#![allow(non_snake_case)] // Win32 FFI 结构体字段必须保持 PascalCase 以匹配 Windows API 命名
+#![allow(dead_code)] // Win32 FFI 类型/常量库，部分预留供后续 Win32 交互使用
 
 use std::ffi::c_void;
 

@@ -1,4 +1,6 @@
-//! 自定义分层窗口菜单
+﻿//! 自定义分层窗口菜单
+
+#![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
 //! 使用 WS_POPUP + WS_EX_LAYERED + D2D/DirectWrite 实现深色主题菜单。
 //! 替代原生 TrackPopupMenu，支持 per-pixel alpha 透明度、DirectWrite 清晰文字、

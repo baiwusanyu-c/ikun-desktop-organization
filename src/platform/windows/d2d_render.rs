@@ -1,4 +1,6 @@
-//! Direct2D/DirectWrite 渲染代码
+﻿//! Direct2D/DirectWrite 渲染代码
+
+#![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
 //! 本模块包含使用 Direct2D 和 DirectWrite 渲染格子窗口内容的所有代码。
 //! 包括设备初始化、分层窗口渲染和图标绘制。
@@ -243,7 +245,7 @@ pub fn render_layered_window(hwnd: HWND) {
 
     // ===== 获取 DPI =====
     let dpi = unsafe { GetDpiForWindow(hwnd) };
-    let dpi = if dpi > 0 { dpi } else { 96 };
+    let _dpi = if dpi > 0 { dpi } else { 96 }; // DPI 预留供后续 DPI 感知渲染使用
 
     // ===== 绘制圆角背景（整体，四角圆角）=====
     let bg_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(1, 1, 1, 38), None) };
@@ -267,7 +269,7 @@ pub fn render_layered_window(hwnd: HWND) {
 
     // ===== 获取 DPI =====
     let dpi = unsafe { GetDpiForWindow(hwnd) };
-    let dpi = if dpi > 0 { dpi } else { 96 };
+    let _dpi = if dpi > 0 { dpi } else { 96 }; // DPI 预留供后续 DPI 感知渲染使用
 
     // ===== 创建文字画刷（标题专用，图标标签画刷在 render_icon_grid 内创建）=====
     let white_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(255, 255, 255, 255), None) };

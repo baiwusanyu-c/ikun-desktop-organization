@@ -1,4 +1,6 @@
-//! 文件图标提取
+﻿//! 文件图标提取
+
+#![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
 //! 使用 SHGetFileInfoW / SHDefExtractIconW 获取文件的系统图标句柄 (HICON)
 //! 支持解析 .lnk 快捷方式的目标路径以提取高清图标

@@ -1,5 +1,8 @@
 //! OLE 拖拽源实现（IDataObject + IDropSource）
 //!
+
+#![allow(dead_code)]
+// COM vtable 函数通过函数指针调用，编译器无法静态追踪；IEnumFORMATETC 为架构预留
 //! 为分类框提供标准 OLE 拖拽能力：
 //! - 从分类框拖出图标到另一个分类框（框间移动）
 //! - 从分类框拖出图标到桌面空白区域（恢复到桌面）
@@ -293,7 +296,7 @@ unsafe extern "system" fn data_object_set_data(
     this: *mut c_void,
     format_etc: *const FORMATETC,
     medium: *mut STGMEDIUM,
-    f_release: i32,
+    _f_release: i32,
 ) -> HRESULT {
     if format_etc.is_null() || medium.is_null() {
         return E_INVALIDARG;
@@ -807,7 +810,7 @@ unsafe fn build_hglobal_from_bytes(data: &[u8]) -> Option<HGLOBAL> {
 pub fn start_box_drag(
     file_paths: Vec<String>,
     box_drag_data: IkunBoxDragData,
-    icon_handle: HICON,
+    _icon_handle: HICON,
 ) -> u32 {
     let custom_format_id = get_box_drag_format_id();
 

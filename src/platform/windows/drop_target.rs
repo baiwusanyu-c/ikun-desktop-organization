@@ -1,4 +1,6 @@
-//! OLE 拖拽目标实现（IDropTarget）
+﻿//! OLE 拖拽目标实现（IDropTarget）
+
+#![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
 //! 为分类框提供接收拖拽的能力：
 //! - 接收从其他分类框拖入的图标（框间移动）

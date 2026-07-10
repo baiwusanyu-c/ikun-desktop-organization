@@ -1,4 +1,6 @@
-//! Windows 系统托盘入口。
+﻿//! Windows 系统托盘入口。
+
+#![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
 //! 创建隐藏消息窗口承载 `Shell_NotifyIconW` 回调，并把原生菜单点击转换为
 //! `SystemTrayAction`，由 `app.rs` 在 egui 主循环中消费。

@@ -1,4 +1,6 @@
-//! DPI 缩放工具
+﻿//! DPI 缩放工具
+
+#![allow(dead_code)] // DPI 工具函数，部分为架构预留
 //!
 //! 从 grid_window 提取的 DPI 相关辅助函数。
 

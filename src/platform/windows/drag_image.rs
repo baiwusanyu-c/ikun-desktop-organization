@@ -1,4 +1,6 @@
-//! 自定义拖拽覆盖窗口（替代 OLE IDragSourceHelper）
+﻿//! 自定义拖拽覆盖窗口（替代 OLE IDragSourceHelper）
+
+#![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
 //! 创建一个小型 WS_EX_LAYERED 窗口跟随鼠标光标，
 //! 显示被拖拽图标 + 名称的半透明图像。与原生桌面拖拽体验一致。

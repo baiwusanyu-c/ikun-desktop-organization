@@ -1,4 +1,4 @@
-//! 格子窗口 - 核心组件（Direct2D/DirectWrite 渲染）
+﻿//! 格子窗口 - 核心组件（Direct2D/DirectWrite 渲染）
 //!
 //! 每个收纳格子是一个独立的 WS_POPUP 分层窗口。
 //! 使用 Direct2D + DirectWrite 渲染到 DIB，通过 UpdateLayeredWindow 提交。
@@ -45,6 +45,7 @@ unsafe impl Send for GridFileItem {}
 
 /// 下拉菜单状态
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // 菜单状态字段：渲染代码使用但当前构建路径未完全接入
 pub(crate) struct MenuState {
     /// 菜单是否打开
     pub(crate) open: bool,
@@ -78,6 +79,7 @@ impl Default for MenuState {
 
 /// 格子窗口创建参数
 pub struct GridCreateParams {
+    #[allow(dead_code)] // 窗口 ID 在内部追踪使用
     pub id: usize,
     pub title: String,
     pub x: i32,
@@ -151,9 +153,13 @@ pub(crate) struct GridWindowData {
     /// 分组方式
     pub(crate) group_by: GroupBy,
     /// 菜单打开前的窗口位置和尺寸（用于关闭菜单时恢复）
+    #[allow(dead_code)] // 菜单关闭恢复位置时使用
     pub(crate) base_window_x: i32,
+    #[allow(dead_code)]
     pub(crate) base_window_y: i32,
+    #[allow(dead_code)]
     pub(crate) base_window_w: i32,
+    #[allow(dead_code)]
     pub(crate) base_window_h: i32,
 
     // ===== 拖拽状态（自定义拖拽跟踪，替代 OLE Drag Source）=====
@@ -233,6 +239,7 @@ impl GridWindowData {
 /// 格子窗口句柄包装
 pub struct GridWindow {
     pub hwnd: HWND,
+    #[allow(dead_code)] // 窗口 ID 用于内部追踪
     pub id: usize,
 }
 
@@ -710,28 +717,27 @@ pub(super) fn save_btn_rect(win_w: i32, title_h: i32, dpi: u32) -> (i32, i32, i3
     (btn_x, btn_y, btn_w, btn_h)
 }
 
-/// 菜单行高（DPI 缩放后）
+#[allow(dead_code)] // 菜单渲染时使用
 pub(super) fn menu_row_h(dpi: u32) -> i32 {
     scale_for_dpi(36, dpi)
 }
 
-/// 主菜单宽度（DPI 缩放后）
+#[allow(dead_code)] // 菜单渲染时使用
 pub(super) fn menu_width(dpi: u32) -> i32 {
     scale_for_dpi(160, dpi)
 }
 
-/// 子菜单宽度（DPI 缩放后）
+#[allow(dead_code)] // 菜单渲染时使用
 pub(super) fn submenu_width(dpi: u32) -> i32 {
     scale_for_dpi(160, dpi)
 }
 
-/// 分隔线高度
+#[allow(dead_code)] // 菜单渲染时使用
 pub(super) fn menu_separator_h(dpi: u32) -> i32 {
     scale_for_dpi(1, dpi)
 }
 
-/// 主菜单在窗口坐标中的矩形
-/// 返回 (x, y, w, h)
+#[allow(dead_code)] // 菜单渲染时使用
 pub(super) fn main_menu_rect(win_w: i32, title_h: i32, dpi: u32) -> (i32, i32, i32, i32) {
     let mw = menu_width(dpi);
     let mx = win_w - mw - scale_for_dpi(6, dpi);
@@ -741,6 +747,7 @@ pub(super) fn main_menu_rect(win_w: i32, title_h: i32, dpi: u32) -> (i32, i32, i
     (mx, my, mw, mh)
 }
 
+#[allow(dead_code)] // 菜单渲染时使用
 /// 子菜单在窗口坐标中的矩形
 ///
 /// `on_left` 为 true 时显示在主菜单左侧，否则显示在右侧。
@@ -765,7 +772,7 @@ pub(super) fn sub_menu_rect(
     (sx, sy, sw, sh)
 }
 
-/// 菜单需要的额外窗口高度
+#[allow(dead_code)] // 菜单渲染时使用
 pub(super) fn menu_extra_height(dpi: u32) -> i32 {
     // 4 主项 + 1 分隔线 + padding + 额外空间
     menu_row_h(dpi) * 4 + menu_separator_h(dpi) + scale_for_dpi(32, dpi)
@@ -839,7 +846,6 @@ pub fn get_grid_count() -> usize {
 /// **注意**：存储的是逻辑像素（DPI 96 基准），恢复时 `create_grid_window` 会重新缩放。
 pub fn collect_grid_layout() -> Vec<crate::config::BoxLayoutData> {
     use crate::config::BoxLayoutData;
-    use uuid::Uuid;
 
     let grids = match GRID_WINDOWS.lock() {
         Ok(g) => g,

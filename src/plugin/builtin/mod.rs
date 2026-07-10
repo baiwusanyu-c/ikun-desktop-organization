@@ -1,6 +1,8 @@
-//! 内置插件注册
+﻿//! 内置插件注册
 //!
 //! 注册所有内置功能插件到 PluginRegistry。
+
+#![allow(dead_code)] // 插件系统为架构预留
 
 pub mod classification_plugin;
 pub mod style_plugin;
