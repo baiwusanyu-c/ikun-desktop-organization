@@ -1,4 +1,4 @@
-﻿//! Windows 平台模块
+//! Windows 平台模块
 //!
 //! 提供 Windows 平台的桌面管理、窗口管理和渲染功能。
 //!
@@ -47,8 +47,9 @@ pub use drop_target::{
 pub use ffi_types::{IkunBoxDragData, IkunDragItemData};
 pub use grid_window::{
     collect_grid_layout, create_grid_window, destroy_all_grid_windows,
-    get_cursor_monitor_work_area_phys, get_grid_count, get_screen_resolution,
-    reposition_window_by_title, GridCreateParams, GridFileItem,
+    get_cursor_monitor_work_area_phys, get_grid_count, get_primary_monitor_work_area_phys,
+    get_screen_resolution, reposition_and_resize_window, reposition_window_by_title,
+    GridCreateParams, GridFileItem,
 };
 pub use icon_extract::extract_file_icon;
 pub use icon_hider::{

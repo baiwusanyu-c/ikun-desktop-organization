@@ -1,4 +1,4 @@
-﻿//! GPUI 应用运行时 — 与 UI 框架无关的业务逻辑层
+//! GPUI 应用运行时 — 与 UI 框架无关的业务逻辑层
 
 #![allow(dead_code)] // GPUI 应用运行时，部分方法/类型预留
 //!
@@ -10,12 +10,11 @@ use crate::context::AppContext;
 use crate::platform::{
     cleanup_desktop_registry, cleanup_system_tray, collect_grid_layout, create_desktop_overlay,
     create_grid_window, destroy_all_grid_windows, destroy_desktop_overlay, extract_file_icon,
-    get_cursor_monitor_work_area_phys, get_grid_count, get_screen_resolution,
-    hide_control_panel_window, hide_native_icons, icon_exists_for_box, native_icons_hidden,
-    resolve_icon_read_path, restore_all_hidden_icons, restore_native_icons, setup_desktop_registry,
-    setup_system_tray, show_control_panel_window, take_pending_create_box,
-    take_pending_tray_action, DesktopIcon, DesktopManagerTrait, GridCreateParams, GridFileItem,
-    SystemTrayAction,
+    get_grid_count, get_screen_resolution, hide_control_panel_window, hide_native_icons,
+    icon_exists_for_box, native_icons_hidden, resolve_icon_read_path, restore_all_hidden_icons,
+    restore_native_icons, setup_desktop_registry, setup_system_tray, show_control_panel_window,
+    take_pending_create_box, take_pending_tray_action, DesktopIcon, DesktopManagerTrait,
+    GridCreateParams, GridFileItem, SystemTrayAction,
 };
 use std::sync::{Arc, Mutex};
 
@@ -123,22 +122,6 @@ pub fn validate_box_name(name: &str) -> BoxNameValidation {
     BoxNameValidation::new(name)
 }
 
-/// 计算创建分类框对话框目标位置。
-///
-/// 输入为鼠标所在显示器工作区的物理像素虚拟桌面坐标，输出为对话框左上角
-/// 物理像素坐标。算法与旧 egui 版本保持一致：宽度按 360，高度按包含标题栏
-/// 的 200 估算，水平居中，垂直位于工作区上方三分之一处。
-pub fn calculate_create_box_dialog_position(
-    work_x: i32,
-    work_y: i32,
-    work_w: i32,
-    work_h: i32,
-) -> (i32, i32) {
-    let dlg_w = 360;
-    let dlg_h = 200;
-    (work_x + (work_w - dlg_w) / 2, work_y + (work_h - dlg_h) / 3)
-}
-
 /// 判断是否需要重新隐藏原生桌面图标
 pub fn should_retry_native_icon_hide(state_icons_hidden: bool, native_hidden: bool) -> bool {
     state_icons_hidden && !native_hidden
@@ -166,8 +149,6 @@ pub struct AppRuntime {
     pub dialog_name: String,
     /// 对话框是否需要在本帧打开
     pub dialog_needs_open: bool,
-    /// 对话框 Win32 目标位置（物理像素坐标）
-    pub dialog_target_pos: Option<(i32, i32)>,
 }
 
 impl AppRuntime {
@@ -184,7 +165,6 @@ impl AppRuntime {
             dialog_open: false,
             dialog_name: String::new(),
             dialog_needs_open: false,
-            dialog_target_pos: None,
         }
     }
 
@@ -317,14 +297,10 @@ impl AppRuntime {
     // =================================================================
 
     pub fn open_create_box_dialog(&mut self) {
-        let (work_x, work_y, work_w, work_h) = get_cursor_monitor_work_area_phys();
-        let (x, y) = calculate_create_box_dialog_position(work_x, work_y, work_w, work_h);
-
         self.dialog_name.clear();
         self.dialog_open = true;
         self.dialog_needs_open = true;
-        self.dialog_target_pos = Some((x, y));
-        log::info!("打开创建分类框对话框，目标位置: ({}, {})", x, y);
+        log::info!("打开创建分类框对话框");
     }
 
     pub fn confirm_create_box(&mut self) {
@@ -335,14 +311,12 @@ impl AppRuntime {
         }
         self.dialog_open = false;
         self.dialog_name.clear();
-        self.dialog_target_pos = None;
         self.create_empty_box(name);
     }
 
     pub fn cancel_create_box_dialog(&mut self) {
         self.dialog_open = false;
         self.dialog_name.clear();
-        self.dialog_target_pos = None;
     }
 
     // =================================================================
@@ -758,18 +732,6 @@ mod tests {
     fn test_box_name_valid_max_len() {
         assert!(is_box_name_valid("1234567890123456"));
         assert!(!is_box_name_valid("12345678901234567"));
-    }
-
-    #[test]
-    fn test_create_box_dialog_position_matches_legacy_algorithm() {
-        assert_eq!(
-            calculate_create_box_dialog_position(0, 0, 1920, 1080),
-            (780, 293)
-        );
-        assert_eq!(
-            calculate_create_box_dialog_position(-1920, 0, 1920, 1040),
-            (-1140, 280)
-        );
     }
 
     #[test]

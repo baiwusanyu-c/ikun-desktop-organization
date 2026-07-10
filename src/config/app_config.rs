@@ -1,4 +1,4 @@
-﻿//! 统一应用配置
+//! 统一应用配置
 
 #![allow(dead_code)] // 配置类型，部分方法在当前构建路径未使用
 //!
@@ -52,6 +52,8 @@ pub struct AppConfig {
     pub overlay: OverlayConfig,
     /// 调试配置
     pub debug: DebugConfig,
+    /// UI 主题配置
+    pub ui_theme: UiThemeConfig,
 }
 
 impl Default for AppConfig {
@@ -68,6 +70,7 @@ impl Default for AppConfig {
             layout: LayoutConfig::default(),
             overlay: OverlayConfig::default(),
             debug: DebugConfig::default(),
+            ui_theme: UiThemeConfig::default(),
         }
     }
 }
@@ -655,6 +658,66 @@ pub enum GroupBy {
     Tag,
     /// 按标题
     Title,
+}
+
+// =============================================================================
+// UI 主题配置
+// =============================================================================
+
+/// UI 主题配置（支持 light/dark 切换）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UiThemeConfig {
+    /// 亮色主题颜色
+    pub light: ThemeColors,
+    /// 暗色主题颜色
+    pub dark: ThemeColors,
+}
+
+/// 主题颜色集合
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ThemeColors {
+    /// 背景色 (#RRGGBB 或 #RRGGBBAA)
+    pub background: Option<String>,
+    /// 前景色
+    pub foreground: Option<String>,
+    /// 边框色
+    pub border: Option<String>,
+    /// 主色
+    pub primary: Option<String>,
+    /// 主色前景
+    pub primary_foreground: Option<String>,
+    /// 成功色
+    pub success: Option<String>,
+    /// 危险色
+    pub danger: Option<String>,
+    /// 弱化前景色
+    pub muted_foreground: Option<String>,
+}
+
+impl Default for UiThemeConfig {
+    fn default() -> Self {
+        Self {
+            light: ThemeColors::default(),
+            dark: ThemeColors::default(),
+        }
+    }
+}
+
+impl Default for ThemeColors {
+    fn default() -> Self {
+        Self {
+            background: None,
+            foreground: None,
+            border: None,
+            primary: None,
+            primary_foreground: None,
+            success: None,
+            danger: None,
+            muted_foreground: None,
+        }
+    }
 }
 
 // =============================================================================

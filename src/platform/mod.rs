@@ -1,4 +1,4 @@
-﻿//! 平台抽象层
+//! 平台抽象层
 
 #![allow(dead_code)] // 平台抽象层，部分在当前构建路径未使用
 //!
@@ -47,12 +47,12 @@ pub use windows::DesktopManager;
 pub use windows::{
     cleanup_desktop_registry, cleanup_system_tray, collect_grid_layout, create_desktop_overlay,
     create_grid_window, destroy_all_grid_windows, destroy_desktop_overlay, extract_file_icon,
-    get_cursor_monitor_work_area_phys, get_grid_count, get_screen_resolution,
-    hide_control_panel_window, hide_native_icons, icon_exists_for_box, native_icons_hidden,
-    register_tray_action_waker, reposition_window_by_title, resolve_icon_read_path,
-    restore_all_hidden_icons, restore_native_icons, setup_desktop_registry, setup_system_tray,
-    show_control_panel_window, take_pending_create_box, take_pending_tray_action, GridCreateParams,
-    GridFileItem,
+    get_cursor_monitor_work_area_phys, get_grid_count, get_primary_monitor_work_area_phys,
+    get_screen_resolution, hide_control_panel_window, hide_native_icons, icon_exists_for_box,
+    native_icons_hidden, register_tray_action_waker, reposition_and_resize_window,
+    reposition_window_by_title, resolve_icon_read_path, restore_all_hidden_icons,
+    restore_native_icons, setup_desktop_registry, setup_system_tray, show_control_panel_window,
+    take_pending_create_box, take_pending_tray_action, GridCreateParams, GridFileItem,
 };
 
 // =============================================================================
@@ -183,6 +183,31 @@ mod macos_stubs {
         }
     }
 
+    /// 获取主显示器的工作区域（macOS 实现，返回物理像素坐标）
+    pub fn get_primary_monitor_work_area_phys() -> (i32, i32, i32, i32) {
+        use cocoa::base::nil;
+        use cocoa::foundation::NSRect;
+        use objc::{msg_send, sel, sel_impl};
+
+        unsafe {
+            let screens: cocoa::base::id = msg_send![class!(NSScreen), screens];
+            let count: usize = msg_send![screens, count];
+            if count == 0 {
+                return (0, 0, 1920, 1080);
+            }
+            // 第一个 screen 是主显示器
+            let main_screen: cocoa::base::id = msg_send![screens, objectAtIndex: 0];
+            let visible_frame: NSRect = msg_send![main_screen, visibleFrame];
+            let scale: f64 = msg_send![main_screen, backingScaleFactor];
+            (
+                (visible_frame.origin.x * scale) as i32,
+                (visible_frame.origin.y * scale) as i32,
+                (visible_frame.size.width * scale) as i32,
+                (visible_frame.size.height * scale) as i32,
+            )
+        }
+    }
+
     /// 获取分类框数量（macOS stub）
     pub fn get_grid_count() -> usize {
         0
@@ -258,10 +283,11 @@ mod macos_stubs {
 pub use macos_stubs::{
     cleanup_desktop_registry, cleanup_system_tray, collect_grid_layout, create_grid_window,
     destroy_all_grid_windows, extract_file_icon, get_cursor_monitor_work_area_phys, get_grid_count,
-    hide_control_panel_window, icon_exists_for_box, native_icons_hidden,
-    reposition_window_by_title, resolve_icon_read_path, restore_all_hidden_icons,
-    setup_desktop_registry, setup_system_tray, show_control_panel_window, take_pending_create_box,
-    take_pending_tray_action, FileIconInfo, GridCreateParams, GridFileItem, HICON,
+    get_primary_monitor_work_area_phys, hide_control_panel_window, icon_exists_for_box,
+    native_icons_hidden, reposition_and_resize_window, reposition_window_by_title,
+    resolve_icon_read_path, restore_all_hidden_icons, setup_desktop_registry, setup_system_tray,
+    show_control_panel_window, take_pending_create_box, take_pending_tray_action, FileIconInfo,
+    GridCreateParams, GridFileItem, HICON,
 };
 
 /// 桌面管理器 trait（跨平台）

@@ -307,6 +307,11 @@ pub const DIB_RGB_COLORS: u32 = 0;
 // ===== Monitor Constants =====
 pub const MONITOR_DEFAULTTONEAREST: u32 = 0x00000002;
 
+/// MonitorFromPoint/MonitorFromWindow: 返回主显示器
+///
+/// 值为 0x00000001，用于获取主显示器句柄。
+pub const MONITOR_DEFAULTTOPRIMARY: u32 = 0x00000001;
+
 /// Win32 MONITORINFO 结构体
 #[repr(C)]
 pub struct MONITORINFO {

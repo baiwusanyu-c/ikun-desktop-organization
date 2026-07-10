@@ -1,4 +1,4 @@
-﻿//! 格子窗口 - 核心组件（Direct2D/DirectWrite 渲染）
+//! 格子窗口 - 核心组件（Direct2D/DirectWrite 渲染）
 //!
 //! 每个收纳格子是一个独立的 WS_POPUP 分层窗口。
 //! 使用 Direct2D + DirectWrite 渲染到 DIB，通过 UpdateLayeredWindow 提交。
@@ -287,6 +287,45 @@ pub fn get_screen_resolution() -> (i32, i32) {
     let w = unsafe { GetSystemMetrics(SM_CXSCREEN) };
     let h = unsafe { GetSystemMetrics(SM_CYSCREEN) };
     (w, h)
+}
+
+/// 获取主显示器的工作区域（物理像素虚拟桌面坐标）
+///
+/// 返回值不做 DPI 转换，直接返回 Windows API 的原始物理像素坐标。
+/// 用于将弹窗居中定位到主显示器。
+pub fn get_primary_monitor_work_area_phys() -> (i32, i32, i32, i32) {
+    unsafe {
+        // 使用 (0, 0) 点配合 MONITOR_DEFAULTTOPRIMARY 确保返回主显示器
+        let pt = POINT { x: 0, y: 0 };
+        let hmon = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
+        if hmon.is_null() {
+            return fallback_work_area();
+        }
+
+        let mut mi = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            rcMonitor: RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            },
+            rcWork: RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            },
+            dwFlags: 0,
+        };
+
+        if GetMonitorInfoW(hmon, &mut mi) != 0 {
+            let w = &mi.rcWork;
+            (w.left, w.top, w.right - w.left, w.bottom - w.top)
+        } else {
+            fallback_work_area()
+        }
+    }
 }
 
 /// 获取当前鼠标所在显示器的工作区域（物理像素虚拟桌面坐标）
@@ -1201,5 +1240,46 @@ mod tests {
             over_limit.chars().count() > max_chars,
             "超出 16 字符应被拒绝"
         );
+    }
+}
+
+/// 重新定位并调整窗口大小（物理像素）
+///  
+/// 与 `reposition_window_by_title` 不同，此函数同时设置位置和尺寸。  
+/// 用于创建分类框对话框等需要精确控制尺寸的场景。
+pub fn reposition_and_resize_window(
+    title: &str,
+    target_x: i32,
+    target_y: i32,
+    width: i32,
+    height: i32,
+) -> bool {
+    unsafe {
+        let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+        let hwnd = FindWindowW(std::ptr::null(), title_wide.as_ptr());
+        if hwnd.is_null() {
+            log::debug!("reposition_and_resize: 未找到窗口 '{}'", title);
+            return false;
+        }
+
+        // SWP_NOZORDER=4, SWP_NOACTIVATE=16
+        SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            target_x,
+            target_y,
+            width,
+            height,
+            4 | 16,
+        );
+        log::info!(
+            "reposition_and_resize: '{}' -> ({}, {}) {}x{}",
+            title,
+            target_x,
+            target_y,
+            width,
+            height
+        );
+        true
     }
 }

@@ -5,10 +5,9 @@
 
 use crate::gpui_app::app_runtime::{AppRuntime, CONTROL_PANEL_TITLE};
 use crate::gpui_app::create_box_dialog::CreateBoxDialogView;
-use crate::platform::reposition_window_by_title;
 use gpui::{
-    div, point, px, rgb, size, App, AppContext, Bounds, Context, Entity, IntoElement,
-    ParentElement, Render, SharedString, Styled, Window, WindowBounds, WindowOptions,
+    div, px, rgb, size, App, AppContext, Bounds, Context, Entity, IntoElement, ParentElement,
+    Render, SharedString, Styled, Window, WindowBounds, WindowOptions,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
@@ -87,24 +86,14 @@ impl ControlPanelView {
         cx: &mut App,
     ) -> anyhow::Result<gpui::WindowHandle<Root>> {
         log::debug!("[ControlPanelView] open_create_box_dialog_window() 开始");
-        let target_pos = runtime.read(cx).dialog_target_pos;
-        let bounds = if let Some((x, y)) = target_pos {
-            Bounds::new(
-                point(px(x as f32), px(y as f32)),
-                size(px(360.0), px(180.0)),
-            )
-        } else {
-            Bounds::centered(None, size(px(360.0), px(180.0)), cx)
-        };
+        let bounds = Bounds::centered(None, size(px(500.0), px(200.0)), cx);
 
         let handle = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(gpui::TitlebarOptions {
-                    title: Some(SharedString::from("创建分类框")),
-                    ..Default::default()
-                }),
-                is_resizable: false,
+                titlebar: Some(gpui_component::TitleBar::title_bar_options()),
+                is_resizable: true,
+                window_min_size: Some(size(px(400.0), px(160.0))),
                 ..Default::default()
             },
             |window, cx| {
@@ -121,9 +110,6 @@ impl ControlPanelView {
                 cx.new(|cx| Root::new(view, window, cx))
             },
         );
-        if let Some((x, y)) = target_pos {
-            reposition_window_by_title("创建分类框", x, y);
-        }
         log::debug!("[ControlPanelView] open_create_box_dialog_window() 完成");
         handle
     }

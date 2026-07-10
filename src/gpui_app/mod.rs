@@ -1,4 +1,4 @@
-﻿//! GPUI 应用模块（Windows 平台）
+//! GPUI 应用模块（Windows 平台）
 //!
 //! 使用 GPUI + gpui-component 替代 eframe/egui，
 //! 实现控制面板和创建分类框对话框的完整 UI。
@@ -10,6 +10,7 @@
 //! - windows_main — Windows GPUI 应用入口
 
 pub mod app_runtime;
+pub mod assets;
 pub mod control_panel;
 pub mod create_box_dialog;
 pub mod windows_main;
