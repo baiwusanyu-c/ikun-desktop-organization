@@ -1,4 +1,4 @@
-﻿//! Direct2D/DirectWrite 渲染代码
+//! Direct2D/DirectWrite 渲染代码
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -299,7 +299,7 @@ pub fn render_layered_window(hwnd: HWND) {
             let title_text: Vec<u16> = data.title.encode_utf16().collect();
 
             // 锁定按钮区域（标题栏右侧）
-            let (btn_x, btn_y, btn_size) = super::grid_window::lock_btn_rect(w, title_h, dpi);
+            let (btn_x, btn_y, btn_size) = super::grid_layout::lock_btn_rect(w, title_h, dpi);
 
             // 创建 TextLayout（右侧为锁定按钮预留空间）
             let text_max_w = (btn_x as f32 - 10.0).max(40.0);
@@ -434,7 +434,7 @@ pub fn render_layered_window(hwnd: HWND) {
 
     // ===== 绘制"更多"按钮（⋮，锁定按钮右侧）=====
     if !data.editing_name {
-        let (mbtn_x, mbtn_y, mbtn_size) = super::grid_window::more_btn_rect(w, title_h, dpi);
+        let (mbtn_x, mbtn_y, mbtn_size) = super::grid_layout::more_btn_rect(w, title_h, dpi);
         let more_icon = "\u{22EE}"; // ⋮ 三个竖点
         let more_font_size = scale_for_dpi(16, dpi) as f32;
         let more_format = unsafe {
@@ -524,9 +524,9 @@ pub fn render_layered_window(hwnd: HWND) {
 
     // ===== 名称编辑模式：绘制输入框 + 清除按钮 + 保存按钮 =====
     if data.editing_name {
-        let (ix, iy, iw, ih) = super::grid_window::input_box_rect(w, title_h, dpi);
-        let (cx, cy, cw, ch) = super::grid_window::clear_btn_rect(w, title_h, dpi);
-        let (sx, sy, sw, sh) = super::grid_window::save_btn_rect(w, title_h, dpi);
+        let (ix, iy, iw, ih) = super::grid_layout::input_box_rect(w, title_h, dpi);
+        let (cx, cy, cw, ch) = super::grid_layout::clear_btn_rect(w, title_h, dpi);
+        let (sx, sy, sw, sh) = super::grid_layout::save_btn_rect(w, title_h, dpi);
         let radius = 4.0_f32;
 
         // 输入框背景（比分类框背景略深、半透明）

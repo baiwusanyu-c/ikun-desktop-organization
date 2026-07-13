@@ -24,11 +24,13 @@ mod drag_image;
 mod drop_target;
 pub mod ffi_imports;
 pub mod ffi_types;
+pub mod grid_layout;
 pub mod grid_window;
 pub mod icon_extract;
 pub mod icon_hider;
 pub mod icon_manager;
 mod menu_window;
+mod monitor_utils;
 pub mod ole_dnd;
 pub mod shell_menu;
 mod sys_tray;
@@ -46,9 +48,7 @@ pub use drop_target::{
 #[allow(unused_imports)] // 公共 API 预留
 pub use ffi_types::{IkunBoxDragData, IkunDragItemData};
 pub use grid_window::{
-    collect_grid_layout, create_grid_window, destroy_all_grid_windows,
-    get_cursor_monitor_work_area_phys, get_grid_count, get_primary_monitor_work_area_phys,
-    get_screen_resolution, reposition_and_resize_window, reposition_window_by_title,
+    collect_grid_layout, create_grid_window, destroy_all_grid_windows, get_grid_count,
     GridCreateParams, GridFileItem,
 };
 pub use icon_extract::extract_file_icon;
@@ -58,6 +58,10 @@ pub use icon_hider::{
 };
 #[allow(unused_imports)] // 公共 API 预留
 pub use icon_manager::DesktopIconManager;
+pub use monitor_utils::{
+    get_cursor_monitor_work_area_phys, get_primary_monitor_dpi, get_primary_monitor_work_area_phys,
+    get_screen_resolution, reposition_and_resize_window, reposition_window_by_title,
+};
 #[allow(unused_imports)] // 公共 API 预留
 pub use ole_dnd::{get_box_drag_format_id, start_box_drag};
 pub use shell_menu::{cleanup_desktop_registry, setup_desktop_registry, take_pending_create_box};

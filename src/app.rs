@@ -1,4 +1,4 @@
-//! 控制面板 - egui 主窗口
+﻿//! 控制面板 - egui 主窗口
 //!
 //! 通过 `AppContext` 统一管理配置、平台服务和分类器。
 //! 创建分类框使用独立的 egui viewport（独立窗口，非控制面板内弹窗）。
@@ -12,12 +12,13 @@ use crate::context::AppContext;
 use crate::platform::{
     cleanup_desktop_registry, cleanup_system_tray, collect_grid_layout, create_desktop_overlay,
     create_grid_window, destroy_all_grid_windows, destroy_desktop_overlay, extract_file_icon,
-    get_cursor_monitor_work_area_phys, get_grid_count, get_screen_resolution,
-    hide_control_panel_window, hide_native_icons, icon_exists_for_box, native_icons_hidden,
-    register_tray_action_waker, reposition_window_by_title, resolve_icon_read_path,
-    restore_all_hidden_icons, restore_native_icons, setup_desktop_registry, setup_system_tray,
-    show_control_panel_window, take_pending_create_box, take_pending_tray_action, DesktopIcon,
-    DesktopManagerTrait, GridCreateParams, GridFileItem, SystemTrayAction,
+    get_cursor_monitor_work_area_phys, get_grid_count, get_primary_monitor_dpi,
+    get_screen_resolution, hide_control_panel_window, hide_native_icons, icon_exists_for_box,
+    native_icons_hidden, register_tray_action_waker, reposition_window_by_title,
+    resolve_icon_read_path, restore_all_hidden_icons, restore_native_icons, setup_desktop_registry,
+    setup_system_tray, show_control_panel_window, take_pending_create_box,
+    take_pending_tray_action, DesktopIcon, DesktopManagerTrait, GridCreateParams, GridFileItem,
+    SystemTrayAction,
 };
 use eframe::egui;
 use std::sync::{Arc, Mutex};

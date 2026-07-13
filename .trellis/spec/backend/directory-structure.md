@@ -1,4 +1,4 @@
-# Directory Structure
+﻿# Directory Structure
 
 > 项目代码组织方式（v2.0 架构）
 
@@ -45,7 +45,9 @@ src/
 │   │   ├── desktop_manager.rs #   桌面图标枚举（文件系统读取）
 │   │   ├── desktop_overlay/   #   桌面覆盖窗口（渲染未管理图标 + 桌面接管生命周期 + 文件监听刷新）
 │   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎
-│   │   ├── grid_window.rs     #   窗口创建/销毁/布局收集
+│   │   ├── grid_window.rs     #   窗口创建/销毁/数据模型
+│   │   ├── grid_layout.rs     #   布局计算/按钮矩形/命中测试
+│   │   ├── monitor_utils.rs   #   显示器查询/窗口定位工具
 │   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc
 │   │   ├── menu_window.rs     #   自定义分层窗口深色菜单（D2D/DirectWrite）
 │   │   ├── shell_menu.rs      #   Shell 右键菜单 + 桌面背景注册表菜单
@@ -189,7 +191,9 @@ platform/windows/
 ├── desktop_manager.rs # DesktopManagerTrait 实现
 ├── desktop_overlay/   # 桌面覆盖窗口（渲染/交互/DPI 自适应）
 ├── d2d_render.rs      # D2D/DirectWrite 渲染
-├── grid_window.rs     # 窗口管理
+├── grid_window.rs     # 窗口创建/销毁/数据模型
+├── grid_layout.rs     # 布局计算/按钮矩形/命中测试
+├── monitor_utils.rs   # 显示器查询/窗口定位工具
 ├── wnd_proc.rs        # 窗口消息处理
 ├── menu_window.rs     # 自定义分层窗口深色菜单（D2D/DirectWrite）
 ├── shell_menu.rs      # Shell 右键菜单 + 注册表菜单动作
@@ -298,3 +302,5 @@ use crate::ui::control_panel;
 - [ ] 如果跨平台，定义 Trait 并条件编译实现
 - [ ] 如果是新功能，更新 `src/main.rs` 的 `mod` 声明
 - [ ] 单文件不超过 1000 行
+
+

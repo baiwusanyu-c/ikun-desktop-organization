@@ -410,3 +410,65 @@ Set show:false in WindowOptions and removed delayed hide logic
 ### Next Steps
 
 - None - task complete
+
+
+## Session 9: 修复副屏拖拽闪烁和分类框位置错误
+
+**Date**: 2026-07-13
+**Task**: 修复副屏拖拽闪烁和分类框位置错误
+**Branch**: `master`
+
+### Summary
+
+修复了两个UI bug：1) drag_image.rs 中 UpdateLayeredWindow 使用(0,0)导致跨显示器拖拽时主屏幕闪烁；2) app_runtime.rs 中新建分类框Y坐标使用screen_h*0.1而非居中
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 10: 修复副屏拖拽闪烁+分类框位置+grid_window拆分
+
+**Date**: 2026-07-13
+**Task**: 修复副屏拖拽闪烁+分类框位置+grid_window拆分
+**Branch**: `master`
+
+### Summary
+
+1) drag_image: 光标DPI渲染残影避免跨显示器闪烁; 2) app_runtime: 物理→逻辑像素+居中定位+400x400; 3) grid_window.rs拆分为monitor_utils.rs(275行)+grid_layout.rs(182行), 主体降至948行; 4) 新增19个单元测试; 5) 更新spec文档
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

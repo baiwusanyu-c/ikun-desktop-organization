@@ -407,3 +407,90 @@ impl MyApp {
 - [ ] 关键操作有日志记录
 - [ ] 无反向依赖
 - [ ] 无性能问题（克隆、高频日志）
+---
+
+## DPI and Pixel Handling
+
+### 多显示器 DPI 适配
+
+本项目支持多显示器环境，不同显示器可能有不同的 DPI 设置。
+
+**核心概念**：
+- **物理像素（Physical Pixels）**：显示器实际像素，由 GetSystemMetrics 等 API 返回
+- **逻辑像素（Logical Pixels）**：96 DPI 基准下的像素值，用于配置存储和跨 DPI 计算
+
+**转换公式**：
+`ust
+// 物理像素 → 逻辑像素
+let logical_px = (physical_px * 96) / dpi;
+
+// 逻辑像素 → 物理像素
+let physical_px = (logical_px * dpi) / 96;
+`
+
+### 窗口定位规范
+
+**规则 1：GridCreateParams 使用逻辑像素**
+
+`ust
+// ✅ 正确：x/y 是逻辑像素（96 DPI 基准）
+let params = GridCreateParams {
+    x: logical_x,
+    y: logical_y,
+    width: logical_w,
+    height: logical_h,
+    ...
+};
+
+// create_grid_window 内部会按实际 DPI 缩放
+`
+
+**规则 2：GetSystemMetrics 返回物理像素**
+
+`ust
+// ❌ 错误：直接使用物理像素计算居中
+let (screen_w, screen_h) = get_screen_resolution();  // 物理像素
+let x = (screen_w - box_w) / 2;  // box_w 是逻辑像素，单位不匹配！
+
+// ✅ 正确：先转换为逻辑像素
+let (screen_w_phys, screen_h_phys) = get_screen_resolution();
+let dpi = get_primary_monitor_dpi();
+let screen_w = (screen_w_phys * 96) / dpi as i32;  // 逻辑像素
+let screen_h = (screen_h_phys * 96) / dpi as i32;  // 逻辑像素
+let x = (screen_w - box_w) / 2;  // 现在单位一致
+`
+
+### 拖拽残影 DPI 适配
+
+**规则 3：拖拽残影使用光标所在显示器的 DPI**
+
+`ust
+// ✅ 正确：获取光标位置的 DPI
+let cursor_dpi = dpi_at_screen_point(cursor_x, cursor_y);
+
+// 按光标 DPI 渲染残影（而非源窗口 DPI）
+let icon_size = scale_dpi(base_size, cursor_dpi, 96);
+`
+
+**原因**：残影跟随光标移动，可能跨越不同 DPI 的显示器。使用光标 DPI 确保残影大小与目标显示器匹配。
+
+### 相关函数
+
+| 函数 | 用途 | 返回值类型 |
+|------|------|-----------|
+| get_screen_resolution() | 获取主屏物理像素尺寸 | (i32, i32) 物理像素 |
+| get_primary_monitor_dpi() | 获取主屏 DPI | u32 |
+| dpi_at_screen_point(x, y) | 获取指定坐标的 DPI | u32 |
+| scale_for_dpi(px, dpi) | 逻辑像素 → 物理像素 | i32 |
+
+### 单元测试要求
+
+所有涉及 DPI 转换的纯逻辑函数必须有单元测试。
+
+---
+
+## Common Mistakes (补充)
+
+6. **混淆物理像素和逻辑像素** → 窗口位置偏移或大小异常
+7. **拖拽残影使用源窗口 DPI** → 跨显示器时残影大小不匹配
+8. **忘记 DPI 转换直接计算居中** → 高 DPI 屏幕下位置错误

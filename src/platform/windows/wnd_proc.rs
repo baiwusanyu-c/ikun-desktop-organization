@@ -16,10 +16,11 @@
 use super::d2d_render::render_layered_window;
 use super::ffi_imports::*;
 use super::ffi_types::*;
-use super::grid_window::{
-    clear_btn_rect, get_data, grid_hit_test, input_box_rect, lock_btn_rect, more_btn_rect,
-    recalculate_layout, save_btn_rect, GridWindowData,
+use super::grid_layout::{
+    clear_btn_rect, grid_hit_test, input_box_rect, lock_btn_rect, more_btn_rect,
+    recalculate_layout, save_btn_rect,
 };
+use super::grid_window::{get_data, GridWindowData};
 use super::menu_window::show_menu_window;
 use super::shell_menu::{show_desktop_context_menu, show_shell_context_menu};
 

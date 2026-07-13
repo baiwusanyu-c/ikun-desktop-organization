@@ -47,12 +47,13 @@ pub use windows::DesktopManager;
 pub use windows::{
     cleanup_desktop_registry, cleanup_system_tray, collect_grid_layout, create_desktop_overlay,
     create_grid_window, destroy_all_grid_windows, destroy_desktop_overlay, extract_file_icon,
-    get_cursor_monitor_work_area_phys, get_grid_count, get_primary_monitor_work_area_phys,
-    get_screen_resolution, hide_control_panel_window, hide_native_icons, icon_exists_for_box,
-    native_icons_hidden, register_tray_action_waker, reposition_and_resize_window,
-    reposition_window_by_title, resolve_icon_read_path, restore_all_hidden_icons,
-    restore_native_icons, setup_desktop_registry, setup_system_tray, show_control_panel_window,
-    take_pending_create_box, take_pending_tray_action, GridCreateParams, GridFileItem,
+    get_cursor_monitor_work_area_phys, get_grid_count, get_primary_monitor_dpi,
+    get_primary_monitor_work_area_phys, get_screen_resolution, hide_control_panel_window,
+    hide_native_icons, icon_exists_for_box, native_icons_hidden, register_tray_action_waker,
+    reposition_and_resize_window, reposition_window_by_title, resolve_icon_read_path,
+    restore_all_hidden_icons, restore_native_icons, setup_desktop_registry, setup_system_tray,
+    show_control_panel_window, take_pending_create_box, take_pending_tray_action, GridCreateParams,
+    GridFileItem,
 };
 
 // =============================================================================
@@ -213,6 +214,21 @@ mod macos_stubs {
         0
     }
 
+    /// 获取主显示器 DPI（macOS stub，Retina 返回 192，普通返回 96）
+    pub fn get_primary_monitor_dpi() -> u32 {
+        use cocoa::base::nil;
+        use objc::{msg_send, sel, sel_impl};
+
+        unsafe {
+            let screen: cocoa::base::id = msg_send![class!(NSScreen), mainScreen];
+            if screen == nil {
+                return 96;
+            }
+            let scale: f64 = msg_send![screen, backingScaleFactor];
+            (scale * 96.0) as u32
+        }
+    }
+
     /// 图标是否存在于分类框（macOS stub）
     pub fn icon_exists_for_box(_box_id: &str) -> bool {
         false
@@ -283,11 +299,11 @@ mod macos_stubs {
 pub use macos_stubs::{
     cleanup_desktop_registry, cleanup_system_tray, collect_grid_layout, create_grid_window,
     destroy_all_grid_windows, extract_file_icon, get_cursor_monitor_work_area_phys, get_grid_count,
-    get_primary_monitor_work_area_phys, hide_control_panel_window, icon_exists_for_box,
-    native_icons_hidden, reposition_and_resize_window, reposition_window_by_title,
-    resolve_icon_read_path, restore_all_hidden_icons, setup_desktop_registry, setup_system_tray,
-    show_control_panel_window, take_pending_create_box, take_pending_tray_action, FileIconInfo,
-    GridCreateParams, GridFileItem, HICON,
+    get_primary_monitor_dpi, get_primary_monitor_work_area_phys, hide_control_panel_window,
+    icon_exists_for_box, native_icons_hidden, reposition_and_resize_window,
+    reposition_window_by_title, resolve_icon_read_path, restore_all_hidden_icons,
+    setup_desktop_registry, setup_system_tray, show_control_panel_window, take_pending_create_box,
+    take_pending_tray_action, FileIconInfo, GridCreateParams, GridFileItem, HICON,
 };
 
 /// 桌面管理器 trait（跨平台）

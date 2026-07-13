@@ -1,4 +1,4 @@
-﻿//! 自定义分层窗口菜单
+//! 自定义分层窗口菜单
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -101,7 +101,7 @@ pub fn show_menu_window(parent_hwnd: HWND) {
     let win_w = parent_rect.right - parent_rect.left;
 
     let (btn_x, btn_y, btn_size) =
-        super::grid_window::more_btn_rect(win_w, parent_data.title_h, dpi);
+        super::grid_layout::more_btn_rect(win_w, parent_data.title_h, dpi);
 
     // 菜单位置：按钮下方，左边缘对齐
     let menu_x = parent_rect.left + btn_x;

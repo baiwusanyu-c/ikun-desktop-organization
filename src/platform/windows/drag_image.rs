@@ -71,6 +71,20 @@ pub(crate) unsafe fn create_drag_overlay(
         return;
     }
 
+    // ★ 关键：用光标位置的 DPI 替换源窗口 DPI 渲染位图。
+    // 残影跟随光标显示，位图尺寸必须匹配光标所在显示器的 DPI，
+    // 否则跨显示器拖拽时会出现残影过大/过小。
+    let source_dpi = dpi; // 源窗口 DPI（参数传入）
+    let mut cursor_pt = POINT { x: 0, y: 0 };
+    GetCursorPos(&mut cursor_pt);
+    let cursor_dpi =
+        crate::platform::windows::desktop_overlay::dpi_at_screen_point(cursor_pt.x, cursor_pt.y);
+    let dpi = if cursor_dpi > 0 { cursor_dpi } else { dpi };
+
+    // 将 icon_size / cell_w 从源窗口 DPI 缩放到光标 DPI
+    let icon_size = scale_dpi(icon_size, dpi, source_dpi);
+    let cell_w = scale_dpi(cell_w, dpi, source_dpi);
+
     // 使用分类框的实际 cell_w，确保标签换行行为与框内一致
     let overlay_w = cell_w;
     let label_h = if display_name.is_empty() {
@@ -124,14 +138,18 @@ pub(crate) unsafe fn create_drag_overlay(
         CLASS_REG = true;
     }
 
+    // 在创建前获取光标位置，用于窗口初始坐标（避免窗口先出现在 (0,0) 再移动）
+    let mut init_pt = POINT { x: 0, y: 0 };
+    GetCursorPos(&mut init_pt);
+
     // 创建分层窗口（WS_EX_LAYERED + WS_EX_TRANSPARENT + WS_EX_TOOLWINDOW）
     let hwnd = CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
         DRAG_OVERLAY_CLASS.as_ptr(),
         std::ptr::null(),
         WS_POPUP,
-        0,
-        0,
+        init_pt.x + 8,
+        init_pt.y + 8,
         total_w,
         total_h,
         std::ptr::null_mut(),
@@ -151,7 +169,11 @@ pub(crate) unsafe fn create_drag_overlay(
     let hdc_mem = CreateCompatibleDC(hdc_screen);
     let old_bmp = SelectObject(hdc_mem, hbmp as HGDIOBJ);
 
-    let pt_dst = POINT { x: 0, y: 0 };
+    // 与 CreateWindowExW 相同的初始位置，保持一致
+    let pt_dst = POINT {
+        x: init_pt.x + 8,
+        y: init_pt.y + 8,
+    };
     let sz = SIZE {
         cx: total_w,
         cy: total_h,
@@ -182,6 +204,8 @@ pub(crate) unsafe fn create_drag_overlay(
     DeleteDC(hdc_mem);
     ReleaseDC(std::ptr::null_mut(), hdc_screen);
 
+    // 显示窗口：由于 CreateWindowExW 和 UpdateLayeredWindow 都使用光标位置，
+    // ShowWindow 不会触发从 (0,0) 到光标位置的移动，因此不会闪烁。
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
 
     OVERLAY_HWND = hwnd;
@@ -192,8 +216,16 @@ pub(crate) unsafe fn create_drag_overlay(
     DRAG_ICON_SIZE = icon_size;
     DRAG_CELL_W = cell_w;
     DRAG_DISPLAY_NAME = display_name.to_string();
-    DRAG_LAST_DPI = dpi;
-    DRAG_ORIGINAL_DPI = dpi;
+    // 用光标位置的 DPI 初始化 DRAG_LAST_DPI，避免 update_drag_overlay 首次检测时
+    // 因源窗口 DPI ≠ 光标 DPI（跨显示器拖拽）触发不必要的重建 → 导致图标闪烁
+    // DRAG_ORIGINAL_DPI 也使用光标 DPI，因为位图已按光标 DPI 渲染（见上方缩放逻辑）
+    let mut cursor_pt2 = POINT { x: 0, y: 0 };
+    GetCursorPos(&mut cursor_pt2);
+    let cursor_dpi2 =
+        crate::platform::windows::desktop_overlay::dpi_at_screen_point(cursor_pt2.x, cursor_pt2.y);
+    let effective_dpi = if cursor_dpi2 > 0 { cursor_dpi2 } else { dpi };
+    DRAG_LAST_DPI = effective_dpi;
+    DRAG_ORIGINAL_DPI = effective_dpi;
 
     log::info!("拖拽覆盖窗口已创建 ({}x{}, 70% 不透明)", total_w, total_h);
 }
@@ -293,7 +325,18 @@ unsafe fn rebuild_drag_overlay_at_dpi(new_dpi: u32) {
     let hdc_mem = CreateCompatibleDC(hdc_screen);
     let old_bmp = SelectObject(hdc_mem, hbmp as HGDIOBJ);
 
-    let pt_dst = POINT { x: 0, y: 0 };
+    // 使用当前窗口位置（而非 (0, 0)），避免重建时窗口瞬间跳到主屏幕左上角
+    let mut cur_rect = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    GetWindowRect(OVERLAY_HWND, &mut cur_rect);
+    let pt_dst = POINT {
+        x: cur_rect.left,
+        y: cur_rect.top,
+    };
     let sz = SIZE {
         cx: total_w,
         cy: total_h,

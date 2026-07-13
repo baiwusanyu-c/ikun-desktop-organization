@@ -179,7 +179,8 @@ pub fn create_desktop_overlay() -> Result<()> {
 
     let hinstance = ensure_class_registered()?;
     // 使用虚拟桌面边界覆盖所有显示器，支持跨显示器拖拽
-    let (x, y, width, height) = crate::platform::windows::grid_window::get_virtual_desktop_bounds();
+    let (x, y, width, height) =
+        crate::platform::windows::monitor_utils::get_virtual_desktop_bounds();
 
     let hwnd = unsafe {
         CreateWindowExW(

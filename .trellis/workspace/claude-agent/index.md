@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 8
+- **Total Sessions**: 10
 - **Last Active**: 2026-07-13
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~412 | Active |
+| `journal-1.md` | ~474 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,8 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 10 | 2026-07-13 | 修复副屏拖拽闪烁+分类框位置+grid_window拆分 | - | `master` |
+| 9 | 2026-07-13 | 修复副屏拖拽闪烁和分类框位置错误 | - | `master` |
 | 8 | 2026-07-13 | 修复桌面快捷方式泄漏和跨显示器DPI缩放 | - | `master` |
 | 7 | 2026-07-13 | 修复分类框到覆盖区域拖拽 Bug | - | `master` |
 | 6 | 2026-07-13 | 修复程序退出时部分图标不恢复桌面 | - | `master` |

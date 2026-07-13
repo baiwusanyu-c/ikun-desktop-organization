@@ -10,11 +10,11 @@ use crate::context::AppContext;
 use crate::platform::{
     cleanup_desktop_registry, cleanup_system_tray, collect_grid_layout, create_desktop_overlay,
     create_grid_window, destroy_all_grid_windows, destroy_desktop_overlay, extract_file_icon,
-    get_grid_count, get_screen_resolution, hide_control_panel_window, hide_native_icons,
-    icon_exists_for_box, native_icons_hidden, resolve_icon_read_path, restore_all_hidden_icons,
-    restore_native_icons, setup_desktop_registry, setup_system_tray, show_control_panel_window,
-    take_pending_create_box, take_pending_tray_action, DesktopIcon, DesktopManagerTrait,
-    GridCreateParams, GridFileItem, SystemTrayAction,
+    get_grid_count, get_primary_monitor_dpi, get_screen_resolution, hide_control_panel_window,
+    hide_native_icons, icon_exists_for_box, native_icons_hidden, resolve_icon_read_path,
+    restore_all_hidden_icons, restore_native_icons, setup_desktop_registry, setup_system_tray,
+    show_control_panel_window, take_pending_create_box, take_pending_tray_action, DesktopIcon,
+    DesktopManagerTrait, GridCreateParams, GridFileItem, SystemTrayAction,
 };
 use std::sync::{Arc, Mutex};
 
@@ -352,11 +352,15 @@ impl AppRuntime {
             ("办公", &office),
         ];
 
-        let (screen_w, screen_h) = get_screen_resolution();
+        let (screen_w_phys, screen_h_phys) = get_screen_resolution();
         let box_w = self.ctx.config.box_defaults.default_width;
         let box_h = self.ctx.config.box_defaults.default_height;
         let padding = 20i32;
         let total_w = 3 * box_w + 2 * padding;
+        // GridCreateParams 的 x/y 是逻辑像素（96 DPI 基准），需要物理→逻辑转换
+        let primary_dpi = get_primary_monitor_dpi();
+        let screen_w = (screen_w_phys * 96) / primary_dpi as i32;
+        let screen_h = (screen_h_phys * 96) / primary_dpi as i32;
         let start_x = ((screen_w - total_w) / 2).max(10);
         let start_y = (screen_h as f32 * 0.08) as i32;
 
@@ -440,12 +444,19 @@ impl AppRuntime {
         log::info!("创建分类框: '{}'", name);
         self.ensure_desktop_overlay_running();
 
-        let (screen_w, screen_h) = get_screen_resolution();
-        let box_w = self.ctx.config.box_defaults.default_width;
-        let box_h = self.ctx.config.box_defaults.default_height;
+        let (screen_w_phys, screen_h_phys) = get_screen_resolution();
+        let box_w = 400;
+        let box_h = 400;
         let existing = get_grid_count();
+        // GridCreateParams 的 x/y 是逻辑像素（96 DPI 基准），create_grid_window 会按实际 DPI 缩放。
+        // 将物理像素屏幕尺寸转换为逻辑像素，再计算居中位置。
+        let primary_dpi = get_primary_monitor_dpi();
+        let screen_w = (screen_w_phys * 96) / primary_dpi as i32;
+        let screen_h = (screen_h_phys * 96) / primary_dpi as i32;
+        // 新建分类框默认出现在主屏幕中央（与'创建分类框'对话框行为一致）
+        // 多个框通过小偏移量级联避免完全重叠
         let x = ((screen_w - box_w) / 2 + (existing as i32 * 40) % 200).max(10);
-        let y = ((screen_h as f32 * 0.1) as i32 + (existing as i32 * 30) % 150).max(10);
+        let y = ((screen_h - box_h) / 2 + (existing as i32 * 30) % 150).max(10);
 
         let params = GridCreateParams {
             id: existing,
@@ -749,5 +760,185 @@ mod tests {
         assert!(open_panel_signal_path()
             .to_string_lossy()
             .contains("ikun_open_panel"));
+    }
+}
+
+// ============================================================================
+// 纯逻辑函数（用于单元测试）
+// ============================================================================
+
+/// 物理像素转逻辑像素（96 DPI 基准）
+///
+/// # 参数
+/// - `physical_px`: 物理像素值
+/// - `dpi`: 显示器 DPI
+///
+/// # 返回
+/// 逻辑像素值（96 DPI 基准）
+fn physical_to_logical_px(physical_px: i32, dpi: u32) -> i32 {
+    (physical_px * 96) / dpi.max(1) as i32
+}
+
+/// 计算分类框居中位置（带级联偏移）
+///
+/// # 参数
+/// - `screen_size`: 屏幕逻辑像素尺寸
+/// - `box_size`: 分类框逻辑像素尺寸
+/// - `existing_count`: 已存在的分类框数量
+/// - `offset_multiplier`: 偏移乘数（x 用 40，y 用 30）
+/// - `offset_mod`: 偏移取模值（x 用 200，y 用 150）
+///
+/// # 返回
+/// 居中位置坐标（最小值 10）
+fn calculate_centered_position(
+    screen_size: i32,
+    box_size: i32,
+    existing_count: usize,
+    offset_multiplier: i32,
+    offset_mod: i32,
+) -> i32 {
+    let offset = (existing_count as i32 * offset_multiplier) % offset_mod;
+    ((screen_size - box_size) / 2 + offset).max(10)
+}
+
+#[cfg(test)]
+mod pixel_conversion_tests {
+    use super::*;
+
+    #[test]
+    fn test_physical_to_logical_at_96dpi() {
+        assert_eq!(physical_to_logical_px(1920, 96), 1920);
+        assert_eq!(physical_to_logical_px(1080, 96), 1080);
+        assert_eq!(physical_to_logical_px(400, 96), 400);
+    }
+
+    #[test]
+    fn test_physical_to_logical_at_144dpi() {
+        assert_eq!(physical_to_logical_px(1920, 144), 1280);
+        assert_eq!(physical_to_logical_px(1080, 144), 720);
+        assert_eq!(physical_to_logical_px(600, 144), 400);
+    }
+
+    #[test]
+    fn test_physical_to_logical_at_192dpi() {
+        assert_eq!(physical_to_logical_px(1920, 192), 960);
+        assert_eq!(physical_to_logical_px(1080, 192), 540);
+        assert_eq!(physical_to_logical_px(800, 192), 400);
+    }
+
+    #[test]
+    fn test_physical_to_logical_at_120dpi() {
+        assert_eq!(physical_to_logical_px(1920, 120), 1536);
+        assert_eq!(physical_to_logical_px(1080, 120), 864);
+    }
+
+    #[test]
+    fn test_physical_to_logical_zero_dpi() {
+        assert_eq!(physical_to_logical_px(1920, 0), 1920 * 96);
+    }
+
+    #[test]
+    fn test_physical_to_logical_zero_pixels() {
+        assert_eq!(physical_to_logical_px(0, 96), 0);
+        assert_eq!(physical_to_logical_px(0, 144), 0);
+    }
+
+    #[test]
+    fn test_physical_to_logical_roundtrip() {
+        let logical = 400;
+        let dpi = 144;
+        let physical = logical * dpi as i32 / 96;
+        let restored = physical_to_logical_px(physical, dpi);
+        assert_eq!(restored, logical);
+    }
+}
+
+#[cfg(test)]
+mod positioning_tests {
+    use super::*;
+
+    #[test]
+    fn test_centered_position_first_box() {
+        let screen_w = 1920;
+        let box_w = 400;
+        let x = calculate_centered_position(screen_w, box_w, 0, 40, 200);
+        assert_eq!(x, 760);
+    }
+
+    #[test]
+    fn test_centered_position_with_offset() {
+        let screen_w = 1920;
+        let box_w = 400;
+        let x = calculate_centered_position(screen_w, box_w, 1, 40, 200);
+        assert_eq!(x, 800);
+    }
+
+    #[test]
+    fn test_centered_position_offset_wraps() {
+        let screen_w = 1920;
+        let box_w = 400;
+        let x = calculate_centered_position(screen_w, box_w, 5, 40, 200);
+        assert_eq!(x, 760);
+    }
+
+    #[test]
+    fn test_centered_position_minimum_10() {
+        let screen_w = 300;
+        let box_w = 400;
+        let x = calculate_centered_position(screen_w, box_w, 0, 40, 200);
+        assert_eq!(x, 10);
+    }
+
+    #[test]
+    fn test_centered_position_y_axis() {
+        let screen_h = 1080;
+        let box_h = 400;
+        let y = calculate_centered_position(screen_h, box_h, 0, 30, 150);
+        assert_eq!(y, 340);
+        let y2 = calculate_centered_position(screen_h, box_h, 2, 30, 150);
+        assert_eq!(y2, 400);
+    }
+
+    #[test]
+    fn test_centered_position_high_dpi_screen() {
+        let screen_w = 1280;
+        let box_w = 400;
+        let x = calculate_centered_position(screen_w, box_w, 0, 40, 200);
+        assert_eq!(x, 440);
+    }
+
+    #[test]
+    fn test_centered_position_multiple_boxes() {
+        let screen_w = 1920;
+        let box_w = 400;
+        let base = 760;
+        assert_eq!(
+            calculate_centered_position(screen_w, box_w, 0, 40, 200),
+            base
+        );
+        assert_eq!(
+            calculate_centered_position(screen_w, box_w, 1, 40, 200),
+            base + 40
+        );
+        assert_eq!(
+            calculate_centered_position(screen_w, box_w, 2, 40, 200),
+            base + 80
+        );
+        assert_eq!(
+            calculate_centered_position(screen_w, box_w, 3, 40, 200),
+            base + 120
+        );
+        assert_eq!(
+            calculate_centered_position(screen_w, box_w, 4, 40, 200),
+            base + 160
+        );
+        assert_eq!(
+            calculate_centered_position(screen_w, box_w, 5, 40, 200),
+            base
+        );
+        assert_eq!(
+            calculate_centered_position(screen_w, box_w, 6, 40, 200),
+            base + 40
+        );
     }
 }
