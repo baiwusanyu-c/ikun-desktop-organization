@@ -9,5 +9,7 @@ mod overlay_render;
 mod overlay_window;
 mod overlay_wnd_proc;
 
-pub(crate) use overlay_window::{add_icon_to_overlay, is_desktop_overlay_window};
+pub(crate) use overlay_window::{
+    add_icon_to_overlay, dpi_at_screen_point, is_desktop_overlay_window,
+};
 pub use overlay_window::{create_desktop_overlay, destroy_desktop_overlay};

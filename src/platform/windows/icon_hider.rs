@@ -19,7 +19,6 @@ use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-
 /// 跨卷移动文件（先尝试 rename，失败后回退到 copy + delete）
 ///
 /// `std::fs::rename` 在源和目标位于不同卷时会失败（Windows 错误码 17: ERROR_NOT_SAME_DEVICE）。
@@ -45,11 +44,7 @@ fn move_file(src: &Path, dst: &Path) -> Result<()> {
                     )
                 })?;
                 std::fs::remove_file(src).map_err(|rm_err| {
-                    anyhow::anyhow!(
-                        "复制后删除源文件失败 {}: {}",
-                        src.display(),
-                        rm_err
-                    )
+                    anyhow::anyhow!("复制后删除源文件失败 {}: {}", src.display(), rm_err)
                 })?;
                 Ok(())
             } else {
@@ -806,5 +801,8 @@ mod tests {
         assert!(restored <= 1);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+        // 清理可能在桌面上创建的 nonexistent_app.lnk
+        let desktop = dirs::home_dir().expect("home dir").join("Desktop");
+        let _ = std::fs::remove_file(desktop.join("nonexistent_app.lnk"));
     }
 }

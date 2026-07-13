@@ -70,15 +70,63 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             refresh_desktop_overlay_icons(hwnd);
             0
         }
-        WM_SIZE | WM_DPICHANGED => {
+        WM_DPICHANGED => {
+            let new_dpi = ((wparam as u32) >> 16) & 0xFFFF;
+            let new_dpi = if new_dpi > 0 { new_dpi } else { 96 };
             if let Some(data) = get_overlay_data(hwnd) {
+                let old_dpi = data.dpi;
+                data.dpi = new_dpi;
+
+                // 应用系统建议的新窗口位置和尺寸
+                if lparam != 0 {
+                    let suggested = unsafe { &*(lparam as *const RECT) };
+                    data.x = suggested.left;
+                    data.y = suggested.top;
+                    data.width = suggested.right - suggested.left;
+                    data.height = suggested.bottom - suggested.top;
+                    unsafe {
+                        SetWindowPos(
+                            hwnd,
+                            std::ptr::null_mut(),
+                            data.x,
+                            data.y,
+                            data.width,
+                            data.height,
+                            SWP_NOZORDER | SWP_NOACTIVATE,
+                        );
+                    }
+                }
+
                 let layout = overlay_layout_params(data.width, data.dpi);
                 data.cell_w = layout.cell_w;
                 data.cell_h = layout.cell_h;
                 data.icon_size = layout.icon_size;
+                log::info!(
+                    "覆盖窗口 DPI 变更: {} -> {}, 新尺寸={}x{}",
+                    old_dpi,
+                    new_dpi,
+                    data.width,
+                    data.height
+                );
                 render_desktop_overlay(hwnd);
             }
-            DefWindowProcW(hwnd, msg, wparam, lparam)
+            0
+        }
+        WM_SIZE => {
+            let new_cx = (lparam as u32) & 0xFFFF;
+            let new_cy = ((lparam as u32) >> 16) & 0xFFFF;
+            if let Some(data) = get_overlay_data(hwnd) {
+                if new_cx > 0 && new_cy > 0 {
+                    data.width = new_cx as i32;
+                    data.height = new_cy as i32;
+                    let layout = overlay_layout_params(data.width, data.dpi);
+                    data.cell_w = layout.cell_w;
+                    data.cell_h = layout.cell_h;
+                    data.icon_size = layout.icon_size;
+                    render_desktop_overlay(hwnd);
+                }
+            }
+            0
         }
         WM_DESTROY => {
             if let Some(data) = get_overlay_data(hwnd) {

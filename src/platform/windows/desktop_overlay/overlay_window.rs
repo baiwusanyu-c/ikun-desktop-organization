@@ -179,8 +179,7 @@ pub fn create_desktop_overlay() -> Result<()> {
 
     let hinstance = ensure_class_registered()?;
     // 使用虚拟桌面边界覆盖所有显示器，支持跨显示器拖拽
-    let (x, y, width, height) =
-        crate::platform::windows::grid_window::get_virtual_desktop_bounds();
+    let (x, y, width, height) = crate::platform::windows::grid_window::get_virtual_desktop_bounds();
 
     let hwnd = unsafe {
         CreateWindowExW(
@@ -584,6 +583,28 @@ fn resolved_icon_position(data: &OverlayWindowData, icon: &OverlayIconItem) -> [
     ]
 }
 
+/// 获取指定屏幕坐标处的显示器 DPI。
+///
+/// 使用 `MonitorFromPoint` + `GetDpiForMonitor` 获取该坐标所在显示器的有效 DPI。
+/// 失败时回退到 96 DPI。
+pub(crate) fn dpi_at_screen_point(screen_x: i32, screen_y: i32) -> u32 {
+    let pt = POINT {
+        x: screen_x,
+        y: screen_y,
+    };
+    let monitor = unsafe { MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST) };
+    if monitor.is_null() {
+        return 96;
+    }
+    let mut dpi_x = 96u32;
+    let mut dpi_y = 96u32;
+    if unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) } == 0 {
+        dpi_x
+    } else {
+        96
+    }
+}
+
 pub(crate) fn physical_to_logical(value: i32, dpi: u32) -> f32 {
     value as f32 * 96.0 / dpi.max(1) as f32
 }
@@ -616,40 +637,56 @@ pub(crate) fn overlay_layout_params(width: i32, dpi: u32) -> OverlayLayoutParams
 }
 
 /// 命中测试覆盖窗口图标区域，返回图标索引，空白区域返回 -1。
+///
+/// 对有存储位置的图标，使用该图标所在显示器 DPI 计算单元格大小，
+/// 确保命中区域与渲染区域一致。
 pub(crate) fn overlay_hit_test(data: &OverlayWindowData, x: i32, y: i32) -> i32 {
-    let layout = overlay_layout_params(data.width, data.dpi);
+    let grid_layout = overlay_layout_params(data.width, data.dpi);
+
+    // 有存储位置的图标：使用 per-icon DPI 做精确命中测试
     for (index, icon) in data.icons.iter().enumerate() {
         if icon.x >= 0.0 && icon.y >= 0.0 {
             let cell_x = logical_to_physical(icon.x, data.dpi);
             let cell_y = logical_to_physical(icon.y, data.dpi);
+            let icon_dpi = dpi_at_screen_point(data.x + cell_x, data.y + cell_y);
+            let icon_layout = overlay_layout_params(data.width, icon_dpi);
             if x >= cell_x
-                && x < cell_x + layout.cell_w
+                && x < cell_x + icon_layout.cell_w
                 && y >= cell_y
-                && y < cell_y + layout.cell_h
+                && y < cell_y + icon_layout.cell_h
             {
                 return index as i32;
             }
         }
     }
 
-    if x < layout.padding || y < layout.padding || layout.cell_w <= 0 || layout.cell_h <= 0 {
+    // 网格布局图标：使用窗口级 DPI
+    if x < grid_layout.padding
+        || y < grid_layout.padding
+        || grid_layout.cell_w <= 0
+        || grid_layout.cell_h <= 0
+    {
         return -1;
     }
 
-    let col = (x - layout.padding) / layout.cell_w;
-    let row = (y - layout.padding) / layout.cell_h;
-    if col < 0 || row < 0 || col >= layout.cols {
+    let col = (x - grid_layout.padding) / grid_layout.cell_w;
+    let row = (y - grid_layout.padding) / grid_layout.cell_h;
+    if col < 0 || row < 0 || col >= grid_layout.cols {
         return -1;
     }
 
-    let idx = row * layout.cols + col;
+    let idx = row * grid_layout.cols + col;
     if idx < 0 || (idx as usize) >= data.icons.len() {
         return -1;
     }
 
-    let cell_x = overlay_icon_cell_x(data, idx as usize, &layout);
-    let cell_y = overlay_icon_cell_y(data, idx as usize, &layout);
-    if x >= cell_x && x < cell_x + layout.cell_w && y >= cell_y && y < cell_y + layout.cell_h {
+    let cell_x = overlay_icon_cell_x(data, idx as usize, &grid_layout);
+    let cell_y = overlay_icon_cell_y(data, idx as usize, &grid_layout);
+    if x >= cell_x
+        && x < cell_x + grid_layout.cell_w
+        && y >= cell_y
+        && y < cell_y + grid_layout.cell_h
+    {
         idx
     } else {
         -1

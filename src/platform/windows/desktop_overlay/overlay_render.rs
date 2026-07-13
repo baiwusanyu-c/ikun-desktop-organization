@@ -29,8 +29,8 @@ use crate::platform::windows::ffi_imports::*;
 use crate::platform::windows::ffi_types::*;
 
 use super::overlay_window::{
-    get_overlay_data, overlay_icon_cell_x, overlay_icon_cell_y, overlay_layout_params,
-    OverlayIconItem, OverlayWindowData,
+    dpi_at_screen_point, get_overlay_data, overlay_icon_cell_x, overlay_icon_cell_y,
+    overlay_layout_params, OverlayIconItem, OverlayWindowData,
 };
 
 /// 初始化覆盖窗口的 D2D/DirectWrite/WIC 设备。
@@ -233,11 +233,8 @@ fn draw_desktop_icons(
     hovered_item: i32,
     data: &OverlayWindowData,
 ) {
-    let layout = overlay_layout_params(width, dpi);
-    let icon_size = layout.icon_size;
-    let cell_w = layout.cell_w;
-    let cell_h = layout.cell_h;
-    let label_h = scale_for_dpi(36, dpi);
+    // 网格定位仍使用窗口级 DPI（保持网格一致性）
+    let grid_layout = overlay_layout_params(width, dpi);
 
     let shadow_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(0, 0, 0, 220), None) };
     let label_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(250, 250, 255, 255), None) };
@@ -247,48 +244,37 @@ fn draw_desktop_icons(
 
     let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
     let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
-    let label_format = unsafe {
-        dw_factory.CreateTextFormat::<_, _, _>(
-            windows::core::PCWSTR(font_name.as_ptr()),
-            None,
-            DWRITE_FONT_WEIGHT_NORMAL,
-            DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL,
-            scale_for_dpi(13, dpi) as f32,
-            windows::core::PCWSTR(locale.as_ptr()),
-        )
-    };
-
-    if let Ok(ref format) = label_format {
-        let _ = unsafe { format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER) };
-        let _ = unsafe { format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR) };
-        let _ = unsafe { format.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP) };
-    }
-
-    let ellipsis_sign = if let Ok(ref format) = label_format {
-        unsafe { dw_factory.CreateEllipsisTrimmingSign(format).ok() }
-    } else {
-        None
-    };
 
     for (index, icon) in icons.iter().enumerate() {
-        let cell_x = overlay_icon_cell_x(data, index, &layout);
-        let cell_y = overlay_icon_cell_y(data, index, &layout);
-        let icon_x = cell_x + (cell_w - icon_size) / 2;
-        let icon_y = cell_y + scale_for_dpi(4, dpi);
+        let cell_x = overlay_icon_cell_x(data, index, &grid_layout);
+        let cell_y = overlay_icon_cell_y(data, index, &grid_layout);
+
+        // 获取该图标所在显示器的 DPI，实现跨显示器自适应缩放
+        let icon_screen_x = data.x + cell_x + grid_layout.cell_w / 2;
+        let icon_screen_y = data.y + cell_y + grid_layout.cell_h / 2;
+        let icon_dpi = dpi_at_screen_point(icon_screen_x, icon_screen_y);
+
+        // 使用 per-icon DPI 计算所有尺寸：图标、单元格、文字、高亮框
+        let icon_layout = overlay_layout_params(width, icon_dpi);
+        let icon_size = icon_layout.icon_size;
+        let icon_cell_w = icon_layout.cell_w;
+        let icon_cell_h = icon_layout.cell_h;
+
+        let icon_x = cell_x + (icon_cell_w - icon_size) / 2;
+        let icon_y = cell_y + scale_for_dpi(4, icon_dpi);
 
         let is_selected = index as i32 == selected_item;
         let is_hovered = index as i32 == hovered_item;
         if is_selected || is_hovered {
             let rect = D2D1_ROUNDED_RECT {
                 rect: d2d_rect(
-                    cell_x as f32 + scale_for_dpi(2, dpi) as f32,
-                    cell_y as f32 + scale_for_dpi(2, dpi) as f32,
-                    (cell_x + cell_w - scale_for_dpi(2, dpi)) as f32,
-                    (cell_y + cell_h - scale_for_dpi(2, dpi)) as f32,
+                    cell_x as f32 + scale_for_dpi(2, icon_dpi) as f32,
+                    cell_y as f32 + scale_for_dpi(2, icon_dpi) as f32,
+                    (cell_x + icon_cell_w - scale_for_dpi(2, icon_dpi)) as f32,
+                    (cell_y + icon_cell_h - scale_for_dpi(2, icon_dpi)) as f32,
                 ),
-                radiusX: scale_for_dpi(6, dpi) as f32,
-                radiusY: scale_for_dpi(6, dpi) as f32,
+                radiusX: scale_for_dpi(6, icon_dpi) as f32,
+                radiusY: scale_for_dpi(6, icon_dpi) as f32,
             };
             if is_selected {
                 if let Ok(ref brush) = selected_brush {
@@ -303,26 +289,45 @@ fn draw_desktop_icons(
             draw_icon_d2d(target, icon.icon_handle, icon_x, icon_y, icon_size);
         }
 
+        // 文字标签：使用 per-icon DPI 创建字体和布局
+        let label_format = unsafe {
+            dw_factory.CreateTextFormat::<_, _, _>(
+                windows::core::PCWSTR(font_name.as_ptr()),
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                scale_for_dpi(13, icon_dpi) as f32,
+                windows::core::PCWSTR(locale.as_ptr()),
+            )
+        };
         if let Ok(ref format) = label_format {
+            let _ = unsafe { format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER) };
+            let _ = unsafe { format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR) };
+            let _ = unsafe { format.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP) };
+
+            let ellipsis_sign = unsafe { dw_factory.CreateEllipsisTrimmingSign(format).ok() };
+
+            let label_h = scale_for_dpi(36, icon_dpi);
             let label: Vec<u16> = icon.display_name.encode_utf16().collect();
             let text_layout = unsafe {
                 dw_factory
-                    .CreateTextLayout(&label, format, (cell_w - 4) as f32, label_h as f32)
+                    .CreateTextLayout(&label, format, (icon_cell_w - 4) as f32, label_h as f32)
                     .ok()
             };
-            if let Some(ref layout) = text_layout {
+            if let Some(ref text_layout) = text_layout {
                 if let Some(ref sign) = ellipsis_sign {
                     let trimming = DWRITE_TRIMMING {
                         granularity: DWRITE_TRIMMING_GRANULARITY_WORD,
                         delimiter: 0,
                         delimiterCount: 0,
                     };
-                    let _ = unsafe { layout.SetTrimming(&trimming, sign) };
+                    let _ = unsafe { text_layout.SetTrimming(&trimming, sign) };
                 }
 
                 let label_x = cell_x + 2;
-                let label_y = icon_y + icon_size + scale_for_dpi(6, dpi);
-                let shadow_offset = scale_for_dpi(1, dpi) as f32;
+                let label_y = icon_y + icon_size + scale_for_dpi(6, icon_dpi);
+                let shadow_offset = scale_for_dpi(1, icon_dpi) as f32;
                 if let Ok(ref brush) = shadow_brush {
                     for &(dx, dy) in &[
                         (shadow_offset, 0.0),
@@ -336,7 +341,7 @@ fn draw_desktop_icons(
                                     x: label_x as f32 + dx,
                                     y: label_y as f32 + dy,
                                 },
-                                layout,
+                                text_layout,
                                 brush,
                                 D2D1_DRAW_TEXT_OPTIONS_NONE,
                             );
@@ -350,7 +355,7 @@ fn draw_desktop_icons(
                                 x: label_x as f32,
                                 y: label_y as f32,
                             },
-                            layout,
+                            text_layout,
                             brush,
                             D2D1_DRAW_TEXT_OPTIONS_NONE,
                         );

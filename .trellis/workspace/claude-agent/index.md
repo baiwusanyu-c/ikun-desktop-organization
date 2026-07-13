@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
+- **Total Sessions**: 8
 - **Last Active**: 2026-07-13
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~381 | Active |
+| `journal-1.md` | ~412 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-07-13 | 修复桌面快捷方式泄漏和跨显示器DPI缩放 | - | `master` |
 | 7 | 2026-07-13 | 修复分类框到覆盖区域拖拽 Bug | - | `master` |
 | 6 | 2026-07-13 | 修复程序退出时部分图标不恢复桌面 | - | `master` |
 | 5 | 2026-07-13 | Fix control panel startup flash | - | `master` |

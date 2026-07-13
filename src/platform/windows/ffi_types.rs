@@ -314,6 +314,9 @@ pub const DIB_RGB_COLORS: u32 = 0;
 // ===== Monitor Constants =====
 pub const MONITOR_DEFAULTTONEAREST: u32 = 0x00000002;
 
+/// GetDpiForMonitor DPI type: effective DPI (accounts for OS scaling)
+pub const MDT_EFFECTIVE_DPI: u32 = 0;
+
 /// MonitorFromPoint/MonitorFromWindow: 返回主显示器
 ///
 /// 值为 0x00000001，用于获取主显示器句柄。

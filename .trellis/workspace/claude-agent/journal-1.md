@@ -379,3 +379,34 @@ Set show:false in WindowOptions and removed delayed hide logic
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: 修复桌面快捷方式泄漏和跨显示器DPI缩放
+
+**Date**: 2026-07-13
+**Task**: 修复桌面快捷方式泄漏和跨显示器DPI缩放
+**Branch**: `master`
+
+### Summary
+
+修复了两个bug: 1) icon_hider测试创建nonexistent_app.lnk在桌面不清理 2) 覆盖窗口图标跨显示器时不随DPI变化调整大小
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
