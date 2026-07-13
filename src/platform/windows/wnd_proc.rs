@@ -904,7 +904,43 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                             render_layered_window(hwnd);
                             return 0;
                         }
-                        _ => {}
+                        _ => {
+                            // 使用 ToUnicode 将虚拟键码转换为字符（GPUI 消息循环不调用 TranslateMessage）
+                            let mut key_state = [0u8; 256];
+                            unsafe { GetKeyboardState(key_state.as_mut_ptr()) };
+                            let scan_code = ((lparam >> 16) & 0xFF) as u32;
+                            let mut char_buf = [0u16; 4];
+                            let result = unsafe {
+                                ToUnicode(
+                                    vk,
+                                    scan_code,
+                                    key_state.as_ptr(),
+                                    char_buf.as_mut_ptr(),
+                                    char_buf.len() as i32,
+                                    0,
+                                )
+                            };
+                            if result == 1 {
+                                // 成功转换出一个字符
+                                let ch = char_buf[0] as u32;
+                                if ch >= 0x20 && ch != 0x7F {
+                                    let char_count = data.edit_buffer.chars().count();
+                                    if char_count < 16 {
+                                        if let Some(c) = char::from_u32(ch) {
+                                            let byte_pos = data
+                                                .edit_buffer
+                                                .char_indices()
+                                                .nth(data.edit_cursor)
+                                                .map(|(i, _)| i)
+                                                .unwrap_or(data.edit_buffer.len());
+                                            data.edit_buffer.insert(byte_pos, c);
+                                            data.edit_cursor += 1;
+                                            render_layered_window(hwnd);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                     return 0;
                 }

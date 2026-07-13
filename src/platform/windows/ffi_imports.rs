@@ -185,6 +185,16 @@ extern "system" {
     pub fn SetFocus(hWnd: HWND) -> HWND;
     #[allow(dead_code)]
     pub fn GetFocus() -> HWND;
+    // Keyboard input
+    pub fn GetKeyboardState(lpKeyState: *mut u8) -> i32;
+    pub fn ToUnicode(
+        wVirtKey: u32,
+        wScanCode: u32,
+        lpKeyState: *const u8,
+        pwszBuff: *mut u16,
+        cchBuff: i32,
+        wFlags: u32,
+    ) -> i32;
 
     // Message pump
     pub fn GetMessageW(lpMsg: *mut MSG, hWnd: HWND, wMsgFilterMin: u32, wMsgFilterMax: u32) -> i32;
