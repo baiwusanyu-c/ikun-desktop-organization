@@ -175,7 +175,7 @@ pub(crate) unsafe fn create_drag_overlay(
     log::info!("拖拽覆盖窗口已创建 ({}x{}, 70% 不透明)", total_w, total_h);
 }
 
-/// 更新拖拽覆盖窗口位置（跟随光标）
+/// 更新拖拽覆盖窗口位置（跟随光标，支持多显示器）
 pub(crate) unsafe fn update_drag_overlay() {
     if OVERLAY_HWND.is_null() {
         return;
@@ -187,12 +187,12 @@ pub(crate) unsafe fn update_drag_overlay() {
     // 窗口位置偏移到光标右下方（避免遮挡光标热点）
     SetWindowPos(
         OVERLAY_HWND,
-        std::ptr::null_mut(),
+        HWND_TOPMOST,
         pt.x + 8,
         pt.y + 8,
         0,
         0,
-        SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER,
+        SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
     );
 }
 

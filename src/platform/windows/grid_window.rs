@@ -373,6 +373,28 @@ pub fn get_cursor_monitor_work_area_phys() -> (i32, i32, i32, i32) {
 /// 通过 Win32 `SetWindowPos` 将指定标题的窗口移动到目标物理像素位置
 ///
 /// 用于修正 egui viewport 在多屏 + DPI 缩放下的定位错误。
+
+/// 获取虚拟桌面边界（包含所有显示器的联合区域）。
+///
+/// 返回值为主显示器坐标系下的虚拟桌面范围，用于跨显示器场景。
+pub fn get_virtual_desktop_bounds() -> (i32, i32, i32, i32) {
+    unsafe {
+        const SM_XVIRTUALSCREEN: i32 = 76;
+        const SM_YVIRTUALSCREEN: i32 = 77;
+        const SM_CXVIRTUALSCREEN: i32 = 78;
+        const SM_CYVIRTUALSCREEN: i32 = 79;
+        let x = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        let y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        let cx = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+        let cy = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+        if cx > 0 && cy > 0 {
+            (x, y, cx, cy)
+        } else {
+            fallback_work_area()
+        }
+    }
+}
+
 pub fn reposition_window_by_title(title: &str, target_x: i32, target_y: i32) -> bool {
     unsafe {
         let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();

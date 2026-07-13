@@ -19,6 +19,51 @@ use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+
+/// 跨卷移动文件（先尝试 rename，失败后回退到 copy + delete）
+///
+/// `std::fs::rename` 在源和目标位于不同卷时会失败（Windows 错误码 17: ERROR_NOT_SAME_DEVICE）。
+/// 此函数提供可靠回退：先尝试 rename，失败时改用 copy + remove_file。
+fn move_file(src: &Path, dst: &Path) -> Result<()> {
+    match std::fs::rename(src, dst) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // Windows ERROR_NOT_SAME_DEVICE = 17, 跨卷移动时触发
+            let is_cross_device = e.raw_os_error() == Some(17);
+            if is_cross_device {
+                log::info!(
+                    "跨卷移动文件 (rename 失败), 回退到 copy + delete: {} -> {}",
+                    src.display(),
+                    dst.display()
+                );
+                std::fs::copy(src, dst).map_err(|copy_err| {
+                    anyhow::anyhow!(
+                        "跨卷复制失败 {} -> {}: {}",
+                        src.display(),
+                        dst.display(),
+                        copy_err
+                    )
+                })?;
+                std::fs::remove_file(src).map_err(|rm_err| {
+                    anyhow::anyhow!(
+                        "复制后删除源文件失败 {}: {}",
+                        src.display(),
+                        rm_err
+                    )
+                })?;
+                Ok(())
+            } else {
+                Err(anyhow::anyhow!(
+                    "移动文件失败 {} -> {}: {}",
+                    src.display(),
+                    dst.display(),
+                    e
+                ))
+            }
+        }
+    }
+}
+
 // =============================================================================
 // ShowWindow 隐藏/恢复（e81c7a0 方式）
 // =============================================================================
@@ -554,7 +599,7 @@ fn restore_icons_from_dir(managed_dir: &Path) -> (u32, u32) {
         }
 
         // 将文件从仓库移回桌面
-        match std::fs::rename(&path, &logical_path) {
+        match move_file(&path, &logical_path) {
             Ok(()) => {
                 notify_shell_path(&logical_str);
                 log::info!(

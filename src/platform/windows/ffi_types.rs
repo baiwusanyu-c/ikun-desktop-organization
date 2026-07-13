@@ -17,6 +17,13 @@ use windows::Win32::Graphics::DirectWrite::{
 
 // ===== Raw Win32 Types =====
 pub type HWND = *mut c_void;
+
+/// HWND_TOPMOST: Places the window above all non-topmost windows.
+/// Value is (HWND)(-1) in Windows API.
+pub const HWND_TOPMOST: HWND = -1isize as *mut c_void;
+
+/// SWP_NOOWNERZORDER: Does not change the owner window's position in the Z order.
+pub const SWP_NOOWNERZORDER: u32 = 0x0200;
 pub type HINSTANCE = *mut c_void;
 pub type HDC = *mut c_void;
 pub type HBRUSH = *mut c_void;
