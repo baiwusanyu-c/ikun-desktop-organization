@@ -3,11 +3,7 @@
 //! 完整替代 eframe 的 Windows 平台入口。
 //! 使用 GPUI Application 事件循环驱动控制面板和创建分类框对话框。
 
-use crate::gpui_app::{
-    app_runtime::{AppRuntime, CONTROL_PANEL_TITLE},
-    control_panel::ControlPanelView,
-};
-use crate::platform::hide_control_panel_window;
+use crate::gpui_app::{app_runtime::AppRuntime, control_panel::ControlPanelView};
 use gpui::{AppContext, Application, Timer};
 use gpui_component::Root;
 use std::time::Duration;
@@ -54,21 +50,6 @@ pub fn run_gpui_app() {
 
             // 激活应用
             cx.activate(true);
-
-            // 延迟 1 秒后隐藏控制面板（避免启动时的借用冲突）
-            cx.spawn(async move |cx| {
-                Timer::after(Duration::from_millis(1000)).await;
-
-                let result = cx.update(|_cx| {
-                    hide_control_panel_window(CONTROL_PANEL_TITLE);
-                    log::info!("延迟隐藏控制面板完成");
-                });
-
-                if result.is_err() {
-                    log::warn!("延迟隐藏控制面板失败");
-                }
-            })
-            .detach();
 
             // 启动轮询定时器（每 50ms 检查信号文件和托盘动作）
             let runtime_for_timer = runtime.clone();
