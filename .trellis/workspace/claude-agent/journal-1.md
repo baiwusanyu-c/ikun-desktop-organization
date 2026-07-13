@@ -317,3 +317,34 @@ Set show:false in WindowOptions and removed delayed hide logic
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: 修复程序退出时部分图标不恢复桌面
+
+**Date**: 2026-07-13
+**Task**: 修复程序退出时部分图标不恢复桌面
+**Branch**: `master`
+
+### Summary
+
+重写 restore_all_hidden_icons() 函数，使其遍历仓库目录并将所有图标文件还原到桌面
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

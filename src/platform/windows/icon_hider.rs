@@ -486,10 +486,94 @@ pub fn delete_vault_copy(logical_path: &str) {
     }
 }
 
-/// 启动时初始化仓库目录（迁移旧数据）
+/// 程序退出时将所有仓库中的图标还原到桌面。
+///
+/// 遍历 `managed_icons/` 目录下的所有文件，根据文件名前缀
+/// (`user__` / `public__`) 还原原始桌面路径，将 .lnk 文件移回桌面，
+/// 并通知 Shell 刷新。已在桌面上存在的文件不会被覆盖。
 pub fn restore_all_hidden_icons() {
-    if let Err(e) = get_managed_dir() {
-        log::warn!("初始化图标仓库失败: {}", e);
+    let managed_dir = match get_managed_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            log::warn!("获取图标仓库目录失败: {}", e);
+            return;
+        }
+    };
+
+    let entries = match std::fs::read_dir(&managed_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            log::warn!("读取图标仓库目录失败: {}", e);
+            return;
+        }
+    };
+
+    let mut restored = 0u32;
+    let mut skipped = 0u32;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        // 跳过子目录（如 user__backup/）
+        if !path.is_file() {
+            continue;
+        }
+
+        let vault_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+
+        // 根据仓库文件名还原原始桌面路径
+        let logical_path = match logical_path_from_vault_name(&vault_name) {
+            Some(p) => p,
+            None => {
+                log::warn!("无法解析仓库文件名: {}", vault_name);
+                continue;
+            }
+        };
+
+        let logical_str = logical_path.to_string_lossy().to_string();
+
+        // 如果桌面已有该文件，仅清理仓库副本
+        if logical_path.exists() {
+            if let Err(e) = std::fs::remove_file(&path) {
+                log::warn!("清理仓库副本失败 {}: {}", vault_name, e);
+            } else {
+                log::info!("桌面已有该图标，已清理仓库副本: {}", vault_name);
+                skipped += 1;
+            }
+            continue;
+        }
+
+        // 将文件从仓库移回桌面
+        match std::fs::rename(&path, &logical_path) {
+            Ok(()) => {
+                notify_shell_path(&logical_str);
+                log::info!(
+                    "图标已从仓库还原到桌面: {} → {}",
+                    vault_name,
+                    logical_path.display()
+                );
+                restored += 1;
+            }
+            Err(e) => {
+                log::warn!(
+                    "从仓库还原图标失败 {} → {}: {}",
+                    vault_name,
+                    logical_path.display(),
+                    e
+                );
+            }
+        }
+    }
+
+    if restored > 0 || skipped > 0 {
+        log::info!(
+            "图标仓库清理完成: 还原 {} 个，跳过 {} 个（桌面已存在）",
+            restored,
+            skipped
+        );
     }
 }
 
