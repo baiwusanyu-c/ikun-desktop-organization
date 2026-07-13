@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 6
+- **Total Sessions**: 7
 - **Last Active**: 2026-07-13
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~350 | Active |
+| `journal-1.md` | ~381 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 7 | 2026-07-13 | 修复分类框到覆盖区域拖拽 Bug | - | `master` |
 | 6 | 2026-07-13 | 修复程序退出时部分图标不恢复桌面 | - | `master` |
 | 5 | 2026-07-13 | Fix control panel startup flash | - | `master` |
 | 4 | 2026-06-24 | 分类框图标自定义拖拽跟踪 | `e81c7a0` | `master` |
