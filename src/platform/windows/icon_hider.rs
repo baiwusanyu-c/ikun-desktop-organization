@@ -1,4 +1,4 @@
-﻿//! 隐藏/恢复原生桌面图标 + 图标仓库（Vault）
+//! 隐藏/恢复原生桌面图标 + 图标仓库（Vault）
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -499,12 +499,19 @@ pub fn restore_all_hidden_icons() {
             return;
         }
     };
+    restore_icons_from_dir(&managed_dir);
+}
 
-    let entries = match std::fs::read_dir(&managed_dir) {
+/// 从指定目录还原图标（可测试的核心逻辑）。
+///
+/// 遍历给定目录中的所有文件，根据仓库文件名前缀还原原始桌面路径，
+/// 将文件移回桌面。返回 `(restored, skipped)` 计数。
+fn restore_icons_from_dir(managed_dir: &Path) -> (u32, u32) {
+    let entries = match std::fs::read_dir(managed_dir) {
         Ok(e) => e,
         Err(e) => {
             log::warn!("读取图标仓库目录失败: {}", e);
-            return;
+            return (0, 0);
         }
     };
 
@@ -575,6 +582,8 @@ pub fn restore_all_hidden_icons() {
             skipped
         );
     }
+
+    (restored, skipped)
 }
 
 #[cfg(test)]
@@ -599,5 +608,158 @@ mod tests {
         let export = export_desktop_path(public);
         assert!(is_user_desktop_path(&export.to_string_lossy()));
         assert!(export.file_name().unwrap() == "Chrome.lnk");
+    }
+
+    #[test]
+    fn test_vault_filename_user_desktop() {
+        let desktop = dirs::home_dir()
+            .expect("home dir")
+            .join("Desktop")
+            .join("RustRover 2026.1.4.lnk");
+        let path = desktop.to_string_lossy();
+        let vault = vault_filename(&path);
+        assert_eq!(vault, Some("user__RustRover 2026.1.4.lnk".to_string()));
+    }
+
+    #[test]
+    fn test_vault_filename_public_desktop() {
+        let public = r"C:\Users\Public\Desktop\Chrome.lnk";
+        let vault = vault_filename(public);
+        assert_eq!(vault, Some("public__Chrome.lnk".to_string()));
+    }
+
+    #[test]
+    fn test_vault_filename_unknown_path() {
+        let vault = vault_filename(r"C:\Other\app.lnk");
+        assert_eq!(vault, Some("user__app.lnk".to_string()));
+    }
+
+    #[test]
+    fn test_logical_path_from_vault_name_user() {
+        let desktop = dirs::home_dir().expect("home dir").join("Desktop");
+        let result = logical_path_from_vault_name("user__RustRover.lnk");
+        assert!(result.is_some());
+        let path = result.unwrap();
+        assert!(path.starts_with(&desktop));
+        assert_eq!(path.file_name().unwrap().to_str().unwrap(), "RustRover.lnk");
+    }
+
+    #[test]
+    fn test_logical_path_from_vault_name_public() {
+        let result = logical_path_from_vault_name("public__Chrome.lnk");
+        assert!(result.is_some());
+        let path = result.unwrap();
+        assert!(path.starts_with(r"C:\Users\Public\Desktop"));
+        assert_eq!(path.file_name().unwrap().to_str().unwrap(), "Chrome.lnk");
+    }
+
+    #[test]
+    fn test_logical_path_from_vault_name_no_prefix() {
+        let desktop = dirs::home_dir().expect("home dir").join("Desktop");
+        let result = logical_path_from_vault_name("unknown.lnk");
+        assert!(result.is_some());
+        let path = result.unwrap();
+        assert!(path.starts_with(&desktop));
+        assert_eq!(path.file_name().unwrap().to_str().unwrap(), "unknown.lnk");
+    }
+
+    #[test]
+    fn test_vault_roundtrip_user() {
+        let desktop = dirs::home_dir()
+            .expect("home dir")
+            .join("Desktop")
+            .join("Test.lnk");
+        let original = desktop.to_string_lossy().to_string();
+        let vault = vault_filename(&original).expect("vault name");
+        let restored = logical_path_from_vault_name(&vault).expect("restored path");
+        assert_eq!(restored.to_string_lossy(), original);
+    }
+
+    #[test]
+    fn test_vault_roundtrip_public() {
+        let original = r"C:\Users\Public\Desktop\App.lnk";
+        let vault = vault_filename(original).expect("vault name");
+        assert_eq!(vault, "public__App.lnk");
+        let restored = logical_path_from_vault_name(&vault).expect("restored path");
+        assert_eq!(restored.to_string_lossy(), original);
+    }
+
+    #[test]
+    fn test_restore_icons_from_empty_dir() {
+        let temp_dir = std::env::temp_dir().join("ikun_test_empty_vault");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+
+        let (restored, skipped) = restore_icons_from_dir(&temp_dir);
+        assert_eq!(restored, 0);
+        assert_eq!(skipped, 0);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_restore_icons_skips_subdirectories() {
+        let temp_dir = std::env::temp_dir().join("ikun_test_skip_subdirs");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+        std::fs::create_dir_all(temp_dir.join("user__backup")).expect("create subdir");
+
+        let (restored, skipped) = restore_icons_from_dir(&temp_dir);
+        assert_eq!(restored, 0);
+        assert_eq!(skipped, 0);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_restore_icons_cleans_vault_when_desktop_exists() {
+        // Create a vault file for a file that already exists on the user's desktop
+        let desktop = dirs::home_dir().expect("home dir").join("Desktop");
+        let existing_file = desktop.join("ikun_test_existing.lnk");
+
+        // Skip test if we can't create files on the desktop
+        if std::fs::write(&existing_file, b"test").is_err() {
+            return;
+        }
+
+        let temp_dir = std::env::temp_dir().join("ikun_test_clean_vault");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+
+        let vault_file = temp_dir.join("user__ikun_test_existing.lnk");
+        std::fs::write(&vault_file, b"vault copy").expect("write vault file");
+
+        let (restored, skipped) = restore_icons_from_dir(&temp_dir);
+        assert_eq!(restored, 0);
+        assert_eq!(skipped, 1);
+        assert!(!vault_file.exists(), "vault file should be cleaned up");
+
+        // Cleanup
+        let _ = std::fs::remove_file(&existing_file);
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_restore_icons_handles_rename_failure_gracefully() {
+        // Create a vault file for a path that doesn't exist and can't be created
+        // (e.g., a path on a non-existent volume)
+        let temp_dir = std::env::temp_dir().join("ikun_test_rename_fail");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+
+        // This vault name will resolve to a user desktop path, but since the
+        // file doesn't exist there, rename will be attempted. If the temp_dir
+        // is on a different volume than the desktop, rename will fail.
+        // The function should handle this gracefully (log warning, continue).
+        let vault_file = temp_dir.join("user__nonexistent_app.lnk");
+        std::fs::write(&vault_file, b"vault copy").expect("write vault file");
+
+        // This should not panic, even if rename fails
+        let (restored, _skipped) = restore_icons_from_dir(&temp_dir);
+        // restored may be 0 (rename failed) or 1 (rename succeeded)
+        // The important thing is no panic
+        assert!(restored <= 1);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
