@@ -286,3 +286,34 @@
 1. 申请管理员权限运行（UAC 提权）→ 公共桌面文件操作可行
 2. 接受公共桌面图标双重存在（分类框覆盖在其上方，视觉上不明显）
 3. 探索 Windows Shell 扩展（IShellIconOverlay）或注册表 Shell\Bags 操纵
+
+
+## Session 5: Fix control panel startup flash
+
+**Date**: 2026-07-13
+**Task**: Fix control panel startup flash
+**Branch**: `master`
+
+### Summary
+
+Set show:false in WindowOptions and removed delayed hide logic
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
