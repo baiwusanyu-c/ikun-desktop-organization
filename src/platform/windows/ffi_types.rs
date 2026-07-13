@@ -1,4 +1,4 @@
-﻿//! Win32 FFI 类型定义、C 结构体和常量
+//! Win32 FFI 类型定义、C 结构体和常量
 //!
 //! 本模块包含所有 Win32 FFI 所需的类型别名、结构体定义和常量。
 //! 被 grid_window、win32_ffi、shell_menu、d2d_render 等模块共享使用。
@@ -37,6 +37,7 @@ pub type HMENU = *mut c_void;
 pub type HHOOK = *mut c_void;
 pub type HMONITOR = *mut c_void;
 pub type HANDLE = *mut c_void;
+pub type HIMC = *mut c_void;
 
 /// COM HRESULT 返回值类型
 pub type HRESULT = i32;
@@ -502,6 +503,8 @@ impl MenuItem {
 pub const WM_KEYDOWN: u32 = 0x0100;
 pub const WM_CHAR: u32 = 0x0102;
 pub const WM_KILLFOCUS: u32 = 0x0008;
+pub const WM_IME_COMPOSITION: u32 = 0x010F;
+pub const GCS_RESULTSTR: u32 = 0x0800;
 pub const VK_ESCAPE: u32 = 0x1B;
 pub const VK_UP: u32 = 0x26;
 pub const VK_DOWN: u32 = 0x28;

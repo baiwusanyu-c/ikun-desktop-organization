@@ -195,7 +195,6 @@ extern "system" {
         cchBuff: i32,
         wFlags: u32,
     ) -> i32;
-
     // Message pump
     pub fn GetMessageW(lpMsg: *mut MSG, hWnd: HWND, wMsgFilterMin: u32, wMsgFilterMax: u32) -> i32;
     pub fn TranslateMessage(lpMsg: *const MSG) -> i32;
@@ -612,4 +611,18 @@ extern "system" {
         hInstance: HINSTANCE,
         lpParam: *mut c_void,
     ) -> HWND;
+}
+
+// ===== IME FFI (imm32.dll) =====
+#[allow(dead_code)]
+#[link(name = "imm32")]
+extern "system" {
+    pub fn ImmGetContext(hWnd: HWND) -> HIMC;
+    pub fn ImmGetCompositionStringW(
+        himc: HIMC,
+        dwIndex: u32,
+        lpBuf: *mut c_void,
+        dwBufLen: i32,
+    ) -> i32;
+    pub fn ImmReleaseContext(hWnd: HWND, himc: HIMC) -> i32;
 }

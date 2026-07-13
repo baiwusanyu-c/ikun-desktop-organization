@@ -54,6 +54,7 @@ fn embed_manifest() {
             println!("cargo:rustc-link-arg={}", obj_path.display());
             println!("cargo:rerun-if-changed=build/app.manifest");
             println!("cargo:rerun-if-changed=build/build.rs");
+            println!("cargo:rerun-if-changed=logo.ico");
             return;
         }
     }
@@ -82,6 +83,7 @@ fn embed_manifest() {
                     println!("cargo:rustc-link-arg={}", obj_path_msvc.display());
                     println!("cargo:rerun-if-changed=build/app.manifest");
                     println!("cargo:rerun-if-changed=build/build.rs");
+                    println!("cargo:rerun-if-changed=logo.ico");
                     return;
                 }
             }
@@ -94,6 +96,7 @@ fn embed_manifest() {
         println!("cargo:rustc-link-arg={}", res_path.display());
         println!("cargo:rerun-if-changed=build/app.manifest");
         println!("cargo:rerun-if-changed=build/build.rs");
+        println!("cargo:rerun-if-changed=logo.ico");
         return;
     }
 

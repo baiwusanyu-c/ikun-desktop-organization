@@ -8,7 +8,8 @@
 //! - WM_MOUSELEAVE：重置所有 hover 状态
 //! - WM_LBUTTONDOWN：编辑模式清除/保存按钮 + 锁定按钮切换 + 图标选中 + "更多"菜单
 //! - WM_LBUTTONDBLCLK：标题栏双击进入名称编辑 + 双击打开文件
-//! - WM_CHAR / WM_KEYDOWN：名称编辑模式文字输入 + 光标移动 + 保存/取消
+//! - WM_CHAR / WM_KEYDOWN：名称编辑模式文字输入（含 ToUnicode 转字符）+ 光标移动 + 保存/取消
+//! - WM_IME_COMPOSITION：IME 输入（中文/日文/韩文等 CJK 字符）
 //! - WM_KILLFOCUS：名称编辑模式失去焦点取消
 //! - WM_RBUTTONUP：Shell 上下文菜单
 //! - WM_DESTROY：释放图标句柄 + D2D/DW/WIC 资源
@@ -941,6 +942,54 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                                 }
                             }
                         }
+                    }
+                    return 0;
+                }
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
+
+        // ===== IME 组合完成：插入中文等 CJK 字符 =====
+        WM_IME_COMPOSITION => {
+            if let Some(data) = get_data(hwnd) {
+                if data.editing_name && (lparam as u32 & GCS_RESULTSTR) != 0 {
+                    let himc = unsafe { ImmGetContext(hwnd) };
+                    if !himc.is_null() {
+                        let len = unsafe {
+                            ImmGetCompositionStringW(himc, GCS_RESULTSTR, std::ptr::null_mut(), 0)
+                        };
+                        if len > 0 {
+                            let byte_len = len as usize;
+                            let mut buf: Vec<u8> = vec![0; byte_len];
+                            unsafe {
+                                ImmGetCompositionStringW(
+                                    himc,
+                                    GCS_RESULTSTR,
+                                    buf.as_mut_ptr() as *mut std::ffi::c_void,
+                                    len,
+                                );
+                            };
+                            let u16_slice: &[u16] = unsafe {
+                                std::slice::from_raw_parts(buf.as_ptr() as *const u16, byte_len / 2)
+                            };
+                            if let Ok(s) = String::from_utf16(u16_slice) {
+                                for c in s.chars() {
+                                    let char_count = data.edit_buffer.chars().count();
+                                    if char_count < 16 {
+                                        let byte_pos = data
+                                            .edit_buffer
+                                            .char_indices()
+                                            .nth(data.edit_cursor)
+                                            .map(|(i, _)| i)
+                                            .unwrap_or(data.edit_buffer.len());
+                                        data.edit_buffer.insert(byte_pos, c);
+                                        data.edit_cursor += 1;
+                                    }
+                                }
+                                render_layered_window(hwnd);
+                            }
+                        }
+                        unsafe { ImmReleaseContext(hwnd, himc) };
                     }
                     return 0;
                 }
