@@ -51,7 +51,12 @@ src/
 │   │   ├── shell_menu.rs      #   Shell 右键菜单 + 桌面背景注册表菜单
 │   │   ├── app_icon.rs        #   嵌入 logo.ico 项目图标（托盘/菜单）
 │   │   ├── icon_extract.rs    #   图标提取（SHDefExtractIconW + .lnk 解析目标图标）
-│   │   ├── icon_hider.rs      #   图标隐藏/恢复（SysListView32）
+│   │   ├── icon_hider.rs      #   图标隐藏/恢复 + managed_icons vault
+│   │   ├── drag_image.rs      #   拖拽残影覆盖窗口（D2D 渲染跟随光标的半透明图标）
+│   │   ├── ole_dnd.rs         #   OLE 拖拽源（IDropSource + IDataObject 实现）
+│   │   ├── drop_target.rs     #   分类框拖放目标（IDropTarget 实现）
+│   │   ├── drag_handler.rs    #   拖拽协调器（连接覆盖窗口/分类框/OLE 拖拽）
+│   │   ├── icon_manager.rs    #   图标管理器（图标生命周期 + 缓存）
 │   │   ├── control_panel_window.rs # 控制面板 Win32 显示/隐藏辅助（托盘优先生命周期）
 │   │   └── sys_tray.rs        #   系统托盘入口（隐藏消息窗口 + 固定菜单动作队列）
 │   └── macos/
@@ -182,7 +187,7 @@ platform/windows/
 ├── ffi_types.rs       # FFI 类型定义
 ├── ffi_imports.rs     # FFI 函数声明
 ├── desktop_manager.rs # DesktopManagerTrait 实现
-├── desktop_overlay/   # 桌面覆盖窗口
+├── desktop_overlay/   # 桌面覆盖窗口（渲染/交互/DPI 自适应）
 ├── d2d_render.rs      # D2D/DirectWrite 渲染
 ├── grid_window.rs     # 窗口管理
 ├── wnd_proc.rs        # 窗口消息处理
@@ -190,7 +195,12 @@ platform/windows/
 ├── shell_menu.rs      # Shell 右键菜单 + 注册表菜单动作
 ├── app_icon.rs        # 项目图标资源加载
 ├── icon_extract.rs    # 图标提取（含 .lnk 目标解析）
-├── icon_hider.rs      # 图标隐藏 / managed_icons vault
+├── icon_hider.rs      # 图标隐藏/恢复 + managed_icons vault
+├── drag_image.rs      # 拖拽残影覆盖窗口（跨显示器 DPI 自适应重建）
+├── ole_dnd.rs         # OLE 拖拽源（IDropSource + IDataObject）
+├── drop_target.rs     # 分类框拖放目标（IDropTarget）
+├── drag_handler.rs    # 拖拽协调器
+├── icon_manager.rs    # 图标管理器（生命周期 + 缓存）
 ├── control_panel_window.rs # GPUI/eframe 控制面板 Win32 显示/隐藏辅助
 └── sys_tray.rs        # 系统托盘入口
 ```

@@ -71,8 +71,7 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             0
         }
         WM_DPICHANGED => {
-            let new_dpi = ((wparam as u32) >> 16) & 0xFFFF;
-            let new_dpi = if new_dpi > 0 { new_dpi } else { 96 };
+            let new_dpi = dpi_from_wparam(wparam);
             if let Some(data) = get_overlay_data(hwnd) {
                 let old_dpi = data.dpi;
                 data.dpi = new_dpi;
@@ -113,8 +112,8 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             0
         }
         WM_SIZE => {
-            let new_cx = (lparam as u32) & 0xFFFF;
-            let new_cy = ((lparam as u32) >> 16) & 0xFFFF;
+            let new_cx = loword_lparam(lparam);
+            let new_cy = hiword_lparam(lparam);
             if let Some(data) = get_overlay_data(hwnd) {
                 if new_cx > 0 && new_cy > 0 {
                     data.width = new_cx as i32;
@@ -404,6 +403,28 @@ fn is_grid_window(hwnd: HWND) -> bool {
     String::from_utf16_lossy(&class_name[..len as usize]) == "DesktopOrgGrid"
 }
 
+/// 从 WM_DPICHANGED 的 WPARAM 提取新 DPI 值。
+///
+/// HIWORD(wParam) 包含新 DPI，如果为 0 则回退到 96。
+fn dpi_from_wparam(wparam: WPARAM) -> u32 {
+    let dpi = ((wparam as u32) >> 16) & 0xFFFF;
+    if dpi > 0 {
+        dpi
+    } else {
+        96
+    }
+}
+
+/// 从 LPARAM 提取 LOWORD（低 16 位）。
+fn loword_lparam(lparam: LPARAM) -> i32 {
+    (lparam as u32 & 0xFFFF) as i32
+}
+
+/// 从 LPARAM 提取 HIWORD（高 16 位）。
+fn hiword_lparam(lparam: LPARAM) -> i32 {
+    ((lparam as u32 >> 16) & 0xFFFF) as i32
+}
+
 fn screen_to_overlay_client(hwnd: HWND, screen_x: i32, screen_y: i32) -> (i32, i32) {
     let mut wr = RECT {
         left: 0,
@@ -428,5 +449,57 @@ mod tests {
     #[test]
     fn test_overlay_nchittest_handles_blank_area_in_overlay() {
         assert_eq!(overlay_nchittest_result(-1), HTCLIENT as LRESULT);
+    }
+
+    #[test]
+    fn test_dpi_from_wparam_96() {
+        // HIWORD = 96 -> 0x0060
+        let wparam: WPARAM = (96u32 << 16) as WPARAM;
+        assert_eq!(dpi_from_wparam(wparam), 96);
+    }
+
+    #[test]
+    fn test_dpi_from_wparam_144() {
+        let wparam: WPARAM = (144u32 << 16) as WPARAM;
+        assert_eq!(dpi_from_wparam(wparam), 144);
+    }
+
+    #[test]
+    fn test_dpi_from_wparam_192() {
+        let wparam: WPARAM = (192u32 << 16) as WPARAM;
+        assert_eq!(dpi_from_wparam(wparam), 192);
+    }
+
+    #[test]
+    fn test_dpi_from_wparam_zero_fallback() {
+        // HIWORD = 0 should fallback to 96
+        assert_eq!(dpi_from_wparam(0), 96);
+    }
+
+    #[test]
+    fn test_loword_lparam() {
+        // LPARAM = 0x0001_0002 -> LOWORD = 2
+        assert_eq!(loword_lparam(0x00010002), 2);
+        assert_eq!(loword_lparam(0), 0);
+        assert_eq!(loword_lparam(0x0000FFFF), 65535);
+    }
+
+    #[test]
+    fn test_hiword_lparam() {
+        // LPARAM = 0x0001_0002 -> HIWORD = 1
+        assert_eq!(hiword_lparam(0x00010002), 1);
+        assert_eq!(hiword_lparam(0), 0);
+        assert_eq!(hiword_lparam(0xFFFF0000u32 as LPARAM), 65535);
+    }
+
+    #[test]
+    fn test_wm_size_lparam_extraction() {
+        // WM_SIZE lParam: LOWORD = cx, HIWORD = cy
+        // 例如窗口尺寸 1920x1080: cx=1920, cy=1080
+        let cx: u32 = 1920;
+        let cy: u32 = 1080;
+        let lparam: LPARAM = ((cy << 16) | cx) as LPARAM;
+        assert_eq!(loword_lparam(lparam), 1920);
+        assert_eq!(hiword_lparam(lparam), 1080);
     }
 }

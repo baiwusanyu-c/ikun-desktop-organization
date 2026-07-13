@@ -797,4 +797,96 @@ mod tests {
         assert_eq!(data.drag_start_x, 0);
         assert_eq!(data.drag_start_y, 0);
     }
+
+    #[test]
+    fn test_overlay_layout_params_at_96dpi() {
+        let layout = overlay_layout_params(1920, 96);
+        assert!(layout.cell_w > 0);
+        assert!(layout.cell_h > 0);
+        assert!(layout.icon_size > 0);
+        assert!(layout.cols >= 2);
+        assert!(layout.padding > 0);
+    }
+
+    #[test]
+    fn test_overlay_layout_params_at_144dpi() {
+        let layout_96 = overlay_layout_params(1920, 96);
+        let layout_144 = overlay_layout_params(1920, 144);
+
+        // 144 DPI = 1.5x of 96 DPI
+        assert_eq!(layout_144.icon_size, layout_96.icon_size * 3 / 2);
+        assert_eq!(layout_144.cell_w, layout_96.cell_w * 3 / 2);
+        assert_eq!(layout_144.cell_h, layout_96.cell_h * 3 / 2);
+        assert_eq!(layout_144.padding, layout_96.padding * 3 / 2);
+    }
+
+    #[test]
+    fn test_overlay_layout_params_at_192dpi() {
+        let layout_96 = overlay_layout_params(1920, 96);
+        let layout_192 = overlay_layout_params(1920, 192);
+
+        // 192 DPI = 2x of 96 DPI
+        assert_eq!(layout_192.icon_size, layout_96.icon_size * 2);
+        assert_eq!(layout_192.cell_w, layout_96.cell_w * 2);
+        assert_eq!(layout_192.cell_h, layout_96.cell_h * 2);
+    }
+
+    #[test]
+    fn test_physical_to_logical_and_back() {
+        // 96 DPI: physical == logical
+        assert_eq!(physical_to_logical(100, 96), 100.0);
+        assert_eq!(logical_to_physical(100.0, 96), 100);
+
+        // 144 DPI: physical 150 -> logical 100
+        assert_eq!(physical_to_logical(150, 144), 100.0);
+        assert_eq!(logical_to_physical(100.0, 144), 150);
+
+        // 192 DPI: physical 200 -> logical 100
+        assert_eq!(physical_to_logical(200, 192), 100.0);
+        assert_eq!(logical_to_physical(100.0, 192), 200);
+    }
+
+    #[test]
+    fn test_physical_logical_roundtrip() {
+        for dpi in [96, 120, 144, 192, 288] {
+            let physical = 500;
+            let logical = physical_to_logical(physical, dpi);
+            let restored = logical_to_physical(logical, dpi);
+            assert_eq!(
+                restored, physical,
+                "roundtrip failed for dpi={}: {} -> {} -> {}",
+                dpi, physical, logical, restored
+            );
+        }
+    }
+
+    #[test]
+    fn test_physical_to_logical_zero_dpi() {
+        // dpi=0 应该回退到 1，避免除零
+        let result = physical_to_logical(100, 0);
+        assert!(result.is_finite());
+    }
+
+    #[test]
+    fn test_scale_for_dpi() {
+        assert_eq!(scale_for_dpi(48, 96), 48);
+        assert_eq!(scale_for_dpi(48, 144), 72);
+        assert_eq!(scale_for_dpi(48, 192), 96);
+        assert_eq!(scale_for_dpi(48, 288), 144);
+    }
+
+    #[test]
+    fn test_overlay_layout_params_narrow_width() {
+        // 窄宽度应该至少有 2 列
+        let layout = overlay_layout_params(200, 96);
+        assert!(layout.cols >= 2);
+    }
+
+    #[test]
+    fn test_overlay_layout_params_wide_width() {
+        // 超宽屏幕应该有更多列
+        let layout_narrow = overlay_layout_params(800, 96);
+        let layout_wide = overlay_layout_params(3840, 96);
+        assert!(layout_wide.cols > layout_narrow.cols);
+    }
 }

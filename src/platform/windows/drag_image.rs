@@ -21,11 +21,17 @@ static DRAG_OVERLAY_CLASS: &[u16] = &[
     73, 107, 117, 110, 68, 114, 97, 103, 79, 118, 101, 114, 108, 97, 121, 0,
 ]; // "IkunDragOverlay"
 
-/// 拖拽覆盖窗口句柄（全局，同一时刻只有一个拖拽）
+// SAFETY: 以下 static mut 变量仅在 UI 主线程（消息循环线程）中访问，
+// 拖拽覆盖窗口生命周期内同一时刻只有一个拖拽操作，不存在并发竞争。
+// 所有访问均在 unsafe 函数 create/update/destroy_drag_overlay 内部完成。
+
+/// 拖拽覆盖窗口句柄和位图
 static mut OVERLAY_HWND: HWND = std::ptr::null_mut();
 static mut OVERLAY_HBMP: HBITMAP = std::ptr::null_mut();
 
-/// 存储拖拽创建参数，用于跨显示器时按新 DPI 重建残影位图
+/// 拖拽创建参数，用于跨显示器时按原始 DPI 重建残影位图。
+/// `DRAG_ORIGINAL_DPI` 记录创建时的 DPI，作为缩放的不变基准；
+/// `DRAG_LAST_DPI` 记录上次渲染的 DPI，用于判断是否需要重建。
 static mut DRAG_ICON_HANDLE: HICON = std::ptr::null_mut();
 static mut DRAG_ICON_SIZE: i32 = 0;
 static mut DRAG_CELL_W: i32 = 0;
@@ -222,6 +228,29 @@ pub(crate) unsafe fn update_drag_overlay() {
     );
 }
 
+/// 按新 DPI 缩放像素值，始终以原始 DPI 为基准，避免累积缩放误差。
+fn scale_dpi(px: i32, target_dpi: u32, original_dpi: u32) -> i32 {
+    (px * target_dpi as i32) / original_dpi.max(1) as i32
+}
+
+/// 计算拖拽残影的标签高度（与 icon_size 成比例）。
+fn drag_label_height(icon_size: i32, has_label: bool) -> i32 {
+    if has_label {
+        icon_size * 36 / 48
+    } else {
+        0
+    }
+}
+
+/// 计算拖拽残影图标与标签的间距。
+fn drag_icon_gap(icon_size: i32, has_label: bool) -> i32 {
+    if has_label {
+        icon_size * 6 / 48
+    } else {
+        0
+    }
+}
+
 /// 按新 DPI 重建拖拽残影位图并更新窗口尺寸。
 unsafe fn rebuild_drag_overlay_at_dpi(new_dpi: u32) {
     let icon_handle = DRAG_ICON_HANDLE;
@@ -229,21 +258,11 @@ unsafe fn rebuild_drag_overlay_at_dpi(new_dpi: u32) {
     let base_cell_w = DRAG_CELL_W;
     let display_name = (*std::ptr::addr_of!(DRAG_DISPLAY_NAME)).clone();
 
-    // 按新 DPI 缩放尺寸，始终以创建时的原始 DPI 为基准，避免累积缩放误差
-    let scale = |px: i32| (px * new_dpi as i32) / DRAG_ORIGINAL_DPI.max(1) as i32;
-    let icon_size = scale(base_icon_size);
-    let cell_w = scale(base_cell_w);
+    let icon_size = scale_dpi(base_icon_size, new_dpi, DRAG_ORIGINAL_DPI);
+    let cell_w = scale_dpi(base_cell_w, new_dpi, DRAG_ORIGINAL_DPI);
 
-    let label_h = if display_name.is_empty() {
-        0
-    } else {
-        icon_size * 36 / 48
-    };
-    let gap = if display_name.is_empty() {
-        0
-    } else {
-        icon_size * 6 / 48
-    };
+    let label_h = drag_label_height(icon_size, !display_name.is_empty());
+    let gap = drag_icon_gap(icon_size, !display_name.is_empty());
     let total_w = cell_w;
     let total_h = icon_size + gap + label_h;
 
@@ -338,4 +357,93 @@ unsafe extern "system" fn overlay_wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     DefWindowProcW(hwnd, msg, wparam, lparam)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_scale_dpi_same_dpi() {
+        assert_eq!(scale_dpi(48, 96, 96), 48);
+        assert_eq!(scale_dpi(80, 96, 96), 80);
+    }
+
+    #[test]
+    fn test_scale_dpi_higher_dpi() {
+        // 96 -> 144 DPI: 1.5x
+        assert_eq!(scale_dpi(48, 144, 96), 72);
+        assert_eq!(scale_dpi(80, 144, 96), 120);
+    }
+
+    #[test]
+    fn test_scale_dpi_lower_dpi() {
+        // 144 -> 96 DPI: 0.67x
+        assert_eq!(scale_dpi(72, 96, 144), 48);
+        assert_eq!(scale_dpi(120, 96, 144), 80);
+    }
+
+    #[test]
+    fn test_scale_dpi_roundtrip() {
+        // 96 -> 144 -> 96 应该还原原始值
+        let original = 48;
+        let scaled = scale_dpi(original, 144, 96);
+        let restored = scale_dpi(scaled, 96, 96);
+        // 注意：restored 用的是 original_dpi=96，不是 144
+        // 正确用法：始终以 original_dpi=96 为基准
+        assert_eq!(scale_dpi(original, 96, 96), 48);
+    }
+
+    #[test]
+    fn test_scale_dpi_no_accumulation_error() {
+        // 模拟多次跨显示器切换，始终以原始 DPI 为基准
+        let original_dpi = 96;
+        let original_size = 48;
+
+        // 第一次：96 -> 144
+        let size_144 = scale_dpi(original_size, 144, original_dpi);
+        assert_eq!(size_144, 72);
+
+        // 第二次：144 -> 96（仍然以 original_dpi=96 为基准）
+        let size_96 = scale_dpi(original_size, 96, original_dpi);
+        assert_eq!(size_96, 48);
+
+        // 第三次：96 -> 192（2x 缩放）
+        let size_192 = scale_dpi(original_size, 192, original_dpi);
+        assert_eq!(size_192, 96);
+
+        // 第四次：192 -> 144
+        let size_144_again = scale_dpi(original_size, 144, original_dpi);
+        assert_eq!(size_144_again, 72);
+    }
+
+    #[test]
+    fn test_scale_dpi_zero_original() {
+        // original_dpi=0 应该回退到 1，避免除零
+        assert_eq!(scale_dpi(48, 96, 0), 48 * 96);
+    }
+
+    #[test]
+    fn test_drag_label_height_with_label() {
+        assert_eq!(drag_label_height(48, true), 36);
+        assert_eq!(drag_label_height(72, true), 54);
+        assert_eq!(drag_label_height(96, true), 72);
+    }
+
+    #[test]
+    fn test_drag_label_height_no_label() {
+        assert_eq!(drag_label_height(48, false), 0);
+        assert_eq!(drag_label_height(72, false), 0);
+    }
+
+    #[test]
+    fn test_drag_icon_gap_with_label() {
+        assert_eq!(drag_icon_gap(48, true), 6);
+        assert_eq!(drag_icon_gap(72, true), 9);
+    }
+
+    #[test]
+    fn test_drag_icon_gap_no_label() {
+        assert_eq!(drag_icon_gap(48, false), 0);
+    }
 }

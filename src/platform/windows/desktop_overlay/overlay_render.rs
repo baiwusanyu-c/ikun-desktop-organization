@@ -245,6 +245,14 @@ fn draw_desktop_icons(
     let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
     let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
 
+    // per-DPI 缓存：避免同一 DPI 的图标重复创建 DirectWrite 资源
+    let mut cached_label_dpi: u32 = 0;
+    let mut cached_label_format: Option<windows::Win32::Graphics::DirectWrite::IDWriteTextFormat> =
+        None;
+    let mut cached_ellipsis_sign: Option<
+        windows::Win32::Graphics::DirectWrite::IDWriteInlineObject,
+    > = None;
+
     for (index, icon) in icons.iter().enumerate() {
         let cell_x = overlay_icon_cell_x(data, index, &grid_layout);
         let cell_y = overlay_icon_cell_y(data, index, &grid_layout);
@@ -289,25 +297,32 @@ fn draw_desktop_icons(
             draw_icon_d2d(target, icon.icon_handle, icon_x, icon_y, icon_size);
         }
 
-        // 文字标签：使用 per-icon DPI 创建字体和布局
-        let label_format = unsafe {
-            dw_factory.CreateTextFormat::<_, _, _>(
-                windows::core::PCWSTR(font_name.as_ptr()),
-                None,
-                DWRITE_FONT_WEIGHT_NORMAL,
-                DWRITE_FONT_STYLE_NORMAL,
-                DWRITE_FONT_STRETCH_NORMAL,
-                scale_for_dpi(13, icon_dpi) as f32,
-                windows::core::PCWSTR(locale.as_ptr()),
-            )
-        };
-        if let Ok(ref format) = label_format {
-            let _ = unsafe { format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER) };
-            let _ = unsafe { format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR) };
-            let _ = unsafe { format.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP) };
-
-            let ellipsis_sign = unsafe { dw_factory.CreateEllipsisTrimmingSign(format).ok() };
-
+        // 文字标签：使用 per-icon DPI，按 DPI 缓存 label_format 避免重复创建
+        if cached_label_dpi != icon_dpi {
+            cached_label_format = unsafe {
+                dw_factory
+                    .CreateTextFormat::<_, _, _>(
+                        windows::core::PCWSTR(font_name.as_ptr()),
+                        None,
+                        DWRITE_FONT_WEIGHT_NORMAL,
+                        DWRITE_FONT_STYLE_NORMAL,
+                        DWRITE_FONT_STRETCH_NORMAL,
+                        scale_for_dpi(13, icon_dpi) as f32,
+                        windows::core::PCWSTR(locale.as_ptr()),
+                    )
+                    .ok()
+            };
+            if let Some(ref format) = cached_label_format {
+                let _ = unsafe { format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER) };
+                let _ = unsafe { format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR) };
+                let _ = unsafe { format.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP) };
+            }
+            cached_ellipsis_sign = cached_label_format
+                .as_ref()
+                .and_then(|format| unsafe { dw_factory.CreateEllipsisTrimmingSign(format).ok() });
+            cached_label_dpi = icon_dpi;
+        }
+        if let Some(ref format) = cached_label_format {
             let label_h = scale_for_dpi(36, icon_dpi);
             let label: Vec<u16> = icon.display_name.encode_utf16().collect();
             let text_layout = unsafe {
@@ -316,7 +331,7 @@ fn draw_desktop_icons(
                     .ok()
             };
             if let Some(ref text_layout) = text_layout {
-                if let Some(ref sign) = ellipsis_sign {
+                if let Some(ref sign) = cached_ellipsis_sign {
                     let trimming = DWRITE_TRIMMING {
                         granularity: DWRITE_TRIMMING_GRANULARITY_WORD,
                         delimiter: 0,
