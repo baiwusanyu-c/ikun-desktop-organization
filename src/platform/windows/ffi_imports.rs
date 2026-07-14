@@ -625,4 +625,8 @@ extern "system" {
         dwBufLen: i32,
     ) -> i32;
     pub fn ImmReleaseContext(hWnd: HWND, himc: HIMC) -> i32;
+    pub fn ImmAssociateContext(hWnd: HWND, himc: HIMC) -> HIMC;
+    pub fn ImmCreateContext() -> HIMC;
+    pub fn ImmDestroyContext(himc: HIMC) -> i32;
+
 }

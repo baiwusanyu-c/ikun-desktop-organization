@@ -578,6 +578,14 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                             data.title = new_name.clone();
                             log::info!("分类框名称已保存: {}", new_name);
                         }
+                        // 释放 IME 上下文
+                        let himc = unsafe { ImmGetContext(hwnd) };
+                        if !himc.is_null() {
+                            unsafe {
+                                ImmAssociateContext(hwnd, std::ptr::null_mut());
+                                ImmDestroyContext(himc);
+                            }
+                        }
                         data.editing_name = false;
                         data.edit_buffer.clear();
                         data.edit_cursor = 0;
@@ -585,10 +593,24 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                     } else if on_input {
                         // 点击输入框：移动光标到点击位置（简化：移到末尾）
                         data.edit_cursor = data.edit_buffer.chars().count();
-                        unsafe { SetFocus(hwnd) };
+                        unsafe {
+                            SetFocus(hwnd);
+                            // 为 WS_POPUP 窗口创建并关联 IME 上下文以支持中文输入
+                            let himc = ImmCreateContext();
+                            if !himc.is_null() {
+                                ImmAssociateContext(hwnd, himc);
+                            }
+                        };
                         need_rerender = true;
                     } else {
                         // 点击编辑区域外：取消编辑
+                        let himc = unsafe { ImmGetContext(hwnd) };
+                        if !himc.is_null() {
+                            unsafe {
+                                ImmAssociateContext(hwnd, std::ptr::null_mut());
+                                ImmDestroyContext(himc);
+                            }
+                        }
                         data.editing_name = false;
                         data.edit_buffer.clear();
                         data.edit_cursor = 0;
@@ -700,7 +722,14 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                         data.edit_cursor = data.edit_buffer.chars().count();
                         data.clear_hovered = false;
                         data.save_hovered = false;
-                        unsafe { SetFocus(hwnd) };
+                        unsafe {
+                            SetFocus(hwnd);
+                            // 为 WS_POPUP 窗口创建并关联 IME 上下文以支持中文输入
+                            let himc = ImmCreateContext();
+                            if !himc.is_null() {
+                                ImmAssociateContext(hwnd, himc);
+                            }
+                        };
                         log::info!("进入名称编辑模式: {}", data.title);
                         render_layered_window(hwnd);
                         return 0;
@@ -771,7 +800,14 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                         data.edit_cursor = data.edit_buffer.chars().count();
                         data.clear_hovered = false;
                         data.save_hovered = false;
-                        unsafe { SetFocus(hwnd) };
+                        unsafe {
+                            SetFocus(hwnd);
+                            // 为 WS_POPUP 窗口创建并关联 IME 上下文以支持中文输入
+                            let himc = ImmCreateContext();
+                            if !himc.is_null() {
+                                ImmAssociateContext(hwnd, himc);
+                            }
+                        };
                         log::info!("进入名称编辑模式: {}", data.title);
                         render_layered_window(hwnd);
                         return 0;
@@ -819,6 +855,13 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                     match vk {
                         VK_ESCAPE => {
                             // 取消编辑
+                            let himc = unsafe { ImmGetContext(hwnd) };
+                            if !himc.is_null() {
+                                unsafe {
+                                    ImmAssociateContext(hwnd, std::ptr::null_mut());
+                                    ImmDestroyContext(himc);
+                                }
+                            }
                             data.editing_name = false;
                             data.edit_buffer.clear();
                             data.edit_cursor = 0;
@@ -831,6 +874,13 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                             if !new_name.is_empty() {
                                 data.title = new_name.clone();
                                 log::info!("分类框名称已修改: {}", new_name);
+                            }
+                            let himc = unsafe { ImmGetContext(hwnd) };
+                            if !himc.is_null() {
+                                unsafe {
+                                    ImmAssociateContext(hwnd, std::ptr::null_mut());
+                                    ImmDestroyContext(himc);
+                                }
                             }
                             data.editing_name = false;
                             data.edit_buffer.clear();
@@ -951,6 +1001,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
 
         // ===== IME 组合完成：插入中文等 CJK 字符 =====
         WM_IME_COMPOSITION => {
+            log::debug!("收到 WM_IME_COMPOSITION: lparam={:#X}", lparam as u32);
             if let Some(data) = get_data(hwnd) {
                 if data.editing_name && (lparam as u32 & GCS_RESULTSTR) != 0 {
                     let himc = unsafe { ImmGetContext(hwnd) };
@@ -1001,6 +1052,14 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         WM_KILLFOCUS => {
             if let Some(data) = get_data(hwnd) {
                 if data.editing_name {
+                    // 释放 IME 上下文
+                    let himc = unsafe { ImmGetContext(hwnd) };
+                    if !himc.is_null() {
+                        unsafe {
+                            ImmAssociateContext(hwnd, std::ptr::null_mut());
+                            ImmDestroyContext(himc);
+                        }
+                    }
                     data.editing_name = false;
                     data.edit_buffer.clear();
                     data.edit_cursor = 0;
