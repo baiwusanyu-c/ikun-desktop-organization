@@ -501,6 +501,40 @@ impl DesktopIconManager {
         Ok(())
     }
 
+    /// 枚举 SysListView32 中所有可见图标的显示名称
+    ///
+    /// 返回 `(display_name, index)` 列表，包含桌面 SysListView32 中的
+    /// 所有图标项。用于发现不在文件系统中的虚拟 Shell 对象
+    /// （如企业微信联系人、回收站等）。
+    pub fn enumerate_all_visible_names(&mut self) -> Vec<(String, i32)> {
+        if let Err(e) = self.rebuild_index() {
+            log::warn!("枚举桌面图标名称失败: {}", e);
+            return Vec::new();
+        }
+
+        let count = self.get_icon_count();
+        if count <= 0 {
+            return Vec::new();
+        }
+
+        let mut results = Vec::with_capacity(count as usize);
+        for i in 0..count {
+            match self.read_item_text(i) {
+                Ok(name) if !name.is_empty() => {
+                    results.push((name, i));
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    log::debug!("读取图标 index={} 名称失败: {}", i, e);
+                }
+            }
+        }
+
+        log::info!("SysListView32 中共发现 {} 个可见图标", results.len());
+        results
+    }
+
+
     /// 获取索引缓存中的所有名称
     pub fn cached_names(&self) -> Vec<String> {
         self.name_to_index.keys().cloned().collect()
@@ -717,8 +751,128 @@ impl DesktopIconManager {
             .unwrap_or(text_buf.len());
         Ok(String::from_utf16_lossy(&text_buf[..len]))
     }
-}
 
+    /// 读取指定 item 在系统图像列表中的 image index (iImage)
+    ///
+    /// 使用 LVM_GETITEMW + LVIF_IMAGE 标志，跨进程读取 LVITEMW.iImage 字段。
+    /// 返回的 iImage 可直接作为 ImageList_GetIcon 的参数。
+    fn read_item_image(&self, index: i32) -> Result<i32> {
+        if self.explorer_process.is_null() {
+            anyhow::bail!("explorer 进程句柄无效");
+        }
+
+        let lvitem_size = std::mem::size_of::<LVITEMW>();
+
+        // 在 explorer.exe 中分配 LVITEMW 内存
+        let remote_base = unsafe {
+            VirtualAllocEx(
+                self.explorer_process,
+                std::ptr::null_mut(),
+                lvitem_size,
+                MEM_COMMIT | MEM_RESERVE,
+                PAGE_READWRITE,
+            )
+        };
+        if remote_base.is_null() {
+            anyhow::bail!("VirtualAllocEx 分配 LVITEMW 内存失败");
+        }
+
+        // 构建 LVITEMW，请求 iImage 字段
+        let lvitem = LVITEMW {
+            mask: LVIF_IMAGE,
+            i_item: index,
+            i_sub_item: 0,
+            state: 0,
+            state_mask: 0,
+            psz_text: std::ptr::null_mut(),
+            cch_text_max: 0,
+            i_image: 0,
+            l_param: 0,
+            i_indent: 0,
+        };
+
+        // 写入 LVITEMW 到远程内存
+        let mut bytes_written: usize = 0;
+        let write_ok = unsafe {
+            WriteProcessMemory(
+                self.explorer_process,
+                remote_base,
+                &lvitem as *const LVITEMW as *const c_void,
+                lvitem_size,
+                &mut bytes_written,
+            )
+        };
+
+        if write_ok == 0 {
+            unsafe { VirtualFreeEx(self.explorer_process, remote_base, 0, MEM_RELEASE) };
+            anyhow::bail!("WriteProcessMemory 写入 LVITEMW 失败");
+        }
+
+        // 发送 LVM_GETITEMW
+        unsafe {
+            SendMessageW(
+                self.listview_hwnd,
+                LVM_GETITEMW,
+                index as WPARAM,
+                remote_base as LPARAM,
+            )
+        };
+
+        // 读取 iImage 字段（在 LVITEMW 结构体中的偏移量）
+        let i_image_offset = std::mem::offset_of!(LVITEMW, i_image);
+        let remote_i_image = (remote_base as usize + i_image_offset) as *const c_void;
+        let mut image_index: i32 = -1;
+        let mut bytes_read: usize = 0;
+        let read_ok = unsafe {
+            ReadProcessMemory(
+                self.explorer_process,
+                remote_i_image,
+                &mut image_index as *mut i32 as *mut c_void,
+                std::mem::size_of::<i32>(),
+                &mut bytes_read,
+            )
+        };
+
+        // 释放远程内存
+        unsafe {
+            VirtualFreeEx(self.explorer_process, remote_base, 0, MEM_RELEASE);
+        }
+
+        if read_ok == 0 {
+            anyhow::bail!("ReadProcessMemory 读取 iImage 失败（index={}）", index);
+        }
+
+        Ok(image_index)
+    }
+
+    /// 枚举所有可见图标的 (显示名称, item_index, image_index)
+    ///
+    /// image_index 是系统图像列表中的索引，可直接传给 ImageList_GetIcon。
+    pub fn enumerate_names_with_images(&mut self) -> Vec<(String, i32, i32)> {
+        if let Err(e) = self.rebuild_index() {
+            log::warn!("enumerate_names_with_images: rebuild_index failed: {}", e);
+            return Vec::new();
+        }
+
+        let count = self.get_icon_count();
+        if count <= 0 {
+            return Vec::new();
+        }
+
+        let mut results = Vec::with_capacity(count as usize);
+        for i in 0..count {
+            let name = match self.read_item_text(i) {
+                Ok(n) if !n.is_empty() => n,
+                _ => continue,
+            };
+            let image_idx = self.read_item_image(i).unwrap_or(-1);
+            results.push((name, i, image_idx));
+        }
+
+        log::info!("enumerate_names_with_images: {} items", results.len());
+        results
+    }
+}
 impl Drop for DesktopIconManager {
     fn drop(&mut self) {
         self.cleanup();
@@ -1280,4 +1434,84 @@ mod tests {
         assert_eq!(MEM_RELEASE, 0x8000);
         assert_eq!(PAGE_READWRITE, 0x04);
     }
+}
+
+
+
+
+
+// ===== SysListView32 icon extraction =====
+
+const SHGFI_SYSICONINDEX: u32 = 0x00000400;
+const SHGFI_SMALLICON: u32 = 0x00000001;
+const ILD_TRANSPARENT: u32 = 0x00000001;
+
+#[repr(C)]
+struct SysSHFILEINFOW {
+    h_icon: *mut std::ffi::c_void,
+    i_icon: i32,
+    dw_attributes: u32,
+    sz_display_name: [u16; 260],
+    sz_type_name: [u16; 80],
+}
+
+impl Default for SysSHFILEINFOW {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+extern "system" {
+    fn SHGetFileInfoW(
+        pszPath: *const u16,
+        dwFileAttributes: u32,
+        psfi: *mut SysSHFILEINFOW,
+        cbFileInfo: u32,
+        uFlags: u32,
+    ) -> usize;
+    fn ImageList_GetIcon(
+        himl: *mut std::ffi::c_void,
+        i: i32,
+        flags: u32,
+    ) -> *mut std::ffi::c_void;
+}
+
+fn get_shell_image_list() -> Option<*mut std::ffi::c_void> {
+    let mut sfi = SysSHFILEINFOW::default();
+    let path: Vec<u16> = "C:\\".encode_utf16().chain(std::iter::once(0)).collect();
+    let result = unsafe {
+        SHGetFileInfoW(
+            path.as_ptr(),
+            0,
+            &mut sfi,
+            std::mem::size_of::<SysSHFILEINFOW>() as u32,
+            SHGFI_SYSICONINDEX | SHGFI_SMALLICON,
+        )
+    };
+    if result == 0 {
+        return None;
+    }
+    Some(result as *mut std::ffi::c_void)
+}
+
+/// 从系统图像列表提取图标
+///
+/// `image_index` 是 LVITEMW.iImage 字段值（通过 read_item_image 获取），
+/// 而非 ListView item index。
+pub fn extract_icon_from_listview(image_index: i32) -> Option<super::icon_extract::FileIconInfo> {
+    if image_index < 0 {
+        log::debug!("extract_icon_from_listview: invalid image_index={}", image_index);
+        return None;
+    }
+    let himl = get_shell_image_list()?;
+    let hicon = unsafe { ImageList_GetIcon(himl, image_index, ILD_TRANSPARENT) };
+    if hicon.is_null() {
+        log::debug!("ImageList_GetIcon(image_index={}) returned null", image_index);
+        return None;
+    }
+    Some(super::icon_extract::FileIconInfo {
+        hicon,
+        display_name: String::new(),
+        type_name: String::new(),
+    })
 }

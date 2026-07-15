@@ -532,6 +532,7 @@ pub const fn colorref(r: u8, g: u8, b: u8) -> u32 {
 // ===== ListView 消息常量（用于跨进程操作 SysListView32）=====
 pub const LVM_FIRST: u32 = 0x1000;
 pub const LVM_GETITEMCOUNT: u32 = LVM_FIRST + 4;
+pub const LVM_GETITEMW: u32 = LVM_FIRST + 75;
 pub const LVM_GETITEMTEXTW: u32 = LVM_FIRST + 115;
 pub const LVM_GETITEMPOSITION: u32 = LVM_FIRST + 16;
 pub const LVM_SETITEMPOSITION: u32 = LVM_FIRST + 15;
@@ -541,6 +542,7 @@ pub const LVM_SETEXTENDEDLISTVIEWSTYLE: u32 = LVM_FIRST + 54;
 
 /// ListView 项目掩码
 pub const LVIF_TEXT: u32 = 0x0001;
+pub const LVIF_IMAGE: u32 = 0x0002;
 
 /// 跨进程内存操作常量
 pub const PROCESS_VM_OPERATION: u32 = 0x0008;

@@ -629,6 +629,11 @@ pub fn collect_grid_layout() -> Vec<crate::config::BoxLayoutData> {
             .iter()
             .map(|item| item.file_path.clone())
             .collect();
+        let display_names: Vec<String> = data
+            .items
+            .iter()
+            .map(|item| item.display_name.clone())
+            .collect();
 
         layouts.push(BoxLayoutData {
             id: data.config_id,
@@ -641,6 +646,7 @@ pub fn collect_grid_layout() -> Vec<crate::config::BoxLayoutData> {
             view_mode: data.view_mode.clone(),
             group_by: data.group_by.clone(),
             icon_names,
+            display_names,
             style_overrides: None,
         });
     }

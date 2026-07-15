@@ -1,4 +1,4 @@
-//! Windows 平台模块
+﻿//! Windows 平台模块
 //!
 //! 提供 Windows 平台的桌面管理、窗口管理和渲染功能。
 //!
@@ -38,7 +38,7 @@ mod wnd_proc;
 
 // Re-export key items
 pub use control_panel_window::{hide_control_panel_window, show_control_panel_window};
-pub use desktop_manager::DesktopManager;
+pub use desktop_manager::{clsid_display_name, DesktopManager};
 pub use desktop_overlay::{create_desktop_overlay, destroy_desktop_overlay};
 #[allow(unused_imports)] // 公共 API 预留
 pub use drop_target::{
@@ -52,7 +52,7 @@ pub use grid_window::{
     GridCreateParams, GridFileItem,
 };
 pub use icon_extract::extract_file_icon;
-pub use icon_hider::{
+pub use icon_hider::{list_vault_icons,
     hide_native_icons, icon_exists_for_box, native_icons_hidden, resolve_icon_read_path,
     restore_all_hidden_icons, restore_native_icons,
 };

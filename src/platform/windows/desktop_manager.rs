@@ -1,11 +1,13 @@
-//! Windows 平台桌面管理实现
+﻿//! Windows 平台桌面管理实现
 //!
 //! 使用文件系统读取桌面图标信息
 //!
 //! # 实现要点
 //! - 桌面枚举：读取桌面文件夹中的文件
 //! - 快捷方式检测：通过扩展名识别 .lnk 文件
-//! - 位置获取：由 `DesktopIconMover` 通过 SysListView32 提供
+//! - 快捷方式解析：使用 IShellLinkW 解析 .lnk 目标路径
+//! - 虚拟 Shell 对象：回收站、此电脑等通过 CLSID 枚举
+//! - 位置获取：由 DesktopIconMover 通过 SysListView32 提供
 
 use crate::platform::types::DesktopIcon;
 use crate::platform::DesktopManagerTrait;
@@ -42,6 +44,71 @@ impl DesktopManagerTrait for DesktopManager {
     }
 }
 
+/// 已知的 Windows 虚拟 Shell 对象
+///
+/// 这些对象出现在桌面 SysListView32 中但不是文件系统上的真实文件。
+/// clsid_path 格式为 ::{CLSID}，可被 ShellExecuteW 打开。
+struct VirtualShellObject {
+    /// 显示名称
+    display_name: &'static str,
+    /// CLSID 路径，如 ::{645FF040-5081-101B-9F08-00AA002F954E}
+    clsid_path: &'static str,
+    /// 注册表键（用于检测该对象是否在桌面显示）
+    /// 格式: (hive, subkey, value_name)
+    registry_check: Option<(&'static str, &'static str, &'static str)>,
+}
+
+/// 常见的 Windows 桌面虚拟对象
+const VIRTUAL_SHELL_OBJECTS: &[VirtualShellObject] = &[
+    VirtualShellObject {
+        display_name: "回收站",
+        clsid_path: "::{645FF040-5081-101B-9F08-00AA002F954E}",
+        registry_check: Some((
+            "HKCU",
+            r"Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel",
+            "{645FF040-5081-101B-9F08-00AA002F954E}",
+        )),
+    },
+    VirtualShellObject {
+        display_name: "此电脑",
+        clsid_path: "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}",
+        registry_check: Some((
+            "HKCU",
+            r"Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel",
+            "{20D04FE0-3AEA-1069-A2D8-08002B30309D}",
+        )),
+    },
+    VirtualShellObject {
+        display_name: "网络",
+        clsid_path: "::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}",
+        registry_check: Some((
+            "HKCU",
+            r"Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel",
+            "{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}",
+        )),
+    },
+    VirtualShellObject {
+        display_name: "控制面板",
+        clsid_path: "::{5399E694-6CE5-4D6C-8FCE-1D8870FDCBA0}",
+        registry_check: Some((
+            "HKCU",
+            r"Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel",
+            "{5399E694-6CE5-4D6C-8FCE-1D8870FDCBA0}",
+        )),
+    },
+];
+
+/// 已知的 CLSID 路径到显示名称的映射
+/// 根据 CLSID 路径获取虚拟 Shell 对象的显示名称
+///
+/// 使用大小写不敏感的比较，因为 CLSID 在不同场景下可能大小写不一致。
+pub fn clsid_display_name(clsid_path: &str) -> Option<&'static str> {
+    let clsid_lower = clsid_path.to_lowercase();
+    VIRTUAL_SHELL_OBJECTS.iter()
+        .find(|obj| obj.clsid_path.to_lowercase() == clsid_lower)
+        .map(|obj| obj.display_name)
+}
+
 impl DesktopManager {
     /// 获取桌面文件夹路径
     fn get_desktop_paths() -> Vec<PathBuf> {
@@ -65,6 +132,185 @@ impl DesktopManager {
         paths
     }
 
+    /// 检查虚拟 Shell 对象是否在桌面可见
+    ///
+    /// Windows 通过注册表 HideDesktopIcons\NewStartPanel 控制虚拟对象显示。
+    /// 如果值为 1，表示隐藏；如果值不存在或不为 1，表示显示。
+    fn is_virtual_object_visible(obj: &VirtualShellObject) -> bool {
+        if let Some((_hive, subkey, value_name)) = obj.registry_check {
+            // 使用 Win32 API 读取注册表
+            use std::ffi::OsStr;
+            use std::os::windows::ffi::OsStrExt;
+
+            extern "system" {
+                fn RegOpenKeyExW(
+                    hkey: usize,
+                    lpSubKey: *const u16,
+                    ulOptions: u32,
+                    samDesired: u32,
+                    phkResult: *mut usize,
+                ) -> i32;
+                fn RegQueryValueExW(
+                    hkey: usize,
+                    lpValueName: *const u16,
+                    lpReserved: *mut u32,
+                    lpType: *mut u32,
+                    lpData: *mut u8,
+                    lpcbData: *mut u32,
+                ) -> i32;
+                fn RegCloseKey(hkey: usize) -> i32;
+            }
+
+            const HKEY_CURRENT_USER: usize = 0x80000001;
+            const KEY_READ: u32 = 0x20019;
+
+            let subkey_wide: Vec<u16> =
+                OsStr::new(subkey).encode_wide().chain(std::iter::once(0)).collect();
+            let value_wide: Vec<u16> =
+                OsStr::new(value_name).encode_wide().chain(std::iter::once(0)).collect();
+
+            let mut hkey: usize = 0;
+            let result = unsafe {
+                RegOpenKeyExW(
+                    HKEY_CURRENT_USER,
+                    subkey_wide.as_ptr(),
+                    0,
+                    KEY_READ,
+                    &mut hkey,
+                )
+            };
+
+            if result != 0 {
+                // 注册表键不存在 → 默认显示
+                return true;
+            }
+
+            let mut data: u32 = 0;
+            let mut data_size: u32 = 4;
+            let mut value_type: u32 = 0;
+            let result = unsafe {
+                RegQueryValueExW(
+                    hkey,
+                    value_wide.as_ptr(),
+                    std::ptr::null_mut(),
+                    &mut value_type,
+                    &mut data as *mut u32 as *mut u8,
+                    &mut data_size,
+                )
+            };
+
+            unsafe { RegCloseKey(hkey) };
+
+            if result != 0 {
+                // 值不存在 → 默认显示
+                return true;
+            }
+
+            // 值为 1 表示隐藏，其他值表示显示
+            data != 1
+        } else {
+            // 没有注册表检查 → 默认显示
+            true
+        }
+    }
+
+    /// 枚举桌面虚拟 Shell 对象（回收站、此电脑等）
+    fn enumerate_virtual_shell_objects() -> Vec<DesktopIcon> {
+        let mut icons = Vec::new();
+
+        for obj in VIRTUAL_SHELL_OBJECTS {
+            if !Self::is_virtual_object_visible(obj) {
+                log::debug!("虚拟对象 '{}' 已隐藏，跳过", obj.display_name);
+                continue;
+            }
+
+            icons.push(DesktopIcon {
+                id: uuid::Uuid::new_v4(),
+                display_name: obj.display_name.to_string(),
+                path: PathBuf::from(obj.clsid_path),
+                target_path: None, // 虚拟对象没有文件目标
+                icon_path: None,
+                position: (0, 0),
+                is_shortcut: false,
+            });
+
+            log::debug!("添加虚拟对象: {} -> {}", obj.display_name, obj.clsid_path);
+        }
+
+        icons
+    }
+
+    /// 从 SysListView32 枚举所有可见桌面图标，发现不在文件系统中的虚拟对象
+    ///
+    /// Windows 桌面的 SysListView32 控件包含所有可见的桌面图标，包括：
+    /// - 文件系统中的文件/快捷方式（已通过文件系统扫描获取）
+    /// - 虚拟 Shell 对象（回收站、此电脑等，已通过已知 CLSID 获取）
+    /// - 其他 Shell 命名空间扩展对象（如企业微信联系人卡片等）
+    ///
+    /// 此方法通过跨进程读取 SysListView32 获取所有可见图标的显示名称，
+    /// 与已有列表对比，为遗漏的虚拟对象创建 DesktopIcon 条目。
+    fn enumerate_listview_icons(
+        &self,
+        icons: &mut Vec<DesktopIcon>,
+        seen_paths: &mut std::collections::HashSet<String>,
+    ) {
+        use super::icon_manager::DesktopIconManager;
+
+        let mut manager = match DesktopIconManager::new() {
+            Ok(m) => m,
+            Err(e) => {
+                log::warn!("创建 DesktopIconManager 失败，跳过 ListView 枚举: {}", e);
+                return;
+            }
+        };
+
+        let visible_names = manager.enumerate_all_visible_names();
+        if visible_names.is_empty() {
+            return;
+        }
+
+        // 构建已有图标的显示名称集合（用于快速查找）
+        let existing_names: std::collections::HashSet<String> = icons
+            .iter()
+            .map(|icon| icon.display_name.to_lowercase())
+            .collect();
+
+        let mut added = 0;
+        for (display_name, _index) in visible_names {
+            let name_lower = display_name.to_lowercase();
+            if existing_names.contains(&name_lower) {
+                continue; // 已在文件系统中找到
+            }
+
+            // 使用合成路径标识虚拟对象
+            let synthetic_path = format!("shell::virtual::{}", display_name);
+            let path_key = synthetic_path.to_lowercase();
+            if !seen_paths.insert(path_key) {
+                continue;
+            }
+
+            log::info!(
+                "发现 SysListView32 中的虚拟对象: '{}' (不在文件系统中)",
+                display_name
+            );
+
+            icons.push(DesktopIcon {
+                id: uuid::Uuid::new_v4(),
+                display_name: display_name.clone(),
+                path: PathBuf::from(&synthetic_path),
+                target_path: None,
+                icon_path: None,
+                position: (0, 0),
+                is_shortcut: false,
+            });
+            added += 1;
+        }
+
+        if added > 0 {
+            log::info!("从 SysListView32 发现 {} 个额外的虚拟对象", added);
+        }
+    }
+
     /// 内部方法：获取桌面图标
     fn get_desktop_icons_internal(&self) -> Result<Vec<DesktopIcon>> {
         let desktop_paths = Self::get_all_desktop_paths();
@@ -74,7 +320,8 @@ impl DesktopManager {
         }
 
         let mut icons = Vec::new();
-        let mut seen_names = std::collections::HashSet::new();
+        // 使用完整路径做去重 key，避免同名快捷方式在用户/公共桌面被误杀
+        let mut seen_paths = std::collections::HashSet::new();
 
         for desktop_path in &desktop_paths {
             log::info!("扫描桌面路径: {}", desktop_path.display());
@@ -95,10 +342,11 @@ impl DesktopManager {
                 let path = entry.path();
                 let file_name = entry.file_name().to_string_lossy().to_string();
 
-                // 跳过隐藏文件
+                // 跳过系统保留文件
                 if file_name.starts_with('.') || file_name == "desktop.ini" {
                     continue;
                 }
+
 
                 let is_shortcut = path
                     .extension()
@@ -118,10 +366,31 @@ impl DesktopManager {
                         .unwrap_or(file_name.clone())
                 };
 
-                // 避免重复
-                if !seen_names.insert(display_name.clone()) {
+                // 使用规范化完整路径去重（替代 display_name 去重）
+                let path_key = path
+                    .to_string_lossy()
+                    .replace('/', "\\")
+                    .to_lowercase();
+                if !seen_paths.insert(path_key) {
                     continue;
                 }
+
+                // 解析快捷方式目标路径
+                let target_path = if is_shortcut {
+                    let path_str = path.to_string_lossy();
+                    let resolved = super::icon_extract::resolve_shortcut_target(&path_str)
+                        .map(PathBuf::from);
+                    if let Some(ref target) = resolved {
+                        log::debug!(
+                            "快捷方式 '{}' -> 目标 '{}'",
+                            display_name,
+                            target.display()
+                        );
+                    }
+                    resolved
+                } else {
+                    Some(path.clone())
+                };
 
                 log::debug!("桌面项目: {} -> {:?}", display_name, path);
 
@@ -129,7 +398,7 @@ impl DesktopManager {
                     id: uuid::Uuid::new_v4(),
                     display_name,
                     path: path.clone(),
-                    target_path: if is_shortcut { None } else { Some(path) },
+                    target_path,
                     icon_path: None,
                     position: (0, 0), // 位置由 DesktopIconMover 提供
                     is_shortcut,
@@ -137,7 +406,20 @@ impl DesktopManager {
             }
         }
 
-        log::info!("找到 {} 个桌面图标", icons.len());
+        // 枚举虚拟 Shell 对象（回收站、此电脑、网络等）
+        let virtual_icons = Self::enumerate_virtual_shell_objects();
+        for vicon in virtual_icons {
+            let path_key = vicon.path.to_string_lossy().to_lowercase();
+            if seen_paths.insert(path_key) {
+                icons.push(vicon);
+            }
+        }
+
+        // 从 SysListView32 枚举所有可见桌面图标，发现不在文件系统中的虚拟对象
+        // （如企业微信联系人卡片等 Shell 命名空间扩展对象）
+        self.enumerate_listview_icons(&mut icons, &mut seen_paths);
+
+        log::info!("找到 {} 个桌面图标（含虚拟对象）", icons.len());
         Ok(icons)
     }
 }
@@ -163,5 +445,23 @@ mod tests {
             .map(|ext| ext == "lnk")
             .unwrap_or(false);
         assert!(!is_shortcut, ".exe 文件不应被识别为快捷方式");
+    }
+
+
+    #[test]
+    fn test_virtual_shell_objects_have_valid_clsids() {
+        for obj in VIRTUAL_SHELL_OBJECTS {
+            assert!(
+                obj.clsid_path.starts_with("::{"),
+                "CLSID 路径应以 '::{{' 开头: {}",
+                obj.clsid_path
+            );
+            assert!(
+                obj.clsid_path.ends_with('}'),
+                "CLSID 路径应以 '}}' 结尾: {}",
+                obj.clsid_path
+            );
+            assert!(!obj.display_name.is_empty(), "显示名称不能为空");
+        }
     }
 }

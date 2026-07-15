@@ -323,7 +323,7 @@ impl MyApp {
         let mut created_count = 0;
         for (i, box_data) in boxes.iter().enumerate() {
             let mut items: Vec<GridFileItem> = Vec::new();
-            for file_path in &box_data.icon_names {
+            for (idx, file_path) in box_data.icon_names.iter().enumerate() {
                 // 过滤已删除的图标：桌面或隐藏目录中存在即可
                 if !icon_exists_for_box(file_path) {
                     log::info!("跳过已删除的图标: {}", file_path);
@@ -332,11 +332,36 @@ impl MyApp {
                 let read_path = resolve_icon_read_path(file_path)
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|| file_path.clone());
-                let display_name = std::path::Path::new(file_path)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(file_path)
-                    .to_string();
+                log::info!(
+                    "恢复图标: file_path={}, display_names[{}]={:?}",
+                    file_path, idx,
+                    box_data.display_names.get(idx).map(|s| s.as_str()).unwrap_or("<missing>")
+                );
+                // 根据路径类型决定显示名称：
+                // - CLSID/shell::virtual:: 路径始终从路径本身解析（避免 display_names 数组不同步）
+                // - 普通文件路径优先使用持久化的 display_name，回退到 file_stem
+                let display_name = if file_path.starts_with("::{") {
+                    // CLSID 路径（已知虚拟 Shell 对象）使用预定义的显示名称
+                    crate::platform::clsid_display_name(file_path)
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| {
+                            log::warn!("CLSID 路径未在已知列表中: {}", file_path);
+                            file_path.clone()
+                        })
+                } else if let Some(name) = file_path.strip_prefix("shell::virtual::") {
+                    // Shell 命名空间扩展对象（从 SysListView32 发现的虚拟对象）
+                    name.to_string()
+                } else if idx < box_data.display_names.len() && !box_data.display_names[idx].is_empty() {
+                    // 普通文件路径：优先使用持久化的 display_name
+                    box_data.display_names[idx].clone()
+                } else {
+                    // 回退：从文件名推导
+                    std::path::Path::new(file_path)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(file_path)
+                        .to_string()
+                };
                 let hicon = extract_file_icon(&read_path)
                     .map(|fi| fi.hicon)
                     .unwrap_or(std::ptr::null_mut());
@@ -874,6 +899,50 @@ mod tests {
     fn test_should_not_retry_native_icon_hide_when_app_did_not_hide_icons() {
         assert!(!should_retry_native_icon_hide(false, false));
         assert!(!should_retry_native_icon_hide(false, true));
+    }
+
+    // ===== 显示名称解析优先级测试 =====
+
+    /// CLSID 路径应始终使用 clsid_display_name 解析，而非 display_names 数组
+    #[test]
+    fn test_display_name_clsid_uses_mapping_not_array() {
+        // Simulate: display_names has wrong value for CLSID path
+        let file_path = "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}";
+        let display_names = vec!["wrong_name".to_string()];
+
+        // The resolution should use CLSID mapping, not display_names
+        let result = if file_path.starts_with("::{") {
+            crate::platform::clsid_display_name(file_path)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| file_path.to_string())
+        } else if let Some(name) = file_path.strip_prefix("shell::virtual::") {
+            name.to_string()
+        } else if !display_names.is_empty() && !display_names[0].is_empty() {
+            display_names[0].clone()
+        } else {
+            file_path.to_string()
+        };
+
+        assert_eq!(result, "此电脑");
+    }
+
+    /// shell::virtual:: 路径应始终从路径提取名称
+    #[test]
+    fn test_display_name_shell_virtual_uses_path() {
+        let file_path = "shell::virtual::陈智辉(数据智能部)";
+        let display_names: Vec<String> = vec![];
+
+        let result = if file_path.starts_with("::{") {
+            file_path.to_string()
+        } else if let Some(name) = file_path.strip_prefix("shell::virtual::") {
+            name.to_string()
+        } else if !display_names.is_empty() {
+            display_names[0].clone()
+        } else {
+            file_path.to_string()
+        };
+
+        assert_eq!(result, "陈智辉(数据智能部)");
     }
 }
 

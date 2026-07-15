@@ -45,7 +45,7 @@ pub use windows::DesktopManager;
 #[cfg(windows)]
 #[allow(unused_imports)] // 部分仅在 eframe-ui feature 路径使用
 pub use windows::{
-    cleanup_desktop_registry, cleanup_system_tray, collect_grid_layout, create_desktop_overlay,
+    cleanup_desktop_registry, cleanup_system_tray, clsid_display_name, collect_grid_layout, create_desktop_overlay,
     create_grid_window, destroy_all_grid_windows, destroy_desktop_overlay, extract_file_icon,
     get_cursor_monitor_work_area_phys, get_grid_count, get_primary_monitor_dpi,
     get_primary_monitor_work_area_phys, get_screen_resolution, hide_control_panel_window,

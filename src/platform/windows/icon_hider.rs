@@ -1,4 +1,4 @@
-//! 隐藏/恢复原生桌面图标 + 图标仓库（Vault）
+﻿//! 隐藏/恢复原生桌面图标 + 图标仓库（Vault）
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -407,6 +407,10 @@ fn notify_shell_path(path: &str) {
 
 /// 图标是否在仓库或桌面上可读
 pub fn icon_exists_for_box(logical_path: &str) -> bool {
+    // 虚拟 Shell 对象（回收站、此电脑等）始终视为存在
+    if logical_path.starts_with("::{") || logical_path.starts_with("shell::virtual::") {
+        return true;
+    }
     if Path::new(logical_path).exists() {
         return true;
     }
@@ -432,6 +436,10 @@ pub fn resolve_icon_read_path(logical_path: &str) -> Option<PathBuf> {
 
 /// 收入仓库：用户桌面移动，公共桌面只读复制
 pub fn ingest_icon(logical_path: &str) -> Result<()> {
+    // 虚拟 Shell 对象（回收站、此电脑等）无需收入仓库，它们始终存在
+    if logical_path.starts_with("::{") || logical_path.starts_with("shell::virtual::") {
+        return Ok(());
+    }
     let vault = vault_path_for(logical_path)?;
     let src = Path::new(logical_path);
 
@@ -472,6 +480,10 @@ pub fn ingest_icon(logical_path: &str) -> Result<()> {
 
 /// 从仓库导出到用户桌面
 pub fn export_icon(logical_path: &str) -> Result<(bool, PathBuf)> {
+    // 虚拟 Shell 对象无法导出到桌面，返回原始路径
+    if logical_path.starts_with("::{") || logical_path.starts_with("shell::virtual::") {
+        return Ok((false, PathBuf::from(logical_path)));
+    }
     let vault = vault_path_for(logical_path)?;
     if !vault.exists() {
         let export = export_desktop_path(logical_path);
@@ -626,6 +638,100 @@ fn restore_icons_from_dir(managed_dir: &Path) -> (u32, u32) {
     (restored, skipped)
 }
 
+
+/// 枚举仓库中的所有图标，返回 DesktopIcon 列表
+///
+/// 遍历 managed_icons/ 目录，根据仓库文件名前缀还原原始桌面路径，
+/// 为每个仓库中的图标创建 DesktopIcon 对象。
+/// 这些图标在桌面上不可见（已被移入仓库），但在分类框中应可见。
+pub fn list_vault_icons() -> Vec<crate::platform::types::DesktopIcon> {
+    let managed_dir = match get_managed_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            log::debug!("获取仓库目录失败（仓库可能不存在）: {}", e);
+            return Vec::new();
+        }
+    };
+
+    if !managed_dir.exists() {
+        return Vec::new();
+    }
+
+    let entries = match std::fs::read_dir(&managed_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            log::warn!("读取仓库目录失败: {}", e);
+            return Vec::new();
+        }
+    };
+
+    let mut icons = Vec::new();
+
+    for entry in entries.flatten() {
+        let vault_file_path = entry.path();
+
+        // 跳过子目录
+        if !vault_file_path.is_file() {
+            continue;
+        }
+
+        let vault_name = match vault_file_path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+
+        // 还原原始桌面路径
+        let logical_path = match logical_path_from_vault_name(&vault_name) {
+            Some(p) => p,
+            None => {
+                log::debug!("无法解析仓库文件名: {}", vault_name);
+                continue;
+            }
+        };
+
+        let is_shortcut = vault_file_path
+            .extension()
+            .map(|ext| ext == "lnk" || ext == "url")
+            .unwrap_or(false);
+
+        // 显示名称（去掉扩展名）
+        let display_name = if is_shortcut {
+            logical_path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| vault_name.clone())
+        } else {
+            logical_path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| vault_name.clone())
+        };
+
+        // 解析快捷方式目标路径（从仓库中的 .lnk 文件）
+        let target_path = if is_shortcut {
+            let vault_str = vault_file_path.to_string_lossy();
+            super::icon_extract::resolve_shortcut_target(&vault_str).map(PathBuf::from)
+        } else {
+            Some(logical_path.clone())
+        };
+
+        icons.push(crate::platform::types::DesktopIcon {
+            id: uuid::Uuid::new_v4(),
+            display_name,
+            path: logical_path,
+            target_path,
+            icon_path: None,
+            position: (0, 0),
+            is_shortcut,
+        });
+    }
+
+    if !icons.is_empty() {
+        log::info!("从仓库加载 {} 个图标", icons.len());
+    }
+
+    icons
+}
 #[cfg(test)]
 mod tests {
     use super::*;

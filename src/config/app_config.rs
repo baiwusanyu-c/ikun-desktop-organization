@@ -460,8 +460,11 @@ pub struct BoxLayoutData {
     pub view_mode: ViewMode,
     /// 分组方式
     pub group_by: GroupBy,
-    /// 包含的图标文件名列表
+    /// 包含的图标文件名列表（文件路径或 CLSID）
     pub icon_names: Vec<String>,
+    /// 对应的显示名称列表（与 icon_names 一一对应）
+    #[serde(default)]
+    pub display_names: Vec<String>,
     /// 此框样式覆盖（None = 使用全局 box_style 默认值）
     pub style_overrides: Option<BoxStyleOverrides>,
 }
@@ -479,6 +482,7 @@ impl Default for BoxLayoutData {
             view_mode: ViewMode::default(),
             group_by: GroupBy::default(),
             icon_names: Vec::new(),
+            display_names: Vec::new(),
             style_overrides: None,
         }
     }
@@ -902,6 +906,7 @@ mod tests {
             view_mode: ViewMode::Large,
             group_by: GroupBy::Name,
             icon_names: vec!["a.exe".to_string(), "b.lnk".to_string()],
+            display_names: vec!["程序A".to_string(), "程序B".to_string()],
             style_overrides: None,
         };
 

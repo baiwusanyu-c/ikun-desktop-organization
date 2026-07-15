@@ -15,6 +15,7 @@ const SHGFI_DISPLAYNAME: u32 = 0x000000200;
 const SHGFI_TYPENAME: u32 = 0x000000400;
 const SHGFI_LARGEICON: u32 = 0x000000000;
 const SHGFI_SMALLICON: u32 = 0x000000001;
+const SHGFI_PIDL: u32 = 0x00000008;
 
 // COM 常量
 const S_OK: HRESULT = 0;
@@ -87,6 +88,12 @@ struct IPersistFile {
     lpVtbl: *const IPersistFileVtbl,
 }
 
+/// ITEMIDLIST 占位类型（仅用于指针传递，不需要解引用）
+#[repr(C)]
+struct ITEMIDLIST {
+    _mkid: [u8; 0],
+}
+
 /// SHFILEINFOW 结构体
 #[repr(C)]
 pub struct SHFILEINFOW {
@@ -130,6 +137,15 @@ extern "system" {
         riid: *const u8,
         ppv: *mut *mut c_void,
     ) -> HRESULT;
+    // Shell 名称解析与 PIDL 管理（用于虚拟 Shell 对象图标提取）
+    fn SHParseDisplayName(
+        pszName: *const u16,
+        pbc: *mut c_void,
+        ppidl: *mut *mut ITEMIDLIST,
+        sfgaoIn: u32,
+        psfgaoOut: *mut u32,
+    ) -> HRESULT;
+    fn ILFree(pidl: *mut ITEMIDLIST);
 }
 
 /// 文件图标信息
@@ -146,7 +162,7 @@ pub struct FileIconInfo {
 ///
 /// 使用 COM IShellLink + IPersistFile 接口获取快捷方式指向的实际文件路径。
 /// SHDefExtractIconW 无法直接处理 .lnk 文件，需要先解析目标。
-fn resolve_shortcut_target(lnk_path: &str) -> Option<String> {
+pub fn resolve_shortcut_target(lnk_path: &str) -> Option<String> {
     let lnk_wide: Vec<u16> = lnk_path.encode_utf16().chain(std::iter::once(0)).collect();
 
     // COM 可能已被 eframe 初始化，RPC_E_CHANGED_MODE 表示已有 COM 环境可用
@@ -233,6 +249,120 @@ fn resolve_shortcut_target(lnk_path: &str) -> Option<String> {
     result
 }
 
+fn is_clsid_path(path: &str) -> bool {
+    path.starts_with("::{")
+}
+
+/// 从 CLSID 路径提取虚拟 Shell 对象的图标
+///
+/// 使用 `SHParseDisplayName` 将 CLSID 字符串解析为 PIDL，
+/// 然后通过 `SHGetFileInfoW` + `SHGFI_PIDL` 提取系统图标。
+/// 这样可以正确获取回收站、此电脑、网络等虚拟对象的图标。
+fn extract_clsid_icon(clsid_path: &str) -> Option<FileIconInfo> {
+    let path_wide: Vec<u16> = clsid_path.encode_utf16().chain(std::iter::once(0)).collect();
+
+    // 解析 CLSID 字符串为 PIDL
+    let mut pidl: *mut ITEMIDLIST = std::ptr::null_mut();
+    let mut sfgao_out: u32 = 0;
+    let hr = unsafe {
+        SHParseDisplayName(
+            path_wide.as_ptr(),
+            std::ptr::null_mut(),
+            &mut pidl,
+            0,
+            &mut sfgao_out,
+        )
+    };
+    if hr != S_OK || pidl.is_null() {
+        log::warn!("SHParseDisplayName 失败 (hr={:#X}): {}", hr as u32, clsid_path);
+        return None;
+    }
+
+    // 提取显示名称和类型名称
+    let mut name_info = SHFILEINFOW::default();
+    unsafe {
+        SHGetFileInfoW(
+            pidl as *const u16,
+            0,
+            &mut name_info,
+            std::mem::size_of::<SHFILEINFOW>() as u32,
+            SHGFI_PIDL | SHGFI_DISPLAYNAME | SHGFI_TYPENAME,
+        );
+    }
+    let name_len = name_info.sz_display_name.iter().position(|&c| c == 0).unwrap_or(0);
+    let display_name = String::from_utf16_lossy(&name_info.sz_display_name[..name_len]);
+    let type_len = name_info.sz_type_name.iter().position(|&c| c == 0).unwrap_or(0);
+    let type_name = String::from_utf16_lossy(&name_info.sz_type_name[..type_len]);
+
+    // 提取大图标 (32x32)
+    let mut icon_info = SHFILEINFOW::default();
+    let result = unsafe {
+        SHGetFileInfoW(
+            pidl as *const u16,
+            0,
+            &mut icon_info,
+            std::mem::size_of::<SHFILEINFOW>() as u32,
+            SHGFI_PIDL | SHGFI_ICON | SHGFI_LARGEICON,
+        )
+    };
+
+    let hicon = if result != 0 && !icon_info.h_icon.is_null() {
+        icon_info.h_icon
+    } else {
+        // 回退：小图标 (16x16)
+        let result2 = unsafe {
+            SHGetFileInfoW(
+                pidl as *const u16,
+                0,
+                &mut icon_info,
+                std::mem::size_of::<SHFILEINFOW>() as u32,
+                SHGFI_PIDL | SHGFI_ICON | SHGFI_SMALLICON,
+            )
+        };
+        if result2 != 0 && !icon_info.h_icon.is_null() {
+            icon_info.h_icon
+        } else {
+            unsafe { ILFree(pidl) };
+            return None;
+        }
+    };
+
+    unsafe { ILFree(pidl) };
+
+    log::debug!("虚拟对象图标提取成功: {} -> {}", clsid_path, display_name);
+    Some(FileIconInfo {
+        hicon,
+        display_name,
+        type_name,
+    })
+}
+
+
+/// 通过显示名称从 SysListView32 提取虚拟对象图标
+///
+/// 用于处理 shell::virtual:: 前缀的路径，这些对象不存在于文件系统中，
+/// 只能通过 SysListView32 的图像列表提取图标。
+fn extract_virtual_icon_by_name(display_name: &str) -> Option<FileIconInfo> {
+    use crate::platform::windows::icon_manager::DesktopIconManager;
+
+    let mut manager = DesktopIconManager::new().ok()?;
+    let entries = manager.enumerate_names_with_images();
+
+    // 查找匹配的显示名称，使用 image_index（而非 item_index）提取图标
+    for (name, _item_idx, image_idx) in entries {
+        if name.eq_ignore_ascii_case(display_name) {
+            log::debug!(
+                "Found virtual icon '{}' item={} image={}",
+                display_name, _item_idx, image_idx
+            );
+            return crate::platform::windows::icon_manager::extract_icon_from_listview(image_idx);
+        }
+    }
+
+    log::warn!("Virtual icon '{}' not found in SysListView32", display_name);
+    None
+}
+
 /// 提取文件的系统图标（优先高质量大图标，支持高 DPI 缩放）
 ///
 /// 对 .lnk 快捷方式，先解析目标路径再从实际 exe 提取图标。
@@ -241,6 +371,17 @@ fn resolve_shortcut_target(lnk_path: &str) -> Option<String> {
 /// 2. SHGetFileInfoW 大图标（32×32）
 /// 3. SHGetFileInfoW 小图标（16×16）
 pub fn extract_file_icon(file_path: &str) -> Option<FileIconInfo> {
+    // 虚拟 Shell 对象（回收站、此电脑等）使用 PIDL 提取图标
+    if is_clsid_path(file_path) {
+        return extract_clsid_icon(file_path);
+    }
+
+    // Shell 命名空间扩展对象（从 SysListView32 发现的虚拟对象）
+    // 通过显示名称在 SysListView32 中查找并提取图标
+    if let Some(display_name) = file_path.strip_prefix("shell::virtual::") {
+        return extract_virtual_icon_by_name(display_name);
+    }
+
     // 获取显示名称和类型名称（始终使用原始路径）
     let display_path_wide: Vec<u16> = file_path.encode_utf16().chain(std::iter::once(0)).collect();
     let mut info = SHFILEINFOW::default();
