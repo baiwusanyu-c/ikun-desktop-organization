@@ -632,7 +632,18 @@ pub fn collect_grid_layout() -> Vec<crate::config::BoxLayoutData> {
         let display_names: Vec<String> = data
             .items
             .iter()
-            .map(|item| item.display_name.clone())
+            .map(|item| {
+                let display_name = item.display_name.clone();
+                // 如果是 CLSID 路径，确保保存解析后的显示名称
+                if item.file_path.starts_with("::{") {
+                    if let Some(resolved) = crate::platform::windows::desktop_manager::clsid_display_name(&item.file_path) {
+                        log::info!("collect_grid_layout: 解析 CLSID {} -> {}", item.file_path, resolved);
+                        return resolved.to_string();
+                    }
+                }
+                log::debug!("collect_grid_layout: {} -> {}", item.file_path, display_name);
+                display_name
+            })
             .collect();
 
         layouts.push(BoxLayoutData {

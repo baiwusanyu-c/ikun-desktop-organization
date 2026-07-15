@@ -345,21 +345,35 @@ fn extract_clsid_icon(clsid_path: &str) -> Option<FileIconInfo> {
 fn extract_virtual_icon_by_name(display_name: &str) -> Option<FileIconInfo> {
     use crate::platform::windows::icon_manager::DesktopIconManager;
 
-    let mut manager = DesktopIconManager::new().ok()?;
+    log::info!("extract_virtual_icon_by_name: 尝试提取 '{}'", display_name);
+
+    let mut manager = match DesktopIconManager::new() {
+        Ok(m) => {
+            log::info!("extract_virtual_icon_by_name: DesktopIconManager 创建成功");
+            m
+        }
+        Err(e) => {
+            log::warn!("extract_virtual_icon_by_name: DesktopIconManager 创建失败: {}", e);
+            return None;
+        }
+    };
+
     let entries = manager.enumerate_names_with_images();
+    log::info!("extract_virtual_icon_by_name: 枚举到 {} 个图标", entries.len());
 
     // 查找匹配的显示名称，使用 image_index（而非 item_index）提取图标
-    for (name, _item_idx, image_idx) in entries {
+    for (name, item_idx, image_idx) in &entries {
+        log::debug!("  检查: '{}' (item={}, image={})", name, item_idx, image_idx);
         if name.eq_ignore_ascii_case(display_name) {
-            log::debug!(
-                "Found virtual icon '{}' item={} image={}",
-                display_name, _item_idx, image_idx
+            log::info!(
+                "extract_virtual_icon_by_name: 找到匹配 '{}' item={} image={}",
+                display_name, item_idx, image_idx
             );
-            return crate::platform::windows::icon_manager::extract_icon_from_listview(image_idx);
+            return crate::platform::windows::icon_manager::extract_icon_from_listview(*image_idx);
         }
     }
 
-    log::warn!("Virtual icon '{}' not found in SysListView32", display_name);
+    log::warn!("extract_virtual_icon_by_name: '{}' 未在 SysListView32 中找到", display_name);
     None
 }
 

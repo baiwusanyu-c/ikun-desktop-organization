@@ -1499,16 +1499,27 @@ fn get_shell_image_list() -> Option<*mut std::ffi::c_void> {
 /// `image_index` 是 LVITEMW.iImage 字段值（通过 read_item_image 获取），
 /// 而非 ListView item index。
 pub fn extract_icon_from_listview(image_index: i32) -> Option<super::icon_extract::FileIconInfo> {
+    log::info!("extract_icon_from_listview: 尝试提取 image_index={}", image_index);
     if image_index < 0 {
-        log::debug!("extract_icon_from_listview: invalid image_index={}", image_index);
+        log::warn!("extract_icon_from_listview: invalid image_index={}", image_index);
         return None;
     }
-    let himl = get_shell_image_list()?;
+    let himl = match get_shell_image_list() {
+        Some(h) => {
+            log::info!("extract_icon_from_listview: 获取系统图像列表成功 himl={:?}", h);
+            h
+        }
+        None => {
+            log::warn!("extract_icon_from_listview: 获取系统图像列表失败");
+            return None;
+        }
+    };
     let hicon = unsafe { ImageList_GetIcon(himl, image_index, ILD_TRANSPARENT) };
     if hicon.is_null() {
-        log::debug!("ImageList_GetIcon(image_index={}) returned null", image_index);
+        log::warn!("extract_icon_from_listview: ImageList_GetIcon(image_index={}) returned null", image_index);
         return None;
     }
+    log::info!("extract_icon_from_listview: 成功提取图标 hicon={:?}", hicon);
     Some(super::icon_extract::FileIconInfo {
         hicon,
         display_name: String::new(),
