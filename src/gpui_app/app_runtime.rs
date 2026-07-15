@@ -514,7 +514,7 @@ impl AppRuntime {
         let mut created_count = 0;
         for (i, box_data) in boxes.iter().enumerate() {
             let mut items: Vec<GridFileItem> = Vec::new();
-            for file_path in &box_data.icon_names {
+            for (idx, file_path) in box_data.icon_names.iter().enumerate() {
                 if !icon_exists_for_box(file_path) {
                     log::info!("跳过已删除的图标: {}", file_path);
                     continue;
@@ -522,11 +522,22 @@ impl AppRuntime {
                 let read_path = resolve_icon_read_path(file_path)
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|| file_path.clone());
-                let display_name = std::path::Path::new(file_path)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(file_path)
-                    .to_string();
+                // CLSID 路径始终从路径本身解析显示名称
+                let display_name = if file_path.starts_with("::{") {
+                    crate::platform::clsid_display_name(file_path)
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| file_path.clone())
+                } else if idx < box_data.display_names.len() && !box_data.display_names[idx].is_empty() {
+                    // 普通文件路径优先使用持久化的 display_name
+                    box_data.display_names[idx].clone()
+                } else {
+                    // 回退：从文件名推导
+                    std::path::Path::new(file_path)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(file_path)
+                        .to_string()
+                };
                 let hicon = extract_file_icon(&read_path)
                     .map(|fi| fi.hicon)
                     .unwrap_or(std::ptr::null_mut());
