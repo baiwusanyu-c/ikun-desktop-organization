@@ -1476,22 +1476,32 @@ extern "system" {
     ) -> *mut std::ffi::c_void;
 }
 
+/// 获取桌面 SysListView32 使用的系统图像列表句柄
+///
+/// 使用 SHGetImageList(SHIL_LARGE) 获取系统大图标图像列表。
+/// 这是获取系统图像列表的推荐方式，比 SHGetFileInfoW 更可靠。
+/// 返回的 IImageList 由系统管理，这里泄漏引用（系统级资源，进程结束时释放）。
 fn get_shell_image_list() -> Option<*mut std::ffi::c_void> {
-    let mut sfi = SysSHFILEINFOW::default();
-    let path: Vec<u16> = "C:\\".encode_utf16().chain(std::iter::once(0)).collect();
-    let result = unsafe {
-        SHGetFileInfoW(
-            path.as_ptr(),
-            0,
-            &mut sfi,
-            std::mem::size_of::<SysSHFILEINFOW>() as u32,
-            SHGFI_SYSICONINDEX | SHGFI_SMALLICON,
-        )
-    };
-    if result == 0 {
-        return None;
+    use windows::Win32::UI::Shell::{SHGetImageList, SHIL_LARGE};
+    use windows::Win32::UI::Controls::IImageList;
+
+    let result: windows::core::Result<IImageList> = unsafe { SHGetImageList(SHIL_LARGE as i32) };
+    match result {
+        Ok(image_list) => {
+            // 将 IImageList COM 接口转换为 HIMAGELIST (原始指针)
+            // IImageList 和 HIMAGELIST 在 Windows 内部是同一对象
+            use windows::core::Interface;
+            let himl = image_list.as_raw() as *mut std::ffi::c_void;
+            // 防止 COM 对象被 drop（系统级资源，保持引用）
+            std::mem::forget(image_list);
+            log::info!("get_shell_image_list: 获取系统图像列表成功 himl={:?}", himl);
+            Some(himl)
+        }
+        Err(e) => {
+            log::warn!("get_shell_image_list: SHGetImageList 失败: {:?}", e);
+            None
+        }
     }
-    Some(result as *mut std::ffi::c_void)
 }
 
 /// 从系统图像列表提取图标
