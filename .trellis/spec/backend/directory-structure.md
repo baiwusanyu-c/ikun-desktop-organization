@@ -50,10 +50,10 @@ src/
 │   │   ├── monitor_utils.rs   #   显示器查询/窗口定位工具
 │   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc
 │   │   ├── menu_window.rs     #   自定义分层窗口深色菜单（D2D/DirectWrite）
-│   │   ├── shell_menu.rs      #   Shell 右键菜单 + 桌面背景注册表菜单
+│   │   ├── shell_menu.rs      #   Shell 右键菜单 + 桌面背景注册表菜单（覆盖区域含 Ikun 动作，分类框不含）
 │   │   ├── app_icon.rs        #   嵌入 logo.ico 项目图标（托盘/菜单）
 │   │   ├── icon_extract.rs    #   图标提取（SHDefExtractIconW + .lnk 解析目标图标）
-│   │   ├── icon_hider.rs      #   图标隐藏/恢复 + managed_icons vault
+│   │   ├── icon_hider.rs      #   图标隐藏/恢复 + managed_icons vault + 删除分类框后还原非管理图标
 │   │   ├── drag_image.rs      #   拖拽残影覆盖窗口（D2D 渲染跟随光标的半透明图标）
 │   │   ├── ole_dnd.rs         #   OLE 拖拽源（IDropSource + IDataObject 实现）
 │   │   ├── drop_target.rs     #   分类框拖放目标（IDropTarget 实现）
@@ -196,7 +196,7 @@ platform/windows/
 ├── monitor_utils.rs   # 显示器查询/窗口定位工具
 ├── wnd_proc.rs        # 窗口消息处理
 ├── menu_window.rs     # 自定义分层窗口深色菜单（D2D/DirectWrite）
-├── shell_menu.rs      # Shell 右键菜单 + 注册表菜单动作
+├── shell_menu.rs      # Shell 右键菜单 + 注册表菜单动作（覆盖区域含 Ikun 动作，分类框不含）
 ├── app_icon.rs        # 项目图标资源加载
 ├── icon_extract.rs    # 图标提取（含 .lnk 目标解析）
 ├── icon_hider.rs      # 图标隐藏/恢复 + managed_icons vault

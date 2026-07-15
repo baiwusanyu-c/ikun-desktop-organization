@@ -394,7 +394,11 @@ pub(crate) fn add_icon_to_overlay(
         return false;
     };
 
-    if data.icons.iter().any(|item| item.file_path == file_path) {
+    if data
+        .icons
+        .iter()
+        .any(|item| item.file_path == file_path || item.display_name == display_name)
+    {
         log::debug!("框→覆盖窗口: 覆盖窗口已存在该图标，跳过 {}", display_name);
         return true;
     }
@@ -436,15 +440,26 @@ fn collect_overlay_icons() -> Vec<OverlayIconItem> {
     };
 
     let mut items = Vec::new();
+    let mut seen_display_names = std::collections::HashSet::new();
     let overlay_config = AppConfig::load()
         .map(|config| config.overlay)
         .unwrap_or_else(|e| {
             log::warn!("覆盖窗口读取位置配置失败，使用默认位置: {}", e);
             OverlayConfig::default()
         });
+    log::debug!(
+        "覆盖窗口: managed_paths数={}, 开始遍历桌面图标",
+        managed_paths.len()
+    );
     for icon in manager.get_desktop_icons() {
         let path = icon.path.to_string_lossy().to_string();
-        if is_managed_icon_path(&path, &icon.display_name, &managed_paths) {
+        let is_managed = is_managed_icon_path(&path, &icon.display_name, &managed_paths);
+        if is_managed {
+            continue;
+        }
+        // 按 display_name 去重：同一图标可能在用户桌面和公共桌面各有一个 .lnk
+        let norm_dn = icon.display_name.to_lowercase();
+        if !seen_display_names.insert(norm_dn) {
             continue;
         }
 
@@ -493,17 +508,37 @@ fn is_managed_icon_path(path: &str, display_name: &str, managed_paths: &HashSet<
     let Some(file_name) = Path::new(path).file_name().and_then(|name| name.to_str()) else {
         return false;
     };
-    let Some(stem) = Path::new(path).file_stem().and_then(|name| name.to_str()) else {
-        return false;
-    };
 
-    let public_alias = format!("public__{}", file_name);
-    let public_stem_alias = format!("public__{}", stem);
+    let norm_file_name = normalize_path_key(file_name);
+    let public_alias = normalize_path_key(&format!("public__{}", file_name));
+
     managed_paths.iter().any(|managed| {
-        managed.ends_with(&normalize_path_key(&public_alias))
-            || managed.ends_with(&normalize_path_key(&public_stem_alias))
-            || managed.ends_with(&normalize_path_key(file_name))
-            || managed.ends_with(&normalize_path_key(display_name))
+        // 精确匹配文件名部分（避免子串误判：如"企业微信.lnk"匹配"微信.lnk"）
+        let managed_file_name = Path::new(managed)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+        // 检查 managed 路径的文件名是否精确匹配
+        if managed_file_name == norm_file_name {
+            return true;
+        }
+        // 检查 managed 路径的文件名是否精确匹配 public__ 别名
+        if managed_file_name == public_alias {
+            return true;
+        }
+        // 检查 display_name 精确匹配（不使用 ends_with，避免子串误判）
+        if !display_name.is_empty() {
+            let norm_dn = normalize_path_key(display_name);
+            // 从 managed 路径提取文件名（去掉扩展名），与 display_name 比较
+            let managed_stem = Path::new(managed)
+                .file_stem()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            if normalize_path_key(managed_stem) == norm_dn {
+                return true;
+            }
+        }
+        false
     })
 }
 
@@ -543,9 +578,14 @@ pub(crate) fn save_overlay_icon_positions() {
     for hwnd in windows {
         if let Some(data) = get_overlay_data(hwnd) {
             for icon in &data.icons {
-                let position = resolved_icon_position(data, icon);
-                positions.insert(icon.file_path.clone(), position);
-                positions.insert(normalize_path_key(&icon.file_path), position);
+                // 只保存用户拖拽设定的位置（x >= 0 && y >= 0），
+                // 不保存自动布局位置（x < 0 || y < 0），避免下次刷新时自动布局位置
+                // 因列表顺序变化导致图标重叠
+                if icon.x >= 0.0 && icon.y >= 0.0 {
+                    let position = [icon.x, icon.y];
+                    positions.insert(icon.file_path.clone(), position);
+                    positions.insert(normalize_path_key(&icon.file_path), position);
+                }
             }
         }
     }
@@ -576,8 +616,11 @@ fn resolved_icon_position(data: &OverlayWindowData, icon: &OverlayIconItem) -> [
         return [0.0, 0.0];
     };
     let layout = overlay_layout_params(data.width, data.dpi);
-    let col = (index as i32) % layout.cols;
-    let row = (index as i32) / layout.cols;
+    // 纵向优先（列优先）布局：先填满一列再换下一列
+    let total = data.icons.len().max(1) as i32;
+    let rows = (total + layout.cols - 1) / layout.cols;
+    let row = (index as i32) % rows;
+    let col = (index as i32) / rows;
     [
         physical_to_logical(layout.padding + col * layout.cell_w, data.dpi),
         physical_to_logical(layout.padding + row * layout.cell_h, data.dpi),
@@ -706,7 +749,10 @@ pub(crate) fn overlay_icon_cell_x(
     if icon.x >= 0.0 {
         return logical_to_physical(icon.x, data.dpi);
     }
-    let col = (index as i32) % layout.cols;
+    // 纵向优先（列优先）布局
+    let total = data.icons.len().max(1) as i32;
+    let rows = (total + layout.cols - 1) / layout.cols;
+    let col = (index as i32) / rows;
     layout.padding + col * layout.cell_w
 }
 
@@ -722,7 +768,10 @@ pub(crate) fn overlay_icon_cell_y(
     if icon.y >= 0.0 {
         return logical_to_physical(icon.y, data.dpi);
     }
-    let row = (index as i32) / layout.cols;
+    // 纵向优先（列优先）布局
+    let total = data.icons.len().max(1) as i32;
+    let rows = (total + layout.cols - 1) / layout.cols;
+    let row = (index as i32) % rows;
     layout.padding + row * layout.cell_h
 }
 
@@ -889,5 +938,198 @@ mod tests {
         let layout_narrow = overlay_layout_params(800, 96);
         let layout_wide = overlay_layout_params(3840, 96);
         assert!(layout_wide.cols > layout_narrow.cols);
+    }
+    // ===== is_managed_icon_path 精确匹配测试 =====
+
+    fn make_managed_paths(paths: &[&str]) -> std::collections::HashSet<String> {
+        paths.iter().map(|p| normalize_path_key(p)).collect()
+    }
+
+    #[test]
+    fn test_is_managed_icon_path_direct_match() {
+        let managed = make_managed_paths(&[r"C:\Users\chenzhihui\Desktop\Apifox.lnk"]);
+        assert!(is_managed_icon_path(
+            r"C:\Users\chenzhihui\Desktop\Apifox.lnk",
+            "Apifox",
+            &managed,
+        ));
+    }
+
+    #[test]
+    fn test_is_managed_icon_path_no_match() {
+        let managed = make_managed_paths(&[r"C:\Users\chenzhihui\Desktop\Apifox.lnk"]);
+        assert!(!is_managed_icon_path(
+            r"C:\Users\Public\Desktop\Chrome.lnk",
+            "Chrome",
+            &managed,
+        ));
+    }
+
+    #[test]
+    fn test_is_managed_icon_path_no_substring_false_positive() {
+        // 关键回归测试：企业微信不应匹配微信
+        let managed = make_managed_paths(&[r"C:\Users\Public\Desktop\企业微信.lnk"]);
+        assert!(!is_managed_icon_path(
+            r"C:\Users\Public\Desktop\微信.lnk",
+            "微信",
+            &managed,
+        ));
+    }
+
+    #[test]
+    fn test_is_managed_icon_path_exact_filename_match() {
+        let managed = make_managed_paths(&[r"C:\Users\Public\Desktop\微信.lnk"]);
+        assert!(is_managed_icon_path(
+            r"C:\Users\Public\Desktop\微信.lnk",
+            "微信",
+            &managed,
+        ));
+    }
+
+    #[test]
+    fn test_is_managed_icon_path_public_alias() {
+        let managed = make_managed_paths(&[
+            r"C:\Users\chenzhihui\.ikun_organizer\managed_icons\public__Chrome.lnk",
+        ]);
+        assert!(is_managed_icon_path(
+            r"C:\Users\Public\Desktop\Chrome.lnk",
+            "Chrome",
+            &managed,
+        ));
+    }
+
+    #[test]
+    fn test_is_managed_icon_path_display_name_match() {
+        // managed_paths ????????????? icon_names ???
+        let managed = make_managed_paths(&[r"C:\Users\chenzhihui\Desktop\??.lnk"]);
+        // ?????????????????
+        assert!(is_managed_icon_path(
+            r"C:\Users\Public\Desktop\??.lnk",
+            "??",
+            &managed,
+        ));
+    }
+
+    #[test]
+    fn test_is_managed_icon_path_empty_display_name() {
+        let managed = make_managed_paths(&[r"C:\Users\chenzhihui\Desktop\Apifox.lnk"]);
+        assert!(is_managed_icon_path(
+            r"C:\Users\chenzhihui\Desktop\Apifox.lnk",
+            "",
+            &managed,
+        ));
+        assert!(!is_managed_icon_path(
+            r"C:\Users\Public\Desktop\Other.lnk",
+            "",
+            &managed,
+        ));
+    }
+
+    #[test]
+    fn test_is_managed_icon_path_case_insensitive() {
+        let managed = make_managed_paths(&[r"C:\Users\Public\Desktop\Chrome.lnk"]);
+        assert!(is_managed_icon_path(
+            r"C:\USERS\PUBLIC\DESKTOP\CHROME.LNK",
+            "chrome",
+            &managed,
+        ));
+    }
+
+    #[test]
+    fn test_is_managed_icon_path_clsids() {
+        let managed = make_managed_paths(&["::{645FF040-5081-101B-9F08-00AA002F954E}"]);
+        assert!(is_managed_icon_path(
+            "::{645FF040-5081-101B-9F08-00AA002F954E}",
+            "回收站",
+            &managed,
+        ));
+        assert!(!is_managed_icon_path(
+            "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}",
+            "此电脑",
+            &managed,
+        ));
+    }
+
+    #[test]
+    fn test_is_managed_icon_path_no_file_name() {
+        let managed = make_managed_paths(&[r"C:\Users\chenzhihui\Desktop\Apifox.lnk"]);
+        assert!(!is_managed_icon_path("", "test", &managed));
+    }
+
+    // ===== normalize_path_key 测试 =====
+
+    #[test]
+    fn test_normalize_path_key_slash_conversion() {
+        assert_eq!(
+            normalize_path_key(r"C:/Users/test/file.lnk"),
+            r"c:\users\test\file.lnk"
+        );
+    }
+
+    #[test]
+    fn test_normalize_path_key_lowercase() {
+        assert_eq!(
+            normalize_path_key(r"C:\Users\Test\FILE.LNK"),
+            r"c:\users\test\file.lnk"
+        );
+    }
+
+    #[test]
+    fn test_normalize_path_key_already_normalized() {
+        assert_eq!(
+            normalize_path_key(r"c:\users\test\file.lnk"),
+            r"c:\users\test\file.lnk"
+        );
+    }
+
+    #[test]
+    fn test_normalize_path_key_clsids() {
+        assert_eq!(
+            normalize_path_key("::{645FF040-5081-101B-9F08-00AA002F954E}"),
+            "::{645ff040-5081-101b-9f08-00aa002f954e}"
+        );
+    }
+
+    // ===== save_overlay_icon_positions 仅保存用户设定位置测试 =====
+
+    #[test]
+    fn test_icon_position_only_saved_for_user_set() {
+        let auto_icon = OverlayIconItem {
+            file_path: r"C:\Users\test\auto.lnk".to_string(),
+            display_name: "auto".to_string(),
+            icon_handle: std::ptr::null_mut(),
+            x: -1.0,
+            y: -1.0,
+        };
+        assert!(auto_icon.x < 0.0 && auto_icon.y < 0.0);
+
+        let user_icon = OverlayIconItem {
+            file_path: r"C:\Users\test\user.lnk".to_string(),
+            display_name: "user".to_string(),
+            icon_handle: std::ptr::null_mut(),
+            x: 100.0,
+            y: 200.0,
+        };
+        assert!(user_icon.x >= 0.0 && user_icon.y >= 0.0);
+    }
+
+    // ===== collect_overlay_icons display_name 去重测试 =====
+
+    #[test]
+    fn test_display_name_deduplication_logic() {
+        let mut seen = std::collections::HashSet::new();
+        let dn1 = "微信".to_lowercase();
+        let dn2 = "微信".to_lowercase();
+        assert!(seen.insert(dn1));
+        assert!(!seen.insert(dn2));
+    }
+
+    #[test]
+    fn test_display_name_deduplication_case_insensitive() {
+        let mut seen = std::collections::HashSet::new();
+        let dn1 = "Chrome".to_lowercase();
+        let dn2 = "chrome".to_lowercase();
+        assert!(seen.insert(dn1));
+        assert!(!seen.insert(dn2));
     }
 }

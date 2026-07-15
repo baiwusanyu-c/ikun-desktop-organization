@@ -11,5 +11,6 @@ mod overlay_wnd_proc;
 
 pub(crate) use overlay_window::{
     add_icon_to_overlay, dpi_at_screen_point, is_desktop_overlay_window,
+    request_desktop_overlay_refresh,
 };
 pub use overlay_window::{create_desktop_overlay, destroy_desktop_overlay};

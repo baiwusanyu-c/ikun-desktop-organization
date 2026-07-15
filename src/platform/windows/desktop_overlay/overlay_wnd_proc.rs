@@ -259,7 +259,7 @@ fn handle_right_click(hwnd: HWND, x: i32, y: i32) {
         Some(data) => {
             let hit = overlay_hit_test(data, x, y);
             if hit < 0 || (hit as usize) >= data.icons.len() {
-                crate::platform::windows::shell_menu::show_desktop_context_menu(hwnd);
+                crate::platform::windows::shell_menu::show_desktop_context_menu(hwnd, true);
                 return;
             }
             data.selected_item = hit;

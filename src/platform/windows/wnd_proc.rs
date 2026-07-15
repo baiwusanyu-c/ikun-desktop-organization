@@ -1100,7 +1100,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 show_shell_context_menu(hwnd, path);
                 remove_grid_item_if_missing_after_shell_menu(hwnd, path);
             } else {
-                show_desktop_context_menu(hwnd);
+                show_desktop_context_menu(hwnd, false);
                 // shell_menu.rs 会在用户点击「创建分类框」时设置 PENDING_CREATE_BOX 标志，
                 // app.rs 的 update 循环轮询该标志并打开 egui viewport 对话框。
             }
@@ -1206,6 +1206,17 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                     log::warn!("加载配置失败，跳过配置更新: {}", e);
                 }
             }
+
+            // 刷新桌面覆盖窗口：删除分类框后，其包含的图标变为“非管理”状态，
+            // 需要重新收集并显示在覆盖窗口上（纵向优先布局）
+            // 还原仓库中不再被任何剩余分类框管理的图标到桌面
+            super::icon_hider::restore_unmanaged_vault_icons();
+
+            super::desktop_overlay::request_desktop_overlay_refresh();
+
+            // 修复同模板分层窗口 Z-order 异常（DestroyWindow 副作用）
+            super::grid_window::rerender_all_grid_windows();
+
             0
         }
 

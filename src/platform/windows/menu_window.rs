@@ -163,6 +163,12 @@ pub fn show_menu_window(parent_hwnd: HWND) {
                 }
                 Err(e) => log::warn!("加载配置失败: {}", e),
             }
+            // 还原仓库中不再被任何剩余分类框管理的图标到桌面
+            super::icon_hider::restore_unmanaged_vault_icons();
+
+            // 刷新桌面覆盖窗口：删除分类框后，其包含的图标变为"非管理"状态，
+            // 需要重新收集并显示在覆盖窗口上（纵向优先布局）
+            super::desktop_overlay::request_desktop_overlay_refresh();
         } else {
             render_layered_window(parent_hwnd);
         }

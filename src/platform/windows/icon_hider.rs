@@ -1,4 +1,4 @@
-﻿//! 隐藏/恢复原生桌面图标 + 图标仓库（Vault）
+//! 隐藏/恢复原生桌面图标 + 图标仓库（Vault）
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -554,6 +554,131 @@ pub fn restore_all_hidden_icons() {
     restore_icons_from_dir(&managed_dir);
 }
 
+/// 删除分类框后，将仓库中不再被任何剩余分类框管理的图标还原到桌面。
+///
+/// 遍历仓库文件，根据仓库文件名前缀还原原始桌面路径，
+/// 然后检查该路径是否仍被剩余分类框管理（通过配置文件的 icon_names 字段）。
+/// 未被管理的图标移回桌面，仍被管理的保留在仓库中。
+pub fn restore_unmanaged_vault_icons() {
+    let managed_dir = match get_managed_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            log::warn!("获取图标仓库目录失败: {}", e);
+            return;
+        }
+    };
+
+    // 从配置中收集所有剩余分类框管理的图标路径
+    let managed_paths = match crate::config::AppConfig::load() {
+        Ok(config) => {
+            let mut paths = std::collections::HashSet::new();
+            for box_data in &config.layout.boxes {
+                for path in &box_data.icon_names {
+                    let normalized = path.replace('/', "\\").to_lowercase();
+                    paths.insert(normalized.clone());
+                    if let Some(read_path) = crate::platform::windows::resolve_icon_read_path(path)
+                    {
+                        paths.insert(
+                            read_path
+                                .to_string_lossy()
+                                .replace('/', "\\")
+                                .to_lowercase(),
+                        );
+                    }
+                }
+            }
+            paths
+        }
+        Err(e) => {
+            log::warn!("加载配置失败，跳过还原: {}", e);
+            return;
+        }
+    };
+
+    let entries = match std::fs::read_dir(&managed_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            log::warn!("读取图标仓库目录失败: {}", e);
+            return;
+        }
+    };
+
+    let mut restored = 0u32;
+    let mut kept = 0u32;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        let vault_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+
+        let logical_path = match logical_path_from_vault_name(&vault_name) {
+            Some(p) => p,
+            None => continue,
+        };
+
+        let logical_str = logical_path.to_string_lossy().to_string();
+        let normalized = logical_str.replace('/', "\\").to_lowercase();
+
+        // 检查是否仍被某个分类框管理
+        let is_managed = managed_paths.contains(&normalized)
+            || managed_paths.iter().any(|m| {
+                let file_name = Path::new(m)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
+                !file_name.is_empty() && normalized.ends_with(file_name)
+            });
+
+        if is_managed {
+            kept += 1;
+            continue;
+        }
+
+        // 不再被管理，还原到桌面
+        if logical_path.exists() {
+            if let Err(e) = std::fs::remove_file(&path) {
+                log::warn!("清理仓库副本失败 {}: {}", vault_name, e);
+            } else {
+                log::info!("桌面已有该图标，已清理仓库副本: {}", vault_name);
+            }
+        } else {
+            match move_file(&path, &logical_path) {
+                Ok(()) => {
+                    notify_shell_path(&logical_str);
+                    log::info!(
+                        "分类框删除后还原图标: {} → {}",
+                        vault_name,
+                        logical_path.display()
+                    );
+                    restored += 1;
+                }
+                Err(e) => {
+                    log::warn!(
+                        "分类框删除后还原图标失败 {} → {}: {}",
+                        vault_name,
+                        logical_path.display(),
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    if restored > 0 || kept > 0 {
+        log::info!(
+            "分类框删除后仓库清理: 还原 {} 个，保留 {} 个（仍被管理）",
+            restored,
+            kept
+        );
+    }
+}
+
 /// 从指定目录还原图标（可测试的核心逻辑）。
 ///
 /// 遍历给定目录中的所有文件，根据仓库文件名前缀还原原始桌面路径，
@@ -637,7 +762,6 @@ fn restore_icons_from_dir(managed_dir: &Path) -> (u32, u32) {
 
     (restored, skipped)
 }
-
 
 /// 枚举仓库中的所有图标，返回 DesktopIcon 列表
 ///

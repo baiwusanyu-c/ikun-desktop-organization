@@ -472,3 +472,34 @@ Set show:false in WindowOptions and removed delayed hide logic
 ### Next Steps
 
 - None - task complete
+
+
+## Session 11: 修复分类框删除后图标消失bug
+
+**Date**: 2026-07-15
+**Task**: 修复分类框删除后图标消失bug
+**Branch**: `master`
+
+### Summary
+
+修复了删除分类框后图标消失的问题（现在返回覆盖窗口），并将覆盖窗口自动布局从行优先改为列优先（纵向优先）
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

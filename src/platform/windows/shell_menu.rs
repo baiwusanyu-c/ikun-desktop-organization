@@ -314,7 +314,7 @@ fn show_shell_fallback_menu(hwnd: HWND, file_path: &str) {
 ///
 /// 「创建分类框」选项通过注册表注入（`desktop_hook.rs`），Shell 会自动将其合并到此菜单中，
 /// 同时覆盖初始菜单和"显示更多选项"legacy 菜单。程序退出时清理注册表，确保无残留。
-pub fn show_desktop_context_menu(hwnd: HWND) {
+pub fn show_desktop_context_menu(hwnd: HWND, include_ikun_items: bool) {
     use windows::Win32::UI::Shell::{
         IContextMenu, IShellFolder, IShellView, SHGetDesktopFolder, SVGIO_BACKGROUND,
     };
@@ -359,9 +359,50 @@ pub fn show_desktop_context_menu(hwnd: HWND) {
                     Ok(()) => {
                         log::debug!("桌面菜单: QueryContextMenu 成功");
 
-                        // 注册表注入的 IkunOpenPanel/IkunCreateBox/IkunAiClassify/IkunQuit
-                        // 会被 Shell 自动合并到 QueryContextMenu 结果中，无需编程式追加。
-                        // 程序退出时 cleanup_desktop_registry() 清理注册表。
+                        // 显式追加 Ikun 菜单项（Shell API 不保证自动合并注册表项到自定义窗口）
+                        // 仅覆盖区域右键菜单需要，分类框空白处右键不需要
+                        const IKUN_CMD_OPEN_PANEL: u32 = 10;
+                        const IKUN_CMD_CREATE_BOX: u32 = 11;
+                        const IKUN_CMD_AI_CLASSIFY: u32 = 12;
+                        const IKUN_CMD_QUIT: u32 = 13;
+
+                        if include_ikun_items {
+                            AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+
+                            let open_panel: Vec<u16> =
+                                "打开控制面板(&O)\0".encode_utf16().collect();
+                            let create_box: Vec<u16> = "创建分类框(&N)\0".encode_utf16().collect();
+                            let ai_classify: Vec<u16> = "一键AI分类(&A)\0".encode_utf16().collect();
+                            let quit: Vec<u16> = "退出应用(&Q)\0".encode_utf16().collect();
+
+                            AppendMenuW(
+                                menu,
+                                MF_STRING,
+                                IKUN_CMD_OPEN_PANEL as usize,
+                                open_panel.as_ptr(),
+                            );
+                            AppendMenuW(
+                                menu,
+                                MF_STRING,
+                                IKUN_CMD_CREATE_BOX as usize,
+                                create_box.as_ptr(),
+                            );
+                            AppendMenuW(
+                                menu,
+                                MF_STRING,
+                                IKUN_CMD_AI_CLASSIFY as usize,
+                                ai_classify.as_ptr(),
+                            );
+                            AppendMenuW(menu, MF_STRING, IKUN_CMD_QUIT as usize, quit.as_ptr());
+
+                            // 为追加的菜单项设置图标
+                            if let Some(hbmp) = super::app_icon::get_menu_bitmap() {
+                                let count = GetMenuItemCount(menu);
+                                for i in (count - 4)..count {
+                                    SetMenuItemBitmaps(menu, i as u32, MF_BYPOSITION, hbmp, hbmp);
+                                }
+                            }
+                        }
 
                         let cmd = TrackPopupMenu(
                             menu,
@@ -372,24 +413,54 @@ pub fn show_desktop_context_menu(hwnd: HWND) {
                             hwnd,
                             std::ptr::null(),
                         );
-                        if cmd > 0 && cmd as u32 >= FCIDM_SHVIEWFIRST {
-                            let invoke_info = windows::Win32::UI::Shell::CMINVOKECOMMANDINFO {
-                                cbSize: std::mem::size_of::<
-                                    windows::Win32::UI::Shell::CMINVOKECOMMANDINFO,
-                                >() as u32,
-                                fMask: 0,
-                                hwnd: windows::Win32::Foundation::HWND(hwnd),
-                                lpVerb: windows::core::PCSTR(
-                                    ((cmd as u32 - FCIDM_SHVIEWFIRST) as usize) as *const u8,
-                                ),
-                                lpParameters: windows::core::PCSTR(std::ptr::null()),
-                                lpDirectory: windows::core::PCSTR(std::ptr::null()),
-                                nShow: SW_SHOW,
-                                dwHotKey: 0,
-                                hIcon: windows::Win32::Foundation::HANDLE(std::ptr::null_mut()),
-                            };
-                            if let Err(e) = cm.InvokeCommand(&invoke_info) {
-                                log::warn!("桌面菜单: InvokeCommand 失败: {:?}", e);
+                        if cmd > 0 {
+                            match cmd as u32 {
+                                IKUN_CMD_OPEN_PANEL if include_ikun_items => {
+                                    crate::platform::windows::sys_tray::set_pending_action(
+                                        crate::platform::SystemTrayAction::OpenControlPanel,
+                                    );
+                                }
+                                IKUN_CMD_CREATE_BOX if include_ikun_items => {
+                                    crate::platform::windows::sys_tray::set_pending_action(
+                                        crate::platform::SystemTrayAction::CreateBox,
+                                    );
+                                }
+                                IKUN_CMD_AI_CLASSIFY if include_ikun_items => {
+                                    crate::platform::windows::sys_tray::set_pending_action(
+                                        crate::platform::SystemTrayAction::AiClassify,
+                                    );
+                                }
+                                IKUN_CMD_QUIT if include_ikun_items => {
+                                    crate::platform::windows::sys_tray::set_pending_action(
+                                        crate::platform::SystemTrayAction::Quit,
+                                    );
+                                }
+                                shell_cmd if shell_cmd >= FCIDM_SHVIEWFIRST => {
+                                    let invoke_info =
+                                        windows::Win32::UI::Shell::CMINVOKECOMMANDINFO {
+                                            cbSize: std::mem::size_of::<
+                                                windows::Win32::UI::Shell::CMINVOKECOMMANDINFO,
+                                            >()
+                                                as u32,
+                                            fMask: 0,
+                                            hwnd: windows::Win32::Foundation::HWND(hwnd),
+                                            lpVerb: windows::core::PCSTR(
+                                                ((shell_cmd - FCIDM_SHVIEWFIRST) as usize)
+                                                    as *const u8,
+                                            ),
+                                            lpParameters: windows::core::PCSTR(std::ptr::null()),
+                                            lpDirectory: windows::core::PCSTR(std::ptr::null()),
+                                            nShow: SW_SHOW,
+                                            dwHotKey: 0,
+                                            hIcon: windows::Win32::Foundation::HANDLE(
+                                                std::ptr::null_mut(),
+                                            ),
+                                        };
+                                    if let Err(e) = cm.InvokeCommand(&invoke_info) {
+                                        log::warn!("桌面菜单: InvokeCommand 失败: {:?}", e);
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }

@@ -279,24 +279,36 @@ fn handle_box_to_desktop(
         }
     }
 
-    if export_path.exists() {
-        let export_str = export_path.to_string_lossy().to_string();
-        let shown_on_overlay = super::desktop_overlay::add_icon_to_overlay(
-            export_str.clone(),
-            display_name.clone(),
-            drop_x,
-            drop_y,
+    // 始终尝试添加到覆盖窗口，使用 export_path 或原始 file_path 作为回退
+    // CLSID 虚拟对象（如回收站）的 export_path 不是真实文件，但 add_icon_to_overlay 能处理
+    let overlay_path = if export_path.exists() || file_path.starts_with("::{") {
+        export_path.to_string_lossy().to_string()
+    } else {
+        // 导出路径不存在，使用原始 file_path 作为回退
+        log::info!(
+            "框→覆盖窗口: 导出路径不存在，使用原始路径 '{}' 回退添加",
+            file_path
         );
-        if shown_on_overlay {
-            log::info!("框→覆盖窗口: '{}' 已交给覆盖窗口渲染", display_name);
-        } else {
-            if target_is_overlay {
-                log::warn!(
-                    "框→覆盖窗口: '{}' 未能刷新覆盖窗口，回退到桌面定位",
-                    display_name
-                );
-            }
-            super::icon_manager::position_icon_at_screen(&export_str, drop_x, drop_y);
+        file_path.clone()
+    };
+    let shown_on_overlay = super::desktop_overlay::add_icon_to_overlay(
+        overlay_path.clone(),
+        display_name.clone(),
+        drop_x,
+        drop_y,
+    );
+    if shown_on_overlay {
+        log::info!("框→覆盖窗口: '{}' 已交给覆盖窗口渲染", display_name);
+    } else {
+        if target_is_overlay {
+            log::warn!(
+                "框→覆盖窗口: '{}' 未能刷新覆盖窗口，回退到桌面定位",
+                display_name
+            );
+        }
+        // 仅在非覆盖窗口目标时回退到桌面定位
+        if !target_is_overlay {
+            super::icon_manager::position_icon_at_screen(&overlay_path, drop_x, drop_y);
         }
     }
 
