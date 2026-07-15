@@ -259,6 +259,8 @@ fn ensure_class_registered() -> HINSTANCE {
     let hinstance = unsafe { GetModuleHandleW(std::ptr::null()) };
 
     if !*registered {
+        let app_icon = super::app_icon::get_tray_icon()
+            .unwrap_or(std::ptr::null_mut());
         let wc = WNDCLASSEXW {
             cb_size: std::mem::size_of::<WNDCLASSEXW>() as u32,
             style: CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS,
@@ -266,18 +268,18 @@ fn ensure_class_registered() -> HINSTANCE {
             cb_cls_extra: 0,
             cb_wnd_extra: 0,
             h_instance: hinstance,
-            h_icon: std::ptr::null_mut(),
+            h_icon: app_icon,
             h_cursor: unsafe { LoadCursorW(std::ptr::null_mut(), IDC_ARROW_ID as *const u16) },
             hbr_background: std::ptr::null_mut(),
             lpsz_menu_name: std::ptr::null(),
             lpsz_class_name: CLASS_NAME.as_ptr(),
-            h_icon_sm: std::ptr::null_mut(),
+            h_icon_sm: app_icon,
         };
         unsafe {
             RegisterClassExW(&wc);
         }
         *registered = true;
-        log::info!("格子窗口类已注册（含 CS_DBLCLKS）");
+        log::info!("格子窗口类已注册（含 CS_DBLCLKS，图标已设置）");
     }
 
     hinstance
