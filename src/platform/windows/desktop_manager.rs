@@ -240,78 +240,6 @@ impl DesktopManager {
         icons
     }
 
-    /// 从 SysListView32 枚举所有可见桌面图标，发现不在文件系统中的虚拟对象
-    ///
-    /// Windows 桌面的 SysListView32 控件包含所有可见的桌面图标，包括：
-    /// - 文件系统中的文件/快捷方式（已通过文件系统扫描获取）
-    /// - 虚拟 Shell 对象（回收站、此电脑等，已通过已知 CLSID 获取）
-    /// - 其他 Shell 命名空间扩展对象（如企业微信联系人卡片等）
-    ///
-    /// 此方法通过跨进程读取 SysListView32 获取所有可见图标的显示名称，
-    /// 与已有列表对比，为遗漏的虚拟对象创建 DesktopIcon 条目。
-    fn enumerate_listview_icons(
-        &self,
-        icons: &mut Vec<DesktopIcon>,
-        seen_paths: &mut std::collections::HashSet<String>,
-    ) {
-        use super::icon_manager::DesktopIconManager;
-
-        let mut manager = match DesktopIconManager::new() {
-            Ok(m) => m,
-            Err(e) => {
-                log::warn!("创建 DesktopIconManager 失败，跳过 ListView 枚举: {}", e);
-                return;
-            }
-        };
-
-        let visible_names = manager.enumerate_all_visible_names();
-        if visible_names.is_empty() {
-            return;
-        }
-
-        // 构建已有图标的显示名称集合（用于快速查找）
-        let existing_names: std::collections::HashSet<String> = icons
-            .iter()
-            .map(|icon| icon.display_name.to_lowercase())
-            .collect();
-
-        let mut added = 0;
-        for (display_name, _index) in visible_names {
-            let name_lower = display_name.to_lowercase();
-            if existing_names.contains(&name_lower) {
-                continue; // 已在文件系统中找到
-            }
-
-            // 使用合成路径标识虚拟对象
-            let synthetic_path = format!("shell::virtual::{}", display_name);
-            let path_key = synthetic_path.to_lowercase();
-            if !seen_paths.insert(path_key) {
-                continue;
-            }
-
-            log::info!(
-                "发现 SysListView32 中的虚拟对象: '{}' (不在文件系统中)",
-                display_name
-            );
-
-            icons.push(DesktopIcon {
-                id: uuid::Uuid::new_v4(),
-                display_name: display_name.clone(),
-                path: PathBuf::from(&synthetic_path),
-                target_path: None,
-                icon_path: None,
-                position: (0, 0),
-                is_shortcut: false,
-            });
-            added += 1;
-        }
-
-        if added > 0 {
-            log::info!("从 SysListView32 发现 {} 个额外的虚拟对象", added);
-        }
-    }
-
-    /// 内部方法：获取桌面图标
     fn get_desktop_icons_internal(&self) -> Result<Vec<DesktopIcon>> {
         let desktop_paths = Self::get_all_desktop_paths();
 
@@ -417,7 +345,6 @@ impl DesktopManager {
 
         // 从 SysListView32 枚举所有可见桌面图标，发现不在文件系统中的虚拟对象
         // （如企业微信联系人卡片等 Shell 命名空间扩展对象）
-        self.enumerate_listview_icons(&mut icons, &mut seen_paths);
 
         log::info!("找到 {} 个桌面图标（含虚拟对象）", icons.len());
         Ok(icons)

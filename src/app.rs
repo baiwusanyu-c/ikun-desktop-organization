@@ -338,7 +338,7 @@ impl MyApp {
                     box_data.display_names.get(idx).map(|s| s.as_str()).unwrap_or("<missing>")
                 );
                 // 根据路径类型决定显示名称：
-                // - CLSID/shell::virtual:: 路径始终从路径本身解析（避免 display_names 数组不同步）
+                // - CLSID 路径始终从路径本身解析（避免 display_names 数组不同步）
                 // - 普通文件路径优先使用持久化的 display_name，回退到 file_stem
                 let display_name = if file_path.starts_with("::{") {
                     log::info!("[restore] 检测到 CLSID 路径: {}", file_path);
@@ -351,9 +351,6 @@ impl MyApp {
                             log::warn!("[restore] CLSID 路径未在已知列表中: {}", file_path);
                             file_path.clone()
                         })
-                } else if let Some(name) = file_path.strip_prefix("shell::virtual::") {
-                    // Shell 命名空间扩展对象（从 SysListView32 发现的虚拟对象）
-                    name.to_string()
                 } else if idx < box_data.display_names.len() && !box_data.display_names[idx].is_empty() {
                     // 普通文件路径：优先使用持久化的 display_name
                     box_data.display_names[idx].clone()
@@ -918,8 +915,6 @@ mod tests {
             crate::platform::clsid_display_name(file_path)
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| file_path.to_string())
-        } else if let Some(name) = file_path.strip_prefix("shell::virtual::") {
-            name.to_string()
         } else if !display_names.is_empty() && !display_names[0].is_empty() {
             display_names[0].clone()
         } else {
@@ -929,24 +924,6 @@ mod tests {
         assert_eq!(result, "此电脑");
     }
 
-    /// shell::virtual:: 路径应始终从路径提取名称
-    #[test]
-    fn test_display_name_shell_virtual_uses_path() {
-        let file_path = "shell::virtual::陈智辉(数据智能部)";
-        let display_names: Vec<String> = vec![];
-
-        let result = if file_path.starts_with("::{") {
-            file_path.to_string()
-        } else if let Some(name) = file_path.strip_prefix("shell::virtual::") {
-            name.to_string()
-        } else if !display_names.is_empty() {
-            display_names[0].clone()
-        } else {
-            file_path.to_string()
-        };
-
-        assert_eq!(result, "陈智辉(数据智能部)");
-    }
     
     // ===== CLSID display name test =====
     

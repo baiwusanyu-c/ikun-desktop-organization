@@ -1,4 +1,4 @@
-//! 隐藏/恢复原生桌面图标 + 图标仓库（Vault）
+﻿//! 隐藏/恢复原生桌面图标 + 图标仓库（Vault）
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -408,7 +408,7 @@ fn notify_shell_path(path: &str) {
 /// 图标是否在仓库或桌面上可读
 pub fn icon_exists_for_box(logical_path: &str) -> bool {
     // 虚拟 Shell 对象（回收站、此电脑等）始终视为存在
-    if logical_path.starts_with("::{") || logical_path.starts_with("shell::virtual::") {
+    if logical_path.starts_with("::{") {
         return true;
     }
     if Path::new(logical_path).exists() {
@@ -437,7 +437,7 @@ pub fn resolve_icon_read_path(logical_path: &str) -> Option<PathBuf> {
 /// 收入仓库：用户桌面移动，公共桌面只读复制
 pub fn ingest_icon(logical_path: &str) -> Result<()> {
     // 虚拟 Shell 对象（回收站、此电脑等）无需收入仓库，它们始终存在
-    if logical_path.starts_with("::{") || logical_path.starts_with("shell::virtual::") {
+    if logical_path.starts_with("::{") {
         return Ok(());
     }
     let vault = vault_path_for(logical_path)?;
@@ -481,7 +481,7 @@ pub fn ingest_icon(logical_path: &str) -> Result<()> {
 /// 从仓库导出到用户桌面
 pub fn export_icon(logical_path: &str) -> Result<(bool, PathBuf)> {
     // 虚拟 Shell 对象无法导出到桌面，返回原始路径
-    if logical_path.starts_with("::{") || logical_path.starts_with("shell::virtual::") {
+    if logical_path.starts_with("::{") {
         return Ok((false, PathBuf::from(logical_path)));
     }
     let vault = vault_path_for(logical_path)?;

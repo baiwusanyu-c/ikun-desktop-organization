@@ -1,4 +1,4 @@
-//! 文件图标提取
+﻿//! 文件图标提取
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -338,45 +338,6 @@ fn extract_clsid_icon(clsid_path: &str) -> Option<FileIconInfo> {
 }
 
 
-/// 通过显示名称从 SysListView32 提取虚拟对象图标
-///
-/// 用于处理 shell::virtual:: 前缀的路径，这些对象不存在于文件系统中，
-/// 只能通过 SysListView32 的图像列表提取图标。
-fn extract_virtual_icon_by_name(display_name: &str) -> Option<FileIconInfo> {
-    use crate::platform::windows::icon_manager::DesktopIconManager;
-
-    log::info!("extract_virtual_icon_by_name: 尝试提取 '{}'", display_name);
-
-    let mut manager = match DesktopIconManager::new() {
-        Ok(m) => {
-            log::info!("extract_virtual_icon_by_name: DesktopIconManager 创建成功");
-            m
-        }
-        Err(e) => {
-            log::warn!("extract_virtual_icon_by_name: DesktopIconManager 创建失败: {}", e);
-            return None;
-        }
-    };
-
-    let entries = manager.enumerate_names_with_images();
-    log::info!("extract_virtual_icon_by_name: 枚举到 {} 个图标", entries.len());
-
-    // 查找匹配的显示名称，使用 image_index（而非 item_index）提取图标
-    for (name, item_idx, image_idx) in &entries {
-        log::debug!("  检查: '{}' (item={}, image={})", name, item_idx, image_idx);
-        if name.eq_ignore_ascii_case(display_name) {
-            log::info!(
-                "extract_virtual_icon_by_name: 找到匹配 '{}' item={} image={}",
-                display_name, item_idx, image_idx
-            );
-            return crate::platform::windows::icon_manager::extract_icon_from_listview(*image_idx);
-        }
-    }
-
-    log::warn!("extract_virtual_icon_by_name: '{}' 未在 SysListView32 中找到", display_name);
-    None
-}
-
 /// 提取文件的系统图标（优先高质量大图标，支持高 DPI 缩放）
 ///
 /// 对 .lnk 快捷方式，先解析目标路径再从实际 exe 提取图标。
@@ -390,11 +351,6 @@ pub fn extract_file_icon(file_path: &str) -> Option<FileIconInfo> {
         return extract_clsid_icon(file_path);
     }
 
-    // Shell 命名空间扩展对象（从 SysListView32 发现的虚拟对象）
-    // 通过显示名称在 SysListView32 中查找并提取图标
-    if let Some(display_name) = file_path.strip_prefix("shell::virtual::") {
-        return extract_virtual_icon_by_name(display_name);
-    }
 
     // 获取显示名称和类型名称（始终使用原始路径）
     let display_path_wide: Vec<u16> = file_path.encode_utf16().chain(std::iter::once(0)).collect();
