@@ -1,4 +1,4 @@
-﻿//! 控制面板 - egui 主窗口
+//! 控制面板 - egui 主窗口
 //!
 //! 通过 `AppContext` 统一管理配置、平台服务和分类器。
 //! 创建分类框使用独立的 egui viewport（独立窗口，非控制面板内弹窗）。
@@ -944,6 +944,29 @@ mod tests {
 
         assert_eq!(result, "陈智辉(数据智能部)");
     }
+    
+    // ===== CLSID display name test =====
+    
+    #[test]
+    fn test_clsid_display_name_from_config() {
+        // Test the exact CLSID from the user's config file
+        let clsid = "::{5399E694-6CE5-4D6C-8FCE-1D8870FDCBA0}";
+        let result = crate::platform::clsid_display_name(clsid);
+        log::info!("CLSID {} -> {:?}", clsid, result);
+        assert_eq!(result, Some("控制面板"));
+        
+        // Test other CLSIDs
+        assert_eq!(crate::platform::clsid_display_name("::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"), Some("此电脑"));
+        assert_eq!(crate::platform::clsid_display_name("::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}"), Some("网络"));
+        assert_eq!(crate::platform::clsid_display_name("::{645FF040-5081-101B-9F08-00AA002F954E}"), Some("回收站"));
+        
+        // Test case insensitivity
+        assert_eq!(crate::platform::clsid_display_name("::{5399e694-6ce5-4d6c-8fce-1d8870fdcba0}"), Some("控制面板"));
+        
+        // Test unknown CLSID
+        assert_eq!(crate::platform::clsid_display_name("::{00000000-0000-0000-0000-000000000000}"), None);
+    }
+
 }
 
 /// 验证分类框名称是否有效（非空且不超过 BOX_NAME_MAX_LEN 字符）

@@ -1,4 +1,4 @@
-﻿//! 插件系统
+//! 插件系统
 //!
 //! 功能模块作为插件注册到 `PluginRegistry`，支持灵活扩展。
 //! 所有插件实现 `Plugin` trait，通过 `AppContext` 与核心交互。

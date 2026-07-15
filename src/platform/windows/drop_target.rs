@@ -1,4 +1,4 @@
-﻿//! OLE 拖拽目标实现（IDropTarget）
+//! OLE 拖拽目标实现（IDropTarget）
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!

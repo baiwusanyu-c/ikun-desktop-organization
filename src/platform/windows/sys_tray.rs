@@ -1,4 +1,4 @@
-﻿//! Windows 系统托盘入口。
+//! Windows 系统托盘入口。
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
