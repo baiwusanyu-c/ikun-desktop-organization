@@ -42,7 +42,7 @@ src/
 │   │   ├── mod.rs             #   Windows 平台入口
 │   │   ├── ffi_types.rs       #   Win32 FFI 类型/常量
 │   │   ├── ffi_imports.rs     #   Win32 extern "system" 声明
-│   │   ├── desktop_manager.rs #   桌面图标枚举（文件系统读取）
+│   │   ├── desktop_manager.rs #   桌面图标枚举（文件系统 + 虚拟 Shell 对象 CLSID）
 │   │   ├── desktop_overlay/   #   桌面覆盖窗口（渲染未管理图标 + 桌面接管生命周期 + 文件监听刷新）
 │   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎
 │   │   ├── grid_window.rs     #   窗口创建/销毁/数据模型
@@ -58,7 +58,7 @@ src/
 │   │   ├── ole_dnd.rs         #   OLE 拖拽源（IDropSource + IDataObject 实现）
 │   │   ├── drop_target.rs     #   分类框拖放目标（IDropTarget 实现）
 │   │   ├── drag_handler.rs    #   拖拽协调器（连接覆盖窗口/分类框/OLE 拖拽）
-│   │   ├── icon_manager.rs    #   图标管理器（图标生命周期 + 缓存）
+│   │   ├── icon_manager.rs    #   图标管理器（SysListView32 跨进程操作 + 图像列表提取）
 │   │   ├── control_panel_window.rs # 控制面板 Win32 显示/隐藏辅助（托盘优先生命周期）
 │   │   └── sys_tray.rs        #   系统托盘入口（隐藏消息窗口 + 固定菜单动作队列）
 │   └── macos/
@@ -188,7 +188,7 @@ platform/windows/
 ├── mod.rs             # 入口 + re-exports
 ├── ffi_types.rs       # FFI 类型定义
 ├── ffi_imports.rs     # FFI 函数声明
-├── desktop_manager.rs # DesktopManagerTrait 实现
+├── desktop_manager.rs # DesktopManagerTrait 实现 + 虚拟 Shell 对象（CLSID）枚举
 ├── desktop_overlay/   # 桌面覆盖窗口（渲染/交互/DPI 自适应）
 ├── d2d_render.rs      # D2D/DirectWrite 渲染
 ├── grid_window.rs     # 窗口创建/销毁/数据模型
@@ -204,7 +204,7 @@ platform/windows/
 ├── ole_dnd.rs         # OLE 拖拽源（IDropSource + IDataObject）
 ├── drop_target.rs     # 分类框拖放目标（IDropTarget）
 ├── drag_handler.rs    # 拖拽协调器
-├── icon_manager.rs    # 图标管理器（生命周期 + 缓存）
+├── icon_manager.rs    # 图标管理器（SysListView32 跨进程操作 + 图像列表提取）
 ├── control_panel_window.rs # GPUI/eframe 控制面板 Win32 显示/隐藏辅助
 └── sys_tray.rs        # 系统托盘入口
 ```

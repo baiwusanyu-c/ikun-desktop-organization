@@ -87,7 +87,7 @@ src/
 │   │   ├── mod.rs             #   Windows 平台入口
 │   │   ├── ffi_types.rs       #   Win32 FFI 类型/常量
 │   │   ├── ffi_imports.rs     #   Win32 extern "system" 声明
-│   │   ├── desktop_manager.rs #   桌面图标枚举（文件系统读取）
+│   │   ├── desktop_manager.rs #   桌面图标枚举（文件系统 + 虚拟 Shell 对象 CLSID）
 │   │   ├── desktop_overlay/   #   桌面覆盖窗口（渲染未管理图标 + 桌面接管生命周期 + 文件监听刷新）
 │   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎
 │   │   ├── grid_window.rs     #   窗口创建/销毁/布局收集
@@ -299,6 +299,8 @@ main.rs
 **Shell 右键菜单**：文件菜单使用 `SHParseDisplayName → SHBindToParent → IShellFolder::GetUIObjectOf(IContextMenu)`，桌面背景菜单使用 `IShellFolder → IShellView::GetItemObject(SVGIO_BACKGROUND)` 获取真实 Shell 菜单；`InvokeCommand` 使用 `cmd - FCIDM_SHVIEWFIRST` 作为 verb 偏移，避免绝对/相对 PIDL 混用。COM 菜单链优先使用 `windows` crate 类型，失败时回退到自定义 `ShellExecuteW` 菜单。
 
 **桌面右键动作**：通过 Windows 注册表 (`HKCU\...\Directory\Background\shell\IkunOpenPanel` / `IkunCreateBox` / `IkunAiClassify` / `IkunQuit`) 注入菜单项，Shell 自动合并到 `QueryContextMenu` 结果（覆盖初始菜单和“显示更多选项”legacy 菜单）。程序启动时先清理旧残留再注册，退出时清理，确保不运行时无残留。用户点击时通过命令行参数（如 `--create-box`）写入临时信号文件；运行实例由 `AppRuntime::tick()` 轮询消费后打开 GPUI 控制面板、独立创建分类框窗口、执行 AI 分类或退出。多屏定位通过 Win32 `FindWindowW` + `SetWindowPos` 物理像素坐标实现。
+
+**虚拟 Shell 对象（CLSID）**：回收站、此电脑、网络、控制面板等虚拟对象通过 `::{CLSID}` 路径标识。`desktop_manager.rs` 维护 `VIRTUAL_SHELL_OBJECTS` 静态列表，`clsid_display_name()` 函数提供大小写不敏感的 CLSID → 中文名称映射。`BoxLayoutData.display_names` 持久化显示名称，恢复布局时 CLSID 路径始终通过 `clsid_display_name()` 解析（不依赖 `display_names` 数组），普通文件路径优先使用 `display_names`。
 
 **图标提取与项目图标**：`SHDefExtractIconW` 优先提取 128×128 高清图标，`.lnk` 先通过 `IShellLink` + `IPersistFile` 解析目标后提取目标图标，避免快捷方式箭头覆层污染分类框图标。应用项目图标从 `logo.ico` 经 `build.rs` 嵌入可执行文件，供系统托盘和菜单项图标使用。
 

@@ -1,4 +1,4 @@
-//! 统一应用配置
+﻿//! 统一应用配置
 
 #![allow(dead_code)] // 配置类型，部分方法在当前构建路径未使用
 //!
@@ -1081,5 +1081,55 @@ mod tests {
         assert_eq!(layout.boxes.len(), 1);
         assert_eq!(layout.boxes[0].id, id_a);
         assert_eq!(layout.boxes[0].name, "同名");
+    }
+
+    #[test]
+    fn test_box_layout_data_display_names_serialization() {
+        let layout = BoxLayoutData {
+            id: uuid::Uuid::new_v4(),
+            name: "测试框".to_string(),
+            position: [100.0, 200.0],
+            size: [680.0, 800.0],
+            locked: false,
+            sort_mode: SortMode::Name,
+            sort_ascending: true,
+            view_mode: ViewMode::Medium,
+            group_by: GroupBy::None,
+            icon_names: vec![
+                "C:\\Users\\Desktop\\test.lnk".to_string(),
+                "::{5399E694-6CE5-4D6C-8FCE-1D8870FDCBA0}".to_string(),
+            ],
+            display_names: vec!["测试".to_string(), "控制面板".to_string()],
+            style_overrides: None,
+        };
+
+        let json = serde_json::to_string(&layout).unwrap();
+        let parsed: BoxLayoutData = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.display_names.len(), 2);
+        assert_eq!(parsed.display_names[0], "测试");
+        assert_eq!(parsed.display_names[1], "控制面板");
+    }
+
+    #[test]
+    fn test_box_layout_data_display_names_backward_compat() {
+        // 旧配置文件没有 display_names 字段，应该使用默认空数组
+        let json = r#"{
+            "id": "00000000-0000-0000-0000-000000000001",
+            "name": "旧框",
+            "position": [100.0, 200.0],
+            "size": [680.0, 800.0],
+            "locked": false,
+            "sort_mode": "name",
+            "sort_ascending": true,
+            "view_mode": "medium",
+            "group_by": "none",
+            "icon_names": ["test.lnk"],
+            "style_overrides": null
+        }"#;
+
+        let parsed: BoxLayoutData = serde_json::from_str(json).unwrap();
+        assert!(parsed.display_names.is_empty(), "旧配置应默认 display_names 为空");
+        assert_eq!(parsed.icon_names.len(), 1);
     }
 }

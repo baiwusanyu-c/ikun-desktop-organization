@@ -1434,6 +1434,26 @@ mod tests {
         assert_eq!(MEM_RELEASE, 0x8000);
         assert_eq!(PAGE_READWRITE, 0x04);
     }
+
+    #[test]
+    fn test_extract_icon_from_listview_negative_index() {
+        // 负数 image_index 应该返回 None
+        let result = extract_icon_from_listview(-1);
+        assert!(result.is_none(), "负数 image_index 应返回 None");
+    }
+
+    #[test]
+    fn test_lvm_getimagelist_constant() {
+        use super::super::ffi_types::{LVM_GETIMAGELIST, LVSIL_NORMAL};
+        assert_eq!(LVM_GETIMAGELIST, 0x1002);
+        assert_eq!(LVSIL_NORMAL, 0);
+    }
+
+    #[test]
+    fn test_lvif_image_constant() {
+        use super::super::ffi_types::LVIF_IMAGE;
+        assert_eq!(LVIF_IMAGE, 0x0002);
+    }
 }
 
 

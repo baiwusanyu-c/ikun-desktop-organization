@@ -1,4 +1,4 @@
-//! Windows 平台桌面管理实现
+﻿//! Windows 平台桌面管理实现
 //!
 //! 使用文件系统读取桌面图标信息
 //!
@@ -390,5 +390,68 @@ mod tests {
             );
             assert!(!obj.display_name.is_empty(), "显示名称不能为空");
         }
+    }
+
+    #[test]
+    fn test_clsid_display_name_known_clsids() {
+        // 回收站
+        assert_eq!(
+            clsid_display_name("::{645FF040-5081-101B-9F08-00AA002F954E}"),
+            Some("回收站")
+        );
+        // 此电脑
+        assert_eq!(
+            clsid_display_name("::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"),
+            Some("此电脑")
+        );
+        // 网络
+        assert_eq!(
+            clsid_display_name("::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}"),
+            Some("网络")
+        );
+        // 控制面板
+        assert_eq!(
+            clsid_display_name("::{5399E694-6CE5-4D6C-8FCE-1D8870FDCBA0}"),
+            Some("控制面板")
+        );
+    }
+
+    #[test]
+    fn test_clsid_display_name_case_insensitive() {
+        // 小写 CLSID 应该也能匹配
+        assert_eq!(
+            clsid_display_name("::{645ff040-5081-101b-9f08-00aa002f954e}"),
+            Some("回收站")
+        );
+        assert_eq!(
+            clsid_display_name("::{20d04fe0-3aea-1069-a2d8-08002b30309d}"),
+            Some("此电脑")
+        );
+        // 混合大小写
+        assert_eq!(
+            clsid_display_name("::{5399e694-6CE5-4d6c-8FCE-1d8870fdcba0}"),
+            Some("控制面板")
+        );
+    }
+
+    #[test]
+    fn test_clsid_display_name_unknown() {
+        // 未知 CLSID 返回 None
+        assert_eq!(
+            clsid_display_name("::{00000000-0000-0000-0000-000000000000}"),
+            None
+        );
+        assert_eq!(
+            clsid_display_name("::{DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF}"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_clsid_display_name_non_clsid_path() {
+        // 非 CLSID 路径返回 None
+        assert_eq!(clsid_display_name("C:\\Users\\Desktop\\test.lnk"), None);
+        assert_eq!(clsid_display_name("::{invalid}"), None);
+        assert_eq!(clsid_display_name(""), None);
     }
 }
