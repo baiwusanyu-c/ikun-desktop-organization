@@ -1,4 +1,4 @@
-﻿//! 统一应用配置
+//! 统一应用配置
 
 #![allow(dead_code)] // 配置类型，部分方法在当前构建路径未使用
 //!
@@ -1129,7 +1129,10 @@ mod tests {
         }"#;
 
         let parsed: BoxLayoutData = serde_json::from_str(json).unwrap();
-        assert!(parsed.display_names.is_empty(), "旧配置应默认 display_names 为空");
+        assert!(
+            parsed.display_names.is_empty(),
+            "旧配置应默认 display_names 为空"
+        );
         assert_eq!(parsed.icon_names.len(), 1);
     }
 }

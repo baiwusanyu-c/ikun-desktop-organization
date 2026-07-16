@@ -45,15 +45,15 @@ pub use windows::DesktopManager;
 #[cfg(windows)]
 #[allow(unused_imports)] // 部分仅在 eframe-ui feature 路径使用
 pub use windows::{
-    cleanup_desktop_registry, cleanup_system_tray, clsid_display_name, collect_grid_layout, create_desktop_overlay,
-    create_grid_window, destroy_all_grid_windows, destroy_desktop_overlay, extract_file_icon,
-    get_cursor_monitor_work_area_phys, get_grid_count, get_primary_monitor_dpi,
+    cleanup_desktop_registry, cleanup_system_tray, clsid_display_name, collect_grid_layout,
+    create_desktop_overlay, create_grid_window, destroy_all_grid_windows, destroy_desktop_overlay,
+    extract_file_icon, get_cursor_monitor_work_area_phys, get_grid_count, get_primary_monitor_dpi,
     get_primary_monitor_work_area_phys, get_screen_resolution, hide_control_panel_window,
     hide_native_icons, icon_exists_for_box, native_icons_hidden, register_tray_action_waker,
     reposition_and_resize_window, reposition_window_by_title, resolve_icon_read_path,
     restore_all_hidden_icons, restore_native_icons, setup_desktop_registry, setup_system_tray,
-    show_control_panel_window, take_pending_create_box, take_pending_tray_action, GridCreateParams,
-    GridFileItem,
+    show_control_panel_window, take_pending_create_box, take_pending_tray_action,
+    update_grid_window_title, GridCreateParams, GridFileItem,
 };
 
 // =============================================================================
@@ -121,6 +121,11 @@ mod macos_stubs {
     pub fn collect_grid_layout() -> Vec<BoxLayoutData> {
         log::debug!("macOS: collect_grid_layout (stub)");
         Vec::new()
+    }
+
+    /// 更新格子窗口标题（macOS stub）
+    pub fn update_grid_window_title(_config_id: uuid::Uuid, _new_title: &str) {
+        log::debug!("macOS: update_grid_window_title (stub)");
     }
 
     /// 创建分类框窗口（macOS stub）
@@ -303,7 +308,8 @@ pub use macos_stubs::{
     icon_exists_for_box, native_icons_hidden, reposition_and_resize_window,
     reposition_window_by_title, resolve_icon_read_path, restore_all_hidden_icons,
     setup_desktop_registry, setup_system_tray, show_control_panel_window, take_pending_create_box,
-    take_pending_tray_action, FileIconInfo, GridCreateParams, GridFileItem, HICON,
+    take_pending_tray_action, update_grid_window_title, FileIconInfo, GridCreateParams,
+    GridFileItem, HICON,
 };
 
 /// 桌面管理器 trait（跨平台）

@@ -3355,6 +3355,7 @@ dependencies = [
  "foreign-types-shared",
  "gpui",
  "gpui-component",
+ "lazy_static",
  "libc",
  "log",
  "notify 6.1.1",

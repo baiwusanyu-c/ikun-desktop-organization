@@ -5,6 +5,7 @@
 
 use crate::gpui_app::app_runtime::{AppRuntime, CONTROL_PANEL_TITLE};
 use crate::gpui_app::create_box_dialog::CreateBoxDialogView;
+use crate::gpui_app::edit_box_dialog::EditBoxDialogView;
 use gpui::{
     div, px, rgb, size, App, AppContext, Bounds, Context, Entity, IntoElement, ParentElement,
     Render, SharedString, Styled, Window, WindowBounds, WindowOptions,
@@ -112,6 +113,45 @@ impl ControlPanelView {
             },
         );
         log::debug!("[ControlPanelView] open_create_box_dialog_window() 完成");
+        handle
+    }
+
+    /// 打开编辑分类框名称对话框窗口
+    pub fn open_edit_box_dialog_window(
+        runtime: Entity<AppRuntime>,
+        cx: &mut App,
+        config_id: uuid::Uuid,
+        initial_name: &str,
+    ) -> anyhow::Result<gpui::WindowHandle<Root>> {
+        log::debug!("[ControlPanelView] open_edit_box_dialog_window() 开始");
+        let bounds = Bounds::centered(None, size(px(500.0), px(200.0)), cx);
+        let initial_name = initial_name.to_string();
+
+        let handle = cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(gpui_component::TitleBar::title_bar_options()),
+                is_resizable: true,
+                window_min_size: Some(size(px(400.0), px(160.0))),
+                ..Default::default()
+            },
+            move |window, cx| {
+                log::debug!("[ControlPanelView] 创建编辑对话框视图");
+                let view = cx.new(|cx| {
+                    EditBoxDialogView::new(runtime.clone(), window, cx, config_id, &initial_name)
+                });
+                let rt_for_close = runtime.clone();
+                window.on_window_should_close(cx, move |_window, cx| {
+                    rt_for_close.update(cx, |rt, cx| {
+                        rt.cancel_create_box_dialog();
+                        cx.notify();
+                    });
+                    true
+                });
+                cx.new(|cx| Root::new(view, window, cx))
+            },
+        );
+        log::debug!("[ControlPanelView] open_edit_box_dialog_window() 完成");
         handle
     }
 }

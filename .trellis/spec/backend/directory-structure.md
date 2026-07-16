@@ -33,6 +33,7 @@ src/
 │   ├── app_runtime.rs         #   UI 框架无关运行时/命令层（持有 AppContext）
 │   ├── control_panel.rs       #   GPUI 控制面板视图
 │   ├── create_box_dialog.rs   #   独立 GPUI 创建分类框窗口
+│   ├── edit_box_dialog.rs    #   独立 GPUI 编辑分类框窗口（双击标题打开）
 │   └── windows_main.rs        #   GPUI Application 事件循环
 │
 ├── platform/                  # 平台抽象层
@@ -302,5 +303,6 @@ use crate::ui::control_panel;
 - [ ] 如果跨平台，定义 Trait 并条件编译实现
 - [ ] 如果是新功能，更新 `src/main.rs` 的 `mod` 声明
 - [ ] 单文件不超过 1000 行
+
 
 

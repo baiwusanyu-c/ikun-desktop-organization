@@ -1,0 +1,4 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": "src/platform/windows/wnd_proc.rs", "reason": "分类框编辑态输入、键盘和 IME 消息处理"}
+{"file": "src/platform/windows/ffi_types.rs", "reason": "补充必要 Win32/IME 常量（如需要）"}

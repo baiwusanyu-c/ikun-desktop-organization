@@ -334,8 +334,13 @@ impl MyApp {
                     .unwrap_or_else(|| file_path.clone());
                 log::info!(
                     "恢复图标: file_path={}, display_names[{}]={:?}",
-                    file_path, idx,
-                    box_data.display_names.get(idx).map(|s| s.as_str()).unwrap_or("<missing>")
+                    file_path,
+                    idx,
+                    box_data
+                        .display_names
+                        .get(idx)
+                        .map(|s| s.as_str())
+                        .unwrap_or("<missing>")
                 );
                 // 根据路径类型决定显示名称：
                 // - CLSID 路径始终从路径本身解析（避免 display_names 数组不同步）
@@ -345,13 +350,13 @@ impl MyApp {
                     // CLSID 路径（已知虚拟 Shell 对象）使用预定义的显示名称
                     let clsid_result = crate::platform::clsid_display_name(file_path);
                     log::info!("[restore] clsid_display_name 返回: {:?}", clsid_result);
-                    clsid_result
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| {
-                            log::warn!("[restore] CLSID 路径未在已知列表中: {}", file_path);
-                            file_path.clone()
-                        })
-                } else if idx < box_data.display_names.len() && !box_data.display_names[idx].is_empty() {
+                    clsid_result.map(|s| s.to_string()).unwrap_or_else(|| {
+                        log::warn!("[restore] CLSID 路径未在已知列表中: {}", file_path);
+                        file_path.clone()
+                    })
+                } else if idx < box_data.display_names.len()
+                    && !box_data.display_names[idx].is_empty()
+                {
                     // 普通文件路径：优先使用持久化的 display_name
                     box_data.display_names[idx].clone()
                 } else {
@@ -924,9 +929,8 @@ mod tests {
         assert_eq!(result, "此电脑");
     }
 
-    
     // ===== CLSID display name test =====
-    
+
     #[test]
     fn test_clsid_display_name_from_config() {
         // Test the exact CLSID from the user's config file
@@ -934,19 +938,33 @@ mod tests {
         let result = crate::platform::clsid_display_name(clsid);
         log::info!("CLSID {} -> {:?}", clsid, result);
         assert_eq!(result, Some("控制面板"));
-        
-        // Test other CLSIDs
-        assert_eq!(crate::platform::clsid_display_name("::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"), Some("此电脑"));
-        assert_eq!(crate::platform::clsid_display_name("::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}"), Some("网络"));
-        assert_eq!(crate::platform::clsid_display_name("::{645FF040-5081-101B-9F08-00AA002F954E}"), Some("回收站"));
-        
-        // Test case insensitivity
-        assert_eq!(crate::platform::clsid_display_name("::{5399e694-6ce5-4d6c-8fce-1d8870fdcba0}"), Some("控制面板"));
-        
-        // Test unknown CLSID
-        assert_eq!(crate::platform::clsid_display_name("::{00000000-0000-0000-0000-000000000000}"), None);
-    }
 
+        // Test other CLSIDs
+        assert_eq!(
+            crate::platform::clsid_display_name("::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"),
+            Some("此电脑")
+        );
+        assert_eq!(
+            crate::platform::clsid_display_name("::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}"),
+            Some("网络")
+        );
+        assert_eq!(
+            crate::platform::clsid_display_name("::{645FF040-5081-101B-9F08-00AA002F954E}"),
+            Some("回收站")
+        );
+
+        // Test case insensitivity
+        assert_eq!(
+            crate::platform::clsid_display_name("::{5399e694-6ce5-4d6c-8fce-1d8870fdcba0}"),
+            Some("控制面板")
+        );
+
+        // Test unknown CLSID
+        assert_eq!(
+            crate::platform::clsid_display_name("::{00000000-0000-0000-0000-000000000000}"),
+            None
+        );
+    }
 }
 
 /// 验证分类框名称是否有效（非空且不超过 BOX_NAME_MAX_LEN 字符）

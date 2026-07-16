@@ -96,13 +96,10 @@ pub fn run_gpui_app() {
                         // 然后在新的 update 中打开或复用窗口（避免嵌套借用）
                         let open_result = cx.update(|cx| {
                             if let Some(handle) = dialog_handle {
-                                if handle
-                                    .update(cx, |_root, window, _cx| {
-                                        window.remove_window();
-                                    })
-                                    .is_err()
-                                {
-                                    log::debug!("创建分类框窗口句柄已失效，将重新创建");
+                                if handle.update(cx, |_root, window, _cx| {
+                                    window.remove_window();
+                                }).is_ok() {
+                                    log::debug!("已关闭旧的创建分类框窗口");
                                 }
                                 dialog_handle = None;
                             }
@@ -123,6 +120,78 @@ pub fn run_gpui_app() {
                             Err(_) => {
                                 log::warn!("打开创建分类框窗口时更新 GPUI 失败");
                                 break;
+                            }
+                        }
+                    }
+
+                    // 第五步：检查是否需要打开编辑分类框对话框
+                    // 合并所有编辑对话框相关操作到一个 cx.update() 调用中，避免多次借用
+                    let pending_edit = crate::gpui_app::app_runtime::take_pending_edit_request();
+                    let edit_dialog_info = match cx.update(|cx| {
+                        runtime_for_timer.update(cx, |rt, _cx| {
+                            // 如果有待处理的编辑请求，设置标志
+                            if let Some((config_id, current_name)) = pending_edit {
+                                log::debug!("[Timer] 设置编辑对话框标志: config_id={}, name={}", config_id, current_name);
+                                rt.edit_dialog_config_id = Some(config_id);
+                                rt.edit_dialog_initial_name = current_name;
+                                rt.edit_dialog_needs_open = true;
+                            }
+
+                            // 读取并清除标志（在同一借用中完成）
+                            let needs_open = rt.edit_dialog_needs_open;
+                            let config_id = rt.edit_dialog_config_id;
+                            let initial_name = rt.edit_dialog_initial_name.clone();
+
+                            if needs_open {
+                                rt.edit_dialog_needs_open = false;
+                                log::debug!("[Timer] 读取编辑对话框标志并清除: needs_open={}, config_id={:?}", needs_open, config_id);
+                            }
+
+                            (needs_open, config_id, initial_name)
+                        })
+                    }) {
+                        Ok(result) => result,
+                        Err(_) => {
+                            log::warn!("[Timer] 更新失败（编辑对话框）");
+                            break;
+                        }
+                    };
+
+                    if edit_dialog_info.0 {
+                        if let (Some(config_id), initial_name) = (edit_dialog_info.1, edit_dialog_info.2) {
+                            log::info!("[Timer] 准备打开编辑对话框: config_id={}, initial_name={}", config_id, initial_name);
+
+                            let open_result = cx.update(|cx| {
+                                // 关闭已存在的对话框窗口
+                                if let Some(handle) = dialog_handle {
+                                    if handle.update(cx, |_root, window, _cx| {
+                                            window.remove_window();
+                                        }).is_ok() {
+                                            log::debug!("已关闭旧的编辑分类框窗口");
+                                        }
+                                    dialog_handle = None;
+                                }
+
+                                ControlPanelView::open_edit_box_dialog_window(
+                                    runtime_for_timer.clone(),
+                                    cx,
+                                    config_id,
+                                    &initial_name,
+                                )
+                            });
+
+                            match open_result {
+                                Ok(Ok(handle)) => {
+                                    log::info!("[Timer] 编辑对话框窗口已打开");
+                                    dialog_handle = Some(handle);
+                                }
+                                Ok(Err(e)) => {
+                                    log::warn!("打开编辑分类框窗口失败: {}", e);
+                                }
+                                Err(_) => {
+                                    log::warn!("打开编辑分类框窗口时更新 GPUI 失败");
+                                    break;
+                                }
                             }
                         }
                     }

@@ -7,14 +7,44 @@
 
 use crate::config::app_config::AppConfig;
 use crate::context::AppContext;
+// 全局编辑分类框回调存储
+lazy_static::lazy_static! {
+    static ref EDIT_BOX_CALLBACK: Mutex<Option<Box<dyn Fn(uuid::Uuid, &str) + Send + Sync>>> = Mutex::new(None);
+    static ref PENDING_EDIT_REQUEST: Mutex<Option<(uuid::Uuid, String)>> = Mutex::new(None);
+}
+
+/// 获取待处理的编辑请求（从全局存储中取出）
+pub fn take_pending_edit_request() -> Option<(uuid::Uuid, String)> {
+    let mut pending = PENDING_EDIT_REQUEST.lock().unwrap();
+    pending.take()
+}
+
+/// 设置全局编辑分类框回调
+pub fn set_edit_box_callback(callback: Box<dyn Fn(uuid::Uuid, &str) + Send + Sync>) {
+    let mut cb = EDIT_BOX_CALLBACK.lock().unwrap();
+    *cb = Some(callback);
+}
+
+/// 触发编辑分类框回调
+pub fn trigger_edit_box_callback(config_id: uuid::Uuid, current_name: &str) {
+    // 将编辑请求存入全局存储，由 GPUI 轮询定时器检查并打开弹窗
+    let mut pending = PENDING_EDIT_REQUEST.lock().unwrap();
+    *pending = Some((config_id, current_name.to_string()));
+    log::info!(
+        "编辑请求已存入全局存储: config_id={}, name={}",
+        config_id,
+        current_name
+    );
+}
 use crate::platform::{
     cleanup_desktop_registry, cleanup_system_tray, collect_grid_layout, create_desktop_overlay,
     create_grid_window, destroy_all_grid_windows, destroy_desktop_overlay, extract_file_icon,
     get_grid_count, get_primary_monitor_dpi, get_screen_resolution, hide_control_panel_window,
     hide_native_icons, icon_exists_for_box, native_icons_hidden, resolve_icon_read_path,
     restore_all_hidden_icons, restore_native_icons, setup_desktop_registry, setup_system_tray,
-    show_control_panel_window, take_pending_create_box, take_pending_tray_action, DesktopIcon,
-    DesktopManagerTrait, GridCreateParams, GridFileItem, SystemTrayAction,
+    show_control_panel_window, take_pending_create_box, take_pending_tray_action,
+    update_grid_window_title, DesktopIcon, DesktopManagerTrait, GridCreateParams, GridFileItem,
+    SystemTrayAction,
 };
 use std::sync::{Arc, Mutex};
 
@@ -149,6 +179,14 @@ pub struct AppRuntime {
     pub dialog_name: String,
     /// 对话框是否需要在本帧打开
     pub dialog_needs_open: bool,
+
+    // ---- 编辑分类框对话框状态 ----
+    /// 编辑对话框是否需要在本帧打开
+    pub edit_dialog_needs_open: bool,
+    /// 编辑对话框的 config_id
+    pub edit_dialog_config_id: Option<uuid::Uuid>,
+    /// 编辑对话框的初始名称
+    pub edit_dialog_initial_name: String,
 }
 
 impl AppRuntime {
@@ -165,6 +203,9 @@ impl AppRuntime {
             dialog_open: false,
             dialog_name: String::new(),
             dialog_needs_open: false,
+            edit_dialog_needs_open: false,
+            edit_dialog_config_id: None,
+            edit_dialog_initial_name: String::new(),
         }
     }
 
@@ -319,6 +360,57 @@ impl AppRuntime {
         self.dialog_name.clear();
     }
 
+    /// 重命名分类框
+    pub fn rename_box(&mut self, config_id: uuid::Uuid, new_name: &str) {
+        log::info!(
+            "[rename_box] 开始: config_id={}, new_name={:?}",
+            config_id,
+            new_name
+        );
+        let name = new_name.trim().to_string();
+        if !is_box_name_valid(&name) {
+            log::warn!("[rename_box] 分类框名称无效: {:?}", name);
+            return;
+        }
+
+        // 查找对应的 Box 并更新名称
+        if let Some(box_item) = self
+            .ctx
+            .config
+            .layout
+            .boxes
+            .iter_mut()
+            .find(|b| b.id == config_id)
+        {
+            let old_name = box_item.name.clone();
+            box_item.name = name.clone();
+            log::info!(
+                "[rename_box] 重命名分类框: '{}' -> '{}' (config_id={})",
+                old_name,
+                name,
+                config_id
+            );
+
+            // 保存配置
+            if let Err(e) = self.ctx.save_config() {
+                log::error!("[rename_box] 保存配置失败: {}", e);
+            } else {
+                log::info!("[rename_box] 配置保存成功");
+            }
+
+            // 更新对应的格子窗口显示
+            log::debug!("[rename_box] 调用 update_grid_window_title");
+            update_grid_window_title(config_id, &name);
+            log::info!("[rename_box] 完成");
+        } else {
+            log::warn!("[rename_box] 未找到 config_id: {} 对应的分类框", config_id);
+            log::debug!("[rename_box] 当前已有的 config_id 列表:");
+            for b in &self.ctx.config.layout.boxes {
+                log::debug!("  - config_id={}, name={}", b.id, b.name);
+            }
+        }
+    }
+
     // =================================================================
     // 业务逻辑
     // =================================================================
@@ -396,6 +488,9 @@ impl AppRuntime {
                 sort_ascending: self.ctx.config.box_defaults.sort_ascending,
                 group_by: self.ctx.config.box_defaults.group_by.clone(),
                 config_id: uuid::Uuid::new_v4(),
+                edit_box_callback: Some(Box::new(|config_id, name| {
+                    trigger_edit_box_callback(config_id, name);
+                })),
             };
             if create_grid_window(params).is_ok() {
                 created_count += 1;
@@ -472,6 +567,9 @@ impl AppRuntime {
             sort_ascending: self.ctx.config.box_defaults.sort_ascending,
             group_by: self.ctx.config.box_defaults.group_by.clone(),
             config_id: uuid::Uuid::new_v4(),
+            edit_box_callback: Some(Box::new(|config_id, name| {
+                trigger_edit_box_callback(config_id, name);
+            })),
         };
 
         match create_grid_window(params) {
@@ -527,7 +625,9 @@ impl AppRuntime {
                     crate::platform::clsid_display_name(file_path)
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| file_path.clone())
-                } else if idx < box_data.display_names.len() && !box_data.display_names[idx].is_empty() {
+                } else if idx < box_data.display_names.len()
+                    && !box_data.display_names[idx].is_empty()
+                {
                     // 普通文件路径优先使用持久化的 display_name
                     box_data.display_names[idx].clone()
                 } else {
@@ -561,6 +661,9 @@ impl AppRuntime {
                 sort_ascending: box_data.sort_ascending,
                 group_by: box_data.group_by.clone(),
                 config_id: box_data.id,
+                edit_box_callback: Some(Box::new(|config_id, name| {
+                    trigger_edit_box_callback(config_id, name);
+                })),
             };
             if create_grid_window(params).is_ok() {
                 created_count += 1;
@@ -951,5 +1054,181 @@ mod positioning_tests {
             calculate_centered_position(screen_w, box_w, 6, 40, 200),
             base + 40
         );
+    }
+}
+
+#[cfg(test)]
+mod edit_dialog_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    // 测试锁，防止测试间状态冲突
+    lazy_static::lazy_static! {
+        static ref TEST_LOCK: Mutex<()> = Mutex::new(());
+    }
+
+    #[test]
+    fn test_take_pending_edit_request_empty() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        // 清空待处理请求
+        let _ = take_pending_edit_request();
+
+        // 初始状态应该返回 None
+        assert!(take_pending_edit_request().is_none());
+    }
+
+    #[test]
+    fn test_trigger_and_take_edit_request() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        // 清空待处理请求
+        let _ = take_pending_edit_request();
+
+        let test_id = uuid::Uuid::new_v4();
+        let test_name = "测试分类框";
+
+        // 触发编辑回调
+        trigger_edit_box_callback(test_id, test_name);
+
+        // 应该能取到编辑请求
+        let request = take_pending_edit_request();
+        assert!(request.is_some());
+        let (id, name) = request.unwrap();
+        assert_eq!(id, test_id);
+        assert_eq!(name, test_name);
+
+        // 第二次取应该返回 None（已消费）
+        assert!(take_pending_edit_request().is_none());
+    }
+
+    #[test]
+    fn test_edit_request_overwrite() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        // 清空待处理请求
+        let _ = take_pending_edit_request();
+
+        let id1 = uuid::Uuid::new_v4();
+        let id2 = uuid::Uuid::new_v4();
+
+        // 触发两次编辑回调
+        trigger_edit_box_callback(id1, "第一个");
+        trigger_edit_box_callback(id2, "第二个");
+
+        // 应该只取到最后一个
+        let request = take_pending_edit_request();
+        assert!(request.is_some());
+        let (id, name) = request.unwrap();
+        assert_eq!(id, id2);
+        assert_eq!(name, "第二个");
+    }
+
+    #[test]
+    fn test_edit_request_with_chinese_name() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let _ = take_pending_edit_request();
+
+        let test_id = uuid::Uuid::new_v4();
+        let test_name = "办公文档分类框";
+
+        trigger_edit_box_callback(test_id, test_name);
+
+        let request = take_pending_edit_request();
+        assert!(request.is_some());
+        let (_, name) = request.unwrap();
+        assert_eq!(name, test_name);
+    }
+
+    #[test]
+    fn test_edit_request_with_max_length_name() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let _ = take_pending_edit_request();
+
+        let test_id = uuid::Uuid::new_v4();
+        let test_name = "1234567890123456"; // 16 characters
+
+        trigger_edit_box_callback(test_id, test_name);
+
+        let request = take_pending_edit_request();
+        assert!(request.is_some());
+        let (_, name) = request.unwrap();
+        assert_eq!(name, test_name);
+        assert_eq!(name.chars().count(), 16);
+    }
+}
+
+#[cfg(test)]
+mod rename_validation_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    lazy_static::lazy_static! {
+        static ref TEST_LOCK: Mutex<()> = Mutex::new(());
+    }
+
+    #[test]
+    fn test_rename_validation_rejects_empty() {
+        // 空名称不应通过验证
+        assert!(!is_box_name_valid(""));
+        assert!(!is_box_name_valid("   "));
+        assert!(!is_box_name_valid("\t\n"));
+    }
+
+    #[test]
+    fn test_rename_validation_accepts_valid_names() {
+        assert!(is_box_name_valid("办公"));
+        assert!(is_box_name_valid("Work"));
+        assert!(is_box_name_valid("工具-1"));
+        assert!(is_box_name_valid("a"));
+    }
+
+    #[test]
+    fn test_rename_validation_rejects_too_long() {
+        let max = "a".repeat(BOX_NAME_MAX_LEN);
+        assert!(is_box_name_valid(&max));
+
+        let over = "a".repeat(BOX_NAME_MAX_LEN + 1);
+        assert!(!is_box_name_valid(&over));
+    }
+
+    #[test]
+    fn test_validate_box_name_trims_whitespace() {
+        let v = validate_box_name("  hello  ");
+        assert_eq!(v.trimmed, "hello");
+        assert!(v.is_valid);
+    }
+
+    #[test]
+    fn test_edit_request_chinese_name_preserved() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let _ = take_pending_edit_request();
+
+        let id = uuid::Uuid::new_v4();
+        let name = "中文名称测试框";
+        trigger_edit_box_callback(id, name);
+
+        let req = take_pending_edit_request().unwrap();
+        assert_eq!(req.0, id);
+        assert_eq!(req.1, name);
+        // 确保消费后为空
+        assert!(take_pending_edit_request().is_none());
+    }
+
+    #[test]
+    fn test_edit_request_latest_wins() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let _ = take_pending_edit_request();
+
+        // 快速连续触发 3 次
+        let id1 = uuid::Uuid::new_v4();
+        let id2 = uuid::Uuid::new_v4();
+        let id3 = uuid::Uuid::new_v4();
+        trigger_edit_box_callback(id1, "第一次");
+        trigger_edit_box_callback(id2, "第二次");
+        trigger_edit_box_callback(id3, "第三次");
+
+        // 只保留最后一个
+        let req = take_pending_edit_request().unwrap();
+        assert_eq!(req.0, id3);
+        assert_eq!(req.1, "第三次");
+        assert!(take_pending_edit_request().is_none());
     }
 }

@@ -1,4 +1,4 @@
-﻿//! 文件图标提取
+//! 文件图标提取
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -259,7 +259,10 @@ fn is_clsid_path(path: &str) -> bool {
 /// 然后通过 `SHGetFileInfoW` + `SHGFI_PIDL` 提取系统图标。
 /// 这样可以正确获取回收站、此电脑、网络等虚拟对象的图标。
 fn extract_clsid_icon(clsid_path: &str) -> Option<FileIconInfo> {
-    let path_wide: Vec<u16> = clsid_path.encode_utf16().chain(std::iter::once(0)).collect();
+    let path_wide: Vec<u16> = clsid_path
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
 
     // 解析 CLSID 字符串为 PIDL
     let mut pidl: *mut ITEMIDLIST = std::ptr::null_mut();
@@ -274,7 +277,11 @@ fn extract_clsid_icon(clsid_path: &str) -> Option<FileIconInfo> {
         )
     };
     if hr != S_OK || pidl.is_null() {
-        log::warn!("SHParseDisplayName 失败 (hr={:#X}): {}", hr as u32, clsid_path);
+        log::warn!(
+            "SHParseDisplayName 失败 (hr={:#X}): {}",
+            hr as u32,
+            clsid_path
+        );
         return None;
     }
 
@@ -289,9 +296,17 @@ fn extract_clsid_icon(clsid_path: &str) -> Option<FileIconInfo> {
             SHGFI_PIDL | SHGFI_DISPLAYNAME | SHGFI_TYPENAME,
         );
     }
-    let name_len = name_info.sz_display_name.iter().position(|&c| c == 0).unwrap_or(0);
+    let name_len = name_info
+        .sz_display_name
+        .iter()
+        .position(|&c| c == 0)
+        .unwrap_or(0);
     let display_name = String::from_utf16_lossy(&name_info.sz_display_name[..name_len]);
-    let type_len = name_info.sz_type_name.iter().position(|&c| c == 0).unwrap_or(0);
+    let type_len = name_info
+        .sz_type_name
+        .iter()
+        .position(|&c| c == 0)
+        .unwrap_or(0);
     let type_name = String::from_utf16_lossy(&name_info.sz_type_name[..type_len]);
 
     // 提取大图标 (32x32)
@@ -337,7 +352,6 @@ fn extract_clsid_icon(clsid_path: &str) -> Option<FileIconInfo> {
     })
 }
 
-
 /// 提取文件的系统图标（优先高质量大图标，支持高 DPI 缩放）
 ///
 /// 对 .lnk 快捷方式，先解析目标路径再从实际 exe 提取图标。
@@ -350,7 +364,6 @@ pub fn extract_file_icon(file_path: &str) -> Option<FileIconInfo> {
     if is_clsid_path(file_path) {
         return extract_clsid_icon(file_path);
     }
-
 
     // 获取显示名称和类型名称（始终使用原始路径）
     let display_path_wide: Vec<u16> = file_path.encode_utf16().chain(std::iter::once(0)).collect();

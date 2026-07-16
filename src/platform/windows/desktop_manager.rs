@@ -1,4 +1,4 @@
-﻿//! Windows 平台桌面管理实现
+//! Windows 平台桌面管理实现
 //!
 //! 使用文件系统读取桌面图标信息
 //!
@@ -104,7 +104,8 @@ const VIRTUAL_SHELL_OBJECTS: &[VirtualShellObject] = &[
 /// 使用大小写不敏感的比较，因为 CLSID 在不同场景下可能大小写不一致。
 pub fn clsid_display_name(clsid_path: &str) -> Option<&'static str> {
     let clsid_lower = clsid_path.to_lowercase();
-    VIRTUAL_SHELL_OBJECTS.iter()
+    VIRTUAL_SHELL_OBJECTS
+        .iter()
         .find(|obj| obj.clsid_path.to_lowercase() == clsid_lower)
         .map(|obj| obj.display_name)
 }
@@ -164,10 +165,14 @@ impl DesktopManager {
             const HKEY_CURRENT_USER: usize = 0x80000001;
             const KEY_READ: u32 = 0x20019;
 
-            let subkey_wide: Vec<u16> =
-                OsStr::new(subkey).encode_wide().chain(std::iter::once(0)).collect();
-            let value_wide: Vec<u16> =
-                OsStr::new(value_name).encode_wide().chain(std::iter::once(0)).collect();
+            let subkey_wide: Vec<u16> = OsStr::new(subkey)
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            let value_wide: Vec<u16> = OsStr::new(value_name)
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
 
             let mut hkey: usize = 0;
             let result = unsafe {
@@ -275,7 +280,6 @@ impl DesktopManager {
                     continue;
                 }
 
-
                 let is_shortcut = path
                     .extension()
                     .map(|ext| ext == "lnk" || ext == "url")
@@ -295,10 +299,7 @@ impl DesktopManager {
                 };
 
                 // 使用规范化完整路径去重（替代 display_name 去重）
-                let path_key = path
-                    .to_string_lossy()
-                    .replace('/', "\\")
-                    .to_lowercase();
+                let path_key = path.to_string_lossy().replace('/', "\\").to_lowercase();
                 if !seen_paths.insert(path_key) {
                     continue;
                 }
@@ -306,14 +307,10 @@ impl DesktopManager {
                 // 解析快捷方式目标路径
                 let target_path = if is_shortcut {
                     let path_str = path.to_string_lossy();
-                    let resolved = super::icon_extract::resolve_shortcut_target(&path_str)
-                        .map(PathBuf::from);
+                    let resolved =
+                        super::icon_extract::resolve_shortcut_target(&path_str).map(PathBuf::from);
                     if let Some(ref target) = resolved {
-                        log::debug!(
-                            "快捷方式 '{}' -> 目标 '{}'",
-                            display_name,
-                            target.display()
-                        );
+                        log::debug!("快捷方式 '{}' -> 目标 '{}'", display_name, target.display());
                     }
                     resolved
                 } else {
@@ -373,7 +370,6 @@ mod tests {
             .unwrap_or(false);
         assert!(!is_shortcut, ".exe 文件不应被识别为快捷方式");
     }
-
 
     #[test]
     fn test_virtual_shell_objects_have_valid_clsids() {

@@ -265,6 +265,7 @@ main.rs
   │     ├── app_runtime.rs (UI 框架无关命令/运行时层，持有 AppContext)
   │     ├── control_panel.rs (GPUI 控制面板视图)
   │     ├── create_box_dialog.rs (独立 GPUI 创建分类框窗口)
+  │     ├── edit_box_dialog.rs (独立 GPUI 编辑分类框窗口)
   │     └── windows_main.rs (GPUI 事件循环)
   ├── app.rs + ui/ (legacy eframe 回退，仅 eframe-ui feature)
   └── utils/ (日志、DPI、字符串)
@@ -287,7 +288,7 @@ main.rs
 
 **标题栏布局**：左侧纯文本名称（无图标、无数量），右侧 🔒/🔓 锁定按钮 + ⋮ "更多"按钮（`Segoe UI Emoji` / `Segoe UI Symbol` 字体）。锁定时整个窗口返回 `HTCLIENT`（禁止拖拽和缩放），未锁定时正常边缘缩放（`hover_edge` 驱动蓝色指示条反馈）。按钮 hover 时显示手型光标 + 半透明背景高亮。
 
-**分类框名称编辑**：双击标题文字进入内联编辑模式（未锁定时通过 `WM_NCLBUTTONDBLCLK` + `HTCAPTION` 触发，已锁定时通过 `WM_LBUTTONDBLCLK` 触发）。编辑模式下标题栏替换为：深色半透明输入框 + 绿色"清空"/"保存"按钮（D2D/DirectWrite 渲染），整个窗口返回 `HTCLIENT` 禁止拖拽和缩放。输入限制 16 字符，支持 Unicode。Enter 保存、Escape/失焦取消。保存更新 `GridWindowData.title`，下次 `collect_grid_layout()` 时自动持久化到 `~/.ikun_organizer.json`。
+**分类框名称编辑**：双击标题文字打开 GPUI 编辑对话框（`edit_box_dialog.rs`，样式与"创建分类框"对话框对齐）。通过 `edit_box_callback` 回调传递 `config_id` 和当前名称，支持中文 IME 输入（利用 GPUI 内置的 `Input` 组件）。输入限制 16 字符。Enter 或点击"确定"保存（调用 `AppRuntime::rename_box()` 更新配置和窗口标题），Escape 或点击"取消"关闭。保存时通过 `update_grid_window_title()` 实时更新格子窗口标题。
 
 **更多下拉菜单**：点击 ⋮ 按钮弹出自定义分层窗口菜单（`WS_POPUP | WS_EX_LAYERED` + D2D/DirectWrite 渲染），支持 per-pixel alpha 半透明深色背景、圆角、DirectWrite 清晰文字（任意 DPI 不模糊）、无系统阴影。包含删除、排序（8维度+递增/递减）、分组（8维度）、查看（8模式，预留回调接口暂未实现）四个功能组，子菜单自动定位（屏幕边界翻转）。多分类框菜单互斥（全局 `OPEN_MENU_HWND` + `PostMessage` 延迟切换）。菜单打开期间分类框自动锁定。通过 `SetForegroundWindow` + `WM_ACTIVATE(WA_INACTIVE)` 实现点击外部关闭，子菜单使用 `SW_SHOWNOACTIVATE` + `MA_NOACTIVATE` 避免抢焦点。
 
@@ -341,7 +342,7 @@ main.rs
 - [x] 边缘拖拽修改尺寸 + 尺寸记忆（同上）
 - [x] 锁定按钮 + 锁定记忆（锁定后不可拖拽/缩放，hover 反馈，状态持久化）
 - [x] "更多"下拉菜单（排序/分组/查看/删除，自定义分层窗口 + D2D/DirectWrite 渲染，删除功能已实现）
-- [x] 分类框名称修改（双击标题文字进入内联编辑，输入框 + 清空/保存按钮，16字符限制，Enter保存/Esc取消/失焦取消）
+- [x] 分类框名称修改（双击标题文字打开 GPUI 编辑对话框，输入框 + 确定/取消按钮，16字符限制，Enter保存/Esc取消）
 - [x] 排序方式：名称、类型、修改时间、作者、创建时间、大小、标记、标题 × 递增/递减（引擎已实现，菜单可选）
 - [x] 查看方式：超大、大、中、小、列表、详细信息、平铺、内容（引擎已实现，菜单可选）
 - [x] 分组展示：按名称、类型、修改时间、作者、创建时间、大小、标记、标题（引擎已实现，菜单可选）
@@ -384,5 +385,7 @@ main.rs
 - [Windows Shell API](https://learn.microsoft.com/en-us/windows/win32/shell/)
 - 架构重构方案：`todo/架构重构.md`
 - 需求 PRD：`todo/desktop-prd.md`
+
+
 
 

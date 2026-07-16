@@ -8,6 +8,7 @@ license = "MIT"
 build = "build/build.rs"
 
 [dependencies]
+lazy_static = "1.4"
 # ===== GUI 框架 =====
 egui = { version = "0.27", optional = true }
 eframe = { version = "0.27", default-features = false, features = ["glow"], optional = true }

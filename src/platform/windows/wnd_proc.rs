@@ -8,19 +8,15 @@
 //! - WM_MOUSELEAVE：重置所有 hover 状态
 //! - WM_LBUTTONDOWN：编辑模式清除/保存按钮 + 锁定按钮切换 + 图标选中 + "更多"菜单
 //! - WM_LBUTTONDBLCLK：标题栏双击进入名称编辑 + 双击打开文件
-//! - WM_CHAR / WM_KEYDOWN：名称编辑模式文字输入（含 ToUnicode 转字符）+ 光标移动 + 保存/取消
-//! - WM_IME_COMPOSITION：IME 输入（中文/日文/韩文等 CJK 字符）
-//! - WM_KILLFOCUS：名称编辑模式失去焦点取消
+//! - WM_CHAR / WM_KEYDOWN：默认处理（编辑已由 GPUI 编辑对话框实现）
+//! - WM_IME_COMPOSITION：默认处理
 //! - WM_RBUTTONUP：Shell 上下文菜单
 //! - WM_DESTROY：释放图标句柄 + D2D/DW/WIC 资源
 
 use super::d2d_render::render_layered_window;
 use super::ffi_imports::*;
 use super::ffi_types::*;
-use super::grid_layout::{
-    clear_btn_rect, grid_hit_test, input_box_rect, lock_btn_rect, more_btn_rect,
-    recalculate_layout, save_btn_rect,
-};
+use super::grid_layout::{grid_hit_test, lock_btn_rect, more_btn_rect, recalculate_layout};
 use super::grid_window::{get_data, GridWindowData};
 use super::menu_window::show_menu_window;
 use super::shell_menu::{show_desktop_context_menu, show_shell_context_menu};
@@ -131,13 +127,6 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 }
             }
 
-            // 名称编辑模式时，全部返回 HTCLIENT（禁止拖拽和缩放）
-            if let Some(ref d) = data_opt {
-                if d.editing_name {
-                    return HTCLIENT as LRESULT;
-                }
-            }
-
             // 锁定时禁止拖拽移动和边缘缩放（除锁定按钮外全部返回 HTCLIENT）
             if is_locked {
                 if let Some(data) = get_data(hwnd) {
@@ -231,33 +220,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 HTTOPRIGHT | HTBOTTOMLEFT => IDC_SIZENESW_ID,
                 HTCLIENT => {
                     if let Some(data) = get_data(hwnd) {
-                        if data.editing_name {
-                            // 编辑模式：输入框上显示 I 型光标，按钮上显示手型
-                            let mut wr = RECT {
-                                left: 0,
-                                top: 0,
-                                right: 0,
-                                bottom: 0,
-                            };
-                            unsafe { GetWindowRect(hwnd, &mut wr) };
-                            let w = wr.right - wr.left;
-                            let dpi = unsafe { GetDpiForWindow(hwnd) };
-                            let dpi = if dpi > 0 { dpi } else { 96 };
-                            let (ix, iy, iw, ih) = input_box_rect(w, data.title_h, dpi);
-                            // 使用鼠标在窗口中的坐标来定位
-                            let mut pt = POINT { x: 0, y: 0 };
-                            unsafe { GetCursorPos(&mut pt) };
-                            let mx = pt.x - wr.left;
-                            let my = pt.y - wr.top;
-                            let on_input = mx >= ix && mx < ix + iw && my >= iy && my < iy + ih;
-                            if on_input {
-                                IDC_IBEAM_ID
-                            } else if data.clear_hovered || data.save_hovered {
-                                IDC_HAND_ID
-                            } else {
-                                return DefWindowProcW(hwnd, msg, wparam, lparam);
-                            }
-                        } else if data.lock_hovered || data.more_hovered {
+                        if data.lock_hovered || data.more_hovered {
                             // 正常模式：按钮上显示手型光标
                             IDC_HAND_ID
                         } else {
@@ -392,43 +355,24 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 let dpi = unsafe { GetDpiForWindow(hwnd) };
                 let dpi = if dpi > 0 { dpi } else { 96 };
 
-                if data.editing_name {
-                    // 编辑模式：检测清除/保存按钮 hover
-                    let (cx, cy, cw, ch) = clear_btn_rect(w, data.title_h, dpi);
-                    let over_clear = mx >= cx && mx < cx + cw && my >= cy && my < cy + ch;
-                    if over_clear != data.clear_hovered {
-                        data.clear_hovered = over_clear;
-                        need_rerender = true;
-                    }
+                // 正常模式：锁定按钮 hover 检测
+                let (btn_x, btn_y, btn_size) = lock_btn_rect(w, data.title_h, dpi);
+                let over_lock =
+                    mx >= btn_x && mx < btn_x + btn_size && my >= btn_y && my < btn_y + btn_size;
+                if over_lock != data.lock_hovered {
+                    data.lock_hovered = over_lock;
+                    need_rerender = true;
+                }
 
-                    let (sx, sy, sw, sh) = save_btn_rect(w, data.title_h, dpi);
-                    let over_save = mx >= sx && mx < sx + sw && my >= sy && my < sy + sh;
-                    if over_save != data.save_hovered {
-                        data.save_hovered = over_save;
-                        need_rerender = true;
-                    }
-                } else {
-                    // 正常模式：锁定按钮 hover 检测
-                    let (btn_x, btn_y, btn_size) = lock_btn_rect(w, data.title_h, dpi);
-                    let over_lock = mx >= btn_x
-                        && mx < btn_x + btn_size
-                        && my >= btn_y
-                        && my < btn_y + btn_size;
-                    if over_lock != data.lock_hovered {
-                        data.lock_hovered = over_lock;
-                        need_rerender = true;
-                    }
-
-                    // "更多"按钮 hover 检测
-                    let (mbtn_x, mbtn_y, mbtn_size) = more_btn_rect(w, data.title_h, dpi);
-                    let over_more = mx >= mbtn_x
-                        && mx < mbtn_x + mbtn_size
-                        && my >= mbtn_y
-                        && my < mbtn_y + mbtn_size;
-                    if over_more != data.more_hovered {
-                        data.more_hovered = over_more;
-                        need_rerender = true;
-                    }
+                // "更多"按钮 hover 检测
+                let (mbtn_x, mbtn_y, mbtn_size) = more_btn_rect(w, data.title_h, dpi);
+                let over_more = mx >= mbtn_x
+                    && mx < mbtn_x + mbtn_size
+                    && my >= mbtn_y
+                    && my < mbtn_y + mbtn_size;
+                if over_more != data.more_hovered {
+                    data.more_hovered = over_more;
+                    need_rerender = true;
                 }
 
                 // 边缘 resize hover 已由 WM_NCHITTEST 更新 hover_edge
@@ -551,79 +495,6 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             let dpi = unsafe { GetDpiForWindow(hwnd) };
             let dpi = if dpi > 0 { dpi } else { 96 };
 
-            // 名称编辑模式：处理清除/保存按钮点击
-            let in_edit_mode = get_data(hwnd).map(|d| d.editing_name).unwrap_or(false);
-            if in_edit_mode {
-                let (cx, cy, cw, ch) = clear_btn_rect(win_w, get_data(hwnd).unwrap().title_h, dpi);
-                let (sx, sy, sw, sh) = save_btn_rect(win_w, get_data(hwnd).unwrap().title_h, dpi);
-                let (ix, iy, iw, ih) = input_box_rect(win_w, get_data(hwnd).unwrap().title_h, dpi);
-
-                let on_clear =
-                    click_x >= cx && click_x < cx + cw && click_y >= cy && click_y < cy + ch;
-                let on_save =
-                    click_x >= sx && click_x < sx + sw && click_y >= sy && click_y < sy + sh;
-                let on_input =
-                    click_x >= ix && click_x < ix + iw && click_y >= iy && click_y < iy + ih;
-
-                if let Some(data) = get_data(hwnd) {
-                    if on_clear {
-                        // 清除输入内容
-                        data.edit_buffer.clear();
-                        data.edit_cursor = 0;
-                        need_rerender = true;
-                    } else if on_save {
-                        // 保存名称
-                        let new_name = data.edit_buffer.trim().to_string();
-                        if !new_name.is_empty() {
-                            data.title = new_name.clone();
-                            log::info!("分类框名称已保存: {}", new_name);
-                        }
-                        // 释放 IME 上下文
-                        let himc = unsafe { ImmGetContext(hwnd) };
-                        if !himc.is_null() {
-                            unsafe {
-                                ImmAssociateContext(hwnd, std::ptr::null_mut());
-                                ImmDestroyContext(himc);
-                            }
-                        }
-                        data.editing_name = false;
-                        data.edit_buffer.clear();
-                        data.edit_cursor = 0;
-                        need_rerender = true;
-                    } else if on_input {
-                        // 点击输入框：移动光标到点击位置（简化：移到末尾）
-                        data.edit_cursor = data.edit_buffer.chars().count();
-                        unsafe {
-                            SetFocus(hwnd);
-                            // 为 WS_POPUP 窗口创建并关联 IME 上下文以支持中文输入
-                            let himc = ImmCreateContext();
-                            if !himc.is_null() {
-                                ImmAssociateContext(hwnd, himc);
-                            }
-                        };
-                        need_rerender = true;
-                    } else {
-                        // 点击编辑区域外：取消编辑
-                        let himc = unsafe { ImmGetContext(hwnd) };
-                        if !himc.is_null() {
-                            unsafe {
-                                ImmAssociateContext(hwnd, std::ptr::null_mut());
-                                ImmDestroyContext(himc);
-                            }
-                        }
-                        data.editing_name = false;
-                        data.edit_buffer.clear();
-                        data.edit_cursor = 0;
-                        need_rerender = true;
-                    }
-                }
-
-                if need_rerender {
-                    render_layered_window(hwnd);
-                }
-                return 0;
-            }
-
             // 检查是否点击了锁定按钮
             let lock_clicked = if let Some(data) = get_data(hwnd) {
                 let (btn_x, btn_y, btn_size) = lock_btn_rect(win_w, data.title_h, dpi);
@@ -716,22 +587,19 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                         && click_y < mbtn_y + mbtn_size;
 
                     if !on_lock && !on_more {
-                        // 进入名称编辑模式
-                        data.editing_name = true;
-                        data.edit_buffer = data.title.clone();
-                        data.edit_cursor = data.edit_buffer.chars().count();
-                        data.clear_hovered = false;
-                        data.save_hovered = false;
-                        unsafe {
-                            SetFocus(hwnd);
-                            // 为 WS_POPUP 窗口创建并关联 IME 上下文以支持中文输入
-                            let himc = ImmCreateContext();
-                            if !himc.is_null() {
-                                ImmAssociateContext(hwnd, himc);
-                            }
-                        };
-                        log::info!("进入名称编辑模式: {}", data.title);
-                        render_layered_window(hwnd);
+                        // 调用编辑分类框回调函数
+                        if let Some(ref callback) = data.edit_box_callback {
+                            let config_id = data.config_id;
+                            let title = data.title.clone();
+                            callback(config_id, &title);
+                            log::info!(
+                                "触发编辑分类框对话框: config_id={}, title={}",
+                                config_id,
+                                title
+                            );
+                        } else {
+                            log::warn!("edit_box_callback 未设置，无法打开编辑对话框");
+                        }
                         return 0;
                     }
                 }
@@ -795,21 +663,19 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                         && click_y < mbtn_y + mbtn_size;
 
                     if !on_lock && !on_more && !data.menu.open {
-                        data.editing_name = true;
-                        data.edit_buffer = data.title.clone();
-                        data.edit_cursor = data.edit_buffer.chars().count();
-                        data.clear_hovered = false;
-                        data.save_hovered = false;
-                        unsafe {
-                            SetFocus(hwnd);
-                            // 为 WS_POPUP 窗口创建并关联 IME 上下文以支持中文输入
-                            let himc = ImmCreateContext();
-                            if !himc.is_null() {
-                                ImmAssociateContext(hwnd, himc);
-                            }
-                        };
-                        log::info!("进入名称编辑模式: {}", data.title);
-                        render_layered_window(hwnd);
+                        // 调用编辑分类框回调函数（与 WM_LBUTTONDBLCLK 一致）
+                        if let Some(ref callback) = data.edit_box_callback {
+                            let config_id = data.config_id;
+                            let title = data.title.clone();
+                            callback(config_id, &title);
+                            log::info!(
+                                "WM_NCLBUTTONDBLCLK 触发编辑分类框对话框: config_id={}, title={}",
+                                config_id,
+                                title
+                            );
+                        } else {
+                            log::warn!("edit_box_callback 未设置，无法打开编辑对话框");
+                        }
                         return 0;
                     }
                 }
@@ -818,256 +684,16 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         }
 
         // ===== 键盘字符输入：名称编辑模式 =====
-        WM_CHAR => {
-            if let Some(data) = get_data(hwnd) {
-                if data.editing_name {
-                    let ch = wparam as u32;
-                    // 过滤控制字符（回车、退格等已由 WM_KEYDOWN 处理）
-                    if ch >= 0x20 && ch != 0x7F {
-                        // 限制最大 16 个字符
-                        let char_count = data.edit_buffer.chars().count();
-                        if char_count < 16 {
-                            // 支持 Unicode 字符（包括中文、emoji 等）
-                            if let Some(c) = char::from_u32(ch) {
-                                let byte_pos = data
-                                    .edit_buffer
-                                    .char_indices()
-                                    .nth(data.edit_cursor)
-                                    .map(|(i, _)| i)
-                                    .unwrap_or(data.edit_buffer.len());
-                                data.edit_buffer.insert(byte_pos, c);
-                                data.edit_cursor += 1;
-                                render_layered_window(hwnd);
-                            }
-                        }
-                    }
-                    return 0;
-                }
-            }
-            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
-        }
+        WM_CHAR => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
 
         // ===== 键盘按键：名称编辑模式特殊键 =====
-        WM_KEYDOWN => {
-            if let Some(data) = get_data(hwnd) {
-                if data.editing_name {
-                    let vk = wparam as u32;
-                    match vk {
-                        VK_ESCAPE => {
-                            // 取消编辑
-                            let himc = unsafe { ImmGetContext(hwnd) };
-                            if !himc.is_null() {
-                                unsafe {
-                                    ImmAssociateContext(hwnd, std::ptr::null_mut());
-                                    ImmDestroyContext(himc);
-                                }
-                            }
-                            data.editing_name = false;
-                            data.edit_buffer.clear();
-                            data.edit_cursor = 0;
-                            render_layered_window(hwnd);
-                            return 0;
-                        }
-                        VK_RETURN => {
-                            // 保存名称
-                            let new_name = data.edit_buffer.trim().to_string();
-                            if !new_name.is_empty() {
-                                data.title = new_name.clone();
-                                log::info!("分类框名称已修改: {}", new_name);
-                            }
-                            let himc = unsafe { ImmGetContext(hwnd) };
-                            if !himc.is_null() {
-                                unsafe {
-                                    ImmAssociateContext(hwnd, std::ptr::null_mut());
-                                    ImmDestroyContext(himc);
-                                }
-                            }
-                            data.editing_name = false;
-                            data.edit_buffer.clear();
-                            data.edit_cursor = 0;
-                            render_layered_window(hwnd);
-                            return 0;
-                        }
-                        VK_BACK => {
-                            // 退格：删除光标前的一个字符
-                            if data.edit_cursor > 0 {
-                                let byte_pos = data
-                                    .edit_buffer
-                                    .char_indices()
-                                    .nth(data.edit_cursor - 1)
-                                    .map(|(i, _)| i)
-                                    .unwrap_or(data.edit_buffer.len());
-                                let next_byte = data
-                                    .edit_buffer
-                                    .char_indices()
-                                    .nth(data.edit_cursor)
-                                    .map(|(i, _)| i)
-                                    .unwrap_or(data.edit_buffer.len());
-                                data.edit_buffer.drain(byte_pos..next_byte);
-                                data.edit_cursor -= 1;
-                                render_layered_window(hwnd);
-                            }
-                            return 0;
-                        }
-                        VK_DELETE => {
-                            // Delete：删除光标处的字符
-                            let char_count = data.edit_buffer.chars().count();
-                            if data.edit_cursor < char_count {
-                                let byte_pos = data
-                                    .edit_buffer
-                                    .char_indices()
-                                    .nth(data.edit_cursor)
-                                    .map(|(i, _)| i)
-                                    .unwrap_or(data.edit_buffer.len());
-                                let next_byte = data
-                                    .edit_buffer
-                                    .char_indices()
-                                    .nth(data.edit_cursor + 1)
-                                    .map(|(i, _)| i)
-                                    .unwrap_or(data.edit_buffer.len());
-                                data.edit_buffer.drain(byte_pos..next_byte);
-                                render_layered_window(hwnd);
-                            }
-                            return 0;
-                        }
-                        VK_LEFT => {
-                            if data.edit_cursor > 0 {
-                                data.edit_cursor -= 1;
-                                render_layered_window(hwnd);
-                            }
-                            return 0;
-                        }
-                        VK_RIGHT => {
-                            let char_count = data.edit_buffer.chars().count();
-                            if data.edit_cursor < char_count {
-                                data.edit_cursor += 1;
-                                render_layered_window(hwnd);
-                            }
-                            return 0;
-                        }
-                        VK_HOME => {
-                            data.edit_cursor = 0;
-                            render_layered_window(hwnd);
-                            return 0;
-                        }
-                        VK_END => {
-                            data.edit_cursor = data.edit_buffer.chars().count();
-                            render_layered_window(hwnd);
-                            return 0;
-                        }
-                        _ => {
-                            // 使用 ToUnicode 将虚拟键码转换为字符（GPUI 消息循环不调用 TranslateMessage）
-                            let mut key_state = [0u8; 256];
-                            unsafe { GetKeyboardState(key_state.as_mut_ptr()) };
-                            let scan_code = ((lparam >> 16) & 0xFF) as u32;
-                            let mut char_buf = [0u16; 4];
-                            let result = unsafe {
-                                ToUnicode(
-                                    vk,
-                                    scan_code,
-                                    key_state.as_ptr(),
-                                    char_buf.as_mut_ptr(),
-                                    char_buf.len() as i32,
-                                    0,
-                                )
-                            };
-                            if result == 1 {
-                                // 成功转换出一个字符
-                                let ch = char_buf[0] as u32;
-                                if ch >= 0x20 && ch != 0x7F {
-                                    let char_count = data.edit_buffer.chars().count();
-                                    if char_count < 16 {
-                                        if let Some(c) = char::from_u32(ch) {
-                                            let byte_pos = data
-                                                .edit_buffer
-                                                .char_indices()
-                                                .nth(data.edit_cursor)
-                                                .map(|(i, _)| i)
-                                                .unwrap_or(data.edit_buffer.len());
-                                            data.edit_buffer.insert(byte_pos, c);
-                                            data.edit_cursor += 1;
-                                            render_layered_window(hwnd);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    return 0;
-                }
-            }
-            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
-        }
+        WM_KEYDOWN => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
 
         // ===== IME 组合完成：插入中文等 CJK 字符 =====
-        WM_IME_COMPOSITION => {
-            log::debug!("收到 WM_IME_COMPOSITION: lparam={:#X}", lparam as u32);
-            if let Some(data) = get_data(hwnd) {
-                if data.editing_name && (lparam as u32 & GCS_RESULTSTR) != 0 {
-                    let himc = unsafe { ImmGetContext(hwnd) };
-                    if !himc.is_null() {
-                        let len = unsafe {
-                            ImmGetCompositionStringW(himc, GCS_RESULTSTR, std::ptr::null_mut(), 0)
-                        };
-                        if len > 0 {
-                            let byte_len = len as usize;
-                            let mut buf: Vec<u8> = vec![0; byte_len];
-                            unsafe {
-                                ImmGetCompositionStringW(
-                                    himc,
-                                    GCS_RESULTSTR,
-                                    buf.as_mut_ptr() as *mut std::ffi::c_void,
-                                    len,
-                                );
-                            };
-                            let u16_slice: &[u16] = unsafe {
-                                std::slice::from_raw_parts(buf.as_ptr() as *const u16, byte_len / 2)
-                            };
-                            if let Ok(s) = String::from_utf16(u16_slice) {
-                                for c in s.chars() {
-                                    let char_count = data.edit_buffer.chars().count();
-                                    if char_count < 16 {
-                                        let byte_pos = data
-                                            .edit_buffer
-                                            .char_indices()
-                                            .nth(data.edit_cursor)
-                                            .map(|(i, _)| i)
-                                            .unwrap_or(data.edit_buffer.len());
-                                        data.edit_buffer.insert(byte_pos, c);
-                                        data.edit_cursor += 1;
-                                    }
-                                }
-                                render_layered_window(hwnd);
-                            }
-                        }
-                        unsafe { ImmReleaseContext(hwnd, himc) };
-                    }
-                    return 0;
-                }
-            }
-            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
-        }
+        WM_IME_COMPOSITION => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
 
         // ===== 失去焦点：取消名称编辑 =====
-        WM_KILLFOCUS => {
-            if let Some(data) = get_data(hwnd) {
-                if data.editing_name {
-                    // 释放 IME 上下文
-                    let himc = unsafe { ImmGetContext(hwnd) };
-                    if !himc.is_null() {
-                        unsafe {
-                            ImmAssociateContext(hwnd, std::ptr::null_mut());
-                            ImmDestroyContext(himc);
-                        }
-                    }
-                    data.editing_name = false;
-                    data.edit_buffer.clear();
-                    data.edit_cursor = 0;
-                    render_layered_window(hwnd);
-                }
-            }
-            0
-        }
+        WM_KILLFOCUS => 0,
 
         // ===== 鼠标右键：弹出上下文菜单 =====
         WM_RBUTTONUP => {
@@ -1121,14 +747,6 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 }
                 if data.more_hovered {
                     data.more_hovered = false;
-                    need_rerender = true;
-                }
-                if data.clear_hovered {
-                    data.clear_hovered = false;
-                    need_rerender = true;
-                }
-                if data.save_hovered {
-                    data.save_hovered = false;
                     need_rerender = true;
                 }
                 if data.hover_edge != 0 {

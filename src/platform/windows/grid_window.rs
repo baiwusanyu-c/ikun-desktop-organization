@@ -100,6 +100,8 @@ pub struct GridCreateParams {
     pub group_by: GroupBy,
     /// 配置持久化 ID（对应 BoxLayoutData.id，删除时按此 ID 精确匹配）
     pub config_id: uuid::Uuid,
+    /// 编辑分类框回调函数（双击标题栏时调用）
+    pub edit_box_callback: Option<Box<dyn Fn(uuid::Uuid, &str) + Send + Sync>>,
 }
 
 /// 格子窗口内部数据（存储在 GWLP_USERDATA）
@@ -137,16 +139,8 @@ pub(crate) struct GridWindowData {
     pub(crate) more_hovered: bool,
     /// 菜单状态
     pub(crate) menu: MenuState,
-    /// 是否在名称编辑模式
-    pub(crate) editing_name: bool,
-    /// 编辑模式输入缓冲区
-    pub(crate) edit_buffer: String,
-    /// 编辑模式光标位置（字符索引）
-    pub(crate) edit_cursor: usize,
-    /// 清除按钮是否被鼠标悬停
-    pub(crate) clear_hovered: bool,
-    /// 保存按钮是否被鼠标悬停
-    pub(crate) save_hovered: bool,
+    /// 编辑分类框回调函数（双击标题栏时调用）
+    pub(crate) edit_box_callback: Option<Box<dyn Fn(uuid::Uuid, &str) + Send + Sync>>,
     /// 排序方式
     pub(crate) sort_mode: SortMode,
     /// 是否升序
@@ -192,6 +186,7 @@ impl GridWindowData {
     /// 创建测试用的默认实例（所有字段为初始值）
     pub(crate) fn test_default() -> Self {
         Self {
+            edit_box_callback: None,
             title: "测试分类框".to_string(),
             items: Vec::new(),
             grid_id: 0,
@@ -210,11 +205,6 @@ impl GridWindowData {
             hover_edge: 0,
             more_hovered: false,
             menu: MenuState::default(),
-            editing_name: false,
-            edit_buffer: String::new(),
-            edit_cursor: 0,
-            clear_hovered: false,
-            save_hovered: false,
             sort_mode: SortMode::Name,
             sort_ascending: true,
             group_by: GroupBy::None,
@@ -259,8 +249,7 @@ fn ensure_class_registered() -> HINSTANCE {
     let hinstance = unsafe { GetModuleHandleW(std::ptr::null()) };
 
     if !*registered {
-        let app_icon = super::app_icon::get_tray_icon()
-            .unwrap_or(std::ptr::null_mut());
+        let app_icon = super::app_icon::get_tray_icon().unwrap_or(std::ptr::null_mut());
         let wc = WNDCLASSEXW {
             cb_size: std::mem::size_of::<WNDCLASSEXW>() as u32,
             style: CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS,
@@ -394,6 +383,7 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
 
     // 2. 存储窗口数据（含 D2D/DW 设备缓存）
     let data = Box::new(GridWindowData {
+        edit_box_callback: params.edit_box_callback,
         title: params.title,
         items: params.items,
         grid_id: params.id,
@@ -412,11 +402,6 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         hover_edge: 0,
         more_hovered: false,
         menu: MenuState::default(),
-        editing_name: false,
-        edit_buffer: String::new(),
-        edit_cursor: 0,
-        clear_hovered: false,
-        save_hovered: false,
         sort_mode: params.sort_mode,
         sort_ascending: params.sort_ascending,
         group_by: params.group_by,
@@ -580,6 +565,44 @@ pub fn get_grid_count() -> usize {
     GRID_WINDOWS.lock().map(|g| g.len()).unwrap_or(0)
 }
 
+/// 通过 config_id 更新格子窗口的标题
+pub fn update_grid_window_title(config_id: uuid::Uuid, new_title: &str) {
+    let grids = match GRID_WINDOWS.lock() {
+        Ok(g) => g,
+        Err(_) => {
+            log::warn!("无法锁定 GRID_WINDOWS");
+            return;
+        }
+    };
+
+    for grid in grids.iter() {
+        // 通过 HWND 获取 GridWindowData
+        let data_ptr =
+            unsafe { GetWindowLongPtrW(grid.hwnd, GWLP_USERDATA) } as *mut GridWindowData;
+        if data_ptr.is_null() {
+            continue;
+        }
+
+        let data = unsafe { &mut *data_ptr };
+        if data.config_id == config_id {
+            let old_title = data.title.clone();
+            data.title = new_title.to_string();
+            log::info!(
+                "更新格子窗口标题: config_id={}, '{}' -> '{}'",
+                config_id,
+                old_title,
+                new_title
+            );
+
+            // 重新渲染窗口
+            render_layered_window(grid.hwnd);
+            return;
+        }
+    }
+
+    log::warn!("未找到 config_id={} 对应的格子窗口", config_id);
+}
+
 /// 收集所有格子窗口的当前布局数据
 ///
 /// 读取每个窗口的实时位置、尺寸、标题、文件列表等信息，
@@ -636,12 +659,24 @@ pub fn collect_grid_layout() -> Vec<crate::config::BoxLayoutData> {
                 let display_name = item.display_name.clone();
                 // 如果是 CLSID 路径，确保保存解析后的显示名称
                 if item.file_path.starts_with("::{") {
-                    if let Some(resolved) = crate::platform::windows::desktop_manager::clsid_display_name(&item.file_path) {
-                        log::info!("collect_grid_layout: 解析 CLSID {} -> {}", item.file_path, resolved);
+                    if let Some(resolved) =
+                        crate::platform::windows::desktop_manager::clsid_display_name(
+                            &item.file_path,
+                        )
+                    {
+                        log::info!(
+                            "collect_grid_layout: 解析 CLSID {} -> {}",
+                            item.file_path,
+                            resolved
+                        );
                         return resolved.to_string();
                     }
                 }
-                log::debug!("collect_grid_layout: {} -> {}", item.file_path, display_name);
+                log::debug!(
+                    "collect_grid_layout: {} -> {}",
+                    item.file_path,
+                    display_name
+                );
                 display_name
             })
             .collect();
@@ -681,9 +716,7 @@ pub(crate) unsafe fn get_data<'a>(hwnd: HWND) -> Option<&'a mut GridWindowData> 
 
 #[cfg(test)]
 mod tests {
-    use super::super::grid_layout::{
-        clear_btn_rect, input_box_rect, lock_btn_rect, more_btn_rect, save_btn_rect,
-    };
+    use super::super::grid_layout::{lock_btn_rect, more_btn_rect};
     use super::*;
 
     // ===== lock_btn_rect 计算验证 =====
@@ -764,6 +797,7 @@ mod tests {
             sort_ascending: true,
             group_by: crate::config::app_config::GroupBy::None,
             config_id: uuid::Uuid::new_v4(),
+            edit_box_callback: None,
         };
         assert!(params.locked);
 
@@ -781,6 +815,7 @@ mod tests {
             sort_ascending: true,
             group_by: crate::config::app_config::GroupBy::None,
             config_id: uuid::Uuid::new_v4(),
+            edit_box_callback: None,
         };
         assert!(!params2.locked);
     }
@@ -802,6 +837,7 @@ mod tests {
             sort_ascending: true,
             group_by: crate::config::app_config::GroupBy::None,
             config_id: id,
+            edit_box_callback: None,
         };
         assert_eq!(params.config_id, id);
         // 每个窗口应有独立的 UUID
@@ -821,147 +857,5 @@ mod tests {
         // config_id 应为 v4 UUID
         assert_eq!(data.config_id.get_version_num(), 4);
         let _ = id; // 验证外部 UUID 可用
-    }
-
-    // ===== 名称编辑模式布局计算验证 =====
-
-    #[test]
-    fn test_save_btn_rect_at_96dpi() {
-        let win_w = 400;
-        let title_h = 40;
-        let dpi = 96;
-        let (x, y, w, h) = save_btn_rect(win_w, title_h, dpi);
-        // DPI 96: scale_for_dpi(x, 96) = x
-        assert_eq!(w, 54, "保存按钮宽度应为 54");
-        assert_eq!(h, 28, "保存按钮高度应为 28");
-        assert_eq!(x, win_w - 54 - 6, "保存按钮应在窗口右侧（右边距 6）");
-        assert_eq!(y, (title_h - 28) / 2, "保存按钮应垂直居中");
-    }
-
-    #[test]
-    fn test_clear_btn_rect_at_96dpi() {
-        let win_w = 400;
-        let title_h = 40;
-        let dpi = 96;
-        let (x, y, w, h) = clear_btn_rect(win_w, title_h, dpi);
-        assert_eq!(w, 54, "清空按钮宽度应与保存按钮一致（54）");
-        assert_eq!(h, 28, "清空按钮高度应与保存按钮一致（28）");
-        assert_eq!(y, (title_h - 28) / 2, "清空按钮应垂直居中");
-        // 清空按钮应在保存按钮左侧，间距 4
-        let (sx, _, _, _) = save_btn_rect(win_w, title_h, dpi);
-        assert_eq!(x, sx - 4 - 54, "清空按钮应在保存按钮左侧（间距 4）");
-    }
-
-    #[test]
-    fn test_input_box_rect_at_96dpi() {
-        let win_w = 400;
-        let title_h = 40;
-        let dpi = 96;
-        let (x, y, w, h) = input_box_rect(win_w, title_h, dpi);
-        assert_eq!(x, 8, "输入框左边距应为 8");
-        assert_eq!(h, 28, "输入框高度应为 28");
-        assert_eq!(y, (title_h - 28) / 2, "输入框应垂直居中");
-        // 输入框右边缘不超过清空按钮左边缘
-        let (cx, _, _, _) = clear_btn_rect(win_w, title_h, dpi);
-        assert!(
-            x + w <= cx,
-            "输入框右边缘 {} 不应超过清空按钮左边缘 {}",
-            x + w,
-            cx
-        );
-    }
-
-    #[test]
-    fn test_edit_mode_layout_alignment() {
-        // 三个元素在 DPI 96 下应垂直对齐、高度一致
-        let win_w = 500;
-        let title_h = 40;
-        let dpi = 96;
-        let (_, iy, _, ih) = input_box_rect(win_w, title_h, dpi);
-        let (_, cy, _, ch) = clear_btn_rect(win_w, title_h, dpi);
-        let (_, sy, _, sh) = save_btn_rect(win_w, title_h, dpi);
-
-        assert_eq!(ih, ch, "输入框和清空按钮高度应一致");
-        assert_eq!(ch, sh, "清空按钮和保存按钮高度应一致");
-        assert_eq!(iy, cy, "输入框和清空按钮 y 坐标应一致（垂直对齐）");
-        assert_eq!(cy, sy, "清空按钮和保存按钮 y 坐标应一致（垂直对齐）");
-    }
-
-    #[test]
-    fn test_edit_mode_layout_horizontal_order() {
-        // 水平顺序：输入框 < 清空按钮 < 保存按钮
-        let win_w = 500;
-        let title_h = 40;
-        let dpi = 96;
-        let (ix, _, iw, _) = input_box_rect(win_w, title_h, dpi);
-        let (cx, _, cw, _) = clear_btn_rect(win_w, title_h, dpi);
-        let (sx, _, sw, _) = save_btn_rect(win_w, title_h, dpi);
-
-        assert!(ix + iw < cx, "输入框右边缘应在清空按钮左侧");
-        assert!(cx + cw < sx, "清空按钮右边缘应在保存按钮左侧");
-        assert!(sx + sw <= win_w, "保存按钮不应超出窗口右边界");
-    }
-
-    #[test]
-    fn test_edit_mode_layout_at_144dpi() {
-        let win_w = 750;
-        let title_h = 60;
-        let dpi = 144;
-        let (_, iy, _, ih) = input_box_rect(win_w, title_h, dpi);
-        let (_, cy, _, ch) = clear_btn_rect(win_w, title_h, dpi);
-        let (_, sy, _, sh) = save_btn_rect(win_w, title_h, dpi);
-
-        assert_eq!(ih, ch, "DPI 144: 输入框和清空按钮高度应一致");
-        assert_eq!(ch, sh, "DPI 144: 清空按钮和保存按钮高度应一致");
-        assert_eq!(iy, cy, "DPI 144: 垂直对齐");
-        assert_eq!(cy, sy, "DPI 144: 垂直对齐");
-    }
-
-    #[test]
-    fn test_edit_mode_layout_narrow_window() {
-        // 窄窗口：输入框有最小宽度保护，不应为负
-        let win_w = 200;
-        let title_h = 40;
-        let dpi = 96;
-        let (ix, _, iw, _) = input_box_rect(win_w, title_h, dpi);
-        let (cx, _, cw, _) = clear_btn_rect(win_w, title_h, dpi);
-        let (sx, _, sw, _) = save_btn_rect(win_w, title_h, dpi);
-
-        assert!(iw > 0, "输入框宽度不应为 0 或负数");
-        assert!(ix >= 0, "输入框 x 不应为负");
-        assert!(sx + sw <= win_w, "保存按钮不应超出窗口");
-        assert!(cx + cw <= sx, "清空按钮不应与保存按钮重叠");
-    }
-
-    // ===== GridWindowData 编辑模式字段验证 =====
-
-    #[test]
-    fn test_grid_window_data_edit_mode_defaults() {
-        let data = GridWindowData::test_default();
-        assert!(!data.editing_name, "默认不应处于编辑模式");
-        assert!(data.edit_buffer.is_empty(), "编辑缓冲区应默认为空");
-        assert_eq!(data.edit_cursor, 0, "编辑光标应默认为 0");
-        assert!(!data.clear_hovered, "清空按钮默认不应 hover");
-        assert!(!data.save_hovered, "保存按钮默认不应 hover");
-    }
-
-    // ===== 名称字符限制验证 =====
-
-    #[test]
-    fn test_name_max_length_16_chars() {
-        // 验证 16 字符限制对 ASCII 和中文均有效
-        let max_chars = 16;
-        let ascii_name: String = "a".repeat(max_chars);
-        assert_eq!(ascii_name.chars().count(), 16);
-
-        let chinese_name: String = "名".repeat(max_chars);
-        assert_eq!(chinese_name.chars().count(), 16);
-
-        // 超出限制
-        let over_limit: String = "a".repeat(max_chars + 1);
-        assert!(
-            over_limit.chars().count() > max_chars,
-            "超出 16 字符应被拒绝"
-        );
     }
 }

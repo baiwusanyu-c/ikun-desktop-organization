@@ -72,49 +72,6 @@ pub(super) fn more_btn_rect(win_w: i32, title_h: i32, dpi: u32) -> (i32, i32, i3
     (btn_x, btn_y, btn_size)
 }
 
-/// 计算名称编辑模式下的输入框矩形
-///
-/// 位于标题栏左侧，为右侧的清除/保存按钮预留空间。
-/// 返回 (x, y, w, h)。
-pub(super) fn input_box_rect(win_w: i32, title_h: i32, dpi: u32) -> (i32, i32, i32, i32) {
-    let pad = scale_for_dpi(8, dpi);
-    let box_h = scale_for_dpi(28, dpi);
-    let box_y = (title_h - box_h) / 2;
-    let gap = scale_for_dpi(4, dpi);
-    let (_, _, save_w, _) = save_btn_rect(win_w, title_h, dpi);
-    let (_, _, clear_w, _) = clear_btn_rect(win_w, title_h, dpi);
-    // 右侧为间隙 + 清除按钮 + 间隙 + 保存按钮 预留空间
-    let right_reserve = gap + clear_w + gap + save_w + scale_for_dpi(6, dpi);
-    let box_w = (win_w - pad - right_reserve).max(scale_for_dpi(80, dpi));
-    (pad, box_y, box_w, box_h)
-}
-
-/// 计算清除按钮在窗口坐标中的矩形区域
-///
-/// 位于保存按钮左侧，与输入框/保存按钮水平对齐（同高，统一间距）。
-/// 返回 (x, y, w, h)。
-pub(super) fn clear_btn_rect(win_w: i32, title_h: i32, dpi: u32) -> (i32, i32, i32, i32) {
-    let btn_w = scale_for_dpi(54, dpi);
-    let btn_h = scale_for_dpi(28, dpi);
-    let btn_y = (title_h - btn_h) / 2;
-    let (_, _, save_w, _) = save_btn_rect(win_w, title_h, dpi);
-    let gap = scale_for_dpi(4, dpi);
-    let btn_x = win_w - save_w - scale_for_dpi(6, dpi) - gap - btn_w;
-    (btn_x, btn_y, btn_w, btn_h)
-}
-
-/// 计算保存按钮在窗口坐标中的矩形区域
-///
-/// 位于清除按钮右侧，显示 "保存" 文字。
-/// 返回 (x, y, w, h)。
-pub(super) fn save_btn_rect(win_w: i32, title_h: i32, dpi: u32) -> (i32, i32, i32, i32) {
-    let btn_w = scale_for_dpi(54, dpi);
-    let btn_h = scale_for_dpi(28, dpi);
-    let btn_x = win_w - btn_w - scale_for_dpi(6, dpi);
-    let btn_y = (title_h - btn_h) / 2;
-    (btn_x, btn_y, btn_w, btn_h)
-}
-
 #[allow(dead_code)] // 菜单渲染时使用
 pub(super) fn menu_row_h(dpi: u32) -> i32 {
     scale_for_dpi(36, dpi)

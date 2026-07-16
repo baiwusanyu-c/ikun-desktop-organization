@@ -49,12 +49,12 @@ pub use drop_target::{
 pub use ffi_types::{IkunBoxDragData, IkunDragItemData};
 pub use grid_window::{
     collect_grid_layout, create_grid_window, destroy_all_grid_windows, get_grid_count,
-    GridCreateParams, GridFileItem,
+    update_grid_window_title, GridCreateParams, GridFileItem,
 };
 pub use icon_extract::extract_file_icon;
-pub use icon_hider::{list_vault_icons,
-    hide_native_icons, icon_exists_for_box, native_icons_hidden, resolve_icon_read_path,
-    restore_all_hidden_icons, restore_native_icons,
+pub use icon_hider::{
+    hide_native_icons, icon_exists_for_box, list_vault_icons, native_icons_hidden,
+    resolve_icon_read_path, restore_all_hidden_icons, restore_native_icons,
 };
 #[allow(unused_imports)] // 公共 API 预留
 pub use icon_manager::DesktopIconManager;
