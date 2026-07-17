@@ -194,3 +194,177 @@ pub(super) fn menu_extra_height(dpi: u32) -> i32 {
 fn scale_for_dpi(px: i32, dpi: u32) -> i32 {
     (px * dpi as i32) / 96
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::app_config::{GroupBy, SortMode, ViewMode};
+    use crate::platform::windows::grid_window::{GridFileItem, GridWindowData, MenuState};
+    use std::ptr::null_mut;
+
+    /// Helper to create a test GridFileItem
+    fn test_item(name: &str, col: i32, row: i32) -> GridFileItem {
+        GridFileItem {
+            file_path: format!("{}.lnk", name),
+            display_name: name.to_string(),
+            icon_handle: null_mut(),
+            grid_col: col,
+            grid_row: row,
+        }
+    }
+
+    /// Helper to create a minimal GridWindowData for testing
+    fn test_data(cols: i32, items: Vec<GridFileItem>) -> GridWindowData {
+        GridWindowData {
+            title: "Test".to_string(),
+            items,
+            grid_id: 0,
+            config_id: uuid::Uuid::new_v4(),
+            title_h: 40,
+            cell_w: 80,
+            cell_h: 100,
+            cols,
+            icon_size: 48,
+            selected_item: -1,
+            hovered_item: -1,
+            tooltip_hwnd: null_mut(),
+            view_mode: ViewMode::Medium,
+            locked: false,
+            lock_hovered: false,
+            hover_edge: 0,
+            more_hovered: false,
+            menu: MenuState::default(),
+            edit_box_callback: None,
+            sort_mode: SortMode::Name,
+            sort_ascending: true,
+            group_by: GroupBy::None,
+            base_window_x: 0,
+            base_window_y: 0,
+            base_window_w: 400,
+            base_window_h: 600,
+            drag_pending: false,
+            drag_start_x: 0,
+            drag_start_y: 0,
+            drag_active: false,
+            drag_item_index: -1,
+            drop_highlight: false,
+            drop_target_ptr: null_mut(),
+            scroll_offset: 0,
+            d2d_factory: None,
+            dw_factory: None,
+            wic_factory: None,
+            d2d_target: None,
+        }
+    }
+
+    #[test]
+    fn test_reflow_items_4cols_to_2cols_with_empty_space() {
+        // Original: 4 cols, A(0,0), B(1,0), _(2,0), C(3,0)
+        // Expected: 2 cols, A(0,0), B(1,0), _(0,1), C(1,1)
+        let items = vec![
+            test_item("A", 0, 0),
+            test_item("B", 1, 0),
+            test_item("C", 3, 0),
+        ];
+        let mut data = test_data(2, items); // Change to 2 cols
+
+        reflow_items(&mut data);
+
+        // A should be at (0, 0) - linear index 0 -> row 0, col 0
+        assert_eq!(data.items[0].grid_col, 0);
+        assert_eq!(data.items[0].grid_row, 0);
+
+        // B should be at (1, 0) - linear index 1 -> row 0, col 1
+        assert_eq!(data.items[1].grid_col, 1);
+        assert_eq!(data.items[1].grid_row, 0);
+
+        // C should be at (1, 1) - linear index 3 -> row 1, col 1
+        // This preserves the empty space at (0, 1)
+        assert_eq!(data.items[2].grid_col, 1);
+        assert_eq!(data.items[2].grid_row, 1);
+    }
+
+    #[test]
+    fn test_reflow_items_2cols_to_4cols() {
+        // Original: 2 cols, A(0,0), B(1,0), C(0,1)
+        // Expected: 4 cols, A(0,0), B(1,0), C(2,0)
+        let items = vec![
+            test_item("A", 0, 0),
+            test_item("B", 1, 0),
+            test_item("C", 0, 1),
+        ];
+        let mut data = test_data(4, items); // Change to 4 cols
+
+        reflow_items(&mut data);
+
+        // A should be at (0, 0) - linear index 0
+        assert_eq!(data.items[0].grid_col, 0);
+        assert_eq!(data.items[0].grid_row, 0);
+
+        // B should be at (1, 0) - linear index 1
+        assert_eq!(data.items[1].grid_col, 1);
+        assert_eq!(data.items[1].grid_row, 0);
+
+        // C should be at (2, 0) - linear index 2
+        assert_eq!(data.items[2].grid_col, 2);
+        assert_eq!(data.items[2].grid_row, 0);
+    }
+
+    #[test]
+    fn test_reflow_items_preserves_auto_layout() {
+        // Items with grid_col=-1 (auto-layout) should not be modified
+        let items = vec![
+            test_item("A", -1, -1),
+            test_item("B", 1, 0),
+            test_item("C", -1, -1),
+        ];
+        let mut data = test_data(3, items);
+
+        reflow_items(&mut data);
+
+        // Auto-layout items should remain unchanged
+        assert_eq!(data.items[0].grid_col, -1);
+        assert_eq!(data.items[0].grid_row, -1);
+        assert_eq!(data.items[2].grid_col, -1);
+        assert_eq!(data.items[2].grid_row, -1);
+
+        // Fixed position item should be reflowed
+        assert_eq!(data.items[1].grid_col, 1);
+        assert_eq!(data.items[1].grid_row, 0);
+    }
+
+    #[test]
+    fn test_reflow_items_empty_list() {
+        let items: Vec<GridFileItem> = vec![];
+        let mut data = test_data(3, items);
+
+        reflow_items(&mut data);
+
+        // Should not panic
+        assert_eq!(data.items.len(), 0);
+    }
+
+    #[test]
+    fn test_reflow_items_all_auto_layout() {
+        let items = vec![test_item("A", -1, -1), test_item("B", -1, -1)];
+        let mut data = test_data(3, items);
+
+        reflow_items(&mut data);
+
+        // All items should remain auto-layout
+        assert_eq!(data.items[0].grid_col, -1);
+        assert_eq!(data.items[1].grid_col, -1);
+    }
+
+    #[test]
+    fn test_reflow_items_invalid_cols() {
+        let items = vec![test_item("A", 0, 0)];
+        let mut data = test_data(0, items); // Invalid cols
+
+        reflow_items(&mut data);
+
+        // Should not panic and should not modify items
+        assert_eq!(data.items[0].grid_col, 0);
+        assert_eq!(data.items[0].grid_row, 0);
+    }
+}

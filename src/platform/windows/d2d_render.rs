@@ -23,11 +23,10 @@ use std::ffi::c_void;
 use windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED;
 use windows::Win32::Graphics::Direct2D::{
     Common::{D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_POINT_2F, D2D_SIZE_U},
-    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
-    D2D1_BITMAP_PROPERTIES, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-    D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
-    D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT,
-    D2D1_ANTIALIAS_MODE_ALIASED,
+    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, D2D1_ANTIALIAS_MODE_ALIASED,
+    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_BITMAP_PROPERTIES, D2D1_DRAW_TEXT_OPTIONS_NONE,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES,
+    D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL,
@@ -835,20 +834,28 @@ pub fn render_icon_grid(
         // Calculate scrollbar thumb size and position
         let scrollbar_w = scale_for_dpi(6, dpi) as f32;
         let min_thumb_h = scale_for_dpi(30, dpi) as f32;
-        let thumb_h = (visible_h as f32 * visible_h as f32 / total_content_h as f32).max(min_thumb_h);
+        let thumb_h =
+            (visible_h as f32 * visible_h as f32 / total_content_h as f32).max(min_thumb_h);
         let max_scroll = total_content_h - visible_h;
-        let scroll_ratio = if max_scroll > 0 { scroll_offset as f32 / max_scroll as f32 } else { 0.0 };
+        let scroll_ratio = if max_scroll > 0 {
+            scroll_offset as f32 / max_scroll as f32
+        } else {
+            0.0
+        };
         let track_h = visible_h as f32 - thumb_h;
         let thumb_y = grid_top as f32 + scroll_ratio * track_h;
 
         // Draw scrollbar track (subtle background)
-        let track_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(255, 255, 255, 15), None) };
+        let track_brush =
+            unsafe { target.CreateSolidColorBrush(&d2d_color(255, 255, 255, 15), None) };
         if let Ok(ref tb) = track_brush {
             let track_rect = D2D1_ROUNDED_RECT {
                 rect: d2d_rect(
                     (layout.grid_left + cols * cell_w) as f32 + scale_for_dpi(2, dpi) as f32,
                     grid_top as f32,
-                    (layout.grid_left + cols * cell_w) as f32 + scale_for_dpi(2, dpi) as f32 + scrollbar_w,
+                    (layout.grid_left + cols * cell_w) as f32
+                        + scale_for_dpi(2, dpi) as f32
+                        + scrollbar_w,
                     window_height as f32,
                 ),
                 radiusX: scrollbar_w / 2.0,
@@ -858,13 +865,16 @@ pub fn render_icon_grid(
         }
 
         // Draw scrollbar thumb
-        let thumb_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(255, 255, 255, 80), None) };
+        let thumb_brush =
+            unsafe { target.CreateSolidColorBrush(&d2d_color(255, 255, 255, 80), None) };
         if let Ok(ref hb) = thumb_brush {
             let thumb_rect = D2D1_ROUNDED_RECT {
                 rect: d2d_rect(
                     (layout.grid_left + cols * cell_w) as f32 + scale_for_dpi(2, dpi) as f32,
                     thumb_y,
-                    (layout.grid_left + cols * cell_w) as f32 + scale_for_dpi(2, dpi) as f32 + scrollbar_w,
+                    (layout.grid_left + cols * cell_w) as f32
+                        + scale_for_dpi(2, dpi) as f32
+                        + scrollbar_w,
                     thumb_y + thumb_h,
                 ),
                 radiusX: scrollbar_w / 2.0,

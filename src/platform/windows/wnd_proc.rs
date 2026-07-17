@@ -16,12 +16,14 @@
 use super::d2d_render::render_layered_window;
 use super::ffi_imports::*;
 use super::ffi_types::*;
-use crate::box_core::layout_calc::calculate_grid;
-use crate::box_core::view_engine::get_view_params;
-use super::grid_layout::{grid_hit_test, lock_btn_rect, more_btn_rect, recalculate_layout, reflow_items};
+use super::grid_layout::{
+    grid_hit_test, lock_btn_rect, more_btn_rect, recalculate_layout, reflow_items,
+};
 use super::grid_window::{get_data, GridWindowData};
 use super::menu_window::show_menu_window;
 use super::shell_menu::{show_desktop_context_menu, show_shell_context_menu};
+use crate::box_core::layout_calc::calculate_grid;
+use crate::box_core::view_engine::get_view_params;
 
 fn remove_grid_item_if_missing_after_shell_menu(hwnd: HWND, logical_path: &str) {
     if super::icon_hider::icon_exists_for_box(logical_path) {
@@ -264,7 +266,8 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                     // Clamp scroll_offset after layout change (content may have reflowed)
                     let view_params = get_view_params(&data.view_mode, dpi);
                     let grid_layout = calculate_grid(win_w, data.title_h, &view_params, dpi);
-                    let total_rows = (data.items.len() as i32 + grid_layout.cols - 1) / grid_layout.cols;
+                    let total_rows =
+                        (data.items.len() as i32 + grid_layout.cols - 1) / grid_layout.cols;
                     let total_content_h = total_rows * grid_layout.cell_h;
                     let visible_h = win_h - data.title_h;
                     let max_scroll = (total_content_h - visible_h).max(0);
@@ -754,7 +757,12 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             if let Some(data) = get_data(hwnd) {
                 let dpi = unsafe { GetDpiForWindow(hwnd) };
                 let dpi = if dpi > 0 { dpi } else { 96 };
-                let mut wr = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+                let mut wr = RECT {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                };
                 unsafe { GetWindowRect(hwnd, &mut wr) };
                 let window_w = wr.right - wr.left;
                 let view_params = get_view_params(&data.view_mode, dpi);
@@ -767,7 +775,8 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 let visible_h = window_h - data.title_h;
                 let max_scroll = (total_content_h - visible_h).max(0);
                 let old_offset = data.scroll_offset;
-                data.scroll_offset = (data.scroll_offset - delta * scroll_amount).clamp(0, max_scroll);
+                data.scroll_offset =
+                    (data.scroll_offset - delta * scroll_amount).clamp(0, max_scroll);
                 if data.scroll_offset != old_offset {
                     render_layered_window(hwnd);
                 }
