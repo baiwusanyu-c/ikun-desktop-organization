@@ -5,7 +5,8 @@
 
 use super::overlay_render::render_desktop_overlay;
 use super::overlay_window::{
-    get_overlay_data, overlay_hit_test, overlay_layout_params, physical_to_logical,
+    get_overlay_data, overlay_hit_test, overlay_layout_params,
+    overlay_snap_to_grid,
     refresh_desktop_overlay_icons, save_overlay_icon_positions,
 };
 use crate::platform::windows::ffi_imports::*;
@@ -368,13 +369,17 @@ fn restore_dragged_icon_position(hwnd: HWND, item_idx: i32, screen_x: i32, scree
         if item_idx < 0 || (item_idx as usize) >= data.icons.len() {
             return;
         }
-        let layout = overlay_layout_params(data.width, data.dpi);
-        let local_x = screen_x.saturating_sub(data.x) - layout.cell_w / 2;
-        let local_y = screen_y.saturating_sub(data.y) - layout.cell_h / 2;
-        let max_x = data.width.saturating_sub(layout.cell_w).max(0);
-        let max_y = data.height.saturating_sub(layout.cell_h).max(0);
-        data.icons[item_idx as usize].x = physical_to_logical(local_x.clamp(0, max_x), data.dpi);
-        data.icons[item_idx as usize].y = physical_to_logical(local_y.clamp(0, max_y), data.dpi);
+        let local_x = screen_x.saturating_sub(data.x);
+        let local_y = screen_y.saturating_sub(data.y);
+        let (snap_pos, occupied_by) = overlay_snap_to_grid(data, local_x, local_y, item_idx);
+        if let Some(occupied_idx) = occupied_by {
+            let drag_x = data.icons[item_idx as usize].x;
+            let drag_y = data.icons[item_idx as usize].y;
+            data.icons[occupied_idx].x = drag_x;
+            data.icons[occupied_idx].y = drag_y;
+        }
+        data.icons[item_idx as usize].x = snap_pos[0];
+        data.icons[item_idx as usize].y = snap_pos[1];
         data.selected_item = item_idx;
         data.hovered_item = item_idx;
     }
