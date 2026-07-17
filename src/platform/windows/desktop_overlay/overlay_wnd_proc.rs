@@ -76,6 +76,21 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             0
         }
         WM_MOUSEACTIVATE => {
+            // 在点击传递到桌面之前，检查是否点击了空白区域
+            // 如果是空白区域且有选中项，则取消选中
+            let screen_x = get_x_lparam(lparam);
+            let screen_y = get_y_lparam(lparam);
+            let (local_x, local_y) = screen_to_overlay_client(hwnd, screen_x, screen_y);
+            
+            if let Some(data) = get_overlay_data(hwnd) {
+                let hit = overlay_hit_test(data, local_x, local_y);
+                // 如果点击的是空白区域（hit == -1）且有选中项，则取消选中
+                if hit == -1 && data.selected_item != -1 {
+                    data.selected_item = -1;
+                    render_desktop_overlay(hwnd);
+                }
+            }
+            
             log::debug!("覆盖窗口 WM_MOUSEACTIVATE: 返回 MA_NOACTIVATE");
             MA_NOACTIVATE as LRESULT
         }
