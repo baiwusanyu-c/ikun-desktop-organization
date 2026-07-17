@@ -3,7 +3,7 @@
 //! 阶段 3 在图标区域接管鼠标事件：hover、选中、双击打开、右键菜单和拖入分类框。
 //! 空白区域由覆盖窗口处理桌面背景菜单，避免把右键/新建转发给已隐藏的原生桌面。
 
-use super::overlay_grid::overlay_snap_to_grid;
+use super::overlay_grid::{overlay_grid_to_logical, overlay_snap_to_grid};
 use super::overlay_render::render_desktop_overlay;
 use super::overlay_window::{
     get_overlay_data, overlay_hit_test, overlay_layout_params, refresh_desktop_overlay_icons,
@@ -371,6 +371,18 @@ fn restore_dragged_icon_position(hwnd: HWND, item_idx: i32, screen_x: i32, scree
         }
         let local_x = screen_x.saturating_sub(data.x);
         let local_y = screen_y.saturating_sub(data.y);
+        // Materialize dragged icon's auto-layout position before swap
+        // so the swapped icon gets a concrete position, not (-1, -1)
+        if data.icons[item_idx as usize].x < 0.0 || data.icons[item_idx as usize].y < 0.0 {
+            let layout = overlay_layout_params(data.width, data.dpi);
+            let total = data.icons.len().max(1) as i32;
+            let rows = (total + layout.cols - 1) / layout.cols;
+            let auto_col = (item_idx as i32) / rows;
+            let auto_row = (item_idx as i32) % rows;
+            let resolved = overlay_grid_to_logical(data, auto_col, auto_row);
+            data.icons[item_idx as usize].x = resolved[0];
+            data.icons[item_idx as usize].y = resolved[1];
+        }
         let (snap_pos, occupied_by) = overlay_snap_to_grid(data, local_x, local_y, item_idx);
         if let Some(occupied_idx) = occupied_by {
             let drag_x = data.icons[item_idx as usize].x;

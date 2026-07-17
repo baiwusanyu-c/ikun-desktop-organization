@@ -237,6 +237,23 @@ fn handle_same_box_drop(hwnd: HWND, dragged_idx: usize, screen_x: i32, screen_y:
         return;
     }
 
+    // Materialize dragged item's auto-layout position before any swap
+    if data.items[dragged_idx].grid_col < 0 {
+        let auto_col = (dragged_idx as i32) % layout.cols;
+        let auto_row = (dragged_idx as i32) / layout.cols;
+        data.items[dragged_idx].grid_col = auto_col;
+        data.items[dragged_idx].grid_row = auto_row;
+    }
+
+    // Materialize all auto-layout items' positions before occupied check
+    // to ensure accurate collision detection and swap
+    for (i, item) in data.items.iter_mut().enumerate() {
+        if item.grid_col < 0 {
+            item.grid_col = (i as i32) % layout.cols;
+            item.grid_row = (i as i32) / layout.cols;
+        }
+    }
+
     // Check if another item occupies the target cell
     let occupied_idx = data
         .items
