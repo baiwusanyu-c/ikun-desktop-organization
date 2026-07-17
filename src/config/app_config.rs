@@ -465,6 +465,9 @@ pub struct BoxLayoutData {
     /// 对应的显示名称列表（与 icon_names 一一对应）
     #[serde(default)]
     pub display_names: Vec<String>,
+    /// 每个图标的网格位置 [col, row]，-1 表示自动布局（与 icon_names 一一对应）
+    #[serde(default)]
+    pub grid_positions: Vec<[i32; 2]>,
     /// 此框样式覆盖（None = 使用全局 box_style 默认值）
     pub style_overrides: Option<BoxStyleOverrides>,
 }
@@ -483,6 +486,7 @@ impl Default for BoxLayoutData {
             group_by: GroupBy::default(),
             icon_names: Vec::new(),
             display_names: Vec::new(),
+            grid_positions: Vec::new(),
             style_overrides: None,
         }
     }
@@ -907,6 +911,7 @@ mod tests {
             group_by: GroupBy::Name,
             icon_names: vec!["a.exe".to_string(), "b.lnk".to_string()],
             display_names: vec!["程序A".to_string(), "程序B".to_string()],
+            grid_positions: Vec::new(),
             style_overrides: None,
         };
 
@@ -1100,6 +1105,7 @@ mod tests {
                 "::{5399E694-6CE5-4D6C-8FCE-1D8870FDCBA0}".to_string(),
             ],
             display_names: vec!["测试".to_string(), "控制面板".to_string()],
+            grid_positions: Vec::new(),
             style_overrides: None,
         };
 

@@ -374,6 +374,8 @@ impl MyApp {
                     file_path: file_path.clone(),
                     display_name,
                     icon_handle: hicon,
+                    grid_col: -1,
+                    grid_row: -1,
                 });
             }
             let params = GridCreateParams {
@@ -501,6 +503,8 @@ impl MyApp {
                     file_path: path_str,
                     display_name: icon.display_name.clone(),
                     icon_handle: hicon,
+                    grid_col: -1,
+                    grid_row: -1,
                 });
             }
             let params = GridCreateParams {

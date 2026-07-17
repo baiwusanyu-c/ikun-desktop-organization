@@ -472,6 +472,8 @@ impl AppRuntime {
                     file_path: path_str,
                     display_name: icon.display_name.clone(),
                     icon_handle: hicon,
+                    grid_col: -1,
+                    grid_row: -1,
                 });
             }
             let params = GridCreateParams {
@@ -641,10 +643,21 @@ impl AppRuntime {
                 let hicon = extract_file_icon(&read_path)
                     .map(|fi| fi.hicon)
                     .unwrap_or(std::ptr::null_mut());
+                // Restore grid position if saved
+                let (grid_col, grid_row) = if idx < box_data.grid_positions.len() {
+                    (
+                        box_data.grid_positions[idx][0],
+                        box_data.grid_positions[idx][1],
+                    )
+                } else {
+                    (-1, -1)
+                };
                 items.push(GridFileItem {
                     file_path: file_path.clone(),
                     display_name,
                     icon_handle: hicon,
+                    grid_col,
+                    grid_row,
                 });
             }
             let params = GridCreateParams {

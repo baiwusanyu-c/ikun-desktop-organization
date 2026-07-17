@@ -40,6 +40,10 @@ pub struct GridFileItem {
     pub display_name: String,
     /// 系统图标句柄（调用者负责提供，格子窗口负责释放）
     pub icon_handle: HICON,
+    /// 网格列号（-1 = 自动布局，基于索引）
+    pub grid_col: i32,
+    /// 网格行号（-1 = 自动布局，基于索引）
+    pub grid_row: i32,
 }
 
 unsafe impl Send for GridFileItem {}
@@ -652,6 +656,12 @@ pub fn collect_grid_layout() -> Vec<crate::config::BoxLayoutData> {
             .iter()
             .map(|item| item.file_path.clone())
             .collect();
+        let grid_positions: Vec<[i32; 2]> = data
+            .items
+            .iter()
+            .map(|item| [item.grid_col, item.grid_row])
+            .collect();
+
         let display_names: Vec<String> = data
             .items
             .iter()
@@ -693,6 +703,7 @@ pub fn collect_grid_layout() -> Vec<crate::config::BoxLayoutData> {
             group_by: data.group_by.clone(),
             icon_names,
             display_names,
+            grid_positions,
             style_overrides: None,
         });
     }

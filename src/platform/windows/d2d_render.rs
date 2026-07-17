@@ -682,11 +682,18 @@ pub fn render_icon_grid(
     let hover_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(70, 90, 130, 70), None) };
 
     for (i, item) in items.iter().enumerate() {
-        let col = (i as i32) % cols;
-        let row = (i as i32) / cols;
-
-        let cell_x = grid_left + col * cell_w;
-        let cell_y = grid_top + row * cell_h;
+        let (cell_x, cell_y) = if item.grid_col >= 0 && item.grid_row >= 0 {
+            // Per-item grid position (user-placed via drag)
+            (
+                grid_left + item.grid_col * cell_w,
+                grid_top + item.grid_row * cell_h,
+            )
+        } else {
+            // Auto-layout: index-based position
+            let col = (i as i32) % cols;
+            let row = (i as i32) / cols;
+            (grid_left + col * cell_w, grid_top + row * cell_h)
+        };
         let is_selected = i as i32 == selected_item;
         let is_hovered = i as i32 == hovered_item;
 

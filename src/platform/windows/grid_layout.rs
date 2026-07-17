@@ -42,9 +42,29 @@ pub(crate) fn grid_hit_test(
     let view_params = get_view_params(&data.view_mode, dpi);
     let layout = calculate_grid(window_width, data.title_h, &view_params, dpi);
 
-    layout_hit_test(&layout, data.items.len(), click_x, click_y)
-        .map(|i| i as i32)
-        .unwrap_or(-1)
+    // First check positioned items (grid_col >= 0, grid_row >= 0)
+    for (i, item) in data.items.iter().enumerate() {
+        if item.grid_col >= 0 && item.grid_row >= 0 {
+            let cell_x = layout.grid_left + item.grid_col * layout.cell_w;
+            let cell_y = layout.grid_top + item.grid_row * layout.cell_h;
+            if click_x >= cell_x
+                && click_x < cell_x + layout.cell_w
+                && click_y >= cell_y
+                && click_y < cell_y + layout.cell_h
+            {
+                return i as i32;
+            }
+        }
+    }
+
+    // Fall back to index-based hit test for auto-layout items
+    // Skip items that have per-item positions (already checked above)
+    if let Some(i) = layout_hit_test(&layout, data.items.len(), click_x, click_y) {
+        if i < data.items.len() && data.items[i].grid_col < 0 {
+            return i as i32;
+        }
+    }
+    -1
 }
 
 /// 计算锁定按钮在窗口坐标中的矩形区域

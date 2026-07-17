@@ -144,8 +144,8 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
     let target_hwnd = unsafe { WindowFromPoint(pt) };
 
     if target_hwnd == hwnd {
-        // 拖回同一个框 → 取消
-        log::info!("拖拽取消: 拖回同一个分类框");
+        // 同框内拖拽 → grid snap + swap
+        handle_same_box_drop(hwnd, item_idx as usize, pt.x, pt.y);
         return true;
     }
 
@@ -185,6 +185,96 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
     }
 
     true
+}
+
+/// 同框内拖拽：grid snap + swap
+fn handle_same_box_drop(hwnd: HWND, dragged_idx: usize, screen_x: i32, screen_y: i32) {
+    let data = match unsafe { get_data(hwnd) } {
+        Some(d) => d,
+        None => return,
+    };
+
+    if dragged_idx >= data.items.len() {
+        return;
+    }
+
+    // Convert screen coords to window client coords
+    let mut wr = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    unsafe { GetWindowRect(hwnd, &mut wr) };
+    let client_x = screen_x - wr.left;
+    let client_y = screen_y - wr.top;
+
+    // Get current layout
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    let dpi = if dpi > 0 { dpi } else { 96 };
+    let mut wr2 = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    unsafe { GetWindowRect(hwnd, &mut wr2) };
+    let window_width = wr2.right - wr2.left;
+
+    let view_params = crate::box_core::view_engine::get_view_params(&data.view_mode, dpi);
+    let layout =
+        crate::box_core::layout_calc::calculate_grid(window_width, data.title_h, &view_params, dpi);
+
+    // Determine target grid cell from click position
+    let target_col;
+    let target_row;
+    if client_x >= layout.grid_left && client_y >= layout.grid_top {
+        target_col = ((client_x - layout.grid_left) / layout.cell_w).max(0);
+        target_row = ((client_y - layout.grid_top) / layout.cell_h).max(0);
+    } else {
+        // Click outside grid area → cancel
+        log::info!("同框拖拽: 释放在网格区域外，取消");
+        return;
+    }
+
+    // Check if another item occupies the target cell
+    let occupied_idx = data
+        .items
+        .iter()
+        .enumerate()
+        .find(|(i, item)| {
+            *i != dragged_idx && item.grid_col == target_col && item.grid_row == target_row
+        })
+        .map(|(i, _)| i);
+
+    if let Some(other_idx) = occupied_idx {
+        // Swap: exchange grid positions
+        let drag_col = data.items[dragged_idx].grid_col;
+        let drag_row = data.items[dragged_idx].grid_row;
+        data.items[dragged_idx].grid_col = target_col;
+        data.items[dragged_idx].grid_row = target_row;
+        data.items[other_idx].grid_col = drag_col;
+        data.items[other_idx].grid_row = drag_row;
+        log::info!(
+            "Grid swap: '{}' <-> '{}'",
+            data.items[dragged_idx].display_name,
+            data.items[other_idx].display_name,
+        );
+    } else {
+        // Move to empty cell
+        data.items[dragged_idx].grid_col = target_col;
+        data.items[dragged_idx].grid_row = target_row;
+        log::info!(
+            "Grid snap: '{}' -> ({}, {})",
+            data.items[dragged_idx].display_name,
+            target_col,
+            target_row,
+        );
+    }
+
+    data.selected_item = dragged_idx as i32;
+    render_layered_window(hwnd);
+    save_config();
 }
 
 /// 框→框移动：从源框移除项，添加到目标框
@@ -379,6 +469,8 @@ pub(crate) fn handle_drag_item_added(hwnd: HWND) {
                 file_path: file_path.clone(),
                 display_name: display_name.clone(),
                 icon_handle,
+                grid_col: -1,
+                grid_row: -1,
             });
             log::info!(
                 "项已添加到框: '{}' (read_path={})",
@@ -515,6 +607,8 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
             file_path: file_path.clone(),
             display_name: display_name.clone(),
             icon_handle,
+            grid_col: -1,
+            grid_row: -1,
         });
         added += 1;
 
