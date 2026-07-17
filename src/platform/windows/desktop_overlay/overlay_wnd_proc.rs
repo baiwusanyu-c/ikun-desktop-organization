@@ -49,12 +49,9 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             0
         }
         WM_MOUSELEAVE => {
-            if let Some(data) = get_overlay_data(hwnd) {
-                if data.hovered_item != -1 {
-                    data.hovered_item = -1;
-                    render_desktop_overlay(hwnd);
-                }
-            }
+            // WS_EX_LAYERED 窗口在 alpha=0 像素上会持续触发 WM_MOUSELEAVE
+            // 忽略此消息，hover 状态由 WM_MOUSEMOVE 自然管理
+            // 当鼠标真正离开窗口时，WM_MOUSEMOVE 的 hit test 会返回 -1 并更新 hover
             0
         }
         WM_LBUTTONDOWN => {

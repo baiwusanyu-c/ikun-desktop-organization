@@ -175,7 +175,10 @@ pub(crate) fn render_desktop_overlay(hwnd: HWND) {
     }
 
     unsafe { target.BeginDraw() };
-    unsafe { target.Clear(Some(&d2d_color(0, 0, 0, 0))) };
+    // 动态背景透明度：有选中项时使用 alpha=1（接收点击），无选中项时使用 alpha=0（穿透到桌面）
+    // 这是 WS_EX_LAYERED 窗口的特性：alpha=0 的像素会被系统视为不存在，鼠标事件直接穿透
+    let bg_alpha: u8 = if data.selected_item >= 0 { 1 } else { 0 };
+    unsafe { target.Clear(Some(&d2d_color(0, 0, 0, bg_alpha))) };
     draw_desktop_icons(
         target,
         dw_factory,
