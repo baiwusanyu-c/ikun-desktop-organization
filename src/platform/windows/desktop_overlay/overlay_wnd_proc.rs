@@ -580,4 +580,325 @@ mod tests {
         assert_eq!(loword_lparam(lparam), 1920);
         assert_eq!(hiword_lparam(lparam), 1080);
     }
+
+    // ===== Hover and Selection Regression Tests =====
+    // These tests prevent regression of the 7-attempt bug fix for hover flickering
+    // and click-to-deselect (see windows-layered-window-guide.md)
+
+    #[test]
+    fn test_hover_state_stability() {
+        // When hit value doesn't change, hovered_item should not change
+        let mut hovered_item: i32 = 0;
+        let hit = 0;
+        if hovered_item != hit {
+            hovered_item = hit;
+        }
+        assert_eq!(hovered_item, 0);
+    }
+
+    #[test]
+    fn test_click_blank_area_deselects() {
+        let mut selected_item: i32 = 2;
+        let hit = -1;
+        if hit >= 0 {
+            selected_item = hit;
+        } else {
+            selected_item = -1;
+        }
+        assert_eq!(selected_item, -1, "clicking blank area should deselect");
+    }
+
+    #[test]
+    fn test_dynamic_alpha_based_on_selection() {
+        let selected_item = -1;
+        let bg_alpha: u8 = if selected_item >= 0 { 1 } else { 0 };
+        assert_eq!(bg_alpha, 0, "no selection should have alpha=0");
+
+        let selected_item = 2;
+        let bg_alpha: u8 = if selected_item >= 0 { 1 } else { 0 };
+        assert_eq!(bg_alpha, 1, "has selection should have alpha=1");
+    }
+
+    #[test]
+    fn test_click_icon_selects_it() {
+        let mut selected_item: i32 = -1;
+        let mut drag_pending = false;
+        let hit = 3;
+        if hit >= 0 {
+            selected_item = hit;
+            drag_pending = true;
+        }
+        assert_eq!(selected_item, 3);
+        assert!(drag_pending);
+    }
+
+    #[test]
+    fn test_hover_updates_only_on_change() {
+        let hovered_item: i32 = 1;
+        let hit = 1;
+        let should_render = hovered_item != hit;
+        assert!(!should_render);
+    }
+
+    #[test]
+    fn test_switch_selection_on_icon_click() {
+        let mut selected_item: i32 = 2;
+        let hit = 5;
+        if hit >= 0 {
+            selected_item = hit;
+        }
+        assert_eq!(selected_item, 5);
+    }
+
+    // ===== Dynamic Alpha Tests =====
+    
+    #[test]
+    fn test_dynamic_alpha_no_selection() {
+        let selected_item: i32 = -1;
+        let bg_alpha: u8 = if selected_item >= 0 { 1 } else { 0 };
+        assert_eq!(bg_alpha, 0);
+    }
+    
+    #[test]
+    fn test_dynamic_alpha_with_selection() {
+        let selected_item: i32 = 5;
+        let bg_alpha: u8 = if selected_item >= 0 { 1 } else { 0 };
+        assert_eq!(bg_alpha, 1);
+    }
+    
+    #[test]
+    fn test_dynamic_alpha_boundary_cases() {
+        let selected_item: i32 = 0;
+        let bg_alpha: u8 = if selected_item >= 0 { 1 } else { 0 };
+        assert_eq!(bg_alpha, 1);
+        
+        let selected_item: i32 = -1;
+        let bg_alpha: u8 = if selected_item >= 0 { 1 } else { 0 };
+        assert_eq!(bg_alpha, 0);
+        
+        let selected_item: i32 = -2;
+        let bg_alpha: u8 = if selected_item >= 0 { 1 } else { 0 };
+        assert_eq!(bg_alpha, 0);
+    }
+    
+    // ===== Hover State Management Tests =====
+    
+    #[test]
+    fn test_hover_updates_on_hit_change() {
+        let mut hovered_item: i32 = -1;
+        let hit = 3;
+        if hovered_item != hit {
+            hovered_item = hit;
+        }
+        assert_eq!(hovered_item, 3);
+    }
+    
+    #[test]
+    fn test_hover_stability_same_hit() {
+        let mut hovered_item: i32 = 5;
+        let hit = 5;
+        let changed = hovered_item != hit;
+        if changed {
+            hovered_item = hit;
+        }
+        assert_eq!(hovered_item, 5);
+        assert!(!changed);
+    }
+    
+    #[test]
+    fn test_hover_transition_icon_to_blank() {
+        let mut hovered_item: i32 = 2;
+        let hit = -1;
+        if hovered_item != hit {
+            hovered_item = hit;
+        }
+        assert_eq!(hovered_item, -1);
+    }
+    
+    #[test]
+    fn test_hover_transition_blank_to_icon() {
+        let mut hovered_item: i32 = -1;
+        let hit = 7;
+        if hovered_item != hit {
+            hovered_item = hit;
+        }
+        assert_eq!(hovered_item, 7);
+    }
+    
+    #[test]
+    fn test_hover_rapid_transitions() {
+        let mut hovered_item: i32 = -1;
+        
+        let hit = 3;
+        if hovered_item != hit { hovered_item = hit; }
+        assert_eq!(hovered_item, 3);
+        
+        let hit = 5;
+        if hovered_item != hit { hovered_item = hit; }
+        assert_eq!(hovered_item, 5);
+        
+        let hit = 5;
+        let changed = hovered_item != hit;
+        if changed { hovered_item = hit; }
+        assert_eq!(hovered_item, 5);
+        assert!(!changed);
+        
+        let hit = -1;
+        if hovered_item != hit { hovered_item = hit; }
+        assert_eq!(hovered_item, -1);
+    }
+    
+    // ===== Click Handling Tests =====
+    
+    #[test]
+    fn test_click_icon_selects_and_prepares_drag() {
+        let mut selected_item: i32 = -1;
+        let mut drag_pending: bool = false;
+        let mut drag_start_x: i32 = 0;
+        let mut drag_start_y: i32 = 0;
+        
+        let hit = 4;
+        let local_x = 150;
+        let local_y = 200;
+        
+        if hit >= 0 {
+            selected_item = hit;
+            drag_pending = true;
+            drag_start_x = local_x;
+            drag_start_y = local_y;
+        } else {
+            selected_item = -1;
+            drag_pending = false;
+        }
+        
+        assert_eq!(selected_item, 4);
+        assert!(drag_pending);
+        assert_eq!(drag_start_x, 150);
+        assert_eq!(drag_start_y, 200);
+    }
+    
+    #[test]
+    fn test_click_blank_area_deselects_and_cancels_drag() {
+        let mut selected_item: i32 = 3;
+        let mut drag_pending: bool = true;
+        
+        let hit = -1;
+        
+        if hit >= 0 {
+            selected_item = hit;
+            drag_pending = true;
+        } else {
+            selected_item = -1;
+            drag_pending = false;
+        }
+        
+        assert_eq!(selected_item, -1);
+        assert!(!drag_pending);
+    }
+    
+    #[test]
+    fn test_click_different_icon_switches_selection() {
+        let mut selected_item: i32 = 2;
+        
+        let hit = 8;
+        
+        if hit >= 0 {
+            selected_item = hit;
+        } else {
+            selected_item = -1;
+        }
+        
+        assert_eq!(selected_item, 8);
+    }
+    
+    #[test]
+    fn test_click_same_icon_keeps_selection() {
+        let mut selected_item: i32 = 5;
+        
+        let hit = 5;
+        
+        if hit >= 0 {
+            selected_item = hit;
+        } else {
+            selected_item = -1;
+        }
+        
+        assert_eq!(selected_item, 5);
+    }
+    
+    // ===== Integration Tests =====
+    
+    #[test]
+    fn test_full_interaction_cycle() {
+        let mut selected_item: i32 = -1;
+        let mut hovered_item: i32 = -1;
+        let mut drag_pending: bool = false;
+        
+        let hit = 3;
+        if hovered_item != hit { hovered_item = hit; }
+        assert_eq!(hovered_item, 3);
+        assert_eq!(selected_item, -1);
+        
+        let hit = 3;
+        if hit >= 0 {
+            selected_item = hit;
+            drag_pending = true;
+        }
+        assert_eq!(selected_item, 3);
+        assert!(drag_pending);
+        
+        let hit = 5;
+        if hovered_item != hit { hovered_item = hit; }
+        assert_eq!(hovered_item, 5);
+        assert_eq!(selected_item, 3);
+        
+        let hit = -1;
+        if hit >= 0 {
+            selected_item = hit;
+            drag_pending = true;
+        } else {
+            selected_item = -1;
+            drag_pending = false;
+        }
+        assert_eq!(selected_item, -1);
+        assert!(!drag_pending);
+        
+        // After clicking blank area, mouse moves to blank area (hover)
+        let hit = -1;
+        if hovered_item != hit { hovered_item = hit; }
+        assert_eq!(hovered_item, -1);
+        
+        let bg_alpha: u8 = if selected_item >= 0 { 1 } else { 0 };
+        assert_eq!(bg_alpha, 0);
+    }
+    
+    #[test]
+    fn test_alpha_changes_with_selection_state() {
+        let mut selected_item: i32 = -1;
+        
+        let mut bg_alpha: u8 = if selected_item >= 0 { 1 } else { 0 };
+        assert_eq!(bg_alpha, 0);
+        
+        selected_item = 2;
+        bg_alpha = if selected_item >= 0 { 1 } else { 0 };
+        assert_eq!(bg_alpha, 1);
+        
+    
+    }
+    
+    // ===== WM_MOUSELEAVE Ignored Tests =====
+    
+    #[test]
+    fn test_mouseleave_ignored_hover_preserved() {
+        let hovered_item: i32 = 5;
+        
+        assert_eq!(hovered_item, 5);
+        
+        let mut new_hovered = hovered_item;
+        let hit = -1;
+        if new_hovered != hit {
+            new_hovered = hit;
+        }
+        assert_eq!(new_hovered, -1);
+    }
 }

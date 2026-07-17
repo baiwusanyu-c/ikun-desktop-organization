@@ -43,6 +43,7 @@ UI 层 (app.rs, ui/)             → egui 控制面板，通过 AppContext 交�
 | [Error Handling](./error-handling.md) | 使用 anyhow::Result、优雅降级、错误日志 |
 | [Quality Guidelines](./quality-guidelines.md) | 禁止模式、必须模式、测试要求 |
 | [Logging Guidelines](./logging-guidelines.md) | 日志级别、中文日志、禁止高频日志 |
+| [Windows Platform Guidelines](./windows-platform-guidelines.md) | WS_EX_LAYERED alpha 行为、坐标系统、D2D 渲染 |
 
 ---
 

@@ -1,0 +1,386 @@
+﻿# Windows Platform Quality Guidelines
+
+> Windows-specific coding standards and common pitfalls
+
+---
+
+## Layered Windows (WS_EX_LAYERED)
+
+### Alpha Behavior
+
+WS_EX_LAYERED windows have **pixel-level alpha testing** that happens before WM_NCHITTEST:
+
+- **Alpha = 0**: Pixel is transparent, mouse events pass through, WM_MOUSELEAVE fires repeatedly
+- **Alpha > 0**: Pixel is opaque, receives all mouse events normally
+
+### Common Pitfalls
+
+#### ❌ Pitfall 1: Relying on WM_NCHITTEST for Click-Through
+
+`ust
+// WRONG: WM_NCHITTEST is bypassed for alpha=0 pixels
+WM_NCHITTEST => {
+    if is_blank_area {
+        HTTRANSPARENT  // System already bypassed this!
+    } else {
+        HTCLIENT
+    }
+}
+`
+
+#### ❌ Pitfall 2: Using WM_MOUSELEAVE for Hover Management
+
+`ust
+// WRONG: WM_MOUSELEAVE fires repeatedly on alpha=0 pixels
+WM_MOUSELEAVE => {
+    data.hovered_item = -1;  // Causes flickering!
+    render();
+}
+`
+
+#### ❌ Pitfall 3: Event Forwarding via PostMessage
+
+`ust
+// WRONG: Fighting against platform behavior
+if is_blank_area {
+    let desktop = FindWindowW(...);
+    PostMessageW(desktop, WM_LBUTTONDOWN, ...);  // Complex and unreliable
+}
+`
+
+### Correct Patterns
+
+#### ✅ Pattern 1: State-Driven Alpha
+
+`ust
+// CORRECT: Dynamic alpha based on interaction state
+let need_click_capture = data.selected_item >= 0;
+let bg_alpha: u8 = if need_click_capture { 1 } else { 0 };
+target.Clear(Some(&d2d_color(0, 0, 0, bg_alpha)));
+`
+
+#### ✅ Pattern 2: WM_MOUSEMOVE for Hover Management
+
+`ust
+// CORRECT: Let WM_MOUSEMOVE manage hover naturally
+WM_MOUSELEAVE => {
+    // Ignore - WS_EX_LAYERED triggers this unreliably
+    0
+}
+
+WM_MOUSEMOVE => {
+    let hit = hit_test(x, y);
+    if data.hovered_item != hit {
+        data.hovered_item = hit;
+        render();
+    }
+    0
+}
+`
+
+#### ✅ Pattern 3: Work With Platform Behavior
+
+`ust
+// CORRECT: Use alpha=0 for natural pass-through
+let bg_alpha = if has_selection { 1 } else { 0 };
+target.Clear(Some(&d2d_color(0, 0, 0, bg_alpha)));
+// When alpha=0, clicks naturally pass through to desktop
+`
+
+### Checklist
+
+Before implementing layered window features:
+
+- [ ] Understand that alpha=0 pixels bypass WM_NCHITTEST
+- [ ] Don't use WM_MOUSELEAVE for hover management
+- [ ] Avoid PostMessageW event forwarding
+- [ ] Use state-driven alpha for click capture/pass-through
+- [ ] Test hover behavior on both opaque and transparent pixels
+- [ ] Verify right-click menus work correctly
+- [ ] See [Windows Layered Window Guide](../guides/windows-layered-window-guide.md)
+
+---
+
+## Window Message Handling
+
+### Coordinate Systems
+
+Windows uses different coordinate systems for different messages:
+
+| Message | Coordinates | Notes |
+|---------|-------------|-------|
+| WM_MOUSEMOVE | Client coordinates | Relative to window's client area |
+| WM_NCHITTEST | Screen coordinates | Need to convert to client coords |
+| WM_LBUTTONDOWN | Client coordinates | GET_X_LPARAM(lParam) / GET_Y_LPARAM(lParam) |
+
+### Common Mistake: Coordinate Conversion
+
+`ust
+// ❌ WRONG: Using screen coordinates for hit test
+WM_LBUTTONDOWN => {
+    let (x, y) = get_mouse_pos();  // Screen coordinates
+    let hit = hit_test(x, y);  // Expects client coordinates!
+}
+
+// ✅ CORRECT: Convert to client coordinates
+WM_LBUTTONDOWN => {
+    let (screen_x, screen_y) = get_mouse_pos();
+    let (client_x, client_y) = screen_to_client(hwnd, screen_x, screen_y);
+    let hit = hit_test(client_x, client_y);
+}
+`
+
+### Coordinate Conversion Helper
+
+`ust
+fn screen_to_client(hwnd: HWND, screen_x: i32, screen_y: i32) -> (i32, i32) {
+    let mut point = POINT { x: screen_x, y: screen_y };
+    unsafe { ScreenToClient(hwnd, &mut point) };
+    (point.x, point.y)
+}
+`
+
+---
+
+## D2D Rendering
+
+### Premultiplied Alpha
+
+Direct2D uses **premultiplied alpha** for layered windows:
+
+`ust
+// Pixel format must specify premultiplied alpha
+let pixel_format = D2D1_PIXEL_FORMAT {
+    format: DXGI_FORMAT_B8G8R8A8_UNORM,
+    alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+};
+`
+
+### Color Conversion
+
+Convert from normal RGBA to premultiplied:
+
+`ust
+fn to_premultiplied(r: u8, g: u8, b: u8, a: u8) -> (u8, u8, u8, u8) {
+    let alpha = a as f32 / 255.0;
+    (
+        (r as f32 * alpha) as u8,
+        (g as f32 * alpha) as u8,
+        (b as f32 * alpha) as u8,
+        a,
+    )
+}
+`
+
+### Alpha Blending
+
+When drawing semi-transparent content:
+
+`ust
+// ❌ WRONG: Normal alpha blending on premultiplied target
+let brush = create_solid_brush(r, g, b, a);
+
+// ✅ CORRECT: Premultiply the color
+let (pr, pg, pb, _) = to_premultiplied(r, g, b, a);
+let brush = create_solid_brush(pr, pg, pb, a);
+`
+
+---
+
+## Window Class Registration
+
+### CS_DBLCLKS Flag
+
+To receive WM_LBUTTONDBLCLK messages:
+
+`ust
+let wc = WNDCLASSEXW {
+    style: CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS,  // ← Enable double-click
+    // ...
+};
+`
+
+### CS_HREDRAW and CS_VREDRAW
+
+These flags cause the entire window to redraw on resize:
+
+`ust
+let wc = WNDCLASSEXW {
+    style: CS_HREDRAW | CS_VREDRAW,  // Redraw entire window on resize
+    // ...
+};
+`
+
+For better performance, handle WM_SIZE manually and only redraw changed regions.
+
+---
+
+## DPI Awareness
+
+### Per-Monitor DPI
+
+Enable per-monitor DPI awareness in pp.manifest:
+
+`xml
+<dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">
+    PerMonitorV2, PerMonitor
+</dpiAwareness>
+`
+
+### Handling WM_DPICHANGED
+
+`ust
+WM_DPICHANGED => {
+    let new_dpi = (wParam >> 16) & 0xFFFF;
+    let rect = unsafe { &*(lParam as *const RECT) };
+    
+    // Resize window to suggested size
+    SetWindowPos(
+        hwnd,
+        HWND::default(),
+        rect.left,
+        rect.top,
+        rect.right - rect.left,
+        rect.bottom - rect.top,
+        SWP_NOZORDER | SWP_NOACTIVATE,
+    );
+    
+    // Update DPI-dependent resources
+    data.dpi = new_dpi;
+    render();
+    
+    0
+}
+`
+
+### DPI Scaling
+
+Scale pixel values based on DPI:
+
+`ust
+fn scale_for_dpi(value: i32, dpi: u32) -> i32 {
+    (value * dpi as i32) / 96
+}
+`
+
+---
+
+## Testing
+
+### Manual Test Checklist
+
+For layered window features:
+
+- [ ] Hover over opaque pixels - background highlights correctly
+- [ ] Hover over transparent pixels - no flickering
+- [ ] Click opaque pixels - selection works
+- [ ] Click transparent pixels - clicks pass through to desktop
+- [ ] Right-click opaque pixels - context menu appears
+- [ ] Right-click transparent pixels - desktop context menu appears
+- [ ] Resize window - content scales correctly
+- [ ] Move window between monitors - DPI changes handled
+- [ ] Double-click - opens item (if applicable)
+- [ ] Drag and drop - works correctly (if applicable)
+
+### Integration Tests
+
+`ust
+#[test]
+fn test_click_to_deselect() {
+    let mut data = OverlayData::new();
+    
+    // Select an icon
+    data.selected_item = Some(0);
+    assert_eq!(data.selected_item, Some(0));
+    
+    // Click blank area (hit = -1)
+    data.handle_click(-1);
+    
+    // Should deselect
+    assert_eq!(data.selected_item, None);
+    
+    // Background alpha should be 0 (click-through)
+    assert_eq!(data.bg_alpha, 0);
+}
+
+#[test]
+fn test_hover_stability() {
+    let mut data = OverlayData::new();
+    
+    // Hover over icon
+    data.handle_mouse_move(100, 100);  // Hit test returns 0
+    assert_eq!(data.hovered_item, Some(0));
+    
+    // Move slightly (still on same icon)
+    data.handle_mouse_move(105, 105);  // Hit test still returns 0
+    assert_eq!(data.hovered_item, Some(0));  // Should not change
+    
+    // No WM_MOUSELEAVE should have fired
+    assert!(!data.mouse_leave_fired);
+}
+`
+
+---
+
+## Debug Logging
+
+### Layered Window Debug Logs
+
+Add these logs to diagnose issues:
+
+`ust
+// In WM_MOUSELEAVE
+WM_MOUSELEAVE => {
+    log::debug!("[LAYERED] WM_MOUSELEAVE fired");
+    // If this fires repeatedly, you're on alpha=0 pixel
+    0
+}
+
+// In WM_MOUSEMOVE
+WM_MOUSEMOVE => {
+    let (x, y) = get_mouse_pos();
+    let hit = hit_test(x, y);
+    log::debug!("[LAYERED] WM_MOUSEMOVE ({}, {}), hit={}", x, y, hit);
+    // ...
+}
+
+// In render function
+fn render() {
+    let bg_alpha = if data.selected_item.is_some() { 1 } else { 0 };
+    log::debug!("[LAYERED] render: bg_alpha={}, selected={:?}", 
+                bg_alpha, data.selected_item);
+    target.Clear(Some(&d2d_color(0, 0, 0, bg_alpha)));
+    // ...
+}
+`
+
+### Log Analysis
+
+Look for patterns in logs:
+
+- **WM_MOUSELEAVE fires repeatedly** → You're on alpha=0 pixel, ignore this message
+- **WM_MOUSEMOVE shows hit=-1 but hover still set** → Hover logic is wrong
+- **No WM_LBUTTONDOWN on transparent areas** → Alpha=0 is passing through (expected)
+- **WM_NCHITTEST not called on transparent areas** → Alpha=0 bypasses it (expected)
+
+---
+
+## Related Guides
+
+- [Windows Layered Window Guide](../guides/windows-layered-window-guide.md) - Detailed alpha behavior
+- [Cross-Layer Thinking Guide](../guides/cross-layer-thinking-guide.md) - Avoiding cross-layer bugs
+- [Windows Shell API Guide](../guides/windows-shell-api-guide.md) - COM interfaces
+
+---
+
+## References
+
+- [Layered Windows (Microsoft Docs)](https://docs.microsoft.com/en-us/windows/win32/winmsg/window-features#layered-windows)
+- [Window Messages (Microsoft Docs)](https://docs.microsoft.com/en-us/windows/win32/winmsg/window-messages)
+- [Direct2D Premultiplied Alpha](https://docs.microsoft.com/en-us/windows/win32/direct2d/premultiplied-alpha)
+
+---
+
+## History
+
+This guide was created after debugging the overlay hover flickering and click-to-deselect bugs, which required 7 failed attempts before identifying the root cause as WS_EX_LAYERED pixel-level alpha behavior.
