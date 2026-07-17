@@ -32,7 +32,8 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             1
         }
         WM_MOUSEMOVE => {
-            let (local_x, local_y) = screen_to_overlay_client(hwnd, get_x_lparam(lparam), get_y_lparam(lparam));
+            let (local_x, local_y) =
+                screen_to_overlay_client(hwnd, get_x_lparam(lparam), get_y_lparam(lparam));
             handle_mouse_move(hwnd, local_x, local_y);
             0
         }
@@ -55,8 +56,15 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             0
         }
         WM_LBUTTONDOWN => {
-            let (local_x, local_y) = screen_to_overlay_client(hwnd, get_x_lparam(lparam), get_y_lparam(lparam));
-            handle_lbutton_down(hwnd, local_x, local_y, get_x_lparam(lparam), get_y_lparam(lparam));
+            let (local_x, local_y) =
+                screen_to_overlay_client(hwnd, get_x_lparam(lparam), get_y_lparam(lparam));
+            handle_lbutton_down(
+                hwnd,
+                local_x,
+                local_y,
+                get_x_lparam(lparam),
+                get_y_lparam(lparam),
+            );
             0
         }
         WM_LBUTTONUP => {
@@ -64,12 +72,14 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             0
         }
         WM_LBUTTONDBLCLK => {
-            let (local_x, local_y) = screen_to_overlay_client(hwnd, get_x_lparam(lparam), get_y_lparam(lparam));
+            let (local_x, local_y) =
+                screen_to_overlay_client(hwnd, get_x_lparam(lparam), get_y_lparam(lparam));
             handle_double_click(hwnd, local_x, local_y);
             0
         }
         WM_RBUTTONUP => {
-            let (local_x, local_y) = screen_to_overlay_client(hwnd, get_x_lparam(lparam), get_y_lparam(lparam));
+            let (local_x, local_y) =
+                screen_to_overlay_client(hwnd, get_x_lparam(lparam), get_y_lparam(lparam));
             handle_right_click(hwnd, local_x, local_y);
             0
         }
@@ -167,7 +177,14 @@ fn handle_mouse_move(hwnd: HWND, x: i32, y: i32) {
     let mut should_start_drag = false;
     if let Some(data) = get_overlay_data(hwnd) {
         let hit = overlay_hit_test(data, x, y);
-        log::debug!("[HOVER] at ({}, {}), hit={}, hovered={}, selected={}", x, y, hit, data.hovered_item, data.selected_item);
+        log::debug!(
+            "[HOVER] at ({}, {}), hit={}, hovered={}, selected={}",
+            x,
+            y,
+            hit,
+            data.hovered_item,
+            data.selected_item
+        );
         if data.hovered_item != hit {
             log::debug!("[HOVER] changed: {} -> {}", data.hovered_item, hit);
             data.hovered_item = hit;
@@ -208,7 +225,13 @@ fn handle_mouse_move(hwnd: HWND, x: i32, y: i32) {
 fn handle_lbutton_down(hwnd: HWND, local_x: i32, local_y: i32, screen_x: i32, screen_y: i32) {
     if let Some(data) = get_overlay_data(hwnd) {
         let hit = overlay_hit_test(data, local_x, local_y);
-        log::info!("[CLICK] local=({},{}), hit={}, selected={}", local_x, local_y, hit, data.selected_item);
+        log::info!(
+            "[CLICK] local=({},{}), hit={}, selected={}",
+            local_x,
+            local_y,
+            hit,
+            data.selected_item
+        );
 
         if hit >= 0 {
             // 点击图标：选中 + 准备拖拽
@@ -232,8 +255,12 @@ fn handle_lbutton_down(hwnd: HWND, local_x: i32, local_y: i32, screen_x: i32, sc
 /// 将左键点击转发给桌面 SysListView32 窗口（接受屏幕坐标）
 fn forward_lbutton_to_desktop(screen_x: i32, screen_y: i32) {
     const PROGMAN: [u16; 8] = [80, 114, 111, 103, 109, 97, 110, 0];
-    const SHELL_DEF: [u16; 17] = [83, 72, 69, 76, 76, 68, 76, 76, 95, 68, 101, 102, 86, 105, 101, 119, 0];
-    const LISTVIEW: [u16; 14] = [83, 121, 115, 76, 105, 115, 116, 86, 105, 101, 119, 51, 50, 0];
+    const SHELL_DEF: [u16; 17] = [
+        83, 72, 69, 76, 76, 68, 76, 76, 95, 68, 101, 102, 86, 105, 101, 119, 0,
+    ];
+    const LISTVIEW: [u16; 14] = [
+        83, 121, 115, 76, 105, 115, 116, 86, 105, 101, 119, 51, 50, 0,
+    ];
     const WORKER: [u16; 8] = [87, 111, 114, 107, 101, 114, 87, 0];
 
     unsafe {
@@ -241,9 +268,19 @@ fn forward_lbutton_to_desktop(screen_x: i32, screen_y: i32) {
 
         let progman = FindWindowW(PROGMAN.as_ptr(), std::ptr::null());
         if !progman.is_null() {
-            let dv = FindWindowExW(progman, std::ptr::null_mut(), SHELL_DEF.as_ptr(), std::ptr::null());
+            let dv = FindWindowExW(
+                progman,
+                std::ptr::null_mut(),
+                SHELL_DEF.as_ptr(),
+                std::ptr::null(),
+            );
             if !dv.is_null() {
-                list_view = FindWindowExW(dv, std::ptr::null_mut(), LISTVIEW.as_ptr(), std::ptr::null());
+                list_view = FindWindowExW(
+                    dv,
+                    std::ptr::null_mut(),
+                    LISTVIEW.as_ptr(),
+                    std::ptr::null(),
+                );
             }
         }
 
@@ -251,11 +288,25 @@ fn forward_lbutton_to_desktop(screen_x: i32, screen_y: i32) {
             let mut w = std::ptr::null_mut();
             loop {
                 w = FindWindowExW(std::ptr::null_mut(), w, WORKER.as_ptr(), std::ptr::null());
-                if w.is_null() { break; }
-                let dv = FindWindowExW(w, std::ptr::null_mut(), SHELL_DEF.as_ptr(), std::ptr::null());
+                if w.is_null() {
+                    break;
+                }
+                let dv = FindWindowExW(
+                    w,
+                    std::ptr::null_mut(),
+                    SHELL_DEF.as_ptr(),
+                    std::ptr::null(),
+                );
                 if !dv.is_null() {
-                    list_view = FindWindowExW(dv, std::ptr::null_mut(), LISTVIEW.as_ptr(), std::ptr::null());
-                    if !list_view.is_null() { break; }
+                    list_view = FindWindowExW(
+                        dv,
+                        std::ptr::null_mut(),
+                        LISTVIEW.as_ptr(),
+                        std::ptr::null(),
+                    );
+                    if !list_view.is_null() {
+                        break;
+                    }
                 }
             }
         }
@@ -331,7 +382,6 @@ fn handle_right_click(hwnd: HWND, x: i32, y: i32) {
     render_desktop_overlay(hwnd);
     crate::platform::windows::shell_menu::show_shell_context_menu(hwnd, &path);
 }
-
 
 fn start_overlay_drag(hwnd: HWND) {
     let (icon_handle, icon_size, cell_w, display_name) = match get_overlay_data(hwnd) {
@@ -651,38 +701,38 @@ mod tests {
     }
 
     // ===== Dynamic Alpha Tests =====
-    
+
     #[test]
     fn test_dynamic_alpha_no_selection() {
         let selected_item: i32 = -1;
         let bg_alpha: u8 = if selected_item >= 0 { 1 } else { 0 };
         assert_eq!(bg_alpha, 0);
     }
-    
+
     #[test]
     fn test_dynamic_alpha_with_selection() {
         let selected_item: i32 = 5;
         let bg_alpha: u8 = if selected_item >= 0 { 1 } else { 0 };
         assert_eq!(bg_alpha, 1);
     }
-    
+
     #[test]
     fn test_dynamic_alpha_boundary_cases() {
         let selected_item: i32 = 0;
         let bg_alpha: u8 = if selected_item >= 0 { 1 } else { 0 };
         assert_eq!(bg_alpha, 1);
-        
+
         let selected_item: i32 = -1;
         let bg_alpha: u8 = if selected_item >= 0 { 1 } else { 0 };
         assert_eq!(bg_alpha, 0);
-        
+
         let selected_item: i32 = -2;
         let bg_alpha: u8 = if selected_item >= 0 { 1 } else { 0 };
         assert_eq!(bg_alpha, 0);
     }
-    
+
     // ===== Hover State Management Tests =====
-    
+
     #[test]
     fn test_hover_updates_on_hit_change() {
         let mut hovered_item: i32 = -1;
@@ -692,7 +742,7 @@ mod tests {
         }
         assert_eq!(hovered_item, 3);
     }
-    
+
     #[test]
     fn test_hover_stability_same_hit() {
         let mut hovered_item: i32 = 5;
@@ -704,7 +754,7 @@ mod tests {
         assert_eq!(hovered_item, 5);
         assert!(!changed);
     }
-    
+
     #[test]
     fn test_hover_transition_icon_to_blank() {
         let mut hovered_item: i32 = 2;
@@ -714,7 +764,7 @@ mod tests {
         }
         assert_eq!(hovered_item, -1);
     }
-    
+
     #[test]
     fn test_hover_transition_blank_to_icon() {
         let mut hovered_item: i32 = -1;
@@ -724,43 +774,51 @@ mod tests {
         }
         assert_eq!(hovered_item, 7);
     }
-    
+
     #[test]
     fn test_hover_rapid_transitions() {
         let mut hovered_item: i32 = -1;
-        
+
         let hit = 3;
-        if hovered_item != hit { hovered_item = hit; }
+        if hovered_item != hit {
+            hovered_item = hit;
+        }
         assert_eq!(hovered_item, 3);
-        
+
         let hit = 5;
-        if hovered_item != hit { hovered_item = hit; }
+        if hovered_item != hit {
+            hovered_item = hit;
+        }
         assert_eq!(hovered_item, 5);
-        
+
         let hit = 5;
         let changed = hovered_item != hit;
-        if changed { hovered_item = hit; }
+        if changed {
+            hovered_item = hit;
+        }
         assert_eq!(hovered_item, 5);
         assert!(!changed);
-        
+
         let hit = -1;
-        if hovered_item != hit { hovered_item = hit; }
+        if hovered_item != hit {
+            hovered_item = hit;
+        }
         assert_eq!(hovered_item, -1);
     }
-    
+
     // ===== Click Handling Tests =====
-    
+
     #[test]
     fn test_click_icon_selects_and_prepares_drag() {
         let mut selected_item: i32 = -1;
         let mut drag_pending: bool = false;
         let mut drag_start_x: i32 = 0;
         let mut drag_start_y: i32 = 0;
-        
+
         let hit = 4;
         let local_x = 150;
         let local_y = 200;
-        
+
         if hit >= 0 {
             selected_item = hit;
             drag_pending = true;
@@ -770,20 +828,20 @@ mod tests {
             selected_item = -1;
             drag_pending = false;
         }
-        
+
         assert_eq!(selected_item, 4);
         assert!(drag_pending);
         assert_eq!(drag_start_x, 150);
         assert_eq!(drag_start_y, 200);
     }
-    
+
     #[test]
     fn test_click_blank_area_deselects_and_cancels_drag() {
         let mut selected_item: i32 = 3;
         let mut drag_pending: bool = true;
-        
+
         let hit = -1;
-        
+
         if hit >= 0 {
             selected_item = hit;
             drag_pending = true;
@@ -791,54 +849,56 @@ mod tests {
             selected_item = -1;
             drag_pending = false;
         }
-        
+
         assert_eq!(selected_item, -1);
         assert!(!drag_pending);
     }
-    
+
     #[test]
     fn test_click_different_icon_switches_selection() {
         let mut selected_item: i32 = 2;
-        
+
         let hit = 8;
-        
+
         if hit >= 0 {
             selected_item = hit;
         } else {
             selected_item = -1;
         }
-        
+
         assert_eq!(selected_item, 8);
     }
-    
+
     #[test]
     fn test_click_same_icon_keeps_selection() {
         let mut selected_item: i32 = 5;
-        
+
         let hit = 5;
-        
+
         if hit >= 0 {
             selected_item = hit;
         } else {
             selected_item = -1;
         }
-        
+
         assert_eq!(selected_item, 5);
     }
-    
+
     // ===== Integration Tests =====
-    
+
     #[test]
     fn test_full_interaction_cycle() {
         let mut selected_item: i32 = -1;
         let mut hovered_item: i32 = -1;
         let mut drag_pending: bool = false;
-        
+
         let hit = 3;
-        if hovered_item != hit { hovered_item = hit; }
+        if hovered_item != hit {
+            hovered_item = hit;
+        }
         assert_eq!(hovered_item, 3);
         assert_eq!(selected_item, -1);
-        
+
         let hit = 3;
         if hit >= 0 {
             selected_item = hit;
@@ -846,12 +906,14 @@ mod tests {
         }
         assert_eq!(selected_item, 3);
         assert!(drag_pending);
-        
+
         let hit = 5;
-        if hovered_item != hit { hovered_item = hit; }
+        if hovered_item != hit {
+            hovered_item = hit;
+        }
         assert_eq!(hovered_item, 5);
         assert_eq!(selected_item, 3);
-        
+
         let hit = -1;
         if hit >= 0 {
             selected_item = hit;
@@ -862,38 +924,38 @@ mod tests {
         }
         assert_eq!(selected_item, -1);
         assert!(!drag_pending);
-        
+
         // After clicking blank area, mouse moves to blank area (hover)
         let hit = -1;
-        if hovered_item != hit { hovered_item = hit; }
+        if hovered_item != hit {
+            hovered_item = hit;
+        }
         assert_eq!(hovered_item, -1);
-        
+
         let bg_alpha: u8 = if selected_item >= 0 { 1 } else { 0 };
         assert_eq!(bg_alpha, 0);
     }
-    
+
     #[test]
     fn test_alpha_changes_with_selection_state() {
         let mut selected_item: i32 = -1;
-        
+
         let mut bg_alpha: u8 = if selected_item >= 0 { 1 } else { 0 };
         assert_eq!(bg_alpha, 0);
-        
+
         selected_item = 2;
         bg_alpha = if selected_item >= 0 { 1 } else { 0 };
         assert_eq!(bg_alpha, 1);
-        
-    
     }
-    
+
     // ===== WM_MOUSELEAVE Ignored Tests =====
-    
+
     #[test]
     fn test_mouseleave_ignored_hover_preserved() {
         let hovered_item: i32 = 5;
-        
+
         assert_eq!(hovered_item, 5);
-        
+
         let mut new_hovered = hovered_item;
         let hit = -1;
         if new_hovered != hit {
