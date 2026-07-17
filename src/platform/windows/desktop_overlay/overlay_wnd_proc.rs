@@ -260,7 +260,8 @@ fn handle_right_click(hwnd: HWND, x: i32, y: i32) {
         Some(data) => {
             let hit = overlay_hit_test(data, x, y);
             if hit < 0 || (hit as usize) >= data.icons.len() {
-                crate::platform::windows::shell_menu::show_desktop_context_menu(hwnd, true);
+                // 空白区域右键：转发给原生桌面窗口，显示 Windows 11 原生右键菜单
+                forward_right_click_to_desktop(hwnd, x, y);
                 return;
             }
             data.selected_item = hit;
@@ -271,6 +272,97 @@ fn handle_right_click(hwnd: HWND, x: i32, y: i32) {
     };
     render_desktop_overlay(hwnd);
     crate::platform::windows::shell_menu::show_shell_context_menu(hwnd, &path);
+}
+
+/// 将右键事件转发给原生桌面窗口（Progman > SHELLDLL_DefView > SysListView32）
+///
+/// 使覆盖窗口空白区域右键显示 Windows 11 原生桌面上下文菜单，
+/// 而非自定义 Shell API 菜单。
+fn forward_right_click_to_desktop(hwnd: HWND, x: i32, y: i32) {
+    const PROGMAN: [u16; 8] = [80, 114, 111, 103, 109, 97, 110, 0]; // "Progman "
+    const SHELL_DLL_DEF_VIEW: [u16; 17] = [
+        83, 72, 69, 76, 76, 68, 76, 76, 95, 68, 101, 102, 86, 105, 101, 119, 0,
+    ]; // "SHELLDLL_DefView "
+    const SYS_LIST_VIEW: [u16; 14] = [
+        83, 121, 115, 76, 105, 115, 116, 86, 105, 101, 119, 51, 50, 0,
+    ]; // "SysListView32 "
+    const WORKER_W: [u16; 8] = [87, 111, 114, 107, 101, 114, 87, 0]; // "WorkerW "
+
+    unsafe {
+        // 查找桌面 SysListView32 窗口
+        let progman = FindWindowW(PROGMAN.as_ptr(), std::ptr::null());
+        if progman.is_null() {
+            crate::platform::windows::shell_menu::show_desktop_context_menu(hwnd, true);
+            return;
+        }
+
+        let def_view = FindWindowExW(
+            progman,
+            std::ptr::null_mut(),
+            SHELL_DLL_DEF_VIEW.as_ptr(),
+            std::ptr::null(),
+        );
+
+        let list_view = if !def_view.is_null() {
+            FindWindowExW(
+                def_view,
+                std::ptr::null_mut(),
+                SYS_LIST_VIEW.as_ptr(),
+                std::ptr::null(),
+            )
+        } else {
+            // 尝试 WorkerW 窗口（多显示器场景）
+            let mut lv = std::ptr::null_mut();
+            let mut worker = std::ptr::null_mut();
+            loop {
+                worker = FindWindowExW(
+                    std::ptr::null_mut(),
+                    worker,
+                    WORKER_W.as_ptr(),
+                    std::ptr::null(),
+                );
+                if worker.is_null() {
+                    break;
+                }
+                let dv = FindWindowExW(
+                    worker,
+                    std::ptr::null_mut(),
+                    SHELL_DLL_DEF_VIEW.as_ptr(),
+                    std::ptr::null(),
+                );
+                if !dv.is_null() {
+                    lv = FindWindowExW(
+                        dv,
+                        std::ptr::null_mut(),
+                        SYS_LIST_VIEW.as_ptr(),
+                        std::ptr::null(),
+                    );
+                    if !lv.is_null() {
+                        break;
+                    }
+                }
+            }
+            lv
+        };
+
+        if list_view.is_null() {
+            crate::platform::windows::shell_menu::show_desktop_context_menu(hwnd, true);
+            return;
+        }
+
+        // 将覆盖窗口局部坐标转换为屏幕坐标
+        let mut wr = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        GetWindowRect(hwnd, &mut wr);
+        let screen_x = wr.left + x;
+        let screen_y = wr.top + y;
+        let lparam = ((screen_y & 0xFFFF) << 16) | (screen_x & 0xFFFF);
+        PostMessageW(list_view, WM_RBUTTONUP, 0, lparam as LPARAM);
+    }
 }
 
 fn start_overlay_drag(hwnd: HWND) {
