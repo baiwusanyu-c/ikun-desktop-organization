@@ -3,7 +3,7 @@
   "name": "overlay-grid-layout",
   "title": "覆盖区域 Grid 布局 - 图标拖拽到透明格子",
   "description": "",
-  "status": "planning",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -11,11 +11,11 @@
   "creator": "claude-agent",
   "assignee": "claude-agent",
   "createdAt": "2026-07-17",
-  "completedAt": null,
+  "completedAt": "2026-07-17",
   "branch": null,
   "base_branch": "master",
   "worktree_path": null,
-  "current_phase": 0,
+  "current_phase": 6,
   "next_action": [
     {
       "phase": 1,

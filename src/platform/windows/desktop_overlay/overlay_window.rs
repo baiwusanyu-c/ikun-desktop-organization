@@ -20,10 +20,8 @@ use crate::platform::windows::ffi_imports::*;
 use crate::platform::windows::ffi_types::*;
 use crate::platform::DesktopManagerTrait;
 
+use super::overlay_grid::{overlay_first_free_cell, overlay_grid_to_logical, overlay_snap_to_grid};
 use super::overlay_render::render_desktop_overlay;
-use super::overlay_grid::{
-    overlay_first_free_cell, overlay_grid_to_logical, overlay_snap_to_grid,
-};
 
 use super::overlay_wnd_proc::overlay_wnd_proc;
 
@@ -792,8 +790,6 @@ fn scale_for_dpi(value: i32, dpi: u32) -> i32 {
     ((value as f32) * dpi as f32 / 96.0).round() as i32
 }
 
-
-
 impl OverlayWindowData {
     #[cfg(test)]
     pub(crate) fn test_default() -> Self {
@@ -1175,5 +1171,4 @@ mod tests {
         assert!(seen.insert(dn1));
         assert!(!seen.insert(dn2));
     }
-
 }

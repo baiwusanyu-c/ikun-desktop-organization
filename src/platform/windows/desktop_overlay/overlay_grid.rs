@@ -6,15 +6,18 @@
 //! across different DPI/resolution settings.
 
 use super::overlay_window::{
-    overlay_layout_params, logical_to_physical, physical_to_logical,
-    OverlayWindowData,
+    logical_to_physical, overlay_layout_params, physical_to_logical, OverlayWindowData,
 };
 
 // =============================================================================
 // Grid Snap
 // =============================================================================
 
-pub(crate) fn overlay_grid_col_row(data: &OverlayWindowData, physical_x: i32, physical_y: i32) -> (i32, i32) {
+pub(crate) fn overlay_grid_col_row(
+    data: &OverlayWindowData,
+    physical_x: i32,
+    physical_y: i32,
+) -> (i32, i32) {
     let layout = overlay_layout_params(data.width, data.dpi);
     let col = ((physical_x - layout.padding) / layout.cell_w).max(0);
     let row = ((physical_y - layout.padding) / layout.cell_h).max(0);
@@ -115,201 +118,207 @@ pub(crate) fn overlay_snap_to_grid(
     (logical, occupied)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::windows::desktop_overlay::overlay_window::{OverlayIconItem, OverlayWindowData};
+    use crate::platform::windows::desktop_overlay::overlay_window::{
+        OverlayIconItem, OverlayWindowData,
+    };
 
-// ===== Grid Snap Tests =====
+    // ===== Grid Snap Tests =====
 
-#[test]
-fn test_overlay_grid_col_row_basic() {
-    let data = OverlayWindowData::test_default();
-    let layout = overlay_layout_params(data.width, data.dpi);
-    // At (padding, padding) should be (0, 0)
-    let (col, row) = overlay_grid_col_row(&data, layout.padding, layout.padding);
-    assert_eq!(col, 0);
-    assert_eq!(row, 0);
-    // At (padding + cell_w, padding) should be (1, 0)
-    let (col, row) = overlay_grid_col_row(&data, layout.padding + layout.cell_w, layout.padding);
-    assert_eq!(col, 1);
-    assert_eq!(row, 0);
-    // At (padding, padding + cell_h) should be (0, 1)
-    let (col, row) = overlay_grid_col_row(&data, layout.padding, layout.padding + layout.cell_h);
-    assert_eq!(col, 0);
-    assert_eq!(row, 1);
-}
-
-#[test]
-fn test_overlay_grid_col_row_negative_coords() {
-    let data = OverlayWindowData::test_default();
-    // Negative coords should clamp to (0, 0)
-    let (col, row) = overlay_grid_col_row(&data, -100, -100);
-    assert_eq!(col, 0);
-    assert_eq!(row, 0);
-}
-
-#[test]
-fn test_overlay_grid_to_logical_roundtrip() {
-    let data = OverlayWindowData::test_default();
-    let layout = overlay_layout_params(data.width, data.dpi);
-    // (0, 0) should map to (padding, padding) in physical
-    let logical = overlay_grid_to_logical(&data, 0, 0);
-    let back_x = logical_to_physical(logical[0], data.dpi);
-    let back_y = logical_to_physical(logical[1], data.dpi);
-    assert_eq!(back_x, layout.padding);
-    assert_eq!(back_y, layout.padding);
-}
-
-#[test]
-fn test_overlay_grid_max_rows() {
-    let data = OverlayWindowData::test_default();
-    let max_rows = overlay_grid_max_rows(&data);
-    assert!(max_rows > 0, "max_rows should be positive");
-    let layout = overlay_layout_params(data.width, data.dpi);
-    // Should fit within height
-    assert!(max_rows * layout.cell_h + layout.padding * 2 <= data.height + layout.cell_h);
-}
-
-#[test]
-fn test_overlay_grid_occupied_empty() {
-    let data = OverlayWindowData::test_default();
-    // No icons, nothing occupied
-    let result = overlay_grid_occupied_at(&data, 0, 0, -1);
-    assert!(result.is_none());
-}
-
-#[test]
-fn test_overlay_grid_occupied_with_icon() {
-    let mut data = OverlayWindowData::test_default();
-    // Place an icon at grid (0, 0)
-    let pos = overlay_grid_to_logical(&data, 0, 0);
-    data.icons.push(OverlayIconItem {
-        file_path: "test.lnk".to_string(),
-        display_name: "Test".to_string(),
-        icon_handle: std::ptr::null_mut(),
-        x: pos[0],
-        y: pos[1],
-    });
-    // (0, 0) should be occupied by index 0
-    let result = overlay_grid_occupied_at(&data, 0, 0, -1);
-    assert_eq!(result, Some(0));
-    // (1, 0) should be free
-    let result = overlay_grid_occupied_at(&data, 1, 0, -1);
-    assert!(result.is_none());
-}
-
-#[test]
-fn test_overlay_grid_occupied_skip_index() {
-    let mut data = OverlayWindowData::test_default();
-    let pos = overlay_grid_to_logical(&data, 0, 0);
-    data.icons.push(OverlayIconItem {
-        file_path: "test.lnk".to_string(),
-        display_name: "Test".to_string(),
-        icon_handle: std::ptr::null_mut(),
-        x: pos[0],
-        y: pos[1],
-    });
-    // Skip index 0 -> should be None (skipping itself)
-    let result = overlay_grid_occupied_at(&data, 0, 0, 0);
-    assert!(result.is_none());
-}
-
-#[test]
-fn test_overlay_first_free_cell_empty() {
-    let data = OverlayWindowData::test_default();
-    let (col, row) = overlay_first_free_cell(&data);
-    assert_eq!(col, 0);
-    assert_eq!(row, 0);
-}
-
-#[test]
-fn test_overlay_first_free_cell_with_icons() {
-    let mut data = OverlayWindowData::test_default();
-    // Place icons at (0,0) and (0,1)
-    let pos0 = overlay_grid_to_logical(&data, 0, 0);
-    let pos1 = overlay_grid_to_logical(&data, 0, 1);
-    data.icons.push(OverlayIconItem {
-        file_path: "a.lnk".to_string(),
-        display_name: "A".to_string(),
-        icon_handle: std::ptr::null_mut(),
-        x: pos0[0],
-        y: pos0[1],
-    });
-    data.icons.push(OverlayIconItem {
-        file_path: "b.lnk".to_string(),
-        display_name: "B".to_string(),
-        icon_handle: std::ptr::null_mut(),
-        x: pos1[0],
-        y: pos1[1],
-    });
-    let (col, row) = overlay_first_free_cell(&data);
-    // Column-first: (0,0) and (0,1) occupied, so next is (0,2)
-    assert_eq!(col, 0);
-    assert_eq!(row, 2);
-}
-
-#[test]
-fn test_overlay_snap_to_grid_basic() {
-    let data = OverlayWindowData::test_default();
-    let layout = overlay_layout_params(data.width, data.dpi);
-    // Snap to (0, 0)
-    let (pos, occupied) = overlay_snap_to_grid(&data, layout.padding + 10, layout.padding + 10, -1);
-    assert!(occupied.is_none());
-    let expected = overlay_grid_to_logical(&data, 0, 0);
-    assert!((pos[0] - expected[0]).abs() < 0.1);
-    assert!((pos[1] - expected[1]).abs() < 0.1);
-}
-
-#[test]
-fn test_overlay_snap_to_grid_occupied() {
-    let mut data = OverlayWindowData::test_default();
-    let pos0 = overlay_grid_to_logical(&data, 0, 0);
-    data.icons.push(OverlayIconItem {
-        file_path: "test.lnk".to_string(),
-        display_name: "Test".to_string(),
-        icon_handle: std::ptr::null_mut(),
-        x: pos0[0],
-        y: pos0[1],
-    });
-    let layout = overlay_layout_params(data.width, data.dpi);
-    // Snap to (0, 0) which is occupied
-    let (_pos, occupied) = overlay_snap_to_grid(&data, layout.padding + 10, layout.padding + 10, -1);
-    assert_eq!(occupied, Some(0));
-}
-
-#[test]
-fn test_overlay_snap_to_grid_skip_self() {
-    let mut data = OverlayWindowData::test_default();
-    let pos0 = overlay_grid_to_logical(&data, 0, 0);
-    data.icons.push(OverlayIconItem {
-        file_path: "test.lnk".to_string(),
-        display_name: "Test".to_string(),
-        icon_handle: std::ptr::null_mut(),
-        x: pos0[0],
-        y: pos0[1],
-    });
-    let layout = overlay_layout_params(data.width, data.dpi);
-    // Snap to (0, 0) with skip_index=0 (dragging self)
-    let (_pos, occupied) = overlay_snap_to_grid(&data, layout.padding + 10, layout.padding + 10, 0);
-    assert!(occupied.is_none(), "Should not detect self as occupied");
-}
-
-#[test]
-fn test_overlay_grid_multi_dpi() {
-    let mut data = OverlayWindowData::test_default();
-    // Test at different DPI values
-    for dpi in [96, 120, 144, 192] {
-        data.dpi = dpi;
-        let layout = overlay_layout_params(data.width, dpi);
+    #[test]
+    fn test_overlay_grid_col_row_basic() {
+        let data = OverlayWindowData::test_default();
+        let layout = overlay_layout_params(data.width, data.dpi);
+        // At (padding, padding) should be (0, 0)
         let (col, row) = overlay_grid_col_row(&data, layout.padding, layout.padding);
-        assert_eq!(col, 0, "col should be 0 at dpi={}", dpi);
-        assert_eq!(row, 0, "row should be 0 at dpi={}", dpi);
-        let max_rows = overlay_grid_max_rows(&data);
-        assert!(max_rows > 0, "max_rows should be positive at dpi={}", dpi);
+        assert_eq!(col, 0);
+        assert_eq!(row, 0);
+        // At (padding + cell_w, padding) should be (1, 0)
+        let (col, row) =
+            overlay_grid_col_row(&data, layout.padding + layout.cell_w, layout.padding);
+        assert_eq!(col, 1);
+        assert_eq!(row, 0);
+        // At (padding, padding + cell_h) should be (0, 1)
+        let (col, row) =
+            overlay_grid_col_row(&data, layout.padding, layout.padding + layout.cell_h);
+        assert_eq!(col, 0);
+        assert_eq!(row, 1);
     }
-}
+
+    #[test]
+    fn test_overlay_grid_col_row_negative_coords() {
+        let data = OverlayWindowData::test_default();
+        // Negative coords should clamp to (0, 0)
+        let (col, row) = overlay_grid_col_row(&data, -100, -100);
+        assert_eq!(col, 0);
+        assert_eq!(row, 0);
+    }
+
+    #[test]
+    fn test_overlay_grid_to_logical_roundtrip() {
+        let data = OverlayWindowData::test_default();
+        let layout = overlay_layout_params(data.width, data.dpi);
+        // (0, 0) should map to (padding, padding) in physical
+        let logical = overlay_grid_to_logical(&data, 0, 0);
+        let back_x = logical_to_physical(logical[0], data.dpi);
+        let back_y = logical_to_physical(logical[1], data.dpi);
+        assert_eq!(back_x, layout.padding);
+        assert_eq!(back_y, layout.padding);
+    }
+
+    #[test]
+    fn test_overlay_grid_max_rows() {
+        let data = OverlayWindowData::test_default();
+        let max_rows = overlay_grid_max_rows(&data);
+        assert!(max_rows > 0, "max_rows should be positive");
+        let layout = overlay_layout_params(data.width, data.dpi);
+        // Should fit within height
+        assert!(max_rows * layout.cell_h + layout.padding * 2 <= data.height + layout.cell_h);
+    }
+
+    #[test]
+    fn test_overlay_grid_occupied_empty() {
+        let data = OverlayWindowData::test_default();
+        // No icons, nothing occupied
+        let result = overlay_grid_occupied_at(&data, 0, 0, -1);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_overlay_grid_occupied_with_icon() {
+        let mut data = OverlayWindowData::test_default();
+        // Place an icon at grid (0, 0)
+        let pos = overlay_grid_to_logical(&data, 0, 0);
+        data.icons.push(OverlayIconItem {
+            file_path: "test.lnk".to_string(),
+            display_name: "Test".to_string(),
+            icon_handle: std::ptr::null_mut(),
+            x: pos[0],
+            y: pos[1],
+        });
+        // (0, 0) should be occupied by index 0
+        let result = overlay_grid_occupied_at(&data, 0, 0, -1);
+        assert_eq!(result, Some(0));
+        // (1, 0) should be free
+        let result = overlay_grid_occupied_at(&data, 1, 0, -1);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_overlay_grid_occupied_skip_index() {
+        let mut data = OverlayWindowData::test_default();
+        let pos = overlay_grid_to_logical(&data, 0, 0);
+        data.icons.push(OverlayIconItem {
+            file_path: "test.lnk".to_string(),
+            display_name: "Test".to_string(),
+            icon_handle: std::ptr::null_mut(),
+            x: pos[0],
+            y: pos[1],
+        });
+        // Skip index 0 -> should be None (skipping itself)
+        let result = overlay_grid_occupied_at(&data, 0, 0, 0);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_overlay_first_free_cell_empty() {
+        let data = OverlayWindowData::test_default();
+        let (col, row) = overlay_first_free_cell(&data);
+        assert_eq!(col, 0);
+        assert_eq!(row, 0);
+    }
+
+    #[test]
+    fn test_overlay_first_free_cell_with_icons() {
+        let mut data = OverlayWindowData::test_default();
+        // Place icons at (0,0) and (0,1)
+        let pos0 = overlay_grid_to_logical(&data, 0, 0);
+        let pos1 = overlay_grid_to_logical(&data, 0, 1);
+        data.icons.push(OverlayIconItem {
+            file_path: "a.lnk".to_string(),
+            display_name: "A".to_string(),
+            icon_handle: std::ptr::null_mut(),
+            x: pos0[0],
+            y: pos0[1],
+        });
+        data.icons.push(OverlayIconItem {
+            file_path: "b.lnk".to_string(),
+            display_name: "B".to_string(),
+            icon_handle: std::ptr::null_mut(),
+            x: pos1[0],
+            y: pos1[1],
+        });
+        let (col, row) = overlay_first_free_cell(&data);
+        // Column-first: (0,0) and (0,1) occupied, so next is (0,2)
+        assert_eq!(col, 0);
+        assert_eq!(row, 2);
+    }
+
+    #[test]
+    fn test_overlay_snap_to_grid_basic() {
+        let data = OverlayWindowData::test_default();
+        let layout = overlay_layout_params(data.width, data.dpi);
+        // Snap to (0, 0)
+        let (pos, occupied) =
+            overlay_snap_to_grid(&data, layout.padding + 10, layout.padding + 10, -1);
+        assert!(occupied.is_none());
+        let expected = overlay_grid_to_logical(&data, 0, 0);
+        assert!((pos[0] - expected[0]).abs() < 0.1);
+        assert!((pos[1] - expected[1]).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_overlay_snap_to_grid_occupied() {
+        let mut data = OverlayWindowData::test_default();
+        let pos0 = overlay_grid_to_logical(&data, 0, 0);
+        data.icons.push(OverlayIconItem {
+            file_path: "test.lnk".to_string(),
+            display_name: "Test".to_string(),
+            icon_handle: std::ptr::null_mut(),
+            x: pos0[0],
+            y: pos0[1],
+        });
+        let layout = overlay_layout_params(data.width, data.dpi);
+        // Snap to (0, 0) which is occupied
+        let (_pos, occupied) =
+            overlay_snap_to_grid(&data, layout.padding + 10, layout.padding + 10, -1);
+        assert_eq!(occupied, Some(0));
+    }
+
+    #[test]
+    fn test_overlay_snap_to_grid_skip_self() {
+        let mut data = OverlayWindowData::test_default();
+        let pos0 = overlay_grid_to_logical(&data, 0, 0);
+        data.icons.push(OverlayIconItem {
+            file_path: "test.lnk".to_string(),
+            display_name: "Test".to_string(),
+            icon_handle: std::ptr::null_mut(),
+            x: pos0[0],
+            y: pos0[1],
+        });
+        let layout = overlay_layout_params(data.width, data.dpi);
+        // Snap to (0, 0) with skip_index=0 (dragging self)
+        let (_pos, occupied) =
+            overlay_snap_to_grid(&data, layout.padding + 10, layout.padding + 10, 0);
+        assert!(occupied.is_none(), "Should not detect self as occupied");
+    }
+
+    #[test]
+    fn test_overlay_grid_multi_dpi() {
+        let mut data = OverlayWindowData::test_default();
+        // Test at different DPI values
+        for dpi in [96, 120, 144, 192] {
+            data.dpi = dpi;
+            let layout = overlay_layout_params(data.width, dpi);
+            let (col, row) = overlay_grid_col_row(&data, layout.padding, layout.padding);
+            assert_eq!(col, 0, "col should be 0 at dpi={}", dpi);
+            assert_eq!(row, 0, "row should be 0 at dpi={}", dpi);
+            let max_rows = overlay_grid_max_rows(&data);
+            assert!(max_rows > 0, "max_rows should be positive at dpi={}", dpi);
+        }
+    }
 
     // ===== Edge Case Tests =====
 
@@ -421,7 +430,11 @@ fn test_overlay_grid_multi_dpi() {
         }
 
         let (col, row) = overlay_first_free_cell(&data);
-        assert!(col >= 1, "First free cell should be in column >= 1, got col={}", col);
+        assert!(
+            col >= 1,
+            "First free cell should be in column >= 1, got col={}",
+            col
+        );
         assert_eq!(row, 0, "First free cell in new column should be row 0");
     }
 
@@ -436,10 +449,16 @@ fn test_overlay_grid_multi_dpi() {
             let logical = overlay_grid_to_logical(&data, 0, 0);
             let back_x = (logical[0] * dpi as f32 / 96.0).round() as i32;
             let back_y = (logical[1] * dpi as f32 / 96.0).round() as i32;
-            assert_eq!(back_x, layout.padding,
-                "Grid (0,0) physical X mismatch at dpi={}", dpi);
-            assert_eq!(back_y, layout.padding,
-                "Grid (0,0) physical Y mismatch at dpi={}", dpi);
+            assert_eq!(
+                back_x, layout.padding,
+                "Grid (0,0) physical X mismatch at dpi={}",
+                dpi
+            );
+            assert_eq!(
+                back_y, layout.padding,
+                "Grid (0,0) physical Y mismatch at dpi={}",
+                dpi
+            );
 
             assert!(layout.cols >= 2, "cols should be >= 2 at dpi={}", dpi);
             let max_rows = overlay_grid_max_rows(&data);
@@ -453,7 +472,10 @@ fn test_overlay_grid_multi_dpi() {
         data.width = 200;
 
         let layout = overlay_layout_params(data.width, data.dpi);
-        assert!(layout.cols >= 2, "cols should be at least 2 even for narrow window");
+        assert!(
+            layout.cols >= 2,
+            "cols should be at least 2 even for narrow window"
+        );
 
         let (col, row) = overlay_first_free_cell(&data);
         assert!(col >= 0);
