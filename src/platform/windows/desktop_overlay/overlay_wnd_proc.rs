@@ -24,10 +24,16 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             let screen_x = get_x_lparam(lparam);
             let screen_y = get_y_lparam(lparam);
             let (local_x, local_y) = screen_to_overlay_client(hwnd, screen_x, screen_y);
-            let hit = get_overlay_data(hwnd)
-                .map(|data| overlay_hit_test(data, local_x, local_y))
-                .unwrap_or(-1);
-            overlay_nchittest_result(hit)
+            let (hit, has_selection) = get_overlay_data(hwnd)
+                .map(|data| (overlay_hit_test(data, local_x, local_y), data.selected_item >= 0))
+                .unwrap_or((-1, false));
+            // 有选中项时，空白区域也返回 HTCLIENT 以捕获点击用于取消选中
+            // 无选中项时，空白区域返回 HTTRANSPARENT 让点击穿透到桌面
+            if hit >= 0 || has_selection {
+                HTCLIENT as LRESULT
+            } else {
+                HTTRANSPARENT as LRESULT
+            }
         }
         WM_SETCURSOR => {
             let cursor = unsafe { LoadCursorW(std::ptr::null_mut(), IDC_ARROW_ID as *const u16) };
@@ -170,7 +176,9 @@ fn handle_mouse_move(hwnd: HWND, x: i32, y: i32) {
     let mut should_start_drag = false;
     if let Some(data) = get_overlay_data(hwnd) {
         let hit = overlay_hit_test(data, x, y);
+        log::debug!("[HOVER] at ({}, {}), hit={}, hovered={}, selected={}", x, y, hit, data.hovered_item, data.selected_item);
         if data.hovered_item != hit {
+            log::debug!("[HOVER] changed: {} -> {}", data.hovered_item, hit);
             data.hovered_item = hit;
             should_render = true;
         }
