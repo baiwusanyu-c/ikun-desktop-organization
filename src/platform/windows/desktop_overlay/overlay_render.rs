@@ -238,9 +238,9 @@ fn draw_desktop_icons(
 
     let shadow_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(0, 0, 0, 220), None) };
     let label_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(250, 250, 255, 255), None) };
-    let hover_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(255, 255, 255, 34), None) };
+    let hover_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(70, 90, 130, 70), None) };
     let selected_brush =
-        unsafe { target.CreateSolidColorBrush(&d2d_color(51, 153, 255, 90), None) };
+        unsafe { target.CreateSolidColorBrush(&d2d_color(60, 80, 120, 120), None) };
 
     let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
     let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();

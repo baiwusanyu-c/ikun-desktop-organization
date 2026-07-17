@@ -175,6 +175,8 @@ pub(crate) struct GridWindowData {
     pub(crate) drop_highlight: bool,
     /// IDropTarget COM 对象指针（窗口销毁时释放）
     pub(crate) drop_target_ptr: *mut std::ffi::c_void,
+    /// 图标网格 Y 轴滚动偏移量（像素，0 = 顶部）
+    pub(crate) scroll_offset: i32,
 
     // ===== D2D/DirectWrite 设备缓存（窗口级） =====
     pub(crate) d2d_factory: Option<ID2D1Factory>,
@@ -223,6 +225,7 @@ impl GridWindowData {
             drag_item_index: -1,
             drop_highlight: false,
             drop_target_ptr: std::ptr::null_mut(),
+            scroll_offset: 0,
             d2d_factory: None,
             dw_factory: None,
             wic_factory: None,
@@ -420,6 +423,7 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         drag_item_index: -1,
         drop_highlight: false,
         drop_target_ptr: std::ptr::null_mut(),
+        scroll_offset: 0,
         d2d_factory: None,
         dw_factory: None,
         wic_factory: None,

@@ -6,6 +6,41 @@
 use crate::box_core::layout_calc::{calculate_grid, hit_test as layout_hit_test};
 use crate::box_core::view_engine::get_view_params;
 
+/// 在窗口宽度变化时重新映射图标的固定网格位置
+///
+/// 将每个图标的 (grid_col, grid_row) 按线性索引映射到新的列数下，
+/// 保持视觉顺序和空位不变。
+///
+/// 例如 4 列时 `A, B, _, C`（C 在 col=3），变为 2 列后变成
+/// `A, B` / `_, C`（C 仍然在第 2 列），而不是 `A, B` / `C, _`。
+pub(crate) fn reflow_items(data: &mut super::grid_window::GridWindowData) {
+    let new_cols = data.cols;
+    if new_cols <= 0 {
+        return;
+    }
+
+    // 从固定位置推断旧的列数
+    let old_cols = data
+        .items
+        .iter()
+        .filter(|item| item.grid_col >= 0)
+        .map(|item| item.grid_col + 1)
+        .max()
+        .unwrap_or(new_cols);
+    let old_cols = old_cols.max(1);
+
+    for item in &mut data.items {
+        let linear_idx = if item.grid_col >= 0 && item.grid_row >= 0 {
+            item.grid_row * old_cols + item.grid_col
+        } else {
+            // 无固定位置的项保持自动布局
+            continue;
+        };
+        item.grid_col = linear_idx % new_cols;
+        item.grid_row = linear_idx / new_cols;
+    }
+}
+
 /// 重新计算网格布局
 ///
 /// 根据窗口宽度、高度和 DPI 重新计算网格的列数、单元格尺寸等。
@@ -41,6 +76,8 @@ pub(crate) fn grid_hit_test(
 ) -> i32 {
     let view_params = get_view_params(&data.view_mode, dpi);
     let layout = calculate_grid(window_width, data.title_h, &view_params, dpi);
+    // Account for scroll offset: convert screen click to virtual coordinate
+    let click_y = click_y + data.scroll_offset;
 
     // First check positioned items (grid_col >= 0, grid_row >= 0)
     for (i, item) in data.items.iter().enumerate() {

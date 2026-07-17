@@ -161,6 +161,7 @@ pub const WM_LBUTTONUP: u32 = 0x0202;
 pub const WM_LBUTTONDBLCLK: u32 = 0x0203;
 pub const WM_RBUTTONUP: u32 = 0x0205;
 pub const WM_MOUSELEAVE: u32 = 0x02A3;
+pub const WM_MOUSEWHEEL: u32 = 0x020A;
 pub const WM_TIMER: u32 = 0x0113;
 pub const WM_ACTIVATE: u32 = 0x0006;
 

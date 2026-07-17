@@ -532,6 +532,8 @@ pub fn render_layered_window(hwnd: HWND) {
         data.selected_item,
         data.hovered_item,
         dpi,
+        data.scroll_offset,
+        h,
     );
 
     // ===== 绘制边缘拖拽指示条（未锁定时鼠标悬停边缘显示）=====
@@ -633,6 +635,8 @@ pub fn render_icon_grid(
     selected_item: i32,
     hovered_item: i32,
     dpi: u32,
+    scroll_offset: i32,
+    window_height: i32,
 ) {
     let icon_size = view_params.icon_size;
     let cell_w = layout.cell_w;
@@ -694,32 +698,42 @@ pub fn render_icon_grid(
             let row = (i as i32) / cols;
             (grid_left + col * cell_w, grid_top + row * cell_h)
         };
+        // Apply scroll offset
+        let cell_y = cell_y - scroll_offset;
         let is_selected = i as i32 == selected_item;
         let is_hovered = i as i32 == hovered_item;
 
         // Hover 背景（比选中浅，仅非选中项显示）
         if is_hovered && !is_selected {
             if let Ok(ref hb) = hover_brush {
-                let hl_rect = d2d_rect(
-                    cell_x as f32,
-                    cell_y as f32,
-                    (cell_x + cell_w) as f32,
-                    (cell_y + cell_h) as f32,
-                );
-                unsafe { target.FillRectangle(&hl_rect, hb) };
+                let hl_rect = D2D1_ROUNDED_RECT {
+                    rect: d2d_rect(
+                        cell_x as f32,
+                        cell_y as f32,
+                        (cell_x + cell_w) as f32,
+                        (cell_y + cell_h) as f32,
+                    ),
+                    radiusX: scale_for_dpi(6, dpi) as f32,
+                    radiusY: scale_for_dpi(6, dpi) as f32,
+                };
+                unsafe { target.FillRoundedRectangle(&hl_rect, hb) };
             }
         }
 
         // 选中项高亮背景
         if is_selected {
             if let Ok(ref hb) = highlight_brush {
-                let hl_rect = d2d_rect(
-                    cell_x as f32,
-                    cell_y as f32,
-                    (cell_x + cell_w) as f32,
-                    (cell_y + cell_h) as f32,
-                );
-                unsafe { target.FillRectangle(&hl_rect, hb) };
+                let hl_rect = D2D1_ROUNDED_RECT {
+                    rect: d2d_rect(
+                        cell_x as f32,
+                        cell_y as f32,
+                        (cell_x + cell_w) as f32,
+                        (cell_y + cell_h) as f32,
+                    ),
+                    radiusX: scale_for_dpi(6, dpi) as f32,
+                    radiusY: scale_for_dpi(6, dpi) as f32,
+                };
+                unsafe { target.FillRoundedRectangle(&hl_rect, hb) };
             }
         }
 
@@ -803,6 +817,53 @@ pub fn render_icon_grid(
                     }
                 }
             }
+        }
+    }
+
+    // ===== Draw scrollbar if content overflows =====
+    let total_rows = (items.len() as i32 + cols - 1) / cols;
+    let total_content_h = total_rows * cell_h;
+    let visible_h = window_height - grid_top;
+    if total_content_h > visible_h && visible_h > 0 {
+        // Calculate scrollbar thumb size and position
+        let scrollbar_w = scale_for_dpi(6, dpi) as f32;
+        let min_thumb_h = scale_for_dpi(30, dpi) as f32;
+        let thumb_h = (visible_h as f32 * visible_h as f32 / total_content_h as f32).max(min_thumb_h);
+        let max_scroll = total_content_h - visible_h;
+        let scroll_ratio = if max_scroll > 0 { scroll_offset as f32 / max_scroll as f32 } else { 0.0 };
+        let track_h = visible_h as f32 - thumb_h;
+        let thumb_y = grid_top as f32 + scroll_ratio * track_h;
+
+        // Draw scrollbar track (subtle background)
+        let track_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(255, 255, 255, 15), None) };
+        if let Ok(ref tb) = track_brush {
+            let track_rect = D2D1_ROUNDED_RECT {
+                rect: d2d_rect(
+                    (layout.grid_left + cols * cell_w) as f32 + scale_for_dpi(2, dpi) as f32,
+                    grid_top as f32,
+                    (layout.grid_left + cols * cell_w) as f32 + scale_for_dpi(2, dpi) as f32 + scrollbar_w,
+                    window_height as f32,
+                ),
+                radiusX: scrollbar_w / 2.0,
+                radiusY: scrollbar_w / 2.0,
+            };
+            unsafe { target.FillRoundedRectangle(&track_rect, tb) };
+        }
+
+        // Draw scrollbar thumb
+        let thumb_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(255, 255, 255, 80), None) };
+        if let Ok(ref hb) = thumb_brush {
+            let thumb_rect = D2D1_ROUNDED_RECT {
+                rect: d2d_rect(
+                    (layout.grid_left + cols * cell_w) as f32 + scale_for_dpi(2, dpi) as f32,
+                    thumb_y,
+                    (layout.grid_left + cols * cell_w) as f32 + scale_for_dpi(2, dpi) as f32 + scrollbar_w,
+                    thumb_y + thumb_h,
+                ),
+                radiusX: scrollbar_w / 2.0,
+                radiusY: scrollbar_w / 2.0,
+            };
+            unsafe { target.FillRoundedRectangle(&thumb_rect, hb) };
         }
     }
 }

@@ -16,7 +16,9 @@
 use super::d2d_render::render_layered_window;
 use super::ffi_imports::*;
 use super::ffi_types::*;
-use super::grid_layout::{grid_hit_test, lock_btn_rect, more_btn_rect, recalculate_layout};
+use crate::box_core::layout_calc::calculate_grid;
+use crate::box_core::view_engine::get_view_params;
+use super::grid_layout::{grid_hit_test, lock_btn_rect, more_btn_rect, recalculate_layout, reflow_items};
 use super::grid_window::{get_data, GridWindowData};
 use super::menu_window::show_menu_window;
 use super::shell_menu::{show_desktop_context_menu, show_shell_context_menu};
@@ -241,21 +243,32 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
 
         // ===== 窗口缩放 → 重新计算布局并渲染 =====
         WM_SIZE => {
-            if wparam != 0 {
-                let dpi = unsafe { GetDpiForWindow(hwnd) };
-                let dpi = if dpi > 0 { dpi } else { 96 };
-                let mut wr = RECT {
-                    left: 0,
-                    top: 0,
-                    right: 0,
-                    bottom: 0,
-                };
-                unsafe { GetWindowRect(hwnd, &mut wr) };
-                let win_w = wr.right - wr.left;
-                let win_h = wr.bottom - wr.top;
+            // Always recalculate layout on resize (wparam == 0 is SIZE_RESTORED = normal resize)
+            let dpi = unsafe { GetDpiForWindow(hwnd) };
+            let dpi = if dpi > 0 { dpi } else { 96 };
+            let mut wr = RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
+            unsafe { GetWindowRect(hwnd, &mut wr) };
+            let win_w = wr.right - wr.left;
+            let win_h = wr.bottom - wr.top;
 
+            if win_w > 0 && win_h > 0 {
                 if let Some(data) = get_data(hwnd) {
+                    // 先重排：把固定位置转回自动布局，保持视觉顺序
+                    reflow_items(data);
                     recalculate_layout(data, win_w, win_h, dpi);
+                    // Clamp scroll_offset after layout change (content may have reflowed)
+                    let view_params = get_view_params(&data.view_mode, dpi);
+                    let grid_layout = calculate_grid(win_w, data.title_h, &view_params, dpi);
+                    let total_rows = (data.items.len() as i32 + grid_layout.cols - 1) / grid_layout.cols;
+                    let total_content_h = total_rows * grid_layout.cell_h;
+                    let visible_h = win_h - data.title_h;
+                    let max_scroll = (total_content_h - visible_h).max(0);
+                    data.scroll_offset = data.scroll_offset.min(max_scroll);
                 }
             }
             render_layered_window(hwnd);
@@ -272,6 +285,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             let new_h = unsafe { (*suggested_rect).bottom - (*suggested_rect).top };
 
             if let Some(data) = get_data(hwnd) {
+                reflow_items(data);
                 recalculate_layout(data, new_w, new_h, new_dpi);
             }
 
@@ -729,6 +743,34 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 show_desktop_context_menu(hwnd, false);
                 // shell_menu.rs 会在用户点击「创建分类框」时设置 PENDING_CREATE_BOX 标志，
                 // app.rs 的 update 循环轮询该标志并打开 egui viewport 对话框。
+            }
+            0
+        }
+
+        // ===== 鼠标滚轮滚动 =====
+        WM_MOUSEWHEEL => {
+            let delta = ((wparam >> 16) as i16) as i32; // HIWORD(wParam)
+            let scroll_amount = 3; // lines per notch
+            if let Some(data) = get_data(hwnd) {
+                let dpi = unsafe { GetDpiForWindow(hwnd) };
+                let dpi = if dpi > 0 { dpi } else { 96 };
+                let mut wr = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+                unsafe { GetWindowRect(hwnd, &mut wr) };
+                let window_w = wr.right - wr.left;
+                let view_params = get_view_params(&data.view_mode, dpi);
+                let grid_layout = calculate_grid(window_w, data.title_h, &view_params, dpi);
+                let cell_h = grid_layout.cell_h;
+                let cols = grid_layout.cols;
+                let total_rows = (data.items.len() as i32 + cols - 1) / cols;
+                let total_content_h = total_rows * cell_h;
+                let window_h = wr.bottom - wr.top;
+                let visible_h = window_h - data.title_h;
+                let max_scroll = (total_content_h - visible_h).max(0);
+                let old_offset = data.scroll_offset;
+                data.scroll_offset = (data.scroll_offset - delta * scroll_amount).clamp(0, max_scroll);
+                if data.scroll_offset != old_offset {
+                    render_layered_window(hwnd);
+                }
             }
             0
         }
