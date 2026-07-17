@@ -60,6 +60,7 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             0
         }
         WM_LBUTTONDOWN => {
+            log::info!("[OVERLAY] WM_LBUTTONDOWN received at ({}, {})", get_x_lparam(lparam), get_y_lparam(lparam));
             handle_lbutton_down(hwnd, get_x_lparam(lparam), get_y_lparam(lparam));
             0
         }
@@ -76,21 +77,6 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             0
         }
         WM_MOUSEACTIVATE => {
-            // 在点击传递到桌面之前，检查是否点击了空白区域
-            // 如果是空白区域且有选中项，则取消选中
-            let screen_x = get_x_lparam(lparam);
-            let screen_y = get_y_lparam(lparam);
-            let (local_x, local_y) = screen_to_overlay_client(hwnd, screen_x, screen_y);
-            
-            if let Some(data) = get_overlay_data(hwnd) {
-                let hit = overlay_hit_test(data, local_x, local_y);
-                // 如果点击的是空白区域（hit == -1）且有选中项，则取消选中
-                if hit == -1 && data.selected_item != -1 {
-                    data.selected_item = -1;
-                    render_desktop_overlay(hwnd);
-                }
-            }
-            
             log::debug!("覆盖窗口 WM_MOUSEACTIVATE: 返回 MA_NOACTIVATE");
             MA_NOACTIVATE as LRESULT
         }
@@ -174,13 +160,9 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
 }
 
 fn overlay_nchittest_result(hit: i32) -> LRESULT {
-    // 图标区域返回 HTCLIENT，允许捕获点击事件
-    // 空白区域返回 HTTRANSPARENT，让点击穿透到桌面，避免阻止其他应用交互
-    if hit >= 0 {
-        HTCLIENT as LRESULT
-    } else {
-        HTTRANSPARENT as LRESULT
-    }
+    // 无论点击图标还是空白区域，都返回 HTCLIENT
+    // 这样覆盖窗口能捕获所有点击，处理完后再决定是否转发给桌面
+    HTCLIENT as LRESULT
 }
 
 fn handle_mouse_move(hwnd: HWND, x: i32, y: i32) {
@@ -227,17 +209,53 @@ fn handle_mouse_move(hwnd: HWND, x: i32, y: i32) {
 fn handle_lbutton_down(hwnd: HWND, x: i32, y: i32) {
     if let Some(data) = get_overlay_data(hwnd) {
         let hit = overlay_hit_test(data, x, y);
-        data.selected_item = hit;
-        data.drag_pending = hit >= 0;
-        data.drag_active = false;
-        data.drag_item_index = -1;
-        data.drag_start_x = x;
-        data.drag_start_y = y;
+        log::info!("[OVERLAY] WM_LBUTTONDOWN at ({}, {}), hit={}", x, y, hit);
+        
         if hit >= 0 {
-            log::info!(
-                "覆盖窗口图标选中: {}",
-                data.icons[hit as usize].display_name
-            );
+            // 点击图标区域：选中图标，设置拖拽状态
+            data.selected_item = hit;
+            data.drag_pending = true;
+            data.drag_active = false;
+            data.drag_item_index = -1;
+            data.drag_start_x = x;
+            data.drag_start_y = y;
+            log::info!("覆盖窗口图标选中: {}", data.icons[hit as usize].display_name);
+        } else {
+            // 点击空白区域：取消选中，转发点击给桌面
+            log::info!("[OVERLAY] Blank area clicked, deselecting and forwarding to desktop");
+            data.selected_item = -1;
+            data.drag_pending = false;
+            
+            // 转发点击给桌面窗口
+            unsafe {
+                let progman = FindWindowW(b"Progman ".as_ptr() as *const u16, std::ptr::null());
+                if !progman.is_null() {
+                    let def_view = FindWindowExW(
+                        progman,
+                        std::ptr::null_mut(),
+                        b"SHELLDLL_DefView ".as_ptr() as *const u16,
+                        std::ptr::null(),
+                    );
+                    if !def_view.is_null() {
+                        let list_view = FindWindowExW(
+                            def_view,
+                            std::ptr::null_mut(),
+                            b"SysListView32 ".as_ptr() as *const u16,
+                            std::ptr::null(),
+                        );
+                        if !list_view.is_null() {
+                            // 将局部坐标转换为屏幕坐标
+                            let mut wr = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+                            GetWindowRect(hwnd, &mut wr);
+                            let screen_x = wr.left + x;
+                            let screen_y = wr.top + y;
+                            let lparam = ((screen_y & 0xFFFF) << 16) | (screen_x & 0xFFFF);
+                            PostMessageW(list_view, WM_LBUTTONDOWN, 0, lparam as LPARAM);
+                            log::info!("[OVERLAY] Forwarded click to desktop at ({}, {})", screen_x, screen_y);
+                        }
+                    }
+                }
+            }
         }
     }
     render_desktop_overlay(hwnd);
@@ -496,8 +514,8 @@ mod tests {
 
     #[test]
     fn test_overlay_nchittest_handles_blank_area_in_overlay() {
-        // 空白区域返回 HTTRANSPARENT，允许点击穿透到桌面
-        assert_eq!(overlay_nchittest_result(-1), HTTRANSPARENT as LRESULT);
+        // 空白区域也返回 HTCLIENT，捕获点击后在 handle_lbutton_down 中转发给桌面
+        assert_eq!(overlay_nchittest_result(-1), HTCLIENT as LRESULT);
     }
 
     #[test]
