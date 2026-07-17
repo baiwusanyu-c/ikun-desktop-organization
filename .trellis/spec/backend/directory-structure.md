@@ -46,10 +46,10 @@ src/
 │   │   ├── desktop_manager.rs #   桌面图标枚举（文件系统 + 虚拟 Shell 对象 CLSID）
 │   │   ├── desktop_overlay/   #   桌面覆盖窗口（渲染未管理图标 + Grid 吸附布局 + 桌面接管生命周期 + 文件监听刷新）
 │   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎
-│   │   ├── grid_window.rs     #   窗口创建/销毁/数据模型
+│   │   ├── grid_window.rs     #   窗口创建/销毁/数据模型/Z-order 管理（push_other_grids_below + 递归抑制）
 │   │   ├── grid_layout.rs     #   布局计算/按钮矩形/命中测试/滚动重排
 │   │   ├── monitor_utils.rs   #   显示器查询/窗口定位工具
-│   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc
+│   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc（含 Z-order 管理）
 │   │   ├── menu_window.rs     #   自定义分层窗口深色菜单（D2D/DirectWrite）
 │   │   ├── shell_menu.rs      #   Shell 右键菜单 + 桌面背景注册表菜单（覆盖区域含 Ikun 动作，分类框不含）
 │   │   ├── app_icon.rs        #   嵌入 logo.ico 项目图标（托盘/菜单）

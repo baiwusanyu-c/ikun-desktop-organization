@@ -164,6 +164,7 @@ pub const WM_MOUSELEAVE: u32 = 0x02A3;
 pub const WM_MOUSEWHEEL: u32 = 0x020A;
 pub const WM_TIMER: u32 = 0x0113;
 pub const WM_ACTIVATE: u32 = 0x0006;
+pub const WM_WINDOWPOSCHANGING: u32 = 0x0046;
 
 // ===== Hit Test Constants =====
 pub const HTCLIENT: i32 = 1;
@@ -593,6 +594,20 @@ pub const WM_USER_DRAG_ENTER: u32 = WM_APP + 12;
 pub const WM_USER_DRAG_LEAVE: u32 = WM_APP + 13;
 /// 通知框：拖拽放置完成（处理 pending drop）
 pub const WM_USER_DRAG_DROP: u32 = WM_APP + 14;
+/// 窗口位置变化信息（WM_WINDOWPOSCHANGING/WM_WINDOWPOSCHANGED 的 lParam）
+#[repr(C)]
+pub struct WINDOWPOS {
+    pub hwnd: HWND,
+    pub hwnd_insert_after: HWND,
+    pub x: i32,
+    pub y: i32,
+    pub cx: i32,
+    pub cy: i32,
+    pub flags: u32,
+}
+
+/// 通知分类框：将所有其他分类框推到指定窗口之下（Z-order 管理）
+pub const WM_USER_PUSH_GRIDS_BELOW: u32 = WM_APP + 15;
 
 /// 拖拽项信息（用于框间拖拽数据传递）
 #[derive(Debug, Clone)]
@@ -850,5 +865,57 @@ mod tests {
 
         let disabled = MenuItem::new("大图标", 3).disabled(true);
         assert!(disabled.is_disabled);
+    }
+
+    #[test]
+    fn test_windowpos_struct() {
+        // WINDOWPOS repr(C) struct layout verification
+        let wp = WINDOWPOS {
+            hwnd: std::ptr::null_mut(),
+            hwnd_insert_after: std::ptr::null_mut(),
+            x: 100,
+            y: 200,
+            cx: 300,
+            cy: 400,
+            flags: SWP_NOZORDER | SWP_NOACTIVATE,
+        };
+        assert_eq!(wp.x, 100);
+        assert_eq!(wp.y, 200);
+        assert_eq!(wp.cx, 300);
+        assert_eq!(wp.cy, 400);
+        assert_eq!(wp.flags, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    #[test]
+    fn test_windowpos_no_zorder_flag() {
+        // SWP_NOZORDER flag should be non-zero and combinable
+        assert_ne!(SWP_NOZORDER, 0);
+        let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER;
+        assert_ne!(flags & SWP_NOZORDER, 0, "SWP_NOZORDER should be set");
+        assert_ne!(flags & SWP_NOMOVE, 0, "SWP_NOMOVE should be set");
+        assert_ne!(flags & SWP_NOSIZE, 0, "SWP_NOSIZE should be set");
+        assert_eq!(
+            flags & SWP_NOACTIVATE,
+            0,
+            "SWP_NOACTIVATE should NOT be set"
+        );
+    }
+
+    #[test]
+    fn test_zorder_constants() {
+        // WM_WINDOWPOSCHANGING should be the standard Win32 value
+        assert_eq!(WM_WINDOWPOSCHANGING, 0x0046);
+        // Custom message should be in WM_APP range
+        assert_eq!(WM_USER_PUSH_GRIDS_BELOW, WM_APP + 15);
+        // WM_APP base
+        assert_eq!(WM_APP, 0x8000);
+    }
+
+    #[test]
+    fn test_hwnd_constants() {
+        // HWND_BOTTOM should be 1 (below all non-topmost)
+        assert_eq!(HWND_BOTTOM as isize, 1);
+        // HWND_TOPMOST should be -1 (above all non-topmost)
+        assert_eq!(HWND_TOPMOST as isize, -1);
     }
 }

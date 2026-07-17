@@ -12,6 +12,7 @@
 //! - WM_IME_COMPOSITION：默认处理
 //! - WM_RBUTTONUP：Shell 上下文菜单
 //! - WM_DESTROY：释放图标句柄 + D2D/DW/WIC 资源
+//! - WM_WINDOWPOSCHANGING：Z-order 管理（分类框不高于其他应用窗口）
 
 use super::d2d_render::render_layered_window;
 use super::ffi_imports::*;
@@ -20,6 +21,7 @@ use super::grid_layout::{
     grid_hit_test, lock_btn_rect, more_btn_rect, recalculate_layout, reflow_items,
 };
 use super::grid_window::{get_data, GridWindowData};
+use super::grid_window::{is_zorder_suppressing, push_other_grids_below, with_zorder_suppressed};
 use super::menu_window::show_menu_window;
 use super::shell_menu::{show_desktop_context_menu, show_shell_context_menu};
 use crate::box_core::layout_calc::calculate_grid;
@@ -946,6 +948,36 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             0
         }
 
+        // ===== Z-order 管理：确保分类框不高于其他应用窗口 =====
+        //
+        // 当 Windows 试图改变分类框的 Z-order 时（例如点击激活），
+        // 将分类框强制放到 Z-order 底部（HWND_BOTTOM），然后通过延迟消息
+        // 将其他分类框也推到底部，使被激活的分类框在分类框组中保持最前。
+        WM_WINDOWPOSCHANGING => {
+            if !is_zorder_suppressing() {
+                let windowpos = lparam as *mut WINDOWPOS;
+                if !windowpos.is_null() {
+                    let wp = unsafe { &mut *windowpos };
+                    // 仅当 Z-order 正在被改变时干预（resize/move 不涉及 Z-order）
+                    if wp.flags & SWP_NOZORDER == 0 {
+                        // 将本窗口放到 Z-order 底部（高于 overlay，低于其他应用）
+                        wp.hwnd_insert_after = HWND_BOTTOM;
+                        // 延迟推送：等当前 Z-order 变化生效后，再把其他分类框推到本窗口之下
+                        unsafe {
+                            PostMessageW(hwnd, WM_USER_PUSH_GRIDS_BELOW, 0, 0);
+                        }
+                    }
+                }
+            }
+            0
+        }
+
+        // ===== 延迟 Z-order 整理：将其他分类框推到当前窗口之下 =====
+        WM_USER_PUSH_GRIDS_BELOW => {
+            // 在抑制模式下调整其他分类框 Z-order，防止递归 PostMessage
+            with_zorder_suppressed(|| push_other_grids_below(hwnd));
+            0
+        }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }

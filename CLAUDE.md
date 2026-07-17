@@ -90,8 +90,8 @@ src/
 │   │   ├── desktop_manager.rs #   桌面图标枚举（文件系统 + 虚拟 Shell 对象 CLSID）
 │   │   ├── desktop_overlay/   #   桌面覆盖窗口（渲染未管理图标 + Grid 吸附布局 + 桌面接管生命周期 + 文件监听刷新）
 │   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎
-│   │   ├── grid_window.rs     #   窗口创建/销毁/布局收集
-│   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc
+│   │   ├── grid_window.rs     #   窗口创建/销毁/布局收集/Z-order 管理
+│   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc（含 Z-order 管理：WM_WINDOWPOSCHANGING 拦截）
 │   │   ├── menu_window.rs     #   自定义分层窗口深色菜单（D2D/DirectWrite 渲染）
 │   │   ├── shell_menu.rs      #   Shell 右键菜单 + 桌面背景注册表菜单（覆盖区域含 Ikun 动作，分类框空白处不含）
 │   │   ├── app_icon.rs        #   嵌入 logo.ico 资源加载（托盘/菜单图标）
@@ -350,6 +350,7 @@ main.rs
 - [x] 右键功能与原生快捷方式一致（Shell 上下文菜单已实现）
 - [x] 分类框删除（更多菜单 → DestroyWindow + UUID 精确删除配置 + rerender_all 修复分层窗口）
 - [x] 图标 Y 轴滚动（鼠标滚轮 + 半透明滚动条，DPI 自适应，滚动区域裁剪防止溢出标题栏）
+- [x] 窗口层级管理（分类框始终低于其他应用窗口，分类框之间点击的在最前，WM_WINDOWPOSCHANGING + HWND_BOTTOM + 递归抑制）
 - [x] 图标自动重排（窗口尺寸变化时按线性索引重新映射，保持视觉顺序和空位，支持拖拽后固定位置的动态重排）
 - [x] 统一图标样式（覆盖区域和分类框使用相同的 hover/选中背景色和圆角，暗蓝灰色半透明 + 6px 圆角）
 

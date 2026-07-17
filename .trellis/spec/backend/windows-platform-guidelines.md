@@ -17,7 +17,8 @@ WS_EX_LAYERED windows have **pixel-level alpha testing** that happens before WM_
 
 #### ❌ Pitfall 1: Relying on WM_NCHITTEST for Click-Through
 
-`ust
+`
+ust
 // WRONG: WM_NCHITTEST is bypassed for alpha=0 pixels
 WM_NCHITTEST => {
     if is_blank_area {
@@ -30,7 +31,8 @@ WM_NCHITTEST => {
 
 #### ❌ Pitfall 2: Using WM_MOUSELEAVE for Hover Management
 
-`ust
+`
+ust
 // WRONG: WM_MOUSELEAVE fires repeatedly on alpha=0 pixels
 WM_MOUSELEAVE => {
     data.hovered_item = -1;  // Causes flickering!
@@ -40,7 +42,8 @@ WM_MOUSELEAVE => {
 
 #### ❌ Pitfall 3: Event Forwarding via PostMessage
 
-`ust
+`
+ust
 // WRONG: Fighting against platform behavior
 if is_blank_area {
     let desktop = FindWindowW(...);
@@ -52,7 +55,8 @@ if is_blank_area {
 
 #### ✅ Pattern 1: State-Driven Alpha
 
-`ust
+`
+ust
 // CORRECT: Dynamic alpha based on interaction state
 let need_click_capture = data.selected_item >= 0;
 let bg_alpha: u8 = if need_click_capture { 1 } else { 0 };
@@ -61,7 +65,8 @@ target.Clear(Some(&d2d_color(0, 0, 0, bg_alpha)));
 
 #### ✅ Pattern 2: WM_MOUSEMOVE for Hover Management
 
-`ust
+`
+ust
 // CORRECT: Let WM_MOUSEMOVE manage hover naturally
 WM_MOUSELEAVE => {
     // Ignore - WS_EX_LAYERED triggers this unreliably
@@ -80,7 +85,8 @@ WM_MOUSEMOVE => {
 
 #### ✅ Pattern 3: Work With Platform Behavior
 
-`ust
+`
+ust
 // CORRECT: Use alpha=0 for natural pass-through
 let bg_alpha = if has_selection { 1 } else { 0 };
 target.Clear(Some(&d2d_color(0, 0, 0, bg_alpha)));
@@ -115,7 +121,8 @@ Windows uses different coordinate systems for different messages:
 
 ### Common Mistake: Coordinate Conversion
 
-`ust
+`
+ust
 // ❌ WRONG: Using screen coordinates for hit test
 WM_LBUTTONDOWN => {
     let (x, y) = get_mouse_pos();  // Screen coordinates
@@ -132,7 +139,8 @@ WM_LBUTTONDOWN => {
 
 ### Coordinate Conversion Helper
 
-`ust
+`
+ust
 fn screen_to_client(hwnd: HWND, screen_x: i32, screen_y: i32) -> (i32, i32) {
     let mut point = POINT { x: screen_x, y: screen_y };
     unsafe { ScreenToClient(hwnd, &mut point) };
@@ -148,7 +156,8 @@ fn screen_to_client(hwnd: HWND, screen_x: i32, screen_y: i32) -> (i32, i32) {
 
 Direct2D uses **premultiplied alpha** for layered windows:
 
-`ust
+`
+ust
 // Pixel format must specify premultiplied alpha
 let pixel_format = D2D1_PIXEL_FORMAT {
     format: DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -160,7 +169,8 @@ let pixel_format = D2D1_PIXEL_FORMAT {
 
 Convert from normal RGBA to premultiplied:
 
-`ust
+`
+ust
 fn to_premultiplied(r: u8, g: u8, b: u8, a: u8) -> (u8, u8, u8, u8) {
     let alpha = a as f32 / 255.0;
     (
@@ -176,7 +186,8 @@ fn to_premultiplied(r: u8, g: u8, b: u8, a: u8) -> (u8, u8, u8, u8) {
 
 When drawing semi-transparent content:
 
-`ust
+`
+ust
 // ❌ WRONG: Normal alpha blending on premultiplied target
 let brush = create_solid_brush(r, g, b, a);
 
@@ -193,7 +204,8 @@ let brush = create_solid_brush(pr, pg, pb, a);
 
 To receive WM_LBUTTONDBLCLK messages:
 
-`ust
+`
+ust
 let wc = WNDCLASSEXW {
     style: CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS,  // ← Enable double-click
     // ...
@@ -204,7 +216,8 @@ let wc = WNDCLASSEXW {
 
 These flags cause the entire window to redraw on resize:
 
-`ust
+`
+ust
 let wc = WNDCLASSEXW {
     style: CS_HREDRAW | CS_VREDRAW,  // Redraw entire window on resize
     // ...
@@ -229,7 +242,8 @@ Enable per-monitor DPI awareness in pp.manifest:
 
 ### Handling WM_DPICHANGED
 
-`ust
+`
+ust
 WM_DPICHANGED => {
     let new_dpi = (wParam >> 16) & 0xFFFF;
     let rect = unsafe { &*(lParam as *const RECT) };
@@ -257,11 +271,102 @@ WM_DPICHANGED => {
 
 Scale pixel values based on DPI:
 
-`ust
+`
+ust
 fn scale_for_dpi(value: i32, dpi: u32) -> i32 {
     (value * dpi as i32) / 96
 }
 `
+
+---
+
+
+## Z-Order Management (Window Layering)
+
+### Problem
+
+WS_EX_LAYERED popup windows (WS_POPUP) without explicit Z-order management will be promoted to the top of the Z-order when clicked, potentially covering other application windows. This is undesirable for desktop organizer widgets that should stay below normal application windows.
+
+### Z-Order Hierarchy (Top to Bottom)
+
+`
+[Other application windows]
+  ← Grid windows must never appear above this level
+[Active grid window]       ← Topmost among grid windows
+[Other grid windows]       ← Ordered by creation time
+[Desktop overlay window]   ← HWND_BOTTOM (set in overlay_window.rs)
+[Desktop]
+`
+
+### Implementation Pattern
+
+#### 1. Intercept WM_WINDOWPOSCHANGING
+
+`
+ust
+// In wnd_proc.rs
+WM_WINDOWPOSCHANGING => {
+    if !is_zorder_suppressing() {
+        let wp = unsafe { &mut *(lparam as *mut WINDOWPOS) };
+        if wp.flags & SWP_NOZORDER == 0 {
+            wp.hwnd_insert_after = HWND_BOTTOM;
+            unsafe { PostMessageW(hwnd, WM_USER_PUSH_GRIDS_BELOW, 0, 0) };
+        }
+    }
+    0
+}
+`
+
+#### 2. Deferred Push via PostMessage
+
+`
+ust
+// In wnd_proc.rs
+WM_USER_PUSH_GRIDS_BELOW => {
+    with_zorder_suppressed(|| push_other_grids_below(hwnd));
+    0
+}
+`
+
+#### 3. Recursion Prevention (Critical!)
+
+SetWindowPos(HWND_BOTTOM) on other grid windows triggers their WM_WINDOWPOSCHANGING, which would recursively post more messages. Use a thread-local flag to suppress:
+
+`
+ust
+// In grid_window.rs
+thread_local! {
+    static ZORDER_SUPPRESSING: Cell<bool> = const { Cell::new(false) };
+}
+
+pub(crate) fn is_zorder_suppressing() -> bool {
+    ZORDER_SUPPRESSING.with(|f| f.get())
+}
+
+pub(crate) fn with_zorder_suppressed(f: impl FnOnce()) {
+    ZORDER_SUPPRESSING.with(|flag| flag.set(true));
+    f();
+    ZORDER_SUPPRESSING.with(|flag| flag.set(false));
+}
+`
+
+### Key Design Decisions
+
+1. **PostMessage for deferred execution**: Avoids recursive SetWindowPos calls during WM_WINDOWPOSCHANGING processing.
+2. **Thread-local flag**: Prevents exponential recursion when multiple grid windows exist.
+3. **SWP_NOZORDER check**: Only intervenes when Z-order is actually changing (not during resize/move).
+4. **HWND_BOTTOM**: Places grid windows below all normal application windows but above the desktop overlay.
+
+### Checklist
+
+Before implementing Z-order features:
+
+- [ ] Use thread-local recursion guard (not global/static)
+- [ ] Check SWP_NOZORDER flag before modifying hwndInsertAfter
+- [ ] Use PostMessage for deferred Z-order adjustments
+- [ ] Test with multiple grid windows (A clicked should be above B)
+- [ ] Verify grid windows don't cover other applications
+- [ ] Verify resize/move still works normally
 
 ---
 
@@ -284,7 +389,8 @@ For layered window features:
 
 ### Integration Tests
 
-`ust
+`
+ust
 #[test]
 fn test_click_to_deselect() {
     let mut data = OverlayData::new();
@@ -328,7 +434,8 @@ fn test_hover_stability() {
 
 Add these logs to diagnose issues:
 
-`ust
+`
+ust
 // In WM_MOUSELEAVE
 WM_MOUSELEAVE => {
     log::debug!("[LAYERED] WM_MOUSELEAVE fired");
