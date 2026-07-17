@@ -175,7 +175,7 @@ pub(crate) fn render_desktop_overlay(hwnd: HWND) {
     }
 
     unsafe { target.BeginDraw() };
-    unsafe { target.Clear(Some(&d2d_color(0, 0, 0, 1))) };
+    unsafe { target.Clear(Some(&d2d_color(0, 0, 0, 0))) };
     draw_desktop_icons(
         target,
         dw_factory,
