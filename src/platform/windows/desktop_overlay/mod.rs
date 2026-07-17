@@ -5,6 +5,7 @@
 //! 右键菜单、拖拽交互和桌面文件监听刷新。
 
 mod desktop_watcher;
+mod overlay_grid;
 mod overlay_render;
 mod overlay_window;
 mod overlay_wnd_proc;

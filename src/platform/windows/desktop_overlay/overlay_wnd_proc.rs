@@ -4,9 +4,9 @@
 //! 空白区域由覆盖窗口处理桌面背景菜单，避免把右键/新建转发给已隐藏的原生桌面。
 
 use super::overlay_render::render_desktop_overlay;
+use super::overlay_grid::overlay_snap_to_grid;
 use super::overlay_window::{
     get_overlay_data, overlay_hit_test, overlay_layout_params,
-    overlay_snap_to_grid,
     refresh_desktop_overlay_icons, save_overlay_icon_positions,
 };
 use crate::platform::windows::ffi_imports::*;
