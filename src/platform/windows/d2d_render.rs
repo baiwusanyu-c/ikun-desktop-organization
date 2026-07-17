@@ -27,6 +27,7 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_BITMAP_PROPERTIES, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
     D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
     D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT,
+    D2D1_ANTIALIAS_MODE_ALIASED,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL,
@@ -522,6 +523,10 @@ pub fn render_layered_window(hwnd: HWND) {
     let view_params = get_view_params(&data.view_mode, dpi);
     let grid_layout = calculate_grid(w, title_h, &view_params, dpi);
 
+    // 裁剪区域：标题栏下方到窗口底部，防止滚动时图标溢出到标题区域
+    let clip_rect = d2d_rect(0.0, title_h as f32, w as f32, h as f32);
+    unsafe { target.PushAxisAlignedClip(&clip_rect, D2D1_ANTIALIAS_MODE_ALIASED) };
+
     render_icon_grid(
         target,
         dw_factory,
@@ -535,6 +540,8 @@ pub fn render_layered_window(hwnd: HWND) {
         data.scroll_offset,
         h,
     );
+
+    unsafe { target.PopAxisAlignedClip() };
 
     // ===== 绘制边缘拖拽指示条（未锁定时鼠标悬停边缘显示）=====
     if !data.locked && data.hover_edge > 0 {
