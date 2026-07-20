@@ -21,7 +21,7 @@ use super::grid_layout::{
     grid_hit_test, lock_btn_rect, more_btn_rect, recalculate_layout, reflow_items,
 };
 use super::grid_window::{get_data, GridWindowData};
-use super::grid_window::{is_zorder_suppressing, push_other_grids_below, with_zorder_suppressed};
+use super::grid_window::{is_drag_in_progress, is_zorder_suppressing, push_other_grids_below, with_zorder_suppressed};
 use super::menu_window::show_menu_window;
 use super::shell_menu::{show_desktop_context_menu, show_shell_context_menu};
 use crate::box_core::layout_calc::calculate_grid;
@@ -954,7 +954,8 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         // 将分类框强制放到 Z-order 底部（HWND_BOTTOM），然后通过延迟消息
         // 将其他分类框也推到底部，使被激活的分类框在分类框组中保持最前。
         WM_WINDOWPOSCHANGING => {
-            if !is_zorder_suppressing() {
+            // 拖拽进行中不干预 Z-order，否则 OLE hit-testing 无法检测到目标窗口
+            if !is_zorder_suppressing() && !is_drag_in_progress() {
                 let windowpos = lparam as *mut WINDOWPOS;
                 if !windowpos.is_null() {
                     let wp = unsafe { &mut *windowpos };

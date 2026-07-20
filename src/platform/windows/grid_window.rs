@@ -607,6 +607,13 @@ thread_local! {
     static ZORDER_SUPPRESSING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+// OLE 拖拽进行中标志：DoDragDrop 是阻塞调用，期间 Windows 会对所有窗口做 hit-testing。
+// 如果此时 WM_WINDOWPOSCHANGING 强制 HWND_BOTTOM，分类框可能低于 overlay 窗口，
+// 导致 OLE 无法触发目标窗口的 DragEnter。拖拽期间不干预 Z-order。
+thread_local! {
+    static DRAG_IN_PROGRESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// 检查当前是否正在 Z-order 批量调整中（抑制 WM_WINDOWPOSCHANGING 干预）
 pub(crate) fn is_zorder_suppressing() -> bool {
     ZORDER_SUPPRESSING.with(|f| f.get())
@@ -620,6 +627,19 @@ pub(crate) fn with_zorder_suppressed(f: impl FnOnce()) {
     ZORDER_SUPPRESSING.with(|flag| flag.set(true));
     f();
     ZORDER_SUPPRESSING.with(|flag| flag.set(false));
+}
+
+/// 设置 OLE 拖拽进行中标志（DoDragDrop 前设为 true，结束后设为 false）
+///
+/// 拖拽期间 WM_WINDOWPOSCHANGING 不干预 Z-order，确保 OLE hit-testing 能正确
+/// 检测到目标窗口的 IDropTarget。
+pub fn set_drag_in_progress(in_progress: bool) {
+    DRAG_IN_PROGRESS.with(|f| f.set(in_progress));
+}
+
+/// 检查当前是否有 OLE 拖拽正在进行
+pub(crate) fn is_drag_in_progress() -> bool {
+    DRAG_IN_PROGRESS.with(|f| f.get())
 }
 
 /// 获取格子数量
@@ -990,4 +1010,28 @@ mod tests {
         });
         assert!(!super::is_zorder_suppressing(), "Should be cleared after");
     }
+
+    // ===== drag flag unit tests =====
+
+    #[test]
+    fn test_drag_in_progress_default_false() {
+        assert!(!super::is_drag_in_progress(), "DRAG_IN_PROGRESS should default to false");
+    }
+
+    #[test]
+    fn test_set_drag_in_progress_toggle() {
+        super::set_drag_in_progress(true);
+        assert!(super::is_drag_in_progress(), "Should be true after set(true)");
+        super::set_drag_in_progress(false);
+        assert!(!super::is_drag_in_progress(), "Should be false after set(false)");
+    }
+
+    #[test]
+    fn test_drag_flag_independent_of_zorder_suppressing() {
+        super::set_drag_in_progress(true);
+        assert!(!super::is_zorder_suppressing(), "Z-order suppressing should be independent");
+        assert!(super::is_drag_in_progress(), "Drag flag should be true");
+        super::set_drag_in_progress(false);
+    }
+
 }

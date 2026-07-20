@@ -367,6 +367,32 @@ Before implementing Z-order features:
 - [ ] Test with multiple grid windows (A clicked should be above B)
 - [ ] Verify grid windows don't cover other applications
 - [ ] Verify resize/move still works normally
+- [ ] Verify drag-and-drop from overlay to grid still works (DRAG_IN_PROGRESS flag)
+
+### Drag-and-Drop Interaction
+
+OLE DoDragDrop is a blocking modal call. During execution, Windows performs hit-testing on all windows to find IDropTarget objects. If WM_WINDOWPOSCHANGING forces grid windows to HWND_BOTTOM during drag, the grid may end up below the overlay window, preventing OLE from triggering DragEnter/Drop on the grid's IDropTarget.
+
+**Solution**: Set a thread-local DRAG_IN_PROGRESS flag before DoDragDrop and clear it after. The WM_WINDOWPOSCHANGING handler skips Z-order intervention when this flag is true.
+
+`
+ust
+// In ole_dnd.rs, around DoDragDrop:
+super::grid_window::set_drag_in_progress(true);
+let hr = unsafe { DoDragDrop(data_obj_ptr, drop_src_ptr, DROPEFFECT_MOVE, &mut effect) };
+super::grid_window::set_drag_in_progress(false);
+`
+
+`
+ust
+// In wnd_proc.rs:
+WM_WINDOWPOSCHANGING => {
+    if !is_zorder_suppressing() && !is_drag_in_progress() {
+        // ... force HWND_BOTTOM
+    }
+    0
+}
+`
 
 ---
 

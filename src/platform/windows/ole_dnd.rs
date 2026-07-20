@@ -847,8 +847,12 @@ pub fn start_box_drag(
     let drop_src_ptr = Box::into_raw(drop_src) as *mut c_void;
 
     // 调用 DoDragDrop
+    // 设置拖拽进行中标志：DoDragDrop 是阻塞调用，期间 WM_WINDOWPOSCHANGING 不干预 Z-order，
+    // 否则分类框被强制 HWND_BOTTOM 后可能低于 overlay，导致 OLE hit-testing 失败。
+    super::grid_window::set_drag_in_progress(true);
     let mut effect = DROPEFFECT_NONE;
     let hr = unsafe { DoDragDrop(data_obj_ptr, drop_src_ptr, DROPEFFECT_MOVE, &mut effect) };
+    super::grid_window::set_drag_in_progress(false);
 
     // 根据返回码确定结果
     let result_effect = if hr == DRAGDROP_S_DROP {
