@@ -12,7 +12,7 @@
 //! - WM_IME_COMPOSITION：默认处理
 //! - WM_RBUTTONUP：Shell 上下文菜单
 //! - WM_DESTROY：释放图标句柄 + D2D/DW/WIC 资源
-//! - WM_WINDOWPOSCHANGING：Z-order 管理（分类框不高于其他应用窗口）
+//! - WM_WINDOWPOSCHANGING：Z-order 管理（调用 zorder 模块，分类框不高于其他应用窗口）
 
 use super::d2d_render::render_layered_window;
 use super::ffi_imports::*;
@@ -21,7 +21,7 @@ use super::grid_layout::{
     grid_hit_test, lock_btn_rect, more_btn_rect, recalculate_layout, reflow_items,
 };
 use super::grid_window::{get_data, GridWindowData};
-use super::grid_window::{is_drag_in_progress, is_zorder_suppressing, push_other_grids_below, with_zorder_suppressed};
+use super::zorder::{is_drag_in_progress, is_zorder_suppressing, push_other_grids_below, with_zorder_suppressed};
 use super::menu_window::show_menu_window;
 use super::shell_menu::{show_desktop_context_menu, show_shell_context_menu};
 use crate::box_core::layout_calc::calculate_grid;

@@ -334,7 +334,7 @@ SetWindowPos(HWND_BOTTOM) on other grid windows triggers their WM_WINDOWPOSCHANG
 
 `
 ust
-// In grid_window.rs
+// In zorder.rs (独立模块，从 grid_window.rs 提取)
 thread_local! {
     static ZORDER_SUPPRESSING: Cell<bool> = const { Cell::new(false) };
 }

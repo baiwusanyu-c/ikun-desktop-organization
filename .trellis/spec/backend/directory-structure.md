@@ -49,7 +49,8 @@ src/
 │   │   ├── grid_window.rs     #   窗口创建/销毁/数据模型/Z-order 管理（push_other_grids_below + 递归抑制）
 │   │   ├── grid_layout.rs     #   布局计算/按钮矩形/命中测试/滚动重排
 │   │   ├── monitor_utils.rs   #   显示器查询/窗口定位工具
-│   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc（含 Z-order 管理）
+│   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc
+│   ├── zorder.rs          #   Z-order 层级管理（HWND_BOTTOM + 递归抑制 + 坐标查找）
 │   │   ├── menu_window.rs     #   自定义分层窗口深色菜单（D2D/DirectWrite）
 │   │   ├── shell_menu.rs      #   Shell 右键菜单 + 桌面背景注册表菜单（覆盖区域含 Ikun 动作，分类框不含）
 │   │   ├── app_icon.rs        #   嵌入 logo.ico 项目图标（托盘/菜单）

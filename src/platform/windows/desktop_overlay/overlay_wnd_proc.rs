@@ -442,7 +442,7 @@ fn end_overlay_drag(hwnd: HWND) {
     unsafe { GetCursorPos(&mut pt) };
     // 使用 find_grid_window_at_point 替代 WindowFromPoint，
     // 因为分类框在 HWND_BOTTOM，WindowFromPoint 会被覆盖窗口拦截
-    let target_hwnd = crate::platform::windows::grid_window::find_grid_window_at_point(pt.x, pt.y);
+    let target_hwnd = crate::platform::windows::zorder::find_grid_window_at_point(pt.x, pt.y);
     if target_hwnd.is_null() {
         restore_dragged_icon_position(hwnd, item_idx, pt.x, pt.y);
         log::info!("覆盖窗口内图标位置已更新");
@@ -516,7 +516,7 @@ fn highlight_grid_under_cursor(source_hwnd: HWND) {
     unsafe { GetCursorPos(&mut pt) };
     // 使用 find_grid_window_at_point 替代 WindowFromPoint，
     // 因为分类框在 HWND_BOTTOM，WindowFromPoint 会被覆盖窗口拦截
-    let target_hwnd = crate::platform::windows::grid_window::find_grid_window_at_point(pt.x, pt.y);
+    let target_hwnd = crate::platform::windows::zorder::find_grid_window_at_point(pt.x, pt.y);
     if !target_hwnd.is_null() && target_hwnd != source_hwnd {
         unsafe { PostMessageW(target_hwnd, WM_USER_DRAG_ENTER, 0, 0) };
     }

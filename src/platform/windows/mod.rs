@@ -35,6 +35,7 @@ pub mod ole_dnd;
 pub mod shell_menu;
 mod sys_tray;
 mod wnd_proc;
+pub mod zorder;
 
 // Re-export key items
 pub use control_panel_window::{hide_control_panel_window, show_control_panel_window};
@@ -47,6 +48,10 @@ pub use drop_target::{
 };
 #[allow(unused_imports)] // 公共 API 预留
 pub use ffi_types::{IkunBoxDragData, IkunDragItemData};
+#[allow(unused_imports)] // Z-order 公共 API 预留
+pub use zorder::{
+    find_grid_window_at_point, push_other_grids_below, set_drag_in_progress,
+};
 pub use grid_window::{
     collect_grid_layout, create_grid_window, destroy_all_grid_windows, get_grid_count,
     update_grid_window_title, GridCreateParams, GridFileItem,

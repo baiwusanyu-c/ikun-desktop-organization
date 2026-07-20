@@ -93,7 +93,7 @@ pub(crate) fn update_drag(hwnd: HWND) -> bool {
     unsafe { GetCursorPos(&mut pt) };
     // 使用 find_grid_window_at_point 替代 WindowFromPoint，
     // 因为分类框在 HWND_BOTTOM，WindowFromPoint 会被覆盖窗口拦截
-    let target_hwnd = super::grid_window::find_grid_window_at_point(pt.x, pt.y);
+    let target_hwnd = super::zorder::find_grid_window_at_point(pt.x, pt.y);
 
     // 对目标分类框显示高亮
     if !target_hwnd.is_null() && target_hwnd != hwnd {
@@ -145,7 +145,7 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
     unsafe { GetCursorPos(&mut pt) };
     // 使用 find_grid_window_at_point 替代 WindowFromPoint，
     // 因为分类框在 HWND_BOTTOM，WindowFromPoint 会被覆盖窗口拦截
-    let target_hwnd = super::grid_window::find_grid_window_at_point(pt.x, pt.y);
+    let target_hwnd = super::zorder::find_grid_window_at_point(pt.x, pt.y);
 
     if target_hwnd == hwnd {
         // 同框内拖拽 → grid snap + swap
