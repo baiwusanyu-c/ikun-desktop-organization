@@ -35,6 +35,7 @@ static mut OVERLAY_HBMP: HBITMAP = std::ptr::null_mut();
 static mut DRAG_ICON_HANDLE: HICON = std::ptr::null_mut();
 static mut DRAG_ICON_SIZE: i32 = 0;
 static mut DRAG_CELL_W: i32 = 0;
+static mut DRAG_ICON_OFFSET_X: i32 = 0;
 static mut DRAG_DISPLAY_NAME: String = String::new();
 static mut DRAG_LAST_DPI: u32 = 0;
 static mut DRAG_ORIGINAL_DPI: u32 = 0;
@@ -88,6 +89,8 @@ pub(crate) unsafe fn create_drag_overlay(
 
     // 使用分类框的实际 cell_w，确保标签换行行为与框内一致
     let overlay_w = cell_w;
+    // 图标在窗口内水平居中，计算偏移量用于补偿窗口位置
+    let icon_offset_x = (overlay_w - icon_size) / 2;
     let label_h = if display_name.is_empty() {
         0
     } else {
@@ -143,13 +146,13 @@ pub(crate) unsafe fn create_drag_overlay(
     let mut init_pt = POINT { x: 0, y: 0 };
     GetCursorPos(&mut init_pt);
 
-    // 创建分层窗口（WS_EX_LAYERED + WS_EX_TRANSPARENT + WS_EX_TOOLWINDOW）
+    // 创建分层窗口（WS_EX_LAYERED + WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW）
     let hwnd = CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
         DRAG_OVERLAY_CLASS.as_ptr(),
         std::ptr::null(),
         WS_POPUP,
-        init_pt.x,
+        init_pt.x - icon_offset_x,
         init_pt.y,
         total_w,
         total_h,
@@ -172,7 +175,7 @@ pub(crate) unsafe fn create_drag_overlay(
 
     // 与 CreateWindowExW 相同的初始位置，保持一致
     let pt_dst = POINT {
-        x: init_pt.x,
+        x: init_pt.x - icon_offset_x,
         y: init_pt.y,
     };
     let sz = SIZE {
@@ -216,6 +219,7 @@ pub(crate) unsafe fn create_drag_overlay(
     DRAG_ICON_HANDLE = icon_handle;
     DRAG_ICON_SIZE = icon_size;
     DRAG_CELL_W = cell_w;
+    DRAG_ICON_OFFSET_X = icon_offset_x;
     DRAG_DISPLAY_NAME = display_name.to_string();
     // 用光标位置的 DPI 初始化 DRAG_LAST_DPI，避免 update_drag_overlay 首次检测时
     // 因源窗口 DPI ≠ 光标 DPI（跨显示器拖拽）触发不必要的重建 → 导致图标闪烁
@@ -254,12 +258,12 @@ pub(crate) unsafe fn update_drag_overlay() {
         }
     }
 
-    // 窗口位置偏移到光标右下方（避免遮挡光标热点）
+    // 窗口位置：光标位置减去图标偏移量，使图标对齐光标
     // 使用 SWP_NOZORDER 避免每次都调整 Z-order，减少开销
     SetWindowPos(
         OVERLAY_HWND,
         std::ptr::null_mut(),
-        pt.x,
+        pt.x - DRAG_ICON_OFFSET_X,
         pt.y,
         0,
         0,
