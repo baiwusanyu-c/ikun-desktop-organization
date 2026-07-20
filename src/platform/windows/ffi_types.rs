@@ -172,6 +172,14 @@ pub const WM_TIMER: u32 = 0x0113;
 pub const WM_ACTIVATE: u32 = 0x0006;
 pub const WM_WINDOWPOSCHANGING: u32 = 0x0046;
 
+// ===== Alignment guide constants =====
+pub const WM_ENTERSIZEMOVE: u32 = 0x0231;
+pub const WM_EXITSIZEMOVE: u32 = 0x0232;
+pub const WM_MOVING: u32 = 0x0216;
+pub const WM_SIZING: u32 = 0x0214;
+pub const TIMER_ID_ALIGNMENT: usize = 0x4F56_0003;
+
+
 // ===== Hit Test Constants =====
 pub const HTCLIENT: i32 = 1;
 pub const HTTRANSPARENT: i32 = -1;

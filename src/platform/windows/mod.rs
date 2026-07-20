@@ -14,6 +14,7 @@
 //! - `shell_menu`: Shell 上下文菜单 + 注册表管理
 //! - `sys_tray`: 系统托盘（TODO）
 
+pub mod alignment_guide;
 pub mod app_icon;
 mod control_panel_window;
 mod d2d_render;

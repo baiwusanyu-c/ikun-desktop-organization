@@ -991,6 +991,40 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             with_zorder_suppressed(|| push_other_grids_below(hwnd));
             0
         }
+        // ===== Enter move/resize mode: start alignment detection =====
+        WM_ENTERSIZEMOVE => {
+            super::alignment_guide::on_enter_size_move(hwnd);
+            0
+        }
+
+        // ===== Exit move/resize mode: clear guide lines =====
+        WM_EXITSIZEMOVE => {
+            super::alignment_guide::on_exit_size_move(hwnd);
+            // Save layout after move/resize
+            super::drag_handler::save_config();
+            0
+        }
+
+        // ===== Moving: detect alignment and show guide lines =====
+        WM_MOVING => {
+            let proposed_rect = lparam as *mut RECT;
+            if !proposed_rect.is_null() {
+                let rect = unsafe { &mut *proposed_rect };
+                super::alignment_guide::on_moving(hwnd, rect);
+            }
+            0
+        }
+
+        // ===== Sizing: detect alignment and show guide lines =====
+        WM_SIZING => {
+            let proposed_rect = lparam as *mut RECT;
+            if !proposed_rect.is_null() {
+                let rect = unsafe { &mut *proposed_rect };
+                super::alignment_guide::on_moving(hwnd, rect);
+            }
+            0
+        }
+
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
