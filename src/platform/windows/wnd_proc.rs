@@ -914,9 +914,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             0
         }
         // ===== 捕获丢失处理：纯清理兆底 =====
-        WM_CAPTURECHANGED => {
-            0
-        }
+        WM_CAPTURECHANGED => 0,
 
         // ===== 拖拽悬停进入：显示高亮 =====
         WM_USER_DRAG_ENTER => {

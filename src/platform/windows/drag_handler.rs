@@ -301,7 +301,12 @@ fn handle_box_to_box_move(source_hwnd: HWND, target_hwnd: HWND, item_index: usiz
     unsafe { GetCursorPos(&mut drop_pt) };
     // 通知目标框添加项（包含释放坐标）
     unsafe {
-        super::drop_target::set_pending_add_item(file_path.clone(), display_name.clone(), drop_pt.x, drop_pt.y);
+        super::drop_target::set_pending_add_item(
+            file_path.clone(),
+            display_name.clone(),
+            drop_pt.x,
+            drop_pt.y,
+        );
         PostMessageW(target_hwnd, WM_USER_DRAG_ITEM_ADDED, 0, 0);
     }
 
@@ -454,7 +459,9 @@ pub(crate) fn handle_drag_leave(hwnd: HWND) {
 
 /// 处理 WM_USER_DRAG_ITEM_ADDED（框→框移动 或 桌面→框 时，目标框添加项）
 pub(crate) fn handle_drag_item_added(hwnd: HWND) {
-    if let Some((file_path, display_name, drop_x, drop_y)) = super::drop_target::take_pending_add_item() {
+    if let Some((file_path, display_name, drop_x, drop_y)) =
+        super::drop_target::take_pending_add_item()
+    {
         // 检查是否已存在
         if let Some(data) = unsafe { get_data(hwnd) } {
             if data.items.iter().any(|i| i.file_path == file_path) {
@@ -475,7 +482,10 @@ pub(crate) fn handle_drag_item_added(hwnd: HWND) {
             let (target_col, target_row) = compute_drop_grid_position(hwnd, drop_x, drop_y, data);
             log::info!(
                 "[DIAG] 释放位置计算: drop=({}, {}) -> grid=({}, {})",
-                drop_x, drop_y, target_col, target_row
+                drop_x,
+                drop_y,
+                target_col,
+                target_row
             );
 
             data.items.push(super::grid_window::GridFileItem {
@@ -487,7 +497,9 @@ pub(crate) fn handle_drag_item_added(hwnd: HWND) {
             });
             log::info!(
                 "[DIAG] 项已添加到框: '{}', grid=({}, {})",
-                display_name, target_col, target_row
+                display_name,
+                target_col,
+                target_row
             );
             render_layered_window(hwnd);
             save_config();
@@ -571,10 +583,17 @@ pub(crate) fn save_config() {
 
 /// 根据释放位置的屏幕坐标计算目标网格位置
 fn compute_drop_grid_position(
-    hwnd: HWND, drop_x: i32, drop_y: i32,
+    hwnd: HWND,
+    drop_x: i32,
+    drop_y: i32,
     data: &super::grid_window::GridWindowData,
 ) -> (i32, i32) {
-    let mut wr = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    let mut wr = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
     unsafe { GetWindowRect(hwnd, &mut wr) };
     let client_x = drop_x - wr.left;
     let client_y = drop_y - wr.top;
@@ -584,9 +603,8 @@ fn compute_drop_grid_position(
     let window_width = wr.right - wr.left;
 
     let view_params = crate::box_core::view_engine::get_view_params(&data.view_mode, dpi);
-    let layout = crate::box_core::layout_calc::calculate_grid(
-        window_width, data.title_h, &view_params, dpi
-    );
+    let layout =
+        crate::box_core::layout_calc::calculate_grid(window_width, data.title_h, &view_params, dpi);
 
     if client_x >= layout.grid_left && client_y >= layout.grid_top {
         let col = ((client_x - layout.grid_left) / layout.cell_w).max(0);
@@ -704,86 +722,86 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
     }
 }
 
-    #[test]
-    fn test_compute_drop_grid_position_basic() {
-        // Test basic grid position calculation
-        // This is a simplified test - in real usage, HWND and GetWindowRect would be mocked
-        // For now, we test the logic with known values
-        
-        let grid_left = 10;
-        let grid_top = 40;
-        let cell_w = 80;
-        let cell_h = 96;
-        
-        // Drop at first cell
-        let drop_x = grid_left + 10;
-        let drop_y = grid_top + 10;
-        let client_x = drop_x;
-        let client_y = drop_y;
-        
-        let col = ((client_x - grid_left) / cell_w).max(0);
-        let row = ((client_y - grid_top) / cell_h).max(0);
-        
-        assert_eq!(col, 0);
-        assert_eq!(row, 0);
-        
-        // Drop at second cell (col=1, row=0)
-        let drop_x = grid_left + cell_w + 10;
-        let drop_y = grid_top + 10;
-        let client_x = drop_x;
-        let client_y = drop_y;
-        
-        let col = ((client_x - grid_left) / cell_w).max(0);
-        let row = ((client_y - grid_top) / cell_h).max(0);
-        
-        assert_eq!(col, 1);
-        assert_eq!(row, 0);
-        
-        // Drop at third cell (col=0, row=1)
-        let drop_x = grid_left + 10;
-        let drop_y = grid_top + cell_h + 10;
-        let client_x = drop_x;
-        let client_y = drop_y;
-        
-        let col = ((client_x - grid_left) / cell_w).max(0);
-        let row = ((client_y - grid_top) / cell_h).max(0);
-        
-        assert_eq!(col, 0);
-        assert_eq!(row, 1);
+#[test]
+fn test_compute_drop_grid_position_basic() {
+    // Test basic grid position calculation
+    // This is a simplified test - in real usage, HWND and GetWindowRect would be mocked
+    // For now, we test the logic with known values
+
+    let grid_left = 10;
+    let grid_top = 40;
+    let cell_w = 80;
+    let cell_h = 96;
+
+    // Drop at first cell
+    let drop_x = grid_left + 10;
+    let drop_y = grid_top + 10;
+    let client_x = drop_x;
+    let client_y = drop_y;
+
+    let col = ((client_x - grid_left) / cell_w).max(0);
+    let row = ((client_y - grid_top) / cell_h).max(0);
+
+    assert_eq!(col, 0);
+    assert_eq!(row, 0);
+
+    // Drop at second cell (col=1, row=0)
+    let drop_x = grid_left + cell_w + 10;
+    let drop_y = grid_top + 10;
+    let client_x = drop_x;
+    let client_y = drop_y;
+
+    let col = ((client_x - grid_left) / cell_w).max(0);
+    let row = ((client_y - grid_top) / cell_h).max(0);
+
+    assert_eq!(col, 1);
+    assert_eq!(row, 0);
+
+    // Drop at third cell (col=0, row=1)
+    let drop_x = grid_left + 10;
+    let drop_y = grid_top + cell_h + 10;
+    let client_x = drop_x;
+    let client_y = drop_y;
+
+    let col = ((client_x - grid_left) / cell_w).max(0);
+    let row = ((client_y - grid_top) / cell_h).max(0);
+
+    assert_eq!(col, 0);
+    assert_eq!(row, 1);
+}
+
+#[test]
+fn test_compute_drop_grid_position_outside_grid() {
+    // Test dropping outside grid area returns (-1, -1)
+    let grid_left = 10;
+    let grid_top = 40;
+
+    // Drop before grid_left
+    let client_x = grid_left - 5;
+    let client_y = grid_top + 10;
+
+    if client_x < grid_left || client_y < grid_top {
+        let col = -1;
+        let row = -1;
+        assert_eq!(col, -1);
+        assert_eq!(row, -1);
     }
-    
-    #[test]
-    fn test_compute_drop_grid_position_outside_grid() {
-        // Test dropping outside grid area returns (-1, -1)
-        let grid_left = 10;
-        let grid_top = 40;
-        
-        // Drop before grid_left
-        let client_x = grid_left - 5;
-        let client_y = grid_top + 10;
-        
-        if client_x < grid_left || client_y < grid_top {
-            let col = -1;
-            let row = -1;
-            assert_eq!(col, -1);
-            assert_eq!(row, -1);
-        }
-    }
-    
-    #[test]
-    fn test_compute_drop_grid_position_negative_coordinates() {
-        // Test that negative coordinates are clamped to 0
-        let grid_left = 10;
-        let grid_top = 40;
-        let cell_w = 80;
-        let cell_h = 96;
-        
-        let client_x = grid_left + 10;
-        let client_y = grid_top + 10;
-        
-        let col = ((client_x - grid_left) / cell_w).max(0);
-        let row = ((client_y - grid_top) / cell_h).max(0);
-        
-        assert_eq!(col, 0);
-        assert_eq!(row, 0);
-    }
+}
+
+#[test]
+fn test_compute_drop_grid_position_negative_coordinates() {
+    // Test that negative coordinates are clamped to 0
+    let grid_left = 10;
+    let grid_top = 40;
+    let cell_w = 80;
+    let cell_h = 96;
+
+    let client_x = grid_left + 10;
+    let client_y = grid_top + 10;
+
+    let col = ((client_x - grid_left) / cell_w).max(0);
+    let row = ((client_y - grid_top) / cell_h).max(0);
+
+    assert_eq!(col, 0);
+    assert_eq!(row, 0);
+}

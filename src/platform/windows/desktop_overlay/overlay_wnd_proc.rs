@@ -81,9 +81,7 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             0
         }
         // ===== 捕获丢失处理：纯清理兆底 =====
-        WM_CAPTURECHANGED => {
-            0
-        }
+        WM_CAPTURECHANGED => 0,
         WM_LBUTTONDBLCLK => {
             let (local_x, local_y) =
                 screen_to_overlay_client(hwnd, get_x_lparam(lparam), get_y_lparam(lparam));
@@ -361,7 +359,10 @@ fn handle_overlay_drag_timer(hwnd: HWND) {
 
     // 检测鼠标左键是否仍然按下
     let lbutton_down = unsafe { GetAsyncKeyState(VK_LBUTTON) } & 0x8000u16 as i16 != 0;
-    log::debug!("[DIAG] handle_overlay_drag_timer: lbutton_down={}", lbutton_down);
+    log::debug!(
+        "[DIAG] handle_overlay_drag_timer: lbutton_down={}",
+        lbutton_down
+    );
     if !lbutton_down {
         log::info!("[DIAG] overlay drag timer: 鼠标已释放，结束拖拽");
         end_overlay_drag(hwnd);
@@ -372,7 +373,10 @@ fn handle_lbutton_up(hwnd: HWND) {
     let was_drag_active = get_overlay_data(hwnd)
         .map(|data| data.drag_active)
         .unwrap_or(false);
-    log::info!("[DIAG] handle_lbutton_up: was_drag_active={}", was_drag_active);
+    log::info!(
+        "[DIAG] handle_lbutton_up: was_drag_active={}",
+        was_drag_active
+    );
     if was_drag_active {
         end_overlay_drag(hwnd);
         return;
@@ -466,9 +470,19 @@ fn start_overlay_drag(hwnd: HWND) {
         );
         crate::platform::windows::drag_image::update_drag_overlay();
         // WS_EX_LAYERED 窗口上 SetCapture 不稳定，使用 Timer 轮询检测鼠标释放
-        log::info!("[DIAG] start_overlay_drag: before SetTimer, drag_active={}", get_overlay_data(hwnd).map(|d| d.drag_active).unwrap_or(false));
+        log::info!(
+            "[DIAG] start_overlay_drag: before SetTimer, drag_active={}",
+            get_overlay_data(hwnd)
+                .map(|d| d.drag_active)
+                .unwrap_or(false)
+        );
         SetTimer(hwnd, TIMER_ID_OVERLAY_DRAG, 8, std::ptr::null_mut());
-        log::info!("[DIAG] start_overlay_drag: after SetTimer, drag_active={}", get_overlay_data(hwnd).map(|d| d.drag_active).unwrap_or(false));
+        log::info!(
+            "[DIAG] start_overlay_drag: after SetTimer, drag_active={}",
+            get_overlay_data(hwnd)
+                .map(|d| d.drag_active)
+                .unwrap_or(false)
+        );
     }
 }
 
@@ -510,7 +524,12 @@ fn end_overlay_drag(hwnd: HWND) {
         None => return,
     };
 
-    crate::platform::windows::drop_target::set_pending_add_item(file_path, display_name.clone(), pt.x, pt.y);
+    crate::platform::windows::drop_target::set_pending_add_item(
+        file_path,
+        display_name.clone(),
+        pt.x,
+        pt.y,
+    );
     unsafe { PostMessageW(target_hwnd, WM_USER_DRAG_ITEM_ADDED, 0, 0) };
 
     if let Some(data) = get_overlay_data(hwnd) {
