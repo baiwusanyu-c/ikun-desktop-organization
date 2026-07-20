@@ -264,3 +264,195 @@ fn render() {
 This guide was created after **7 failed debug attempts** (commits de9ed40 through 72c8f73) to fix hover flickering and click-to-deselect bugs. The root cause was an implicit assumption about WM_NCHITTEST behavior that didn't account for pixel-level alpha testing.
 
 **Key lesson**: When working with platform-specific features, always test the actual behavior rather than relying on documentation or assumptions. The platform's implicit behaviors can completely invalidate your mental model.
+
+---
+
+## Drag and Drop on Layered Windows
+
+> Lessons learned from fixing 7 drag-related bugs in 2 days
+
+### SetCapture Limitations
+
+**Critical Rule**: `SetCapture` is **unstable** on WS_EX_LAYERED windows.
+
+```rust
+// WRONG: Causes infinite WM_CAPTURECHANGED loop
+SetCapture(layered_hwnd);
+// -> Windows immediately sends WM_CAPTURECHANGED
+// -> If you re-capture in handler -> infinite loop
+```
+
+**Why it fails**:
+- WS_EX_LAYERED windows have special message routing
+- SetCapture conflicts with layered window's alpha-based hit testing
+- Windows forcibly releases capture, triggering WM_CAPTURECHANGED
+
+**Correct approach**: Use Timer-based polling
+
+```rust
+// CORRECT: Timer polling for drag state
+const DRAG_TIMER_ID: usize = 0x4F56_0001;
+
+fn start_drag(hwnd: HWND) {
+    data.drag_active = true;
+    SetTimer(hwnd, DRAG_TIMER_ID, 8, null_mut()); // 8ms = 125Hz
+}
+
+fn handle_timer(hwnd: HWND, timer_id: usize) {
+    if timer_id == DRAG_TIMER_ID {
+        if !data.drag_active {
+            // State was reset externally, cleanup
+            cleanup_drag(hwnd);
+            return;
+        }
+        
+        // Update drag ghost position
+        update_drag_ghost();
+        
+        // Check if mouse button still pressed
+        if !is_mouse_button_pressed(VK_LBUTTON) {
+            end_drag(hwnd);
+        }
+    }
+}
+
+fn end_drag(hwnd: HWND) {
+    data.drag_active = false;
+    KillTimer(hwnd, DRAG_TIMER_ID);
+    cleanup_drag_ghost();
+}
+```
+
+### Message Routing on Layered Windows
+
+**Key insight**: Layered windows in bottom Z-order **do not receive mouse messages** unless they have capture.
+
+```
++------------------+
+|  Other Windows   |  <- Mouse messages go here (top Z-order)
++------------------+
+| Layered Window   |  <- No mouse messages (bottom Z-order)
+| (alpha=0 area)   |     Unless: SetCapture (unstable) or Timer polling
++------------------+
+```
+
+**Implications**:
+- Cannot rely on `WM_MOUSEMOVE` for drag tracking
+- Cannot rely on `WM_LBUTTONUP` to end drag
+- Must use Timer to poll mouse state
+
+### Drag Ghost Positioning
+
+**Common pitfall**: Assuming window position = icon position
+
+```rust
+// WRONG: Window position != icon position
+SetWindowPos(ghost_hwnd, null_mut(), cursor_x, cursor_y, ...);
+// Icon is drawn centered in window, so actual icon position is offset
+```
+
+**Correct approach**: Account for icon centering offset
+
+```rust
+// CORRECT: Subtract centering offset
+let icon_offset_x = (window_width - icon_size) / 2;
+SetWindowPos(ghost_hwnd, null_mut(), 
+             cursor_x - icon_offset_x, cursor_y, ...);
+```
+
+### State Management Anti-Patterns
+
+**Problem**: Multiple modules can modify `drag_active`, causing state inconsistency
+
+```rust
+// WRONG: Direct field access from multiple modules
+// In drag_handler.rs:
+data.drag_active = true;
+
+// In desktop_watcher.rs:
+data.drag_active = false; // Reset during refresh!
+// -> Drag ghost stuck because Timer sees drag_active=false
+```
+
+**Correct approach**: Centralized state manager with validation
+
+```rust
+// CORRECT: Validate state consistency
+pub fn handle_timer() {
+    if !data.drag_active {
+        // State was reset externally, force cleanup
+        log::warn!("[DRAG] State reset externally, cleaning up");
+        cleanup_ghost();
+        KillTimer(hwnd, DRAG_TIMER_ID);
+        return;
+    }
+    
+    if !is_mouse_pressed() {
+        end_drag();
+    }
+}
+```
+
+### Debug Checklist for Drag Issues
+
+- [ ] **Timer vs SetCapture**: Using Timer on layered windows? (SetCapture is unstable)
+- [ ] **State consistency**: Is `drag_active` synchronized with Timer state?
+- [ ] **External state modification**: Can other modules reset drag state?
+- [ ] **Ghost positioning**: Accounted for icon centering offset?
+- [ ] **Z-order**: Is layered window receiving messages? (Check Z-order)
+- [ ] **Cleanup on error**: Does Timer cleanup ghost if state is inconsistent?
+
+### Common Timer Issues
+
+**Issue 1: Timer too slow (lag)**
+
+```rust
+// WRONG: 16ms timer + expensive DPI check = lag
+SetTimer(hwnd, DRAG_TIMER_ID, 16, null_mut());
+fn handle_timer() {
+    check_dpi(); // Expensive system call every frame!
+    update_ghost();
+}
+```
+
+```rust
+// CORRECT: 8ms timer + cached DPI
+SetTimer(hwnd, DRAG_TIMER_ID, 8, null_mut()); // 125Hz
+static mut LAST_DPI: u32 = 96;
+fn handle_timer() {
+    // Only check DPI every 8 frames
+    if frame_count % 8 == 0 {
+        LAST_DPI = check_dpi();
+    }
+    update_ghost();
+}
+```
+
+**Issue 2: Timer not cleaning up on state reset**
+
+```rust
+// WRONG: Timer only ends drag when mouse released
+fn handle_timer() {
+    if !is_mouse_pressed() {
+        end_drag();
+    }
+    // What if drag_active was reset externally? Timer keeps running!
+}
+```
+
+```rust
+// CORRECT: Timer checks state consistency
+fn handle_timer() {
+    if !data.drag_active {
+        // State was reset externally, force cleanup
+        log::warn!("[DRAG] State reset externally, cleaning up");
+        cleanup_ghost();
+        KillTimer(hwnd, DRAG_TIMER_ID);
+        return;
+    }
+    
+    if !is_mouse_pressed() {
+        end_drag();
+    }
+}
+```

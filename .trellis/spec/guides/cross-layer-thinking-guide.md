@@ -253,3 +253,94 @@ target.Clear(Some(&d2d_color(0, 0, 0, bg_alpha)));
 ## History
 
 This guide was created after debugging the overlay hover flickering and click-to-deselect bugs, which required 7 failed attempts before identifying the root cause as a cross-layer implicit assumption about WS_EX_LAYERED behavior.
+
+---
+
+## Case Study: Drag State Cross-Layer Failure (2026-07-20)
+
+### Problem
+
+Desktop file watcher (background thread) resets overlay data during refresh, breaking drag state managed by UI thread.
+
+**Timeline**:
+```
+UI Thread:              Background Thread:
+drag_start() -> active=true
+drag_update() -> active=true  
+                        desktop_watcher detects file change
+                        refresh_overlay() -> reset_overlay_data() -> active=false
+drag_update() -> active=false (unexpected!)
+drag_ghost stuck (Timer sees false, cleans up)
+```
+
+### Root Cause
+
+```rust
+// desktop_overlay/overlay_window.rs
+fn refresh_desktop_overlay_icons(hwnd: HWND) {
+    // ... collect new icons ...
+    reset_overlay_interaction_state(data);  // <- Resets drag_active!
+}
+
+fn reset_overlay_interaction_state(data: &mut OverlayWindowData) {
+    data.selected_item = -1;
+    data.hovered_item = -1;
+    data.drag_pending = false;
+    data.drag_active = false;  // <- BUG: Breaks ongoing drag
+    data.drag_item_index = -1;
+}
+```
+
+### Solution
+
+**Defensive check**: Skip refresh if drag is active
+
+```rust
+pub(crate) fn refresh_desktop_overlay_icons(hwnd: HWND) {
+    // Skip refresh during drag to prevent state reset
+    if let Some(data) = get_overlay_data(hwnd) {
+        if data.drag_active || data.drag_pending {
+            log::debug!("[OVERLAY] Skip refresh during drag");
+            return;
+        }
+    }
+    // ... normal refresh ...
+}
+```
+
+**Fail-safe cleanup**: Timer detects inconsistent state
+
+```rust
+fn handle_overlay_drag_timer(hwnd: HWND) {
+    let is_dragging = match get_overlay_data(hwnd) {
+        Some(data) => data.drag_active,
+        None => return,
+    };
+    
+    if !is_dragging {
+        // State was reset externally, force cleanup
+        log::warn!("[DRAG] Timer detected state reset, cleaning up");
+        unsafe {
+            KillTimer(hwnd, TIMER_ID_OVERLAY_DRAG);
+            crate::platform::windows::drag_image::destroy_drag_overlay();
+        }
+        return;
+    }
+    // ... normal drag update ...
+}
+```
+
+### Lessons Learned
+
+1. **Cross-thread state modification is dangerous**: Background threads should not directly modify UI state
+2. **Defensive checks are essential**: Always validate state before operations
+3. **Fail-safe cleanup prevents stuck states**: Timers should detect and recover from inconsistent states
+4. **Logging is critical**: Without DIAG logs, this bug would have been impossible to diagnose
+
+### Prevention Checklist
+
+- [ ] **Thread safety**: Does background thread modify UI state?
+- [ ] **State validation**: Do operations check state before executing?
+- [ ] **Fail-safe cleanup**: Can system recover from inconsistent states?
+- [ ] **Cross-module dependencies**: Which modules can reset shared state?
+- [ ] **Logging coverage**: Are state transitions logged for debugging?
