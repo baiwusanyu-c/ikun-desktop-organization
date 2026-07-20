@@ -147,7 +147,7 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
     // 因为分类框在 HWND_BOTTOM，WindowFromPoint 会被覆盖窗口拦截
     let target_hwnd = super::grid_window::find_grid_window_at_point(pt.x, pt.y);
 
-    if target_hwnd.is_null() || target_hwnd == hwnd {
+    if target_hwnd == hwnd {
         // 同框内拖拽 → grid snap + swap
         handle_same_box_drop(hwnd, item_idx as usize, pt.x, pt.y);
         return true;
@@ -158,8 +158,8 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
         handle_box_to_box_move(hwnd, target_hwnd, item_idx as usize);
     } else {
         // === 框→桌面/覆盖窗口（从框中移除项）===
-        let target_is_overlay = super::desktop_overlay::is_desktop_overlay_window(target_hwnd);
-        handle_box_to_desktop(hwnd, item_idx as usize, pt.x, pt.y, target_is_overlay);
+        // target_hwnd 为 null 表示拖到覆盖区域或桌面
+        handle_box_to_desktop(hwnd, item_idx as usize, pt.x, pt.y, true);
     }
 
     // 清除所有框的高亮
