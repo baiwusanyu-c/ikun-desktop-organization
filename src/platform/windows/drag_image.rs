@@ -149,8 +149,8 @@ pub(crate) unsafe fn create_drag_overlay(
         DRAG_OVERLAY_CLASS.as_ptr(),
         std::ptr::null(),
         WS_POPUP,
-        init_pt.x + 8,
-        init_pt.y + 8,
+        init_pt.x,
+        init_pt.y,
         total_w,
         total_h,
         std::ptr::null_mut(),
@@ -172,8 +172,8 @@ pub(crate) unsafe fn create_drag_overlay(
 
     // 与 CreateWindowExW 相同的初始位置，保持一致
     let pt_dst = POINT {
-        x: init_pt.x + 8,
-        y: init_pt.y + 8,
+        x: init_pt.x,
+        y: init_pt.y,
     };
     let sz = SIZE {
         cx: total_w,
@@ -259,8 +259,8 @@ pub(crate) unsafe fn update_drag_overlay() {
     SetWindowPos(
         OVERLAY_HWND,
         std::ptr::null_mut(),
-        pt.x + 8,
-        pt.y + 8,
+        pt.x,
+        pt.y,
         0,
         0,
         SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
