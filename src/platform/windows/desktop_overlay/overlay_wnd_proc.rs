@@ -467,7 +467,7 @@ fn start_overlay_drag(hwnd: HWND) {
         crate::platform::windows::drag_image::update_drag_overlay();
         // WS_EX_LAYERED 窗口上 SetCapture 不稳定，使用 Timer 轮询检测鼠标释放
         log::info!("[DIAG] start_overlay_drag: before SetTimer, drag_active={}", get_overlay_data(hwnd).map(|d| d.drag_active).unwrap_or(false));
-        SetTimer(hwnd, TIMER_ID_OVERLAY_DRAG, 16, std::ptr::null_mut());
+        SetTimer(hwnd, TIMER_ID_OVERLAY_DRAG, 8, std::ptr::null_mut());
         log::info!("[DIAG] start_overlay_drag: after SetTimer, drag_active={}", get_overlay_data(hwnd).map(|d| d.drag_active).unwrap_or(false));
     }
 }

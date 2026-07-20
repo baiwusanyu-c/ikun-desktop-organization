@@ -243,21 +243,27 @@ pub(crate) unsafe fn update_drag_overlay() {
     let mut pt = POINT { x: 0, y: 0 };
     GetCursorPos(&mut pt);
 
-    // 检测光标所在显示器的 DPI，变化时重建残影
-    let current_dpi = crate::platform::windows::desktop_overlay::dpi_at_screen_point(pt.x, pt.y);
-    if current_dpi != DRAG_LAST_DPI && !DRAG_ICON_HANDLE.is_null() {
-        rebuild_drag_overlay_at_dpi(current_dpi);
+    // DPI 检测优化：每 8 次调用才检测一次 DPI，减少系统调用开销
+    static mut DPI_CHECK_COUNTER: u32 = 0;
+    DPI_CHECK_COUNTER = (DPI_CHECK_COUNTER + 1) % 8;
+    
+    if DPI_CHECK_COUNTER == 0 {
+        let current_dpi = crate::platform::windows::desktop_overlay::dpi_at_screen_point(pt.x, pt.y);
+        if current_dpi != DRAG_LAST_DPI && !DRAG_ICON_HANDLE.is_null() {
+            rebuild_drag_overlay_at_dpi(current_dpi);
+        }
     }
 
     // 窗口位置偏移到光标右下方（避免遮挡光标热点）
+    // 使用 SWP_NOZORDER 避免每次都调整 Z-order，减少开销
     SetWindowPos(
         OVERLAY_HWND,
-        HWND_TOPMOST,
+        std::ptr::null_mut(),
         pt.x + 8,
         pt.y + 8,
         0,
         0,
-        SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+        SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
     );
 }
 

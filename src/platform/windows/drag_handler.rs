@@ -60,7 +60,7 @@ pub(crate) fn check_drag_threshold(hwnd: HWND, mx: i32, my: i32) -> bool {
         super::drag_image::create_drag_overlay(icon_handle, icon_size, cell_w, &display_name, dpi);
         super::drag_image::update_drag_overlay();
         // 使用 Timer 轮询检测鼠标释放（SetCapture 在分层窗口上不稳定）
-        SetTimer(hwnd, TIMER_ID_GRID_DRAG, 16, std::ptr::null_mut());
+        SetTimer(hwnd, TIMER_ID_GRID_DRAG, 8, std::ptr::null_mut());
     }
 
     true
