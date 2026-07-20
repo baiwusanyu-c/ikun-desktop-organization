@@ -91,7 +91,9 @@ pub(crate) fn update_drag(hwnd: HWND) -> bool {
     // 检测光标下的窗口，管理高亮
     let mut pt = POINT { x: 0, y: 0 };
     unsafe { GetCursorPos(&mut pt) };
-    let target_hwnd = unsafe { WindowFromPoint(pt) };
+    // 使用 find_grid_window_at_point 替代 WindowFromPoint，
+    // 因为分类框在 HWND_BOTTOM，WindowFromPoint 会被覆盖窗口拦截
+    let target_hwnd = super::grid_window::find_grid_window_at_point(pt.x, pt.y);
 
     // 对目标分类框显示高亮
     if !target_hwnd.is_null() && target_hwnd != hwnd {
@@ -141,35 +143,17 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
     // 检测释放目标
     let mut pt = POINT { x: 0, y: 0 };
     unsafe { GetCursorPos(&mut pt) };
-    let target_hwnd = unsafe { WindowFromPoint(pt) };
+    // 使用 find_grid_window_at_point 替代 WindowFromPoint，
+    // 因为分类框在 HWND_BOTTOM，WindowFromPoint 会被覆盖窗口拦截
+    let target_hwnd = super::grid_window::find_grid_window_at_point(pt.x, pt.y);
 
-    if target_hwnd == hwnd {
+    if target_hwnd.is_null() || target_hwnd == hwnd {
         // 同框内拖拽 → grid snap + swap
         handle_same_box_drop(hwnd, item_idx as usize, pt.x, pt.y);
         return true;
     }
 
-    // 检查目标是否是另一个分类框
-    let target_is_grid = if !target_hwnd.is_null() {
-        let mut class_name = [0u16; 64];
-        let len = unsafe {
-            GetClassNameW(
-                target_hwnd,
-                class_name.as_mut_ptr(),
-                class_name.len() as i32,
-            )
-        };
-        if len > 0 {
-            let name = String::from_utf16_lossy(&class_name[..len as usize]);
-            name == "DesktopOrgGrid"
-        } else {
-            false
-        }
-    } else {
-        false
-    };
-
-    if target_is_grid {
+    if !target_hwnd.is_null() {
         // === 框→框移动 ===
         handle_box_to_box_move(hwnd, target_hwnd, item_idx as usize);
     } else {

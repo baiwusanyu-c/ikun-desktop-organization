@@ -367,9 +367,53 @@ Before implementing Z-order features:
 - [ ] Test with multiple grid windows (A clicked should be above B)
 - [ ] Verify grid windows don't cover other applications
 - [ ] Verify resize/move still works normally
-- [ ] Verify drag-and-drop from overlay to grid still works (DRAG_IN_PROGRESS flag)
+- [ ] Verify drag-and-drop from overlay to grid still works (find_grid_window_at_point)
+- [ ] Verify drag-and-drop between grid windows still works (find_grid_window_at_point)
 
 ### Drag-and-Drop Interaction
+
+#### Custom Drag (SetCapture-based)
+
+The overlay and grid windows use custom drag implementation (SetCapture + WM_MOUSEMOVE) instead of OLE DoDragDrop. This requires manual hit-testing to find target windows.
+
+**Problem**: WindowFromPoint cannot find grid windows at HWND_BOTTOM because the overlay window (full-screen, returns HTCLIENT for all hit tests) intercepts the hit test.
+
+**Solution**: Use ind_grid_window_at_point() which directly iterates the grid window list and checks bounding rectangles:
+
+`
+ust
+// In grid_window.rs:
+pub fn find_grid_window_at_point(screen_x: i32, screen_y: i32) -> HWND {
+    let grids = match GRID_WINDOWS.lock() {
+        Ok(g) => g,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    // Iterate from end (highest Z-order) to start
+    for grid in grids.iter().rev() {
+        let mut rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        unsafe {
+            if GetWindowRect(grid.hwnd, &mut rect) != 0 {
+                if screen_x >= rect.left && screen_x < rect.right
+                    && screen_y >= rect.top && screen_y < rect.bottom
+                {
+                    return grid.hwnd;
+                }
+            }
+        }
+    }
+    std::ptr::null_mut()
+}
+`
+
+`
+ust
+// In overlay_wnd_proc.rs and drag_handler.rs:
+// Replace: let target_hwnd = unsafe { WindowFromPoint(pt) };
+// With:
+let target_hwnd = crate::platform::windows::grid_window::find_grid_window_at_point(pt.x, pt.y);
+`
+
+#### OLE Drag (DoDragDrop-based)
 
 OLE DoDragDrop is a blocking modal call. During execution, Windows performs hit-testing on all windows to find IDropTarget objects. If WM_WINDOWPOSCHANGING forces grid windows to HWND_BOTTOM during drag, the grid may end up below the overlay window, preventing OLE from triggering DragEnter/Drop on the grid's IDropTarget.
 

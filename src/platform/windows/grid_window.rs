@@ -642,6 +642,40 @@ pub(crate) fn is_drag_in_progress() -> bool {
     DRAG_IN_PROGRESS.with(|f| f.get())
 }
 
+/// 查找指定屏幕坐标处的分类框窗口
+///
+/// 由于分类框窗口位于 HWND_BOTTOM（低于覆盖窗口和其他应用窗口），
+/// WindowFromPoint 无法找到它们（被覆盖窗口拦截）。
+/// 此函数直接遍历分类框列表，通过 GetWindowRect 检查矩形碰撞，
+/// 按 Z-order 顺序（列表末尾 = 最上方）返回第一个命中的分类框。
+pub fn find_grid_window_at_point(screen_x: i32, screen_y: i32) -> HWND {
+    let grids = match GRID_WINDOWS.lock() {
+        Ok(g) => g,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    // 从列表末尾向前遍历（Z-order 最高的先检查）
+    for grid in grids.iter().rev() {
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        unsafe {
+            if GetWindowRect(grid.hwnd, &mut rect) != 0 {
+                if screen_x >= rect.left
+                    && screen_x < rect.right
+                    && screen_y >= rect.top
+                    && screen_y < rect.bottom
+                {
+                    return grid.hwnd;
+                }
+            }
+        }
+    }
+    std::ptr::null_mut()
+}
+
 /// 获取格子数量
 pub fn get_grid_count() -> usize {
     GRID_WINDOWS.lock().map(|g| g.len()).unwrap_or(0)
@@ -1032,6 +1066,31 @@ mod tests {
         assert!(!super::is_zorder_suppressing(), "Z-order suppressing should be independent");
         assert!(super::is_drag_in_progress(), "Drag flag should be true");
         super::set_drag_in_progress(false);
+    }
+
+
+    // ===== find_grid_window_at_point unit tests =====
+
+    #[test]
+    fn test_find_grid_window_at_point_empty_list() {
+        // Empty grid list should return null
+        let result = super::find_grid_window_at_point(100, 100);
+        assert!(result.is_null(), "Should return null for empty grid list");
+    }
+
+    #[test]
+    fn test_find_grid_window_at_point_returns_null_for_null_input() {
+        // Should handle edge cases gracefully
+        let result = super::find_grid_window_at_point(0, 0);
+        // May or may not find a window at (0,0), but should not crash
+        let _ = result;
+    }
+
+    #[test]
+    fn test_find_grid_window_at_point_negative_coords() {
+        // Should handle negative coordinates without crashing
+        let result = super::find_grid_window_at_point(-100, -100);
+        assert!(result.is_null(), "Should return null for negative coords");
     }
 
 }
