@@ -180,7 +180,10 @@ mod tests {
 
     #[test]
     fn test_drag_in_progress_default_false() {
-        assert!(!is_drag_in_progress(), "DRAG_IN_PROGRESS should default to false");
+        assert!(
+            !is_drag_in_progress(),
+            "DRAG_IN_PROGRESS should default to false"
+        );
     }
 
     #[test]
@@ -194,7 +197,10 @@ mod tests {
     #[test]
     fn test_drag_flag_independent_of_zorder_suppressing() {
         set_drag_in_progress(true);
-        assert!(!is_zorder_suppressing(), "Z-order suppressing should be independent");
+        assert!(
+            !is_zorder_suppressing(),
+            "Z-order suppressing should be independent"
+        );
         assert!(is_drag_in_progress(), "Drag flag should be true");
         set_drag_in_progress(false);
     }

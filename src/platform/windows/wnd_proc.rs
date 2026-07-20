@@ -21,9 +21,11 @@ use super::grid_layout::{
     grid_hit_test, lock_btn_rect, more_btn_rect, recalculate_layout, reflow_items,
 };
 use super::grid_window::{get_data, GridWindowData};
-use super::zorder::{is_drag_in_progress, is_zorder_suppressing, push_other_grids_below, with_zorder_suppressed};
 use super::menu_window::show_menu_window;
 use super::shell_menu::{show_desktop_context_menu, show_shell_context_menu};
+use super::zorder::{
+    is_drag_in_progress, is_zorder_suppressing, push_other_grids_below, with_zorder_suppressed,
+};
 use crate::box_core::layout_calc::calculate_grid;
 use crate::box_core::view_engine::get_view_params;
 

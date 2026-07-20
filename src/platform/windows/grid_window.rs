@@ -247,7 +247,10 @@ unsafe impl Send for GridWindow {}
 static GRID_WINDOWS: Mutex<Vec<GridWindow>> = Mutex::new(Vec::new());
 
 /// 获取分类框窗口列表的锁（供 zorder 模块使用）
-pub(super) fn get_grid_list() -> Result<std::sync::MutexGuard<'static, Vec<GridWindow>>, std::sync::PoisonError<std::sync::MutexGuard<'static, Vec<GridWindow>>>> {
+pub(super) fn get_grid_list() -> Result<
+    std::sync::MutexGuard<'static, Vec<GridWindow>>,
+    std::sync::PoisonError<std::sync::MutexGuard<'static, Vec<GridWindow>>>,
+> {
     GRID_WINDOWS.lock()
 }
 static CLASS_REGISTERED: Mutex<bool> = Mutex::new(false);
@@ -572,7 +575,6 @@ pub fn rerender_all_grid_windows() {
         }
     }
 }
-
 
 /// 获取格子数量
 pub fn get_grid_count() -> usize {
