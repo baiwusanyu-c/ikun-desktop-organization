@@ -54,6 +54,7 @@ extern "system" {
     #[allow(dead_code)]
     pub fn ScreenToClient(hWnd: HWND, lpPoint: *mut POINT) -> i32;
     pub fn GetCursorPos(lpPoint: *mut POINT) -> i32;
+    pub fn GetAsyncKeyState(vKey: i32) -> i16;
     #[allow(dead_code)]
     pub fn SetCapture(hWnd: HWND) -> HWND;
     #[allow(dead_code)]

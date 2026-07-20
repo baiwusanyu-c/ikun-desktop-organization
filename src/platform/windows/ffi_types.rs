@@ -161,6 +161,12 @@ pub const WM_LBUTTONUP: u32 = 0x0202;
 pub const WM_LBUTTONDBLCLK: u32 = 0x0203;
 pub const WM_RBUTTONUP: u32 = 0x0205;
 pub const WM_MOUSELEAVE: u32 = 0x02A3;
+pub const WM_CAPTURECHANGED: u32 = 0x0215;
+pub const VK_LBUTTON: i32 = 0x01;
+/// Timer ID for overlay drag polling
+pub const TIMER_ID_OVERLAY_DRAG: usize = 0x4F56_0001;
+/// Timer ID for grid drag polling
+pub const TIMER_ID_GRID_DRAG: usize = 0x4F56_0002;
 pub const WM_MOUSEWHEEL: u32 = 0x020A;
 pub const WM_TIMER: u32 = 0x0113;
 pub const WM_ACTIVATE: u32 = 0x0006;

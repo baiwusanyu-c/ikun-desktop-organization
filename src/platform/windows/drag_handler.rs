@@ -59,7 +59,8 @@ pub(crate) fn check_drag_threshold(hwnd: HWND, mx: i32, my: i32) -> bool {
     unsafe {
         super::drag_image::create_drag_overlay(icon_handle, icon_size, cell_w, &display_name, dpi);
         super::drag_image::update_drag_overlay();
-        SetCapture(hwnd);
+        // 使用 Timer 轮询检测鼠标释放（SetCapture 在分层窗口上不稳定）
+        SetTimer(hwnd, TIMER_ID_GRID_DRAG, 16, std::ptr::null_mut());
     }
 
     true
@@ -121,6 +122,8 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
         None => return false,
     };
 
+    log::info!("[DIAG] end_drag called: drag_active={}", data.drag_active);
+
     if !data.drag_active {
         return false;
     }
@@ -129,9 +132,9 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
     data.drag_active = false;
     data.drag_item_index = -1;
 
-    // 释放鼠标捕获 + 销毁覆盖窗口
+    // 停止定时器 + 销毁覆盖窗口
     unsafe {
-        ReleaseCapture();
+        KillTimer(hwnd, TIMER_ID_GRID_DRAG);
         super::drag_image::destroy_drag_overlay();
     }
 
@@ -293,10 +296,12 @@ fn handle_box_to_box_move(source_hwnd: HWND, target_hwnd: HWND, item_index: usiz
     let file_path = item.file_path.clone();
     let display_name = item.display_name.clone();
 
-    // 通知目标框添加项（使用 WM_USER_DRAG_ITEM_ADDED）
-    // 通过全局暂存传递数据
+    // 获取释放位置坐标
+    let mut drop_pt = POINT { x: 0, y: 0 };
+    unsafe { GetCursorPos(&mut drop_pt) };
+    // 通知目标框添加项（包含释放坐标）
     unsafe {
-        super::drop_target::set_pending_add_item(file_path.clone(), display_name.clone());
+        super::drop_target::set_pending_add_item(file_path.clone(), display_name.clone(), drop_pt.x, drop_pt.y);
         PostMessageW(target_hwnd, WM_USER_DRAG_ITEM_ADDED, 0, 0);
     }
 
@@ -449,7 +454,7 @@ pub(crate) fn handle_drag_leave(hwnd: HWND) {
 
 /// 处理 WM_USER_DRAG_ITEM_ADDED（框→框移动 或 桌面→框 时，目标框添加项）
 pub(crate) fn handle_drag_item_added(hwnd: HWND) {
-    if let Some((file_path, display_name)) = super::drop_target::take_pending_add_item() {
+    if let Some((file_path, display_name, drop_x, drop_y)) = super::drop_target::take_pending_add_item() {
         // 检查是否已存在
         if let Some(data) = unsafe { get_data(hwnd) } {
             if data.items.iter().any(|i| i.file_path == file_path) {
@@ -466,17 +471,23 @@ pub(crate) fn handle_drag_item_added(hwnd: HWND) {
                 .map(|info| info.hicon)
                 .unwrap_or(std::ptr::null_mut());
 
+            // 计算释放位置对应的网格坐标
+            let (target_col, target_row) = compute_drop_grid_position(hwnd, drop_x, drop_y, data);
+            log::info!(
+                "[DIAG] 释放位置计算: drop=({}, {}) -> grid=({}, {})",
+                drop_x, drop_y, target_col, target_row
+            );
+
             data.items.push(super::grid_window::GridFileItem {
                 file_path: file_path.clone(),
                 display_name: display_name.clone(),
                 icon_handle,
-                grid_col: -1,
-                grid_row: -1,
+                grid_col: target_col,
+                grid_row: target_row,
             });
             log::info!(
-                "项已添加到框: '{}' (read_path={})",
-                display_name,
-                read_path_str
+                "[DIAG] 项已添加到框: '{}', grid=({}, {})",
+                display_name, target_col, target_row
             );
             render_layered_window(hwnd);
             save_config();
@@ -511,6 +522,40 @@ fn hide_single_desktop_icon(file_path: &str, display_name: &str) {
     }
 }
 
+/// 网格拖拽轮询定时器处理函数（每 16ms 调用一次）
+pub(crate) fn handle_grid_drag_timer(hwnd: HWND) {
+    let data = match unsafe { get_data(hwnd) } {
+        Some(d) => d,
+        None => return,
+    };
+    if !data.drag_active {
+        log::warn!("[DIAG] handle_grid_drag_timer: drag_active=false, 清理残影");
+        unsafe {
+            KillTimer(hwnd, TIMER_ID_GRID_DRAG);
+            super::drag_image::destroy_drag_overlay();
+        }
+        return;
+    }
+
+    // 更新拖拽残影位置
+    unsafe { super::drag_image::update_drag_overlay() };
+
+    // 检测光标下的窗口，管理高亮
+    let mut pt = POINT { x: 0, y: 0 };
+    unsafe { GetCursorPos(&mut pt) };
+    let target_hwnd = super::zorder::find_grid_window_at_point(pt.x, pt.y);
+    if !target_hwnd.is_null() && target_hwnd != hwnd {
+        unsafe { PostMessageW(target_hwnd, WM_USER_DRAG_ENTER, 0, 0) };
+    }
+
+    // 检测鼠标左键是否仍然按下
+    let lbutton_down = unsafe { GetAsyncKeyState(VK_LBUTTON) } & 0x8000u16 as i16 != 0;
+    if !lbutton_down {
+        log::info!("[DIAG] grid drag timer: 鼠标已释放，结束拖拽");
+        end_drag(hwnd);
+    }
+}
+
 /// 拖拽操作后保存配置
 pub(crate) fn save_config() {
     let layouts = super::grid_window::collect_grid_layout();
@@ -521,6 +566,35 @@ pub(crate) fn save_config() {
         } else {
             log::info!("拖拽后配置已保存");
         }
+    }
+}
+
+/// 根据释放位置的屏幕坐标计算目标网格位置
+fn compute_drop_grid_position(
+    hwnd: HWND, drop_x: i32, drop_y: i32,
+    data: &super::grid_window::GridWindowData,
+) -> (i32, i32) {
+    let mut wr = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    unsafe { GetWindowRect(hwnd, &mut wr) };
+    let client_x = drop_x - wr.left;
+    let client_y = drop_y - wr.top;
+
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    let dpi = if dpi > 0 { dpi } else { 96 };
+    let window_width = wr.right - wr.left;
+
+    let view_params = crate::box_core::view_engine::get_view_params(&data.view_mode, dpi);
+    let layout = crate::box_core::layout_calc::calculate_grid(
+        window_width, data.title_h, &view_params, dpi
+    );
+
+    if client_x >= layout.grid_left && client_y >= layout.grid_top {
+        let col = ((client_x - layout.grid_left) / layout.cell_w).max(0);
+        let row = ((client_y - layout.grid_top) / layout.cell_h).max(0);
+        (col, row)
+    } else {
+        // 释放在网格区域外，使用自动布局
+        (-1, -1)
     }
 }
 

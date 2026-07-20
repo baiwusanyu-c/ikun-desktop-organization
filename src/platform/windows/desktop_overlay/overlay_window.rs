@@ -314,6 +314,14 @@ pub(crate) fn request_desktop_overlay_refresh() {
 
 /// 刷新指定覆盖窗口的图标列表。
 pub(crate) fn refresh_desktop_overlay_icons(hwnd: HWND) {
+    // 拖拽期间跳过刷新：刷新会重置 drag_active 等状态，导致残影卡死
+    if let Some(data) = get_overlay_data(hwnd) {
+        if data.drag_active || data.drag_pending {
+            log::info!("[DIAG] refresh_desktop_overlay_icons: 拖拽中，跳过刷新");
+            return;
+        }
+    }
+
     let new_icons = collect_overlay_icons();
     let new_count = new_icons.len();
     let Some(data) = get_overlay_data(hwnd) else {

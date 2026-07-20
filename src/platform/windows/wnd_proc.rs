@@ -906,6 +906,18 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             0
         }
 
+        // ===== 拖拽轮询定时器（替代 SetCapture）=====
+        WM_TIMER => {
+            if wparam == TIMER_ID_GRID_DRAG {
+                super::drag_handler::handle_grid_drag_timer(hwnd);
+            }
+            0
+        }
+        // ===== 捕获丢失处理：纯清理兆底 =====
+        WM_CAPTURECHANGED => {
+            0
+        }
+
         // ===== 拖拽悬停进入：显示高亮 =====
         WM_USER_DRAG_ENTER => {
             super::drag_handler::handle_drag_enter(hwnd);

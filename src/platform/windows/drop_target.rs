@@ -54,18 +54,18 @@ pub fn take_pending_source_removal() -> Option<PendingSourceRemoval> {
         .and_then(|mut g| g.take())
 }
 
-/// 框→框移动：暂存待添加项信息（由 drag_handler 调用）
-static PENDING_ADD_ITEM: Mutex<Option<(String, String)>> = Mutex::new(None);
+/// 框→框移动：暂存待添加项信息（含释放坐标）
+static PENDING_ADD_ITEM: Mutex<Option<(String, String, i32, i32)>> = Mutex::new(None);
 
-/// 设置待添加项（框→框移动时，源框调用）
-pub fn set_pending_add_item(file_path: String, display_name: String) {
+/// 设置待添加项（包含释放位置的屏幕坐标）
+pub fn set_pending_add_item(file_path: String, display_name: String, drop_x: i32, drop_y: i32) {
     if let Ok(mut g) = PENDING_ADD_ITEM.lock() {
-        *g = Some((file_path, display_name));
+        *g = Some((file_path, display_name, drop_x, drop_y));
     }
 }
 
-/// 取出待添加项（框→框移动时，目标框调用）
-pub fn take_pending_add_item() -> Option<(String, String)> {
+/// 取出待添加项（包含释放坐标）
+pub fn take_pending_add_item() -> Option<(String, String, i32, i32)> {
     PENDING_ADD_ITEM.lock().ok().and_then(|mut g| g.take())
 }
 

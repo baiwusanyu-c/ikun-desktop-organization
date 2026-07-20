@@ -64,6 +64,7 @@ pub(crate) unsafe fn create_drag_overlay(
     display_name: &str,
     dpi: u32,
 ) {
+    log::info!("[DIAG] create_drag_overlay called: display_name='{}', OVERLAY_HWND={:?}", display_name, OVERLAY_HWND);
     destroy_drag_overlay();
 
     if icon_handle.is_null() {
@@ -375,6 +376,7 @@ unsafe fn rebuild_drag_overlay_at_dpi(new_dpi: u32) {
 
 /// 销毁拖拽覆盖窗口
 pub(crate) unsafe fn destroy_drag_overlay() {
+    log::info!("[DIAG] destroy_drag_overlay called: OVERLAY_HWND={:?}", OVERLAY_HWND);
     if !OVERLAY_HWND.is_null() {
         DestroyWindow(OVERLAY_HWND);
         OVERLAY_HWND = std::ptr::null_mut();
@@ -399,7 +401,17 @@ unsafe extern "system" fn overlay_wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    DefWindowProcW(hwnd, msg, wparam, lparam)
+    match msg {
+        WM_NCHITTEST => {
+            log::debug!("[DIAG] drag_overlay WM_NCHITTEST: returning HTTRANSPARENT");
+            HTTRANSPARENT as LRESULT
+        }
+        WM_LBUTTONDOWN | WM_LBUTTONUP | WM_MOUSEMOVE => {
+            log::warn!("[DIAG] drag_overlay received mouse message: msg={:#X} (should not happen!)", msg);
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
 }
 
 #[cfg(test)]
