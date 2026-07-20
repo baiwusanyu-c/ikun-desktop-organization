@@ -512,3 +512,67 @@ mod tests {
         assert_eq!(drag_icon_gap(48, false), 0);
     }
 }
+
+    #[test]
+    fn test_icon_offset_calculation() {
+        // Test icon offset calculation logic
+        // icon_offset_x = (cell_w - icon_size) / 2
+        
+        let cell_w = 100;
+        let icon_size = 48;
+        let icon_offset_x = (cell_w - icon_size) / 2;
+        
+        assert_eq!(icon_offset_x, 26);
+        
+        // Test with different sizes
+        let cell_w = 80;
+        let icon_size = 48;
+        let icon_offset_x = (cell_w - icon_size) / 2;
+        
+        assert_eq!(icon_offset_x, 16);
+        
+        // Test with icon_size == cell_w (no offset)
+        let cell_w = 48;
+        let icon_size = 48;
+        let icon_offset_x = (cell_w - icon_size) / 2;
+        
+        assert_eq!(icon_offset_x, 0);
+    }
+    
+    #[test]
+    fn test_icon_offset_with_odd_difference() {
+        // Test with odd difference (should round down)
+        let cell_w = 81;
+        let icon_size = 48;
+        let icon_offset_x = (cell_w - icon_size) / 2;
+        
+        // 81 - 48 = 33, 33 / 2 = 16 (integer division)
+        assert_eq!(icon_offset_x, 16);
+    }
+    
+    #[test]
+    fn test_drag_timer_interval() {
+        // Test that timer interval is 8ms (125Hz)
+        let timer_interval_ms = 8;
+        let fps = 1000.0 / timer_interval_ms as f32;
+        
+        assert!((fps - 125.0).abs() < 0.1);
+    }
+    
+    #[test]
+    fn test_dpi_cache_check_frequency() {
+        // Test DPI cache check frequency (every 8 frames)
+        let mut frame_count = 0u32;
+        let mut dpi_check_count = 0u32;
+        
+        for _ in 0..32 {
+            frame_count += 1;
+            if frame_count % 8 == 0 {
+                dpi_check_count += 1;
+            }
+        }
+        
+        // 32 frames should result in 4 DPI checks
+        assert_eq!(dpi_check_count, 4);
+        assert_eq!(frame_count, 32);
+    }

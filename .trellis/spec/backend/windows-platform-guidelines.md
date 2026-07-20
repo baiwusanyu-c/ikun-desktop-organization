@@ -561,3 +561,171 @@ Look for patterns in logs:
 ## History
 
 This guide was created after debugging the overlay hover flickering and click-to-deselect bugs, which required 7 failed attempts before identifying the root cause as WS_EX_LAYERED pixel-level alpha behavior.
+
+---
+
+## Drag and Drop Implementation
+
+### SetCapture Limitations on WS_EX_LAYERED Windows
+
+`SetCapture` is **unstable** on WS_EX_LAYERED windows. Windows will forcibly release the capture, causing infinite WM_CAPTURECHANGED loops if you try to re-capture in the handler.
+
+#### WRONG: SetCapture on Layered Window
+
+```rust
+// WRONG: Causes infinite WM_CAPTURECHANGED loop
+fn start_drag(hwnd: HWND) {
+    SetCapture(hwnd);  // Windows immediately releases this!
+}
+
+WM_CAPTURECHANGED => {
+    if data.drag_active {
+        SetCapture(hwnd);  // Re-capture -> infinite loop!
+    }
+}
+```
+
+#### CORRECT: Timer-Based Polling
+
+```rust
+// CORRECT: Use Timer to poll drag state
+const DRAG_TIMER_ID: usize = 0x4F56_0001;
+
+fn start_drag(hwnd: HWND) {
+    data.drag_active = true;
+    SetTimer(hwnd, DRAG_TIMER_ID, 8, null_mut()); // 8ms = 125Hz
+}
+
+fn handle_timer(hwnd: HWND, timer_id: usize) {
+    if timer_id == DRAG_TIMER_ID {
+        // Check state consistency
+        if !data.drag_active {
+            cleanup_drag(hwnd);
+            return;
+        }
+        
+        // Update drag ghost position
+        update_drag_ghost();
+        
+        // Check if mouse released
+        if !is_mouse_button_pressed(VK_LBUTTON) {
+            end_drag(hwnd);
+        }
+    }
+}
+
+fn end_drag(hwnd: HWND) {
+    data.drag_active = false;
+    KillTimer(hwnd, DRAG_TIMER_ID);
+    cleanup_drag_ghost();
+}
+```
+
+### Drag Ghost Positioning
+
+Drag ghost windows often have the icon centered within the window, not at the window origin. You must compensate for this offset when positioning.
+
+#### WRONG: Ignoring Icon Offset
+
+```rust
+// WRONG: Window position != icon position
+SetWindowPos(ghost_hwnd, null_mut(), cursor_x, cursor_y, 0, 0, ...);
+// Icon is drawn centered, so actual icon is offset from cursor
+```
+
+#### CORRECT: Subtract Icon Offset
+
+```rust
+// CORRECT: Account for centering offset
+let icon_offset_x = (window_width - icon_size) / 2;
+SetWindowPos(ghost_hwnd, null_mut(), 
+             cursor_x - icon_offset_x, cursor_y, 0, 0, ...);
+```
+
+### State Consistency Checking
+
+External modules (like desktop file watchers) may reset drag state during refresh operations. Timer handlers should detect this and clean up gracefully.
+
+#### WRONG: Blindly Trusting State
+
+```rust
+// WRONG: What if drag_active was reset externally?
+fn handle_timer() {
+    update_ghost();
+    if !is_mouse_pressed() {
+        end_drag();
+    }
+    // Timer keeps running even if state is inconsistent!
+}
+```
+
+#### CORRECT: Validate State Consistency
+
+```rust
+// CORRECT: Check for external state changes
+fn handle_timer() {
+    if !data.drag_active {
+        log::warn!("[DRAG] State reset externally, cleaning up");
+        cleanup_ghost();
+        KillTimer(hwnd, DRAG_TIMER_ID);
+        return;
+    }
+    
+    update_ghost();
+    if !is_mouse_pressed() {
+        end_drag();
+    }
+}
+```
+
+### Timer Performance Optimization
+
+Frequent DPI checks during drag can cause lag. Cache DPI values and check less frequently.
+
+#### WRONG: DPI Check Every Frame
+
+```rust
+// WRONG: Expensive DPI check every 8ms
+fn handle_timer() {
+    let dpi = get_monitor_dpi();  // System call every frame!
+    update_ghost(dpi);
+}
+```
+
+#### CORRECT: Cache and Check Periodically
+
+```rust
+// CORRECT: Cache DPI, check every 8 frames
+static mut CACHED_DPI: u32 = 96;
+static mut FRAME_COUNT: u32 = 0;
+
+fn handle_timer() {
+    FRAME_COUNT += 1;
+    if FRAME_COUNT % 8 == 0 {
+        CACHED_DPI = get_monitor_dpi();
+    }
+    update_ghost(CACHED_DPI);
+}
+```
+
+### Checklist
+
+Before implementing drag-and-drop on layered windows:
+
+- [ ] Use Timer polling instead of SetCapture
+- [ ] Set timer interval to 8ms (125Hz) for smooth tracking
+- [ ] Validate state consistency in timer handler
+- [ ] Account for icon centering offset when positioning ghost
+- [ ] Cache DPI values to avoid performance overhead
+- [ ] Clean up timer and ghost on state reset
+- [ ] Test with external state modifications (file watchers, etc.)
+- [ ] See [Windows Layered Window Guide](../guides/windows-layered-window-guide.md)
+
+---
+
+## Related Files
+
+- `src/platform/windows/drag_handler.rs` - Drag state management
+- `src/platform/windows/drag_image.rs` - Drag ghost window
+- `src/platform/windows/desktop_overlay/overlay_wnd_proc.rs` - Overlay drag handling
+- `src/platform/windows/desktop_overlay/overlay_window.rs` - Overlay state management

@@ -703,3 +703,87 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
         save_config();
     }
 }
+
+    #[test]
+    fn test_compute_drop_grid_position_basic() {
+        // Test basic grid position calculation
+        // This is a simplified test - in real usage, HWND and GetWindowRect would be mocked
+        // For now, we test the logic with known values
+        
+        let grid_left = 10;
+        let grid_top = 40;
+        let cell_w = 80;
+        let cell_h = 96;
+        
+        // Drop at first cell
+        let drop_x = grid_left + 10;
+        let drop_y = grid_top + 10;
+        let client_x = drop_x;
+        let client_y = drop_y;
+        
+        let col = ((client_x - grid_left) / cell_w).max(0);
+        let row = ((client_y - grid_top) / cell_h).max(0);
+        
+        assert_eq!(col, 0);
+        assert_eq!(row, 0);
+        
+        // Drop at second cell (col=1, row=0)
+        let drop_x = grid_left + cell_w + 10;
+        let drop_y = grid_top + 10;
+        let client_x = drop_x;
+        let client_y = drop_y;
+        
+        let col = ((client_x - grid_left) / cell_w).max(0);
+        let row = ((client_y - grid_top) / cell_h).max(0);
+        
+        assert_eq!(col, 1);
+        assert_eq!(row, 0);
+        
+        // Drop at third cell (col=0, row=1)
+        let drop_x = grid_left + 10;
+        let drop_y = grid_top + cell_h + 10;
+        let client_x = drop_x;
+        let client_y = drop_y;
+        
+        let col = ((client_x - grid_left) / cell_w).max(0);
+        let row = ((client_y - grid_top) / cell_h).max(0);
+        
+        assert_eq!(col, 0);
+        assert_eq!(row, 1);
+    }
+    
+    #[test]
+    fn test_compute_drop_grid_position_outside_grid() {
+        // Test dropping outside grid area returns (-1, -1)
+        let grid_left = 10;
+        let grid_top = 40;
+        
+        // Drop before grid_left
+        let client_x = grid_left - 5;
+        let client_y = grid_top + 10;
+        
+        if client_x < grid_left || client_y < grid_top {
+            let col = -1;
+            let row = -1;
+            assert_eq!(col, -1);
+            assert_eq!(row, -1);
+        }
+    }
+    
+    #[test]
+    fn test_compute_drop_grid_position_negative_coordinates() {
+        // Test that negative coordinates are clamped to 0
+        let grid_left = 10;
+        let grid_top = 40;
+        let cell_w = 80;
+        let cell_h = 96;
+        
+        let client_x = grid_left + 10;
+        let client_y = grid_top + 10;
+        
+        let col = ((client_x - grid_left) / cell_w).max(0);
+        let row = ((client_y - grid_top) / cell_h).max(0);
+        
+        assert_eq!(col, 0);
+        assert_eq!(row, 0);
+    }

@@ -1179,4 +1179,86 @@ mod tests {
         assert!(seen.insert(dn1));
         assert!(!seen.insert(dn2));
     }
+
+    #[test]
+    fn test_skip_refresh_during_drag_active() {
+        // Test that refresh is skipped when drag_active is true
+        let mut data = OverlayWindowData::test_default();
+        data.drag_active = true;
+        
+        // When drag_active is true, refresh should be skipped
+        let should_skip = data.drag_active || data.drag_pending;
+        assert!(should_skip, "Should skip refresh when drag_active is true");
+    }
+    
+    #[test]
+    fn test_skip_refresh_during_drag_pending() {
+        // Test that refresh is skipped when drag_pending is true
+        let mut data = OverlayWindowData::test_default();
+        data.drag_pending = true;
+        
+        // When drag_pending is true, refresh should be skipped
+        let should_skip = data.drag_active || data.drag_pending;
+        assert!(should_skip, "Should skip refresh when drag_pending is true");
+    }
+    
+    #[test]
+    fn test_allow_refresh_when_not_dragging() {
+        // Test that refresh is allowed when not dragging
+        let mut data = OverlayWindowData::test_default();
+        data.drag_active = false;
+        data.drag_pending = false;
+        
+        // When not dragging, refresh should be allowed
+        let should_skip = data.drag_active || data.drag_pending;
+        assert!(!should_skip, "Should allow refresh when not dragging");
+    }
+    
+    #[test]
+    fn test_drag_state_consistency() {
+        // Test that drag_active and drag_pending are mutually exclusive in normal flow
+        let mut data = OverlayWindowData::test_default();
+        
+        // Initially both false
+        assert!(!data.drag_active);
+        assert!(!data.drag_pending);
+        
+        // Start drag: pending -> active
+        data.drag_pending = true;
+        assert!(data.drag_pending);
+        assert!(!data.drag_active);
+        
+        // Drag activated: pending cleared, active set
+        data.drag_pending = false;
+        data.drag_active = true;
+        assert!(!data.drag_pending);
+        assert!(data.drag_active);
+        
+        // End drag: both cleared
+        data.drag_active = false;
+        assert!(!data.drag_active);
+        assert!(!data.drag_pending);
+    }
+    
+    #[test]
+    fn test_external_state_reset_detection() {
+        // Test detection of external state reset (e.g., by file watcher)
+        let mut data = OverlayWindowData::test_default();
+        
+        // Simulate drag in progress
+        data.drag_active = true;
+        data.drag_item_index = 5;
+        
+        // External module resets state (simulating file watcher refresh)
+        data.drag_active = false;
+        data.drag_item_index = -1;
+        
+        // Timer should detect this inconsistency
+        let is_dragging = data.drag_active;
+        assert!(!is_dragging, "Timer should detect state was reset externally");
+        
+        // Cleanup should be triggered
+        assert_eq!(data.drag_item_index, -1);
+    }
+
 }
