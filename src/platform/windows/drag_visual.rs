@@ -1,4 +1,4 @@
-﻿//! Drag-over visual feedback: insert separator + replace highlight.
+//! Drag-over visual feedback: insert separator + replace highlight.
 //!
 //! Provides pure functions and HWND-aware handlers for computing and
 //! rendering drag-over visual states during grid drag operations.
@@ -425,4 +425,3 @@ mod tests {
         assert_eq!(r[1], shift_pos(0, 0)); // B -> lin 0
     }
 }
-
