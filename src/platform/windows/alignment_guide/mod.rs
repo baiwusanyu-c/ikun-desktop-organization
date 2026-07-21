@@ -9,8 +9,7 @@ use std::sync::Mutex;
 
 use alignment_detect::{detect_alignments, DEFAULT_ALIGNMENT_THRESHOLD};
 use guide_overlay::{
-    create_guide_overlay, hide_guide_lines, init_guide_color, is_guide_overlay_created,
-    update_guide_lines,
+    create_guide_overlay, hide_guide_lines, is_guide_overlay_created, update_guide_lines,
 };
 
 #[allow(unused_imports)]

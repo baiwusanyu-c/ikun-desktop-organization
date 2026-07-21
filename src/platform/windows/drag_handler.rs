@@ -7,7 +7,6 @@
 //!
 //! Uses Timer-based polling instead of SetCapture (unstable on WS_EX_LAYERED windows).
 
-use super::d2d_render::render_layered_window;
 use super::ffi_imports::*;
 use super::ffi_types::*;
 use super::grid_window::get_data;

@@ -4,7 +4,6 @@
 //! grid snap, swap, shift-insert, and OLE drop from external sources.
 
 use super::d2d_render::render_layered_window;
-use super::drag_visual::clear_drag_over_visual;
 use super::ffi_imports::*;
 use super::ffi_types::*;
 use super::grid_window::get_data;

@@ -10,6 +10,7 @@ mod overlay_render;
 mod overlay_window;
 mod overlay_wnd_proc;
 
+#[allow(unused_imports)] // 公共 API 预留
 pub(crate) use overlay_window::{
     add_icon_to_overlay, dpi_at_screen_point, is_desktop_overlay_window,
     request_desktop_overlay_refresh,

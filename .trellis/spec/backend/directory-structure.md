@@ -1,4 +1,4 @@
-﻿# Directory Structure
+# Directory Structure
 
 > 项目代码组织方式（v2.0 架构）
 
@@ -45,13 +45,13 @@ src/
 │   │   ├── ffi_imports.rs     #   Win32 extern "system" 声明
 │   │   ├── desktop_manager.rs #   桌面图标枚举（文件系统 + 虚拟 Shell 对象 CLSID）
 │   │   ├── desktop_overlay/   #   桌面覆盖窗口（渲染未管理图标 + Grid 吸附布局 + 桌面接管生命周期 + 文件监听刷新）
-?   ?   ??? alignment_guide/   # ??????????????? + ????? + overlay ???
+│   │   ├── alignment_guide/   #   对齐参考线（对齐检测 + 动态对比色 + overlay 渲染）
 │   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎
 │   │   ├── grid_window.rs     #   窗口创建/销毁/数据模型/Z-order 管理（push_other_grids_below + 递归抑制）
 │   │   ├── grid_layout.rs     #   布局计算/按钮矩形/命中测试/滚动重排
 │   │   ├── monitor_utils.rs   #   显示器查询/窗口定位工具
 │   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc
-│   ├── zorder.rs          #   Z-order 层级管理（HWND_BOTTOM + 递归抑制 + 坐标查找）
+│   │   ├── zorder.rs          #   Z-order 层级管理（HWND_BOTTOM + 递归抑制 + 坐标查找）
 │   │   ├── menu_window.rs     #   自定义分层窗口深色菜单（D2D/DirectWrite）
 │   │   ├── shell_menu.rs      #   Shell 右键菜单 + 桌面背景注册表菜单（覆盖区域含 Ikun 动作，分类框不含）
 │   │   ├── app_icon.rs        #   嵌入 logo.ico 项目图标（托盘/菜单）
@@ -61,8 +61,8 @@ src/
 │   │   ├── ole_dnd.rs         #   OLE 拖拽源（IDropSource + IDataObject 实现）
 │   │   ├── drop_target.rs     #   分类框拖放目标（IDropTarget 实现）
 │   │   ├── drag_handler.rs    #   拖拽协调器（拖拽生命周期：阈值检测/位置更新/释放分发）
-│   ├── drag_drop.rs       #   拖拽放置操作（同框/跨框/桌面/OLE drop）
-│   └── drag_visual.rs     #   拖拽可视化反馈（插入分隔线/替换高亮 + 纯逻辑函数）
+│   │   ├── drag_drop.rs       #   拖拽放置操作（同框/跨框/桌面/OLE drop）
+│   │   ├── drag_visual.rs     #   拖拽可视化反馈（插入分隔线/替换高亮 + 纯逻辑函数）
 │   │   ├── icon_manager.rs    #   图标管理器（SysListView32 跨进程操作 + 图像列表提取）
 │   │   ├── control_panel_window.rs # 控制面板 Win32 显示/隐藏辅助（托盘优先生命周期）
 │   │   └── sys_tray.rs        #   系统托盘入口（隐藏消息窗口 + 固定菜单动作队列）
@@ -195,6 +195,7 @@ platform/windows/
 ├── ffi_imports.rs     # FFI 函数声明
 ├── desktop_manager.rs # DesktopManagerTrait 实现 + 虚拟 Shell 对象（CLSID）枚举
 ├── desktop_overlay/   # 桌面覆盖窗口（渲染/交互/Grid 吸附/DPI 自适应）
+├── alignment_guide/   # 对齐参考线（对齐检测 + 动态对比色 + overlay 渲染）
 ├── d2d_render.rs      # D2D/DirectWrite 渲染
 ├── grid_window.rs     # 窗口创建/销毁/数据模型
 ├── grid_layout.rs     # 布局计算/按钮矩形/命中测试/滚动重排
@@ -208,7 +209,9 @@ platform/windows/
 ├── drag_image.rs      # 拖拽残影覆盖窗口（跨显示器 DPI 自适应重建）
 ├── ole_dnd.rs         # OLE 拖拽源（IDropSource + IDataObject）
 ├── drop_target.rs     # 分类框拖放目标（IDropTarget）
-├── drag_handler.rs    # 拖拽协调器
+├── drag_handler.rs    # 拖拽协调器（拖拽生命周期：阈值检测/位置更新/释放分发）
+├── drag_drop.rs       # 拖拽放置操作（同框/跨框/桌面/OLE drop）
+├── drag_visual.rs     # 拖拽可视化反馈（插入分隔线/替换高亮 + 纯逻辑函数）
 ├── icon_manager.rs    # 图标管理器（SysListView32 跨进程操作 + 图像列表提取）
 ├── control_panel_window.rs # GPUI/eframe 控制面板 Win32 显示/隐藏辅助
 └── sys_tray.rs        # 系统托盘入口

@@ -177,7 +177,7 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
     }
 }
 
-fn overlay_nchittest_result(hit: i32) -> LRESULT {
+fn overlay_nchittest_result(_hit: i32) -> LRESULT {
     // 无论点击图标还是空白区域，都返回 HTCLIENT
     // 这样覆盖窗口能捕获所有点击，处理完后再决定是否转发给桌面
     HTCLIENT as LRESULT

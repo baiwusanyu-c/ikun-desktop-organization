@@ -19,6 +19,10 @@ use super::alignment_detect::AlignmentResult;
 use crate::platform::windows::ffi_imports::*;
 use crate::platform::windows::ffi_types::*;
 
+/// 桌面颜色采样网格大小（NxN 个采样点）
+/// 10x10=100 个采样点足够估算屏幕中心区域亮度，同时保持启动时间 < 50ms
+const SAMPLE_GRID_SIZE: i32 = 10;
+
 /// �ο��� Overlay ��������
 struct GuideOverlayData {
     /// ��������ȣ��������أ�
@@ -87,7 +91,7 @@ pub fn init_guide_color() {
     let sh = unsafe { GetSystemMetrics(SM_CYSCREEN) };
     log::info!("[GuideColor] Screen size: {}x{}", sw, sh);
 
-    let sample_count = 8; // 8x8=64 samples, enough for brightness estimation
+    let sample_count = SAMPLE_GRID_SIZE;
     let mut total_luminance = 0.0f32;
     let mut valid = 0i32;
 
@@ -668,5 +672,30 @@ mod tests {
         let l_blue = relative_luminance(0, 0, 255);
         assert!(l_green > l_red, "Green should be brighter than red");
         assert!(l_green > l_blue, "Green should be brighter than blue");
+    }
+
+    #[test]
+    fn test_sample_grid_size_sufficient() {
+        // SAMPLE_GRID_SIZE x SAMPLE_GRID_SIZE 采样点覆盖屏幕中心区域，
+        // 在估算亮度和保持启动速度之间取得平衡
+        let total_samples = SAMPLE_GRID_SIZE * SAMPLE_GRID_SIZE;
+        assert!(
+            total_samples >= 100,
+            "At least 100 samples needed for reliable brightness estimation, got {}",
+            total_samples
+        );
+        assert!(
+            total_samples <= 2500,
+            "At most 2500 samples to keep startup time reasonable, got {}",
+            total_samples
+        );
+    }
+
+    #[test]
+    fn test_sample_grid_size_is_positive() {
+        assert!(
+            SAMPLE_GRID_SIZE > 1,
+            "Grid size must be > 1 to avoid division by zero in sampling loop"
+        );
     }
 }

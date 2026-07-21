@@ -56,6 +56,8 @@ pub use grid_window::{
     update_grid_window_title, GridCreateParams, GridFileItem,
 };
 pub use icon_extract::extract_file_icon;
+#[allow(unused_imports)] // 公共 API 预留
+#[allow(unused_imports)] // 公共 API 预留
 pub use icon_hider::{
     hide_native_icons, icon_exists_for_box, list_vault_icons, native_icons_hidden,
     resolve_icon_read_path, restore_all_hidden_icons, restore_native_icons,
