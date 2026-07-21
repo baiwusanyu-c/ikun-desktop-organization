@@ -245,39 +245,97 @@ fn handle_same_box_drop(hwnd: HWND, dragged_idx: usize, screen_x: i32, screen_y:
         }
     }
 
-    // Check if another item occupies the target cell
-    let occupied_idx = data
-        .items
-        .iter()
-        .enumerate()
-        .find(|(i, item)| {
-            *i != dragged_idx && item.grid_col == target_col && item.grid_row == target_row
-        })
-        .map(|(i, _)| i);
+    // Save drag-over state before clearing (end_drag will clear it)
+    let insert_col = data.drag_over_insert_col;
+    let insert_row = data.drag_over_insert_row;
+    let is_insert_mode = insert_col >= 0 && insert_row >= 0;
 
-    if let Some(other_idx) = occupied_idx {
-        // Swap: exchange grid positions
-        let drag_col = data.items[dragged_idx].grid_col;
-        let drag_row = data.items[dragged_idx].grid_row;
-        data.items[dragged_idx].grid_col = target_col;
-        data.items[dragged_idx].grid_row = target_row;
-        data.items[other_idx].grid_col = drag_col;
-        data.items[other_idx].grid_row = drag_row;
-        log::info!(
-            "Grid swap: '{}' <-> '{}'",
-            data.items[dragged_idx].display_name,
-            data.items[other_idx].display_name,
-        );
+    let cols = layout.cols;
+
+    if is_insert_mode {
+        // === Insert mode: shift items to make room, then place dragged item ===
+        let drag_lin = data.items[dragged_idx].grid_row * cols + data.items[dragged_idx].grid_col;
+        let insert_lin = insert_row * cols + insert_col;
+
+        if drag_lin != insert_lin {
+            if drag_lin < insert_lin {
+                // Dragging right: shift items in (drag_lin, insert_lin] left by 1
+                for (i, item) in data.items.iter_mut().enumerate() {
+                    if i == dragged_idx {
+                        continue;
+                    }
+                    let item_lin = item.grid_row * cols + item.grid_col;
+                    if item_lin > drag_lin && item_lin <= insert_lin {
+                        let new_lin = item_lin - 1;
+                        item.grid_col = new_lin % cols;
+                        item.grid_row = new_lin / cols;
+                    }
+                }
+                data.items[dragged_idx].grid_col = (insert_lin - 1) % cols;
+                data.items[dragged_idx].grid_row = (insert_lin - 1) / cols;
+            } else {
+                // Dragging left: shift items in [insert_lin, drag_lin) right by 1
+                for (i, item) in data.items.iter_mut().enumerate() {
+                    if i == dragged_idx {
+                        continue;
+                    }
+                    let item_lin = item.grid_row * cols + item.grid_col;
+                    if item_lin >= insert_lin && item_lin < drag_lin {
+                        let new_lin = item_lin + 1;
+                        item.grid_col = new_lin % cols;
+                        item.grid_row = new_lin / cols;
+                    }
+                }
+                data.items[dragged_idx].grid_col = insert_lin % cols;
+                data.items[dragged_idx].grid_row = insert_lin / cols;
+            }
+            log::info!(
+                "Grid insert: '{}' -> linear {} (col={}, row={})",
+                data.items[dragged_idx].display_name,
+                if drag_lin < insert_lin {
+                    insert_lin - 1
+                } else {
+                    insert_lin
+                },
+                data.items[dragged_idx].grid_col,
+                data.items[dragged_idx].grid_row,
+            );
+        }
     } else {
-        // Move to empty cell
-        data.items[dragged_idx].grid_col = target_col;
-        data.items[dragged_idx].grid_row = target_row;
-        log::info!(
-            "Grid snap: '{}' -> ({}, {})",
-            data.items[dragged_idx].display_name,
-            target_col,
-            target_row,
-        );
+        // === Replace mode: swap or move to empty cell ===
+        let occupied_idx = data
+            .items
+            .iter()
+            .enumerate()
+            .find(|(i, item)| {
+                *i != dragged_idx && item.grid_col == target_col && item.grid_row == target_row
+            })
+            .map(|(i, _)| i);
+
+        if let Some(other_idx) = occupied_idx {
+            // Swap: exchange grid positions
+            let drag_col = data.items[dragged_idx].grid_col;
+            let drag_row = data.items[dragged_idx].grid_row;
+            data.items[dragged_idx].grid_col = target_col;
+            data.items[dragged_idx].grid_row = target_row;
+            data.items[other_idx].grid_col = drag_col;
+            data.items[other_idx].grid_row = drag_row;
+            log::info!(
+                "Grid swap: '{}' <-> '{}'",
+                data.items[dragged_idx].display_name,
+                data.items[other_idx].display_name,
+            );
+        } else {
+            // Move to empty cell
+            data.items[dragged_idx].grid_col = target_col;
+            data.items[dragged_idx].grid_row = target_row;
+            log::info!(
+                "Grid snap: '{}' -> ({}, {})",
+                data.items[dragged_idx].display_name,
+                target_col,
+                target_row,
+            );
+        }
     }
 
     data.selected_item = dragged_idx as i32;
@@ -305,11 +363,17 @@ fn handle_box_to_box_move(source_hwnd: HWND, target_hwnd: HWND, item_index: usiz
     unsafe { GetCursorPos(&mut drop_pt) };
     // 通知目标框添加项（包含释放坐标）
     unsafe {
+        // 读取目标框的拖拽覆盖状态（用于插入模式）
+        let (insert_col, insert_row) = get_data(target_hwnd)
+            .map(|d| (d.drag_over_insert_col, d.drag_over_insert_row))
+            .unwrap_or((-1, -1));
         super::drop_target::set_pending_add_item(
             file_path.clone(),
             display_name.clone(),
             drop_pt.x,
             drop_pt.y,
+            insert_col,
+            insert_row,
         );
         PostMessageW(target_hwnd, WM_USER_DRAG_ITEM_ADDED, 0, 0);
     }
@@ -453,17 +517,30 @@ pub(crate) fn handle_drag_enter(hwnd: HWND) {
 /// 处理 WM_USER_DRAG_LEAVE（拖拽悬停离开，清除高亮）
 pub(crate) fn handle_drag_leave(hwnd: HWND) {
     if let Some(data) = unsafe { get_data(hwnd) } {
+        let mut changed = false;
         if data.drop_highlight {
             data.drop_highlight = false;
+            changed = true;
+        }
+        // 清除跨框拖拽覆盖可视化状态
+        if data.drag_over_item != -1
+            || data.drag_over_insert_col != -1
+            || data.drag_over_insert_row != -1
+        {
+            data.drag_over_item = -1;
+            data.drag_over_insert_col = -1;
+            data.drag_over_insert_row = -1;
+            changed = true;
+        }
+        if changed {
             render_layered_window(hwnd);
-            log::debug!("拖拽悬停离开: 取消高亮");
         }
     }
 }
 
 /// 处理 WM_USER_DRAG_ITEM_ADDED（框→框移动 或 桌面→框 时，目标框添加项）
 pub(crate) fn handle_drag_item_added(hwnd: HWND) {
-    if let Some((file_path, display_name, drop_x, drop_y)) =
+    if let Some((file_path, display_name, drop_x, drop_y, insert_col, insert_row)) =
         super::drop_target::take_pending_add_item()
     {
         // 检查是否已存在
@@ -492,19 +569,60 @@ pub(crate) fn handle_drag_item_added(hwnd: HWND) {
                 target_row
             );
 
-            data.items.push(super::grid_window::GridFileItem {
-                file_path: file_path.clone(),
-                display_name: display_name.clone(),
-                icon_handle,
-                grid_col: target_col,
-                grid_row: target_row,
-            });
-            log::info!(
-                "[DIAG] 项已添加到框: '{}', grid=({}, {})",
-                display_name,
-                target_col,
-                target_row
-            );
+            let is_insert = insert_col >= 0 && insert_row >= 0;
+
+            if is_insert {
+                // === Insert mode: shift existing items right, then add new item ===
+                let cols = data.cols;
+                let insert_lin = insert_row * cols + insert_col;
+
+                // Materialize all auto-layout positions
+                for (i, item) in data.items.iter_mut().enumerate() {
+                    if item.grid_col < 0 {
+                        item.grid_col = (i as i32) % cols;
+                        item.grid_row = (i as i32) / cols;
+                    }
+                }
+
+                // Shift items at or after insert position right by 1
+                for item in data.items.iter_mut() {
+                    let item_lin = item.grid_row * cols + item.grid_col;
+                    if item_lin >= insert_lin {
+                        let new_lin = item_lin + 1;
+                        item.grid_col = new_lin % cols;
+                        item.grid_row = new_lin / cols;
+                    }
+                }
+
+                data.items.push(super::grid_window::GridFileItem {
+                    file_path: file_path.clone(),
+                    display_name: display_name.clone(),
+                    icon_handle,
+                    grid_col: insert_col,
+                    grid_row: insert_row,
+                });
+                log::info!(
+                    "[DIAG] 项已插入到框: '{}', insert=({}, {})",
+                    display_name,
+                    insert_col,
+                    insert_row
+                );
+            } else {
+                // === Normal mode: add at computed grid position ===
+                data.items.push(super::grid_window::GridFileItem {
+                    file_path: file_path.clone(),
+                    display_name: display_name.clone(),
+                    icon_handle,
+                    grid_col: target_col,
+                    grid_row: target_row,
+                });
+                log::info!(
+                    "[DIAG] 项已添加到框: '{}', grid=({}, {})",
+                    display_name,
+                    target_col,
+                    target_row
+                );
+            }
             render_layered_window(hwnd);
             save_config();
         }
@@ -561,18 +679,21 @@ pub(crate) fn handle_grid_drag_timer(hwnd: HWND) {
     unsafe { GetCursorPos(&mut pt) };
     let target_hwnd = super::zorder::find_grid_window_at_point(pt.x, pt.y);
 
-    // 拖拽可视化反馈：检测同框内的拖拽覆盖状态
+    // 拖拽可视化反馈：检测同框内和跨框的拖拽覆盖状态
     if target_hwnd == hwnd {
         update_drag_over_visual(hwnd, pt.x, pt.y);
     } else {
-        // 光标不在同框内，清除拖拽覆盖状态
+        // 光标不在同框内，清除本框的拖拽覆盖状态
         clear_drag_over_visual(data);
     }
 
+    // 跨框可视化反馈：发送光标位置给目标框以更新可视化
     if !target_hwnd.is_null() && target_hwnd != hwnd {
-        unsafe { PostMessageW(target_hwnd, WM_USER_DRAG_ENTER, 0, 0) };
+        let lparam = ((pt.y as isize) << 16) | ((pt.x as isize) & 0xFFFF);
+        unsafe {
+            PostMessageW(target_hwnd, WM_USER_DRAG_OVER_UPDATE, 0, lparam as LPARAM);
+        }
     }
-
     // 检测鼠标左键是否仍然按下
     let lbutton_down = unsafe { GetAsyncKeyState(VK_LBUTTON) } & 0x8000u16 as i16 != 0;
     if !lbutton_down {
@@ -590,6 +711,90 @@ fn clear_drag_over_visual(data: &mut super::grid_window::GridWindowData) {
         data.drag_over_item = -1;
         data.drag_over_insert_col = -1;
         data.drag_over_insert_row = -1;
+    }
+}
+
+/// 处理跨框拖拽覆盖可视化更新（从 WM_USER_DRAG_OVER_UPDATE 调用）
+///
+/// 与同框拖拽类似，但不需要排除被拖拽项（因为被拖拽项在另一个框中）。
+/// 光标在单元格边缘 → 插入模式（分隔线），光标在中心 → 替换模式（高亮）。
+pub(crate) fn handle_cross_box_drag_over(hwnd: HWND, screen_x: i32, screen_y: i32) {
+    let data = match unsafe { get_data(hwnd) } {
+        Some(d) => d,
+        None => return,
+    };
+
+    let mut wr = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    unsafe { GetWindowRect(hwnd, &mut wr) };
+    let client_x = screen_x - wr.left;
+    let client_y = screen_y - wr.top;
+
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    let dpi = if dpi > 0 { dpi } else { 96 };
+    let window_width = wr.right - wr.left;
+
+    let view_params = crate::box_core::view_engine::get_view_params(&data.view_mode, dpi);
+    let layout =
+        crate::box_core::layout_calc::calculate_grid(window_width, data.title_h, &view_params, dpi);
+
+    let virtual_y = client_y + data.scroll_offset;
+
+    if client_x < layout.grid_left || virtual_y < layout.grid_top {
+        let changed = data.drag_over_item != -1
+            || data.drag_over_insert_col != -1
+            || data.drag_over_insert_row != -1;
+        data.drag_over_item = -1;
+        data.drag_over_insert_col = -1;
+        data.drag_over_insert_row = -1;
+        if changed {
+            render_layered_window(hwnd);
+        }
+        return;
+    }
+
+    let col = ((client_x - layout.grid_left) / layout.cell_w).max(0);
+    let row = ((virtual_y - layout.grid_top) / layout.cell_h).max(0);
+
+    let cell_offset_x = client_x - layout.grid_left - col * layout.cell_w;
+    let ratio_x = cell_offset_x as f32 / layout.cell_w as f32;
+
+    // 查找该单元格上是否有项（跨框拖拽不需要排除任何项）
+    let item_at_cell = data
+        .items
+        .iter()
+        .enumerate()
+        .find(|(_, item)| item.grid_col == col && item.grid_row == row)
+        .map(|(i, _)| i as i32);
+
+    const INSERT_THRESHOLD: f32 = 0.30;
+
+    let (new_over_item, new_insert_col, new_insert_row) = if ratio_x < INSERT_THRESHOLD {
+        (-1, col, row)
+    } else if ratio_x > 1.0 - INSERT_THRESHOLD {
+        if col + 1 < data.cols {
+            (-1, col + 1, row)
+        } else {
+            (item_at_cell.unwrap_or(-1), -1, -1)
+        }
+    } else {
+        (item_at_cell.unwrap_or(-1), -1, -1)
+    };
+
+    let changed = data.drag_over_item != new_over_item
+        || data.drag_over_insert_col != new_insert_col
+        || data.drag_over_insert_row != new_insert_row;
+
+    data.drag_over_item = new_over_item;
+    data.drag_over_insert_col = new_insert_col;
+    data.drag_over_insert_row = new_insert_row;
+
+    if changed {
+        render_layered_window(hwnd);
     }
 }
 

@@ -101,6 +101,12 @@ pub(crate) struct OverlayWindowData {
     pub(crate) cell_h: i32,
     /// 当前布局图标尺寸
     pub(crate) icon_size: i32,
+    /// 拖拽覆盖时，光标下的替换高亮项索引（-1 = 无替换高亮）
+    pub(crate) drag_over_item: i32,
+    /// 拖拽覆盖时，插入指示器的列位置（-1 = 无插入指示）
+    pub(crate) drag_over_insert_col: i32,
+    /// 拖拽覆盖时，插入指示器的行位置（-1 = 无插入指示）
+    pub(crate) drag_over_insert_row: i32,
     /// D2D Factory
     pub(crate) d2d_factory: Option<ID2D1Factory>,
     /// DirectWrite Factory
@@ -227,6 +233,9 @@ pub fn create_desktop_overlay() -> Result<()> {
         cell_w: layout.cell_w,
         cell_h: layout.cell_h,
         icon_size: layout.icon_size,
+        drag_over_item: -1,
+        drag_over_insert_col: -1,
+        drag_over_insert_row: -1,
         d2d_factory: None,
         dw_factory: None,
         wic_factory: None,
@@ -818,6 +827,9 @@ impl OverlayWindowData {
             cell_w: 0,
             cell_h: 0,
             icon_size: 0,
+            drag_over_item: -1,
+            drag_over_insert_col: -1,
+            drag_over_insert_row: -1,
             d2d_factory: None,
             dw_factory: None,
             wic_factory: None,
@@ -849,6 +861,9 @@ mod tests {
             cell_w: 0,
             cell_h: 0,
             icon_size: 0,
+            drag_over_item: -1,
+            drag_over_insert_col: -1,
+            drag_over_insert_row: -1,
             d2d_factory: None,
             dw_factory: None,
             wic_factory: None,
@@ -878,6 +893,9 @@ mod tests {
             cell_w: 80,
             cell_h: 96,
             icon_size: 48,
+            drag_over_item: -1,
+            drag_over_insert_col: -1,
+            drag_over_insert_row: -1,
             d2d_factory: None,
             dw_factory: None,
             wic_factory: None,

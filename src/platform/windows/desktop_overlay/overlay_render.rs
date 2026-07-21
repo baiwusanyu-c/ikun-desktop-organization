@@ -296,6 +296,23 @@ fn draw_desktop_icons(
             }
         }
 
+        // 拖拽覆盖替换高亮
+        if index as i32 == data.drag_over_item && !is_selected {
+            let rect = D2D1_ROUNDED_RECT {
+                rect: d2d_rect(
+                    cell_x as f32 + scale_for_dpi(2, icon_dpi) as f32,
+                    cell_y as f32 + scale_for_dpi(2, icon_dpi) as f32,
+                    (cell_x + icon_cell_w - scale_for_dpi(2, icon_dpi)) as f32,
+                    (cell_y + icon_cell_h - scale_for_dpi(2, icon_dpi)) as f32,
+                ),
+                radiusX: scale_for_dpi(6, icon_dpi) as f32,
+                radiusY: scale_for_dpi(6, icon_dpi) as f32,
+            };
+            if let Ok(ref brush) = hover_brush {
+                unsafe { target.FillRoundedRectangle(&rect, brush) };
+            }
+        }
+
         if !icon.icon_handle.is_null() {
             draw_icon_d2d(target, icon.icon_handle, icon_x, icon_y, icon_size);
         }
@@ -380,6 +397,29 @@ fn draw_desktop_icons(
                     }
                 }
             }
+        }
+    }
+
+    // ===== 拖拽插入指示器（垂直分隔线）=====
+    if data.drag_over_insert_col >= 0 && data.drag_over_insert_row >= 0 {
+        let grid_layout = overlay_layout_params(width, dpi);
+        let sep_col = data.drag_over_insert_col;
+        let sep_row = data.drag_over_insert_row;
+        let separator_x = (grid_layout.padding + sep_col * grid_layout.cell_w) as f32;
+        let separator_top = (grid_layout.padding + sep_row * grid_layout.cell_h) as f32;
+        let separator_bottom = separator_top + grid_layout.cell_h as f32;
+        let separator_w = scale_for_dpi(2, dpi) as f32;
+
+        let insert_brush =
+            unsafe { target.CreateSolidColorBrush(&d2d_color(220, 220, 220, 220), None) };
+        if let Ok(ref ib) = insert_brush {
+            let line_rect = d2d_rect(
+                separator_x - separator_w / 2.0,
+                separator_top + scale_for_dpi(4, dpi) as f32,
+                separator_x + separator_w / 2.0,
+                separator_bottom - scale_for_dpi(4, dpi) as f32,
+            );
+            unsafe { target.FillRectangle(&line_rect, ib) };
         }
     }
 }

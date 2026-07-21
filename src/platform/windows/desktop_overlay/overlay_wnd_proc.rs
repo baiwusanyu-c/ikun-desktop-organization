@@ -345,7 +345,6 @@ fn handle_overlay_drag_timer(hwnd: HWND) {
         None => return,
     };
     if !is_dragging {
-        // drag_active 被外部重置（例如桌面刷新），需要清理残影窗口
         log::warn!("[DIAG] handle_overlay_drag_timer: drag_active=false, 清理残影");
         unsafe {
             KillTimer(hwnd, TIMER_ID_OVERLAY_DRAG);
@@ -357,15 +356,121 @@ fn handle_overlay_drag_timer(hwnd: HWND) {
     // 更新拖拽残影位置
     unsafe { crate::platform::windows::drag_image::update_drag_overlay() };
 
+    // 检测光标下的窗口，管理跨框可视化反馈
+    let mut pt = POINT { x: 0, y: 0 };
+    unsafe { GetCursorPos(&mut pt) };
+    let target_hwnd = crate::platform::windows::zorder::find_grid_window_at_point(pt.x, pt.y);
+
+    if !target_hwnd.is_null() {
+        // 光标在分类框上：发送可视化更新消息给目标框，清除overlay的可视化
+        if let Some(data) = get_overlay_data(hwnd) {
+            let changed = data.drag_over_item != -1
+                || data.drag_over_insert_col != -1
+                || data.drag_over_insert_row != -1;
+            data.drag_over_item = -1;
+            data.drag_over_insert_col = -1;
+            data.drag_over_insert_row = -1;
+            if changed {
+                render_desktop_overlay(hwnd);
+            }
+        }
+        let lparam = ((pt.y as isize) << 16) | ((pt.x as isize) & 0xFFFF);
+        unsafe {
+            PostMessageW(target_hwnd, WM_USER_DRAG_OVER_UPDATE, 0, lparam as LPARAM);
+        }
+    } else {
+        // 光标在overlay区域：更新overlay的可视化反馈
+        update_overlay_drag_over_visual(hwnd, pt.x, pt.y);
+    }
+
     // 检测鼠标左键是否仍然按下
     let lbutton_down = unsafe { GetAsyncKeyState(VK_LBUTTON) } & 0x8000u16 as i16 != 0;
-    log::debug!(
-        "[DIAG] handle_overlay_drag_timer: lbutton_down={}",
-        lbutton_down
-    );
     if !lbutton_down {
         log::info!("[DIAG] overlay drag timer: 鼠标已释放，结束拖拽");
         end_overlay_drag(hwnd);
+    }
+}
+
+/// 更新覆盖窗口的拖拽可视化反馈
+fn update_overlay_drag_over_visual(hwnd: HWND, screen_x: i32, screen_y: i32) {
+    let data = match get_overlay_data(hwnd) {
+        Some(d) => d,
+        None => return,
+    };
+
+    let dragged_idx = data.drag_item_index;
+    if dragged_idx < 0 {
+        return;
+    }
+
+    // 转换为overlay窗口坐标
+    let local_x = screen_x - data.x;
+    let local_y = screen_y - data.y;
+
+    let grid_layout = super::overlay_window::overlay_layout_params(data.width, data.dpi);
+    let padding = grid_layout.padding;
+    let cell_w = grid_layout.cell_w;
+    let cell_h = grid_layout.cell_h;
+    let cols = grid_layout.cols;
+
+    // 光标是否在网格区域内？
+    if local_x < padding || local_y < padding {
+        let changed = data.drag_over_item != -1
+            || data.drag_over_insert_col != -1
+            || data.drag_over_insert_row != -1;
+        data.drag_over_item = -1;
+        data.drag_over_insert_col = -1;
+        data.drag_over_insert_row = -1;
+        if changed {
+            render_desktop_overlay(hwnd);
+        }
+        return;
+    }
+
+    // 计算光标所在的网格列和行（列优先布局）
+    let total = data.icons.len().max(1) as i32;
+    let rows = (total + cols - 1) / cols;
+    let col = ((local_x - padding) / cell_w).min(cols - 1).max(0);
+    let row = ((local_y - padding) / cell_h).min(rows - 1).max(0);
+
+    // 计算光标在单元格内的相对X位置（0.0 ~ 1.0）
+    let cell_offset_x = local_x - padding - col * cell_w;
+    let ratio_x = cell_offset_x as f32 / cell_w as f32;
+
+    // 查找该单元格上是否有图标（列优先：index = col * rows + row）
+    let item_at_cell = {
+        let idx = (col * rows + row) as usize;
+        if idx < data.icons.len() && (idx as i32) != dragged_idx {
+            idx as i32
+        } else {
+            -1
+        }
+    };
+
+    const INSERT_THRESHOLD: f32 = 0.30;
+
+    let (new_over_item, new_insert_col, new_insert_row) = if ratio_x < INSERT_THRESHOLD {
+        (-1, col, row)
+    } else if ratio_x > 1.0 - INSERT_THRESHOLD {
+        if col + 1 < cols {
+            (-1, col + 1, row)
+        } else {
+            (item_at_cell, -1, -1)
+        }
+    } else {
+        (item_at_cell, -1, -1)
+    };
+
+    let changed = data.drag_over_item != new_over_item
+        || data.drag_over_insert_col != new_insert_col
+        || data.drag_over_insert_row != new_insert_row;
+
+    data.drag_over_item = new_over_item;
+    data.drag_over_insert_col = new_insert_col;
+    data.drag_over_insert_row = new_insert_row;
+
+    if changed {
+        render_desktop_overlay(hwnd);
     }
 }
 
@@ -494,6 +599,10 @@ fn end_overlay_drag(hwnd: HWND) {
             data.drag_active = false;
             data.drag_pending = false;
             data.drag_item_index = -1;
+            // 清除拖拽覆盖可视化状态
+            data.drag_over_item = -1;
+            data.drag_over_insert_col = -1;
+            data.drag_over_insert_row = -1;
             item_idx
         }
         None => return,
@@ -524,11 +633,20 @@ fn end_overlay_drag(hwnd: HWND) {
         None => return,
     };
 
+    // 读取目标框的拖拽覆盖状态（用于插入模式）
+    let (insert_col, insert_row) = unsafe {
+        crate::platform::windows::grid_window::get_data(target_hwnd)
+            .map(|d| (d.drag_over_insert_col, d.drag_over_insert_row))
+            .unwrap_or((-1, -1))
+    };
+
     crate::platform::windows::drop_target::set_pending_add_item(
         file_path,
         display_name.clone(),
         pt.x,
         pt.y,
+        insert_col,
+        insert_row,
     );
     unsafe { PostMessageW(target_hwnd, WM_USER_DRAG_ITEM_ADDED, 0, 0) };
 

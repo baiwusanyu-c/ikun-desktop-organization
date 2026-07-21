@@ -922,6 +922,14 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             0
         }
 
+        // ===== 跨框拖拽覆盖可视化更新 =====
+        WM_USER_DRAG_OVER_UPDATE => {
+            let screen_x = (lparam as i32) & 0xFFFF;
+            let screen_y = ((lparam as i32) >> 16) & 0xFFFF;
+            super::drag_handler::handle_cross_box_drag_over(hwnd, screen_x, screen_y);
+            0
+        }
+
         // ===== 拖拽悬停离开：清除高亮 =====
         WM_USER_DRAG_LEAVE => {
             super::drag_handler::handle_drag_leave(hwnd);

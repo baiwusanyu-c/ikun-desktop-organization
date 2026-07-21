@@ -858,7 +858,7 @@ pub fn render_icon_grid(
         let separator_w = scale_for_dpi(2, dpi) as f32;
 
         let insert_brush =
-            unsafe { target.CreateSolidColorBrush(&d2d_color(70, 90, 130, 180), None) };
+            unsafe { target.CreateSolidColorBrush(&d2d_color(220, 220, 220, 220), None) };
         if let Ok(ref ib) = insert_brush {
             let line_rect = d2d_rect(
                 separator_x - separator_w / 2.0,
