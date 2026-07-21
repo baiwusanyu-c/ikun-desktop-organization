@@ -131,6 +131,10 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
     let item_idx = data.drag_item_index;
     data.drag_active = false;
     data.drag_item_index = -1;
+    // 清除拖拽覆盖可视化状态
+    data.drag_over_item = -1;
+    data.drag_over_insert_col = -1;
+    data.drag_over_insert_row = -1;
 
     // 停止定时器 + 销毁覆盖窗口
     unsafe {
@@ -556,6 +560,15 @@ pub(crate) fn handle_grid_drag_timer(hwnd: HWND) {
     let mut pt = POINT { x: 0, y: 0 };
     unsafe { GetCursorPos(&mut pt) };
     let target_hwnd = super::zorder::find_grid_window_at_point(pt.x, pt.y);
+
+    // 拖拽可视化反馈：检测同框内的拖拽覆盖状态
+    if target_hwnd == hwnd {
+        update_drag_over_visual(hwnd, pt.x, pt.y);
+    } else {
+        // 光标不在同框内，清除拖拽覆盖状态
+        clear_drag_over_visual(data);
+    }
+
     if !target_hwnd.is_null() && target_hwnd != hwnd {
         unsafe { PostMessageW(target_hwnd, WM_USER_DRAG_ENTER, 0, 0) };
     }
@@ -565,6 +578,122 @@ pub(crate) fn handle_grid_drag_timer(hwnd: HWND) {
     if !lbutton_down {
         log::info!("[DIAG] grid drag timer: 鼠标已释放，结束拖拽");
         end_drag(hwnd);
+    }
+}
+
+/// 清除拖拽覆盖可视化状态
+fn clear_drag_over_visual(data: &mut super::grid_window::GridWindowData) {
+    if data.drag_over_item != -1
+        || data.drag_over_insert_col != -1
+        || data.drag_over_insert_row != -1
+    {
+        data.drag_over_item = -1;
+        data.drag_over_insert_col = -1;
+        data.drag_over_insert_row = -1;
+    }
+}
+
+/// 更新拖拽覆盖可视化状态（同框内拖拽时调用）
+///
+/// 根据光标在网格单元格中的相对位置，决定显示插入指示器还是替换高亮：
+/// - 光标在单元格左/右 30% 区域 → 插入模式（显示垂直分隔线）
+/// - 光标在单元格中间 40% 区域 → 替换模式（显示背景高亮）
+fn update_drag_over_visual(hwnd: HWND, screen_x: i32, screen_y: i32) {
+    let data = match unsafe { get_data(hwnd) } {
+        Some(d) => d,
+        None => return,
+    };
+
+    let dragged_idx = data.drag_item_index;
+    if dragged_idx < 0 {
+        return;
+    }
+
+    // 计算窗口坐标
+    let mut wr = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    unsafe { GetWindowRect(hwnd, &mut wr) };
+    let client_x = screen_x - wr.left;
+    let client_y = screen_y - wr.top;
+
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    let dpi = if dpi > 0 { dpi } else { 96 };
+    let window_width = wr.right - wr.left;
+
+    let view_params = crate::box_core::view_engine::get_view_params(&data.view_mode, dpi);
+    let layout =
+        crate::box_core::layout_calc::calculate_grid(window_width, data.title_h, &view_params, dpi);
+
+    // 考虑滚动偏移
+    let virtual_y = client_y + data.scroll_offset;
+
+    // 光标是否在网格区域内？
+    if client_x < layout.grid_left || virtual_y < layout.grid_top {
+        let changed = data.drag_over_item != -1
+            || data.drag_over_insert_col != -1
+            || data.drag_over_insert_row != -1;
+        data.drag_over_item = -1;
+        data.drag_over_insert_col = -1;
+        data.drag_over_insert_row = -1;
+        if changed {
+            render_layered_window(hwnd);
+        }
+        return;
+    }
+
+    // 计算光标所在的网格单元格
+    let col = ((client_x - layout.grid_left) / layout.cell_w).max(0);
+    let row = ((virtual_y - layout.grid_top) / layout.cell_h).max(0);
+
+    // 计算光标在单元格内的相对位置（0.0 ~ 1.0）
+    let cell_offset_x = client_x - layout.grid_left - col * layout.cell_w;
+    let ratio_x = cell_offset_x as f32 / layout.cell_w as f32;
+
+    // 查找该单元格上是否有项
+    let item_at_cell = data
+        .items
+        .iter()
+        .enumerate()
+        .find(|(i, item)| {
+            *i != dragged_idx as usize && item.grid_col == col && item.grid_row == row
+        })
+        .map(|(i, _)| i as i32);
+
+    // 插入区域阈值：单元格左/右 30% 为插入区域
+    const INSERT_THRESHOLD: f32 = 0.30;
+
+    let (new_over_item, new_insert_col, new_insert_row) = if ratio_x < INSERT_THRESHOLD {
+        // 左侧插入：分隔线显示在单元格左边缘
+        (-1, col, row)
+    } else if ratio_x > 1.0 - INSERT_THRESHOLD {
+        // 右侧插入：分隔线显示在单元格右边缘（下一列左边缘）
+        // 但要确保不超出列范围
+        if col + 1 < data.cols {
+            (-1, col + 1, row)
+        } else {
+            // 最后一列右侧：显示替换高亮
+            (item_at_cell.unwrap_or(-1), -1, -1)
+        }
+    } else {
+        // 中心区域：替换模式
+        (item_at_cell.unwrap_or(-1), -1, -1)
+    };
+
+    // 检查状态是否变化，仅在变化时重绘
+    let changed = data.drag_over_item != new_over_item
+        || data.drag_over_insert_col != new_insert_col
+        || data.drag_over_insert_row != new_insert_row;
+
+    data.drag_over_item = new_over_item;
+    data.drag_over_insert_col = new_insert_col;
+    data.drag_over_insert_row = new_insert_row;
+
+    if changed {
+        render_layered_window(hwnd);
     }
 }
 

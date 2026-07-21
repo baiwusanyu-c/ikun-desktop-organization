@@ -538,6 +538,9 @@ pub fn render_layered_window(hwnd: HWND) {
         dpi,
         data.scroll_offset,
         h,
+        data.drag_over_item,
+        data.drag_over_insert_col,
+        data.drag_over_insert_row,
     );
 
     unsafe { target.PopAxisAlignedClip() };
@@ -643,6 +646,9 @@ pub fn render_icon_grid(
     dpi: u32,
     scroll_offset: i32,
     window_height: i32,
+    drag_over_item: i32,
+    drag_over_insert_col: i32,
+    drag_over_insert_row: i32,
 ) {
     let icon_size = view_params.icon_size;
     let cell_w = layout.cell_w;
@@ -711,6 +717,23 @@ pub fn render_icon_grid(
 
         // Hover 背景（比选中浅，仅非选中项显示）
         if is_hovered && !is_selected {
+            if let Ok(ref hb) = hover_brush {
+                let hl_rect = D2D1_ROUNDED_RECT {
+                    rect: d2d_rect(
+                        cell_x as f32,
+                        cell_y as f32,
+                        (cell_x + cell_w) as f32,
+                        (cell_y + cell_h) as f32,
+                    ),
+                    radiusX: scale_for_dpi(6, dpi) as f32,
+                    radiusY: scale_for_dpi(6, dpi) as f32,
+                };
+                unsafe { target.FillRoundedRectangle(&hl_rect, hb) };
+            }
+        }
+
+        // 拖拽覆盖替换高亮（与 hover 背景一致，显示在拖拽项覆盖的目标项上）
+        if i as i32 == drag_over_item && !is_selected {
             if let Ok(ref hb) = hover_brush {
                 let hl_rect = D2D1_ROUNDED_RECT {
                     rect: d2d_rect(
@@ -823,6 +846,27 @@ pub fn render_icon_grid(
                     }
                 }
             }
+        }
+    }
+
+    // ===== 拖拽插入指示器（垂直分隔线）=====
+    if drag_over_insert_col >= 0 && drag_over_insert_row >= 0 {
+        let separator_x = (grid_left + drag_over_insert_col * cell_w) as f32;
+        let separator_top =
+            (grid_top + drag_over_insert_row * cell_h) as f32 - scroll_offset as f32;
+        let separator_bottom = separator_top + cell_h as f32;
+        let separator_w = scale_for_dpi(2, dpi) as f32;
+
+        let insert_brush =
+            unsafe { target.CreateSolidColorBrush(&d2d_color(70, 90, 130, 180), None) };
+        if let Ok(ref ib) = insert_brush {
+            let line_rect = d2d_rect(
+                separator_x - separator_w / 2.0,
+                separator_top + scale_for_dpi(4, dpi) as f32,
+                separator_x + separator_w / 2.0,
+                separator_bottom - scale_for_dpi(4, dpi) as f32,
+            );
+            unsafe { target.FillRectangle(&line_rect, ib) };
         }
     }
 

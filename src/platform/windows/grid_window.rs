@@ -173,6 +173,12 @@ pub(crate) struct GridWindowData {
     pub(crate) drag_item_index: i32,
     /// 拖拽悬停高亮（目标框被拖拽物悬停时显示）
     pub(crate) drop_highlight: bool,
+    /// 拖拽覆盖时，光标下的替换高亮项索引（-1 = 无替换高亮）
+    pub(crate) drag_over_item: i32,
+    /// 拖拽覆盖时，插入指示器的列位置（-1 = 无插入指示）
+    pub(crate) drag_over_insert_col: i32,
+    /// 拖拽覆盖时，插入指示器的行位置（-1 = 无插入指示）
+    pub(crate) drag_over_insert_row: i32,
     /// IDropTarget COM 对象指针（窗口销毁时释放）
     pub(crate) drop_target_ptr: *mut std::ffi::c_void,
     /// 图标网格 Y 轴滚动偏移量（像素，0 = 顶部）
@@ -224,6 +230,9 @@ impl GridWindowData {
             drag_active: false,
             drag_item_index: -1,
             drop_highlight: false,
+            drag_over_item: -1,
+            drag_over_insert_col: -1,
+            drag_over_insert_row: -1,
             drop_target_ptr: std::ptr::null_mut(),
             scroll_offset: 0,
             d2d_factory: None,
@@ -430,6 +439,9 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         drag_active: false,
         drag_item_index: -1,
         drop_highlight: false,
+        drag_over_item: -1,
+        drag_over_insert_col: -1,
+        drag_over_insert_row: -1,
         drop_target_ptr: std::ptr::null_mut(),
         scroll_offset: 0,
         d2d_factory: None,
