@@ -179,7 +179,6 @@ pub const WM_MOVING: u32 = 0x0216;
 pub const WM_SIZING: u32 = 0x0214;
 pub const TIMER_ID_ALIGNMENT: usize = 0x4F56_0003;
 
-
 // ===== Hit Test Constants =====
 pub const HTCLIENT: i32 = 1;
 pub const HTTRANSPARENT: i32 = -1;

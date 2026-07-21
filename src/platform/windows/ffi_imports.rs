@@ -65,6 +65,7 @@ extern "system" {
     pub fn SendMessageW(hWnd: HWND, Msg: u32, wParam: WPARAM, lParam: LPARAM) -> LRESULT;
     pub fn GetDC(hWnd: HWND) -> HDC;
     pub fn ReleaseDC(hWnd: HWND, hDC: HDC) -> i32;
+    pub fn GetPixel(hdc: HDC, x: i32, y: i32) -> u32;
     pub fn UpdateLayeredWindow(
         hWnd: HWND,
         hdcDst: HDC,

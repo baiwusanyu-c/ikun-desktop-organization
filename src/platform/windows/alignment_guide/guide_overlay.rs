@@ -40,6 +40,147 @@ struct GuideOverlayWindow {
 
 unsafe impl Send for GuideOverlayWindow {}
 
+/// 采样屏幕指定位置的像素颜色 (返回 RGB)
+fn sample_screen_color(screen_dc: HDC, x: i32, y: i32) -> (u8, u8, u8) {
+    let pixel = unsafe { GetPixel(screen_dc, x, y) };
+    // GetPixel returns COLORREF: 0x00BBGGRR
+    let r = (pixel & 0xFF) as u8;
+    let g = ((pixel >> 8) & 0xFF) as u8;
+    let b = ((pixel >> 16) & 0xFF) as u8;
+    (r, g, b)
+}
+
+/// 计算颜色的相对亮度 (0.0 = 黑色, 1.0 = 白色)
+/// 使用 W3C 标准公式: L = 0.2126*R + 0.7152*G + 0.0722*B
+fn relative_luminance(r: u8, g: u8, b: u8) -> f32 {
+    let r_linear = (r as f32 / 255.0).powf(2.2);
+    let g_linear = (g as f32 / 255.0).powf(2.2);
+    let b_linear = (b as f32 / 255.0).powf(2.2);
+    0.2126 * r_linear + 0.7152 * g_linear + 0.0722 * b_linear
+}
+
+/// 根据背景亮度计算对比色参考线颜色
+/// 返回 D2D1_COLOR_F
+/// Sample desktop luminance once at startup, return cached guide color.
+/// Call init_guide_color() once before first render.
+pub fn init_guide_color() {
+    use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
+
+    log::info!("[GuideColor] Starting desktop color sampling...");
+
+    let screen_dc = unsafe { GetDC(std::ptr::null_mut()) };
+    if screen_dc.is_null() {
+        log::error!("[GuideColor] GetDC failed, using default white");
+        let fallback = D2D1_COLOR_F {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 0.95,
+        };
+        if let Ok(mut guard) = CACHED_GUIDE_COLOR.lock() {
+            *guard = Some(fallback);
+        }
+        return;
+    }
+
+    let sw = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+    let sh = unsafe { GetSystemMetrics(SM_CYSCREEN) };
+    log::info!("[GuideColor] Screen size: {}x{}", sw, sh);
+
+    let sample_count = 16;
+    let mut total_luminance = 0.0f32;
+    let mut valid = 0i32;
+
+    for i in 0..sample_count {
+        for j in 0..sample_count {
+            let x = sw / 4 + (sw / 2) * i / (sample_count - 1);
+            let y = sh / 4 + (sh / 2) * j / (sample_count - 1);
+            let (r, g, b) = sample_screen_color(screen_dc, x, y);
+            let lum = relative_luminance(r, g, b);
+            if i == 0 && j == 0 {
+                log::info!(
+                    "[GuideColor] First sample at ({},{}): rgb=({},{},{}) lum={:.3}",
+                    x,
+                    y,
+                    r,
+                    g,
+                    b,
+                    lum
+                );
+            }
+            total_luminance += lum;
+            valid += 1;
+        }
+    }
+
+    unsafe { ReleaseDC(std::ptr::null_mut(), screen_dc) };
+
+    let avg = if valid > 0 {
+        total_luminance / valid as f32
+    } else {
+        0.5
+    };
+
+    let color = if avg > 0.5 {
+        // Light background -> dark guide line
+        D2D1_COLOR_F {
+            r: 30.0 / 255.0,
+            g: 40.0 / 255.0,
+            b: 60.0 / 255.0,
+            a: 0.95,
+        }
+    } else {
+        // Dark background -> white guide line
+        D2D1_COLOR_F {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 0.95,
+        }
+    };
+
+    if let Ok(mut guard) = CACHED_GUIDE_COLOR.lock() {
+        *guard = Some(color);
+    }
+    log::info!(
+        "[GuideColor] DONE: avg_luminance={:.3}, selected=rgb({:.0},{:.0},{:.0})",
+        avg,
+        color.r * 255.0,
+        color.g * 255.0,
+        color.b * 255.0
+    );
+}
+
+/// Get cached guide color; lazy-initializes if not yet set
+fn get_guide_color() -> windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F {
+    use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
+    {
+        if let Ok(guard) = CACHED_GUIDE_COLOR.lock() {
+            if let Some(c) = *guard {
+                return c;
+            }
+        }
+    }
+    // Cache empty - lazy init (overlay should be hidden when first render is called)
+    log::warn!("[GuideColor] Cache empty during render, lazy-initializing...");
+    init_guide_color();
+    if let Ok(guard) = CACHED_GUIDE_COLOR.lock() {
+        if let Some(c) = *guard {
+            return c;
+        }
+    }
+    // Ultimate fallback: white
+    D2D1_COLOR_F {
+        r: 1.0,
+        g: 1.0,
+        b: 1.0,
+        a: 0.95,
+    }
+}
+
+static CACHED_GUIDE_COLOR: Mutex<Option<windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F>> =
+    Mutex::new(None);
+
 static GUIDE_OVERLAY: Mutex<Option<GuideOverlayWindow>> = Mutex::new(None);
 static CLASS_REGISTERED: Mutex<bool> = Mutex::new(false);
 
@@ -48,10 +189,6 @@ static CLASS_NAME: &[u16] = &[
 ]; // "IkunGuideOverlay"
 
 /// �ο�����ɫ����͸����ɫ (rgba: 0, 120, 255, 200)
-const GUIDE_COLOR_R: f32 = 100.0 / 255.0;
-const GUIDE_COLOR_G: f32 = 255.0 / 255.0;
-const GUIDE_COLOR_B: f32 = 150.0 / 255.0;
-const GUIDE_COLOR_A: f32 = 255.0 / 255.0;
 
 /// �ο��߿��
 const GUIDE_LINE_WIDTH: f32 = 3.0;
@@ -131,9 +268,8 @@ fn ensure_class_registered() -> Result<HINSTANCE, &'static str> {
 /// ��ʼ�� D2D �豸
 fn init_d2d_devices(data: &mut GuideOverlayData) {
     if data.d2d_factory.is_none() {
-        match unsafe {
-            D2D1CreateFactory::<ID2D1Factory>(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)
-        } {
+        match unsafe { D2D1CreateFactory::<ID2D1Factory>(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) }
+        {
             Ok(factory) => data.d2d_factory = Some(factory),
             Err(e) => {
                 log::error!("���� Guide D2D Factory ʧ��: {:?}", e);
@@ -216,13 +352,18 @@ pub fn create_guide_overlay() -> Result<(), &'static str> {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, data_ptr as isize);
     }
 
-
     // ���浽ȫ��
     if let Ok(mut guard) = GUIDE_OVERLAY.lock() {
         *guard = Some(GuideOverlayWindow { hwnd });
     }
 
-    log::info!("Guide overlay �����Ѵ���: {}x{} at ({}, {})", width, height, x, y);
+    log::info!(
+        "Guide overlay �����Ѵ���: {}x{} at ({}, {})",
+        width,
+        height,
+        x,
+        y
+    );
     Ok(())
 }
 
@@ -261,7 +402,8 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
     };
 
     // ����Ƿ��ж���
-    let has_lines = !alignment.horizontal_matches.is_empty() || !alignment.vertical_matches.is_empty();
+    let has_lines =
+        !alignment.horizontal_matches.is_empty() || !alignment.vertical_matches.is_empty();
 
     if !has_lines {
         // ���ش���
@@ -353,74 +495,74 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
 
     // ���Ϊȫ͸��
     unsafe {
-        target.Clear(Some(&windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F {
-            r: 0.0,
-            g: 0.0,
-            b: 0.0,
-            a: 0.0,
-        }));
+        target.Clear(Some(
+            &windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.0,
+            },
+        ));
     }
 
     // �����ο��߻���
-    let guide_color = windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F {
-        r: GUIDE_COLOR_R,
-        g: GUIDE_COLOR_G,
-        b: GUIDE_COLOR_B,
-        a: GUIDE_COLOR_A,
+    // 动态对比色参考线：根据背景亮度自动选择颜色
+    let stroke_style = unsafe {
+        _factory.CreateStrokeStyle(
+            &windows::Win32::Graphics::Direct2D::D2D1_STROKE_STYLE_PROPERTIES {
+                startCap: windows::Win32::Graphics::Direct2D::D2D1_CAP_STYLE_FLAT,
+                endCap: windows::Win32::Graphics::Direct2D::D2D1_CAP_STYLE_FLAT,
+                dashCap: windows::Win32::Graphics::Direct2D::D2D1_CAP_STYLE_FLAT,
+                lineJoin: windows::Win32::Graphics::Direct2D::D2D1_LINE_JOIN_MITER,
+                miterLimit: 10.0,
+                dashStyle: windows::Win32::Graphics::Direct2D::D2D1_DASH_STYLE_SOLID,
+                dashOffset: 0.0,
+            },
+            None,
+        )
     };
 
-    let brush = unsafe { target.CreateSolidColorBrush(&guide_color, None) };
+    // 绘制水平参考线（动态对比色）
+    for m in &alignment.horizontal_matches {
+        let y = (m.position - work_area_offset.1) as f32;
+        let x0 = (m.line_start.0 - work_area_offset.0) as f32;
+        let x1 = (m.line_end.0 - work_area_offset.0) as f32;
+        let p0 = D2D_POINT_2F { x: x0, y };
+        let p1 = D2D_POINT_2F { x: x1, y };
 
-    if let Ok(ref brush) = brush {
-        let stroke_style = unsafe {
-            _factory.CreateStrokeStyle(
-                &windows::Win32::Graphics::Direct2D::D2D1_STROKE_STYLE_PROPERTIES {
-                    startCap: windows::Win32::Graphics::Direct2D::D2D1_CAP_STYLE_FLAT,
-                    endCap: windows::Win32::Graphics::Direct2D::D2D1_CAP_STYLE_FLAT,
-                    dashCap: windows::Win32::Graphics::Direct2D::D2D1_CAP_STYLE_FLAT,
-                    lineJoin: windows::Win32::Graphics::Direct2D::D2D1_LINE_JOIN_MITER,
-                    miterLimit: 10.0,
-                    dashStyle: windows::Win32::Graphics::Direct2D::D2D1_DASH_STYLE_SOLID,
-                    dashOffset: 0.0,
-                },
-                None,
-            )
-        };
-
-        // ����ˮƽ�ο���
-        for m in &alignment.horizontal_matches {
-            let y = (m.position - work_area_offset.1) as f32;
-            let x0 = (m.line_start.0 - work_area_offset.0) as f32;
-            let x1 = (m.line_end.0 - work_area_offset.0) as f32;
-            let p0 = D2D_POINT_2F { x: x0, y };
-            let p1 = D2D_POINT_2F { x: x1, y };
-
+        if let Ok(ref dynamic_brush) =
+            unsafe { target.CreateSolidColorBrush(&get_guide_color(), None) }
+        {
             if let Ok(ref style) = stroke_style {
                 unsafe {
-                    target.DrawLine(p0, p1, brush, GUIDE_LINE_WIDTH, Some(style));
+                    target.DrawLine(p0, p1, dynamic_brush, GUIDE_LINE_WIDTH, Some(style));
                 }
             } else {
                 unsafe {
-                    target.DrawLine(p0, p1, brush, GUIDE_LINE_WIDTH, None);
+                    target.DrawLine(p0, p1, dynamic_brush, GUIDE_LINE_WIDTH, None);
                 }
             }
         }
+    }
 
-        // ���ƴ�ֱ�ο���
-        for m in &alignment.vertical_matches {
-            let x = (m.position - work_area_offset.0) as f32;
-            let y0 = (m.line_start.1 - work_area_offset.1) as f32;
-            let y1 = (m.line_end.1 - work_area_offset.1) as f32;
-            let p0 = D2D_POINT_2F { x, y: y0 };
-            let p1 = D2D_POINT_2F { x, y: y1 };
+    // 绘制垂直参考线（动态对比色）
+    for m in &alignment.vertical_matches {
+        let x = (m.position - work_area_offset.0) as f32;
+        let y0 = (m.line_start.1 - work_area_offset.1) as f32;
+        let y1 = (m.line_end.1 - work_area_offset.1) as f32;
+        let p0 = D2D_POINT_2F { x, y: y0 };
+        let p1 = D2D_POINT_2F { x, y: y1 };
 
+        if let Ok(ref dynamic_brush) =
+            unsafe { target.CreateSolidColorBrush(&get_guide_color(), None) }
+        {
             if let Ok(ref style) = stroke_style {
                 unsafe {
-                    target.DrawLine(p0, p1, brush, GUIDE_LINE_WIDTH, Some(style));
+                    target.DrawLine(p0, p1, dynamic_brush, GUIDE_LINE_WIDTH, Some(style));
                 }
             } else {
                 unsafe {
-                    target.DrawLine(p0, p1, brush, GUIDE_LINE_WIDTH, None);
+                    target.DrawLine(p0, p1, dynamic_brush, GUIDE_LINE_WIDTH, None);
                 }
             }
         }
@@ -458,7 +600,15 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
 
         // ��ʾ����
         ShowWindow(hwnd, SW_SHOWNA);
-        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
 
         // ����
         SelectObject(mem_dc, old_bmp);
@@ -484,3 +634,39 @@ pub fn is_guide_overlay_created() -> bool {
     GUIDE_OVERLAY.lock().map(|g| g.is_some()).unwrap_or(false)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_relative_luminance_black() {
+        let l = relative_luminance(0, 0, 0);
+        assert!(l < 0.01, "Black should have near-zero luminance, got {}", l);
+    }
+
+    #[test]
+    fn test_relative_luminance_white() {
+        let l = relative_luminance(255, 255, 255);
+        assert!(l > 0.99, "White should have near-1.0 luminance, got {}", l);
+    }
+
+    #[test]
+    fn test_relative_luminance_gray() {
+        let l = relative_luminance(128, 128, 128);
+        assert!(
+            l > 0.15 && l < 0.35,
+            "Gray 128 should have moderate luminance, got {}",
+            l
+        );
+    }
+
+    #[test]
+    fn test_relative_luminance_green_bias() {
+        // Green contributes most to luminance (0.7152 weight)
+        let l_green = relative_luminance(0, 255, 0);
+        let l_red = relative_luminance(255, 0, 0);
+        let l_blue = relative_luminance(0, 0, 255);
+        assert!(l_green > l_red, "Green should be brighter than red");
+        assert!(l_green > l_blue, "Green should be brighter than blue");
+    }
+}

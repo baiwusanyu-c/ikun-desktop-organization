@@ -30,6 +30,7 @@ pub struct AlignmentMatch {
 }
 
 /// ��������
+#[derive(Default)]
 pub struct AlignmentResult {
     /// ˮƽ����ƥ�䣨ˮƽ�ο��ߣ�
     pub horizontal_matches: Vec<AlignmentMatch>,
@@ -41,19 +42,6 @@ pub struct AlignmentResult {
 
 unsafe impl Send for AlignmentMatch {}
 unsafe impl Send for AlignmentResult {}
-
-
-impl Default for AlignmentResult {
-    fn default() -> Self {
-        Self {
-            horizontal_matches: Vec::new(),
-            vertical_matches: Vec::new(),
-            snapped_rect: None,
-        }
-    }
-}
-
-
 
 /// Ĭ�϶�����ֵ���������أ�
 pub const DEFAULT_ALIGNMENT_THRESHOLD: i32 = 5;
@@ -73,23 +61,23 @@ pub fn detect_alignments(
     threshold: i32,
 ) -> AlignmentResult {
     let mut result = AlignmentResult::default();
-    
+
     // �ռ����п��ܶ���ı�Ե
     let moving_edges = RectEdges::from_rect(moving_rect);
-    
+
     for (hwnd, other_rect) in others {
         let other_edges = RectEdges::from_rect(other_rect);
-        
+
         // ���ˮƽ���루top/bottom ��Ե��
         check_horizontal_alignment(&mut result, &moving_edges, &other_edges, *hwnd, threshold);
-        
+
         // ��ⴹֱ���루left/right ��Ե��
         check_vertical_alignment(&mut result, &moving_edges, &other_edges, *hwnd, threshold);
     }
-    
+
     // �����������λ��
     result.snapped_rect = calculate_snapped_rect(moving_rect, &result);
-    
+
     result
 }
 
@@ -127,18 +115,24 @@ fn check_horizontal_alignment(
         (moving.bottom, other.top),
         (moving.bottom, other.bottom),
     ];
-    
+
     for (moving_edge, other_edge) in pairs {
         let diff = (moving_edge - other_edge).abs();
         if diff <= threshold {
             // �����Ƿ�������ͬλ�õĶ���
-            let existing = result.horizontal_matches.iter_mut().find(|m| {
-                (m.position - other_edge).abs() <= 1
-            });
-            
+            let existing = result
+                .horizontal_matches
+                .iter_mut()
+                .find(|m| (m.position - other_edge).abs() <= 1);
+
             if let Some(existing) = existing {
                 if !existing.matched_hwnds.contains(&other_hwnd) {
                     existing.matched_hwnds.push(other_hwnd);
+                    // Update line endpoints to include the new box
+                    let left_x = moving.left.min(other.left);
+                    let right_x = moving.right.max(other.right);
+                    existing.line_start.0 = existing.line_start.0.min(left_x);
+                    existing.line_end.0 = existing.line_end.0.max(right_x);
                 }
             } else {
                 // 计算线段端点：水平线从左框的左边缘到右框的右边缘
@@ -172,18 +166,24 @@ fn check_vertical_alignment(
         (moving.right, other.left),
         (moving.right, other.right),
     ];
-    
+
     for (moving_edge, other_edge) in pairs {
         let diff = (moving_edge - other_edge).abs();
         if diff <= threshold {
             // �����Ƿ�������ͬλ�õĶ���
-            let existing = result.vertical_matches.iter_mut().find(|m| {
-                (m.position - other_edge).abs() <= 1
-            });
-            
+            let existing = result
+                .vertical_matches
+                .iter_mut()
+                .find(|m| (m.position - other_edge).abs() <= 1);
+
             if let Some(existing) = existing {
                 if !existing.matched_hwnds.contains(&other_hwnd) {
                     existing.matched_hwnds.push(other_hwnd);
+                    // Update line endpoints to include the new box
+                    let left_x = moving.left.min(other.left);
+                    let right_x = moving.right.max(other.right);
+                    existing.line_start.0 = existing.line_start.0.min(left_x);
+                    existing.line_end.0 = existing.line_end.0.max(right_x);
                 }
             } else {
                 // 计算线段端点：垂直线从上框的上边缘到下框的下边缘
@@ -204,9 +204,14 @@ fn check_vertical_alignment(
 
 /// ����������ľ���λ��
 fn calculate_snapped_rect(original: &RECT, result: &AlignmentResult) -> Option<RECT> {
-    let mut snapped = RECT { left: original.left, top: original.top, right: original.right, bottom: original.bottom };
+    let mut snapped = RECT {
+        left: original.left,
+        top: original.top,
+        right: original.right,
+        bottom: original.bottom,
+    };
     let mut changed = false;
-    
+
     // Ӧ��ˮƽ���������� top/bottom��
     if !result.horizontal_matches.is_empty() {
         // �ҵ������ˮƽ����
@@ -214,11 +219,11 @@ fn calculate_snapped_rect(original: &RECT, result: &AlignmentResult) -> Option<R
         let mut min_diff_bottom = i32::MAX;
         let mut snap_top = original.top;
         let mut snap_bottom = original.bottom;
-        
+
         for m in &result.horizontal_matches {
             let diff_top = (original.top - m.position).abs();
             let diff_bottom = (original.bottom - m.position).abs();
-            
+
             if diff_top < min_diff_top {
                 min_diff_top = diff_top;
                 snap_top = m.position;
@@ -228,7 +233,7 @@ fn calculate_snapped_rect(original: &RECT, result: &AlignmentResult) -> Option<R
                 snap_bottom = m.position;
             }
         }
-        
+
         // �������� top����� top ����С
         if min_diff_top <= min_diff_bottom && min_diff_top > 0 {
             let height = original.bottom - original.top;
@@ -242,18 +247,18 @@ fn calculate_snapped_rect(original: &RECT, result: &AlignmentResult) -> Option<R
             changed = true;
         }
     }
-    
+
     // Ӧ�ô�ֱ���������� left/right��
     if !result.vertical_matches.is_empty() {
         let mut min_diff_left = i32::MAX;
         let mut min_diff_right = i32::MAX;
         let mut snap_left = original.left;
         let mut snap_right = original.right;
-        
+
         for m in &result.vertical_matches {
             let diff_left = (original.left - m.position).abs();
             let diff_right = (original.right - m.position).abs();
-            
+
             if diff_left < min_diff_left {
                 min_diff_left = diff_left;
                 snap_left = m.position;
@@ -263,7 +268,7 @@ fn calculate_snapped_rect(original: &RECT, result: &AlignmentResult) -> Option<R
                 snap_right = m.position;
             }
         }
-        
+
         // �������� left
         if min_diff_left <= min_diff_right && min_diff_left > 0 {
             let width = original.right - original.left;
@@ -277,8 +282,12 @@ fn calculate_snapped_rect(original: &RECT, result: &AlignmentResult) -> Option<R
             changed = true;
         }
     }
-    
-    if changed { Some(snapped) } else { None }
+
+    if changed {
+        Some(snapped)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -286,16 +295,19 @@ mod tests {
     use super::*;
 
     fn make_rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
-        RECT { left, top, right, bottom }
+        RECT {
+            left,
+            top,
+            right,
+            bottom,
+        }
     }
 
     #[test]
     fn test_no_alignment() {
         let moving = make_rect(100, 100, 200, 200);
-        let others = vec![
-            (std::ptr::null_mut(), make_rect(300, 300, 400, 400)),
-        ];
-        
+        let others = vec![(std::ptr::null_mut(), make_rect(300, 300, 400, 400))];
+
         let result = detect_alignments(&moving, &others, 5);
         assert!(result.horizontal_matches.is_empty());
         assert!(result.vertical_matches.is_empty());
@@ -306,10 +318,8 @@ mod tests {
         // moving: top=100, bottom=200
         // other:  top=100, bottom=300 (different bottom, so only top aligns)
         let moving = make_rect(100, 100, 200, 200);
-        let others = vec![
-            (std::ptr::null_mut(), make_rect(300, 100, 400, 300)),
-        ];
-        
+        let others = vec![(std::ptr::null_mut(), make_rect(300, 100, 400, 300))];
+
         let result = detect_alignments(&moving, &others, 5);
         assert_eq!(result.horizontal_matches.len(), 1);
         assert_eq!(result.horizontal_matches[0].position, 100);
@@ -320,10 +330,8 @@ mod tests {
         // moving: left=100, right=200
         // other:  left=100, right=300 (different right, so only left aligns)
         let moving = make_rect(100, 100, 200, 200);
-        let others = vec![
-            (std::ptr::null_mut(), make_rect(100, 300, 300, 400)),
-        ];
-        
+        let others = vec![(std::ptr::null_mut(), make_rect(100, 300, 300, 400))];
+
         let result = detect_alignments(&moving, &others, 5);
         assert_eq!(result.vertical_matches.len(), 1);
         assert_eq!(result.vertical_matches[0].position, 100);
@@ -331,11 +339,9 @@ mod tests {
 
     #[test]
     fn test_snap_threshold() {
-        let moving = make_rect(100, 97, 200, 197);  // top �� 3px
-        let others = vec![
-            (std::ptr::null_mut(), make_rect(300, 100, 400, 300)),
-        ];
-        
+        let moving = make_rect(100, 97, 200, 197); // top �� 3px
+        let others = vec![(std::ptr::null_mut(), make_rect(300, 100, 400, 300))];
+
         let result = detect_alignments(&moving, &others, 5);
         assert_eq!(result.horizontal_matches.len(), 1);
         assert!(result.snapped_rect.is_some());
@@ -344,11 +350,9 @@ mod tests {
 
     #[test]
     fn test_outside_threshold() {
-        let moving = make_rect(100, 94, 200, 194);  // top �� 6px
-        let others = vec![
-            (std::ptr::null_mut(), make_rect(300, 100, 400, 200)),
-        ];
-        
+        let moving = make_rect(100, 94, 200, 194); // top �� 6px
+        let others = vec![(std::ptr::null_mut(), make_rect(300, 100, 400, 200))];
+
         let result = detect_alignments(&moving, &others, 5);
         assert!(result.horizontal_matches.is_empty());
     }
@@ -357,14 +361,123 @@ mod tests {
     fn test_multiple_alignments() {
         let moving = make_rect(100, 100, 200, 200);
         let others = vec![
-            (std::ptr::null_mut(), make_rect(100, 100, 200, 200)),  // ��ȫ�ص�
+            (std::ptr::null_mut(), make_rect(100, 100, 200, 200)), // ��ȫ�ص�
         ];
-        
+
         let result = detect_alignments(&moving, &others, 5);
         // top �� bottom ������
         assert_eq!(result.horizontal_matches.len(), 2);
         // left �� right ������
         assert_eq!(result.vertical_matches.len(), 2);
     }
-}
 
+    #[test]
+    fn test_line_endpoints_horizontal() {
+        // Test that line_start and line_end are calculated correctly for horizontal alignment
+        let moving = make_rect(100, 100, 200, 200);
+        let others = vec![(std::ptr::null_mut(), make_rect(300, 100, 400, 300))];
+
+        let result = detect_alignments(&moving, &others, 5);
+        assert_eq!(result.horizontal_matches.len(), 1);
+
+        let m = &result.horizontal_matches[0];
+        // line_start.x should be the leftmost edge (moving.left = 100)
+        // line_end.x should be the rightmost edge (other.right = 400)
+        // Both y values should be the alignment position (100)
+        assert_eq!(m.line_start.0, 100);
+        assert_eq!(m.line_start.1, 100);
+        assert_eq!(m.line_end.0, 400);
+        assert_eq!(m.line_end.1, 100);
+    }
+
+    #[test]
+    fn test_line_endpoints_vertical() {
+        // Test that line_start and line_end are calculated correctly for vertical alignment
+        let moving = make_rect(100, 100, 200, 200);
+        let others = vec![(std::ptr::null_mut(), make_rect(100, 300, 300, 400))];
+
+        let result = detect_alignments(&moving, &others, 5);
+        assert_eq!(result.vertical_matches.len(), 1);
+
+        let m = &result.vertical_matches[0];
+        // line_start.y should be the topmost edge (moving.top = 100)
+        // line_end.y should be the bottommost edge (other.bottom = 400)
+        // Both x values should be the alignment position (100)
+        assert_eq!(m.line_start.0, 100);
+        assert_eq!(m.line_start.1, 100);
+        assert_eq!(m.line_end.0, 100);
+        assert_eq!(m.line_end.1, 400);
+    }
+
+    #[test]
+    fn test_empty_others() {
+        let moving = make_rect(100, 100, 200, 200);
+        let others: Vec<(*mut std::ffi::c_void, RECT)> = vec![];
+
+        let result = detect_alignments(&moving, &others, 5);
+        assert!(result.horizontal_matches.is_empty());
+        assert!(result.vertical_matches.is_empty());
+        assert!(result.snapped_rect.is_none());
+    }
+
+    #[test]
+    fn test_threshold_boundary() {
+        // Test exact threshold boundary (5px)
+        let moving = make_rect(100, 95, 200, 200); // top is exactly 5px away
+        let others = vec![(std::ptr::null_mut(), make_rect(300, 100, 400, 300))];
+
+        let result = detect_alignments(&moving, &others, 5);
+        // Should detect alignment at exactly threshold distance
+        assert_eq!(result.horizontal_matches.len(), 1);
+    }
+
+    #[test]
+    fn test_multiple_boxes_alignment() {
+        // Test alignment with multiple boxes
+        let moving = make_rect(100, 100, 200, 200);
+        // Use different fake HWND pointers to distinguish boxes
+        let hwnd1 = 0x1000 as *mut std::ffi::c_void;
+        let hwnd2 = 0x2000 as *mut std::ffi::c_void;
+        let others = vec![
+            (hwnd1, make_rect(300, 100, 400, 300)), // top aligns
+            (hwnd2, make_rect(500, 100, 600, 250)), // top also aligns
+        ];
+
+        let result = detect_alignments(&moving, &others, 5);
+        assert_eq!(result.horizontal_matches.len(), 1);
+
+        let m = &result.horizontal_matches[0];
+        // Should have both hwnds in matched_hwnds
+        assert_eq!(m.matched_hwnds.len(), 2);
+        // line_start.x should be leftmost (100)
+        // line_end.x should be rightmost (600)
+        assert_eq!(m.line_start.0, 100);
+        assert_eq!(m.line_end.0, 600);
+    }
+
+    #[test]
+    fn test_bottom_to_top_alignment() {
+        // Test moving.bottom aligns with other.top
+        let moving = make_rect(100, 100, 200, 200); // bottom = 200
+        let others = vec![
+            (std::ptr::null_mut(), make_rect(300, 200, 400, 300)), // top = 200
+        ];
+
+        let result = detect_alignments(&moving, &others, 5);
+        assert_eq!(result.horizontal_matches.len(), 1);
+        assert_eq!(result.horizontal_matches[0].position, 200);
+    }
+
+    #[test]
+    fn test_right_to_left_alignment() {
+        // Test moving.right aligns with other.left
+        let moving = make_rect(100, 100, 200, 200); // right = 200
+        let others = vec![
+            (std::ptr::null_mut(), make_rect(200, 300, 300, 400)), // left = 200
+        ];
+
+        let result = detect_alignments(&moving, &others, 5);
+        assert_eq!(result.vertical_matches.len(), 1);
+        assert_eq!(result.vertical_matches[0].position, 200);
+    }
+}

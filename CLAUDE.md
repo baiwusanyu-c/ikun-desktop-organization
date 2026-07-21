@@ -89,6 +89,7 @@ src/
 │   │   ├── ffi_imports.rs     #   Win32 extern "system" 声明
 │   │   ├── desktop_manager.rs #   桌面图标枚举（文件系统 + 虚拟 Shell 对象 CLSID）
 │   │   ├── desktop_overlay/   #   桌面覆盖窗口（渲染未管理图标 + Grid 吸附布局 + 桌面接管生命周期 + 文件监听刷新）
+?   ?   ??? alignment_guide/   #   ??????????????? + ????? + ??? overlay ???
 │   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎
 │   │   ├── grid_window.rs     #   窗口创建/销毁/布局收集/Z-order 管理
 │   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc
