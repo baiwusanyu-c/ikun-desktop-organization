@@ -87,7 +87,7 @@ pub fn init_guide_color() {
     let sh = unsafe { GetSystemMetrics(SM_CYSCREEN) };
     log::info!("[GuideColor] Screen size: {}x{}", sw, sh);
 
-    let sample_count = 16;
+    let sample_count = 8; // 8x8=64 samples, enough for brightness estimation
     let mut total_luminance = 0.0f32;
     let mut valid = 0i32;
 

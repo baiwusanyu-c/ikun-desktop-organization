@@ -199,6 +199,9 @@ pub fn run_gpui_app() {
             })
             .detach();
 
+            // ?????????????????????
+            crate::platform::windows::alignment_guide::guide_overlay::init_guide_color();
+
             log::info!("GPUI 应用初始化完成，进入事件循环");
         });
 

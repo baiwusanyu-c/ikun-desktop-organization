@@ -35,8 +35,7 @@ pub fn on_enter_size_move(hwnd: *mut std::ffi::c_void) {
         if let Err(e) = create_guide_overlay() {
             log::error!("create guide overlay failed: {}", e);
         }
-        // Sample desktop color once when overlay is first created
-        init_guide_color();
+        // Guide color is pre-sampled at app startup via init_guide_color()
     }
     // Start timer to poll window position every 16ms (~60fps)
     unsafe { SetTimer(hwnd, TIMER_ID_ALIGNMENT, 16, std::ptr::null_mut()) };
