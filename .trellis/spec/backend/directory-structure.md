@@ -60,7 +60,9 @@ src/
 │   │   ├── drag_image.rs      #   拖拽残影覆盖窗口（D2D 渲染跟随光标的半透明图标）
 │   │   ├── ole_dnd.rs         #   OLE 拖拽源（IDropSource + IDataObject 实现）
 │   │   ├── drop_target.rs     #   分类框拖放目标（IDropTarget 实现）
-│   │   ├── drag_handler.rs    #   拖拽协调器（连接覆盖窗口/分类框/OLE 拖拽 + 拖拽可视化反馈）
+│   │   ├── drag_handler.rs    #   拖拽协调器（拖拽生命周期：阈值检测/位置更新/释放分发）
+│   ├── drag_drop.rs       #   拖拽放置操作（同框/跨框/桌面/OLE drop）
+│   └── drag_visual.rs     #   拖拽可视化反馈（插入分隔线/替换高亮 + 纯逻辑函数）
 │   │   ├── icon_manager.rs    #   图标管理器（SysListView32 跨进程操作 + 图像列表提取）
 │   │   ├── control_panel_window.rs # 控制面板 Win32 显示/隐藏辅助（托盘优先生命周期）
 │   │   └── sys_tray.rs        #   系统托盘入口（隐藏消息窗口 + 固定菜单动作队列）
