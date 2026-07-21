@@ -405,10 +405,33 @@ fn draw_desktop_icons(
         let grid_layout = overlay_layout_params(width, dpi);
         let sep_col = data.drag_over_insert_col;
         let sep_row = data.drag_over_insert_row;
-        let separator_x = (grid_layout.padding + sep_col * grid_layout.cell_w) as f32;
-        let separator_top = (grid_layout.padding + sep_row * grid_layout.cell_h) as f32;
+        let total = data.icons.len().max(1) as i32;
+        let rows = (total + grid_layout.cols - 1) / grid_layout.cols;
+
+        // 使用 overlay_icon_cell_x 计算精确位置（与图标渲染一致）
+        // 列优先：index = col * rows + row
+        let icon_index_at_sep = (sep_col * rows + sep_row) as usize;
+        let separator_x = if icon_index_at_sep < data.icons.len() {
+            overlay_icon_cell_x(data, icon_index_at_sep, &grid_layout) as f32
+        } else {
+            // 超出图标列表范围，使用最后一个图标位置 + cell_w
+            let last_idx = data.icons.len().saturating_sub(1);
+            (overlay_icon_cell_x(data, last_idx, &grid_layout) + grid_layout.cell_w) as f32
+        };
+
+        // 计算分隔线的 Y 范围：使用该行的图标位置
+        let icon_index_for_row = if sep_col > 0 {
+            ((sep_col - 1) * rows + sep_row) as usize
+        } else {
+            icon_index_at_sep
+        };
+        let separator_top = if icon_index_for_row < data.icons.len() {
+            overlay_icon_cell_y(data, icon_index_for_row, &grid_layout) as f32
+        } else {
+            (grid_layout.padding + sep_row * grid_layout.cell_h) as f32
+        };
         let separator_bottom = separator_top + grid_layout.cell_h as f32;
-        let separator_w = scale_for_dpi(2, dpi) as f32;
+        let separator_w = scale_for_dpi(1, dpi) as f32;
 
         let insert_brush =
             unsafe { target.CreateSolidColorBrush(&d2d_color(220, 220, 220, 220), None) };

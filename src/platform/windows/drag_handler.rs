@@ -131,6 +131,9 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
     let item_idx = data.drag_item_index;
     data.drag_active = false;
     data.drag_item_index = -1;
+    // 保存拖拽覆盖可视化状态（在清除前），供 handle_same_box_drop 使用
+    let saved_insert_col = data.drag_over_insert_col;
+    let saved_insert_row = data.drag_over_insert_row;
     // 清除拖拽覆盖可视化状态
     data.drag_over_item = -1;
     data.drag_over_insert_col = -1;
@@ -156,7 +159,14 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
 
     if target_hwnd == hwnd {
         // 同框内拖拽 → grid snap + swap
-        handle_same_box_drop(hwnd, item_idx as usize, pt.x, pt.y);
+        handle_same_box_drop(
+            hwnd,
+            item_idx as usize,
+            pt.x,
+            pt.y,
+            saved_insert_col,
+            saved_insert_row,
+        );
         return true;
     }
 
@@ -179,7 +189,14 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
 }
 
 /// 同框内拖拽：grid snap + swap
-fn handle_same_box_drop(hwnd: HWND, dragged_idx: usize, screen_x: i32, screen_y: i32) {
+fn handle_same_box_drop(
+    hwnd: HWND,
+    dragged_idx: usize,
+    screen_x: i32,
+    screen_y: i32,
+    saved_insert_col: i32,
+    saved_insert_row: i32,
+) {
     let data = match unsafe { get_data(hwnd) } {
         Some(d) => d,
         None => return,
@@ -245,9 +262,9 @@ fn handle_same_box_drop(hwnd: HWND, dragged_idx: usize, screen_x: i32, screen_y:
         }
     }
 
-    // Save drag-over state before clearing (end_drag will clear it)
-    let insert_col = data.drag_over_insert_col;
-    let insert_row = data.drag_over_insert_row;
+    // Use the saved insert state from end_drag (already cleared in data)
+    let insert_col = saved_insert_col;
+    let insert_row = saved_insert_row;
     let is_insert_mode = insert_col >= 0 && insert_row >= 0;
 
     let cols = layout.cols;

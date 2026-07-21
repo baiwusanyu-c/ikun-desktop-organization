@@ -855,7 +855,7 @@ pub fn render_icon_grid(
         let separator_top =
             (grid_top + drag_over_insert_row * cell_h) as f32 - scroll_offset as f32;
         let separator_bottom = separator_top + cell_h as f32;
-        let separator_w = scale_for_dpi(2, dpi) as f32;
+        let separator_w = scale_for_dpi(1, dpi) as f32;
 
         let insert_brush =
             unsafe { target.CreateSolidColorBrush(&d2d_color(220, 220, 220, 220), None) };
