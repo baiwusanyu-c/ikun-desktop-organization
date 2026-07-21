@@ -1,4 +1,4 @@
-﻿//! Direct2D/DirectWrite 渲染代码
+//! Direct2D/DirectWrite 渲染代码
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -1366,4 +1366,3 @@ pub fn render_drag_overlay_bitmap(
         dib
     }
 }
-

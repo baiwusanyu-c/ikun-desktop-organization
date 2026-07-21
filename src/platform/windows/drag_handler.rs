@@ -282,7 +282,7 @@ fn handle_same_box_drop(
                         continue;
                     }
                     let item_lin = item.grid_row * cols + item.grid_col;
-                    if item_lin > drag_lin && item_lin <= insert_lin {
+                    if item_lin > drag_lin && item_lin < insert_lin {
                         let new_lin = item_lin - 1;
                         item.grid_col = new_lin % cols;
                         item.grid_row = new_lin / cols;
@@ -967,6 +967,83 @@ fn compute_drop_grid_position(
     }
 }
 
+// =============================================================================
+// Pure logic functions (extracted for unit testing)
+// =============================================================================
+
+/// Compute drag-over visual state from cursor position ratio.
+///
+/// Returns `(drag_over_item, insert_col, insert_row)`:
+/// - Insert mode: `(-1, col, row)` - show vertical separator
+/// - Replace mode: `(item_index, -1, -1)` - show highlight background
+fn compute_drag_over_state(
+    ratio_x: f32,
+    col: i32,
+    row: i32,
+    max_cols: i32,
+    item_at_cell: Option<i32>,
+    insert_threshold: f32,
+) -> (i32, i32, i32) {
+    if ratio_x < insert_threshold {
+        (-1, col, row)
+    } else if ratio_x > 1.0 - insert_threshold {
+        if col + 1 < max_cols {
+            (-1, col + 1, row)
+        } else {
+            (item_at_cell.unwrap_or(-1), -1, -1)
+        }
+    } else {
+        (item_at_cell.unwrap_or(-1), -1, -1)
+    }
+}
+
+/// Apply shift-insert repositioning on grid item positions.
+///
+/// Moves the dragged item to the target linear position and shifts
+/// other items in the affected range by 1.
+fn apply_shift_insert(
+    positions: &[(i32, i32)],
+    dragged_idx: usize,
+    insert_lin: i32,
+    cols: i32,
+) -> Vec<(i32, i32)> {
+    let drag_lin = positions[dragged_idx].1 * cols + positions[dragged_idx].0;
+    let mut result: Vec<(i32, i32)> = positions.to_vec();
+
+    if drag_lin == insert_lin {
+        return result;
+    }
+
+    if drag_lin < insert_lin {
+        for (i, pos) in result.iter_mut().enumerate() {
+            if i == dragged_idx {
+                continue;
+            }
+            let item_lin = pos.1 * cols + pos.0;
+            if item_lin > drag_lin && item_lin < insert_lin {
+                let new_lin = item_lin - 1;
+                *pos = (new_lin % cols, new_lin / cols);
+            }
+        }
+        let target_lin = insert_lin - 1;
+        result[dragged_idx] = (target_lin % cols, target_lin / cols);
+    } else {
+        for (i, pos) in result.iter_mut().enumerate() {
+            if i == dragged_idx {
+                continue;
+            }
+            let item_lin = pos.1 * cols + pos.0;
+            if item_lin >= insert_lin && item_lin < drag_lin {
+                let new_lin = item_lin + 1;
+                *pos = (new_lin % cols, new_lin / cols);
+            }
+        }
+        result[dragged_idx] = (insert_lin % cols, insert_lin / cols);
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1155,4 +1232,148 @@ fn test_compute_drop_grid_position_negative_coordinates() {
 
     assert_eq!(col, 0);
     assert_eq!(row, 0);
+}
+
+#[test]
+fn test_drag_over_left_zone_insert() {
+    let (oi, ic, ir) = compute_drag_over_state(0.1, 2, 0, 4, Some(5), 0.30);
+    assert_eq!(oi, -1);
+    assert_eq!(ic, 2);
+    assert_eq!(ir, 0);
+}
+
+#[test]
+fn test_drag_over_right_zone_insert() {
+    let (oi, ic, ir) = compute_drag_over_state(0.85, 1, 0, 4, Some(3), 0.30);
+    assert_eq!(oi, -1);
+    assert_eq!(ic, 2); // col+1
+    assert_eq!(ir, 0);
+}
+
+#[test]
+fn test_drag_over_right_zone_last_col_replace() {
+    let (oi, ic, ir) = compute_drag_over_state(0.85, 3, 0, 4, Some(7), 0.30);
+    assert_eq!(oi, 7);
+    assert_eq!(ic, -1);
+    assert_eq!(ir, -1);
+}
+
+#[test]
+fn test_drag_over_center_replace_with_item() {
+    let (oi, ic, ir) = compute_drag_over_state(0.5, 1, 0, 4, Some(3), 0.30);
+    assert_eq!(oi, 3);
+    assert_eq!(ic, -1);
+    assert_eq!(ir, -1);
+}
+
+#[test]
+fn test_drag_over_center_empty_cell() {
+    let (oi, ic, ir) = compute_drag_over_state(0.5, 2, 1, 4, None, 0.30);
+    assert_eq!(oi, -1);
+    assert_eq!(ic, -1);
+    assert_eq!(ir, -1);
+}
+
+#[test]
+fn test_drag_over_exact_threshold_boundary() {
+    let (oi, _, _) = compute_drag_over_state(0.30, 1, 0, 4, Some(3), 0.30);
+    assert_eq!(oi, 3, "exact 0.30 -> center (not < 0.30)");
+    let (oi, _, _) = compute_drag_over_state(0.70, 1, 0, 4, Some(3), 0.30);
+    assert_eq!(oi, 3, "exact 0.70 -> center (not > 0.70)");
+}
+
+#[test]
+fn test_drag_over_just_below_left_threshold() {
+    let (oi, ic, _) = compute_drag_over_state(0.299, 1, 0, 4, Some(3), 0.30);
+    assert_eq!(oi, -1);
+    assert_eq!(ic, 1);
+}
+
+#[test]
+fn test_drag_over_just_above_right_threshold() {
+    let (oi, ic, _) = compute_drag_over_state(0.701, 1, 0, 4, Some(3), 0.30);
+    assert_eq!(oi, -1);
+    assert_eq!(ic, 2);
+}
+
+// ===== apply_shift_insert tests =====
+
+fn shift_pos(col: i32, row: i32) -> (i32, i32) {
+    (col, row)
+}
+
+#[test]
+fn test_shift_drag_right_between_b_and_c() {
+    // A(0,0) B(1,0) C(2,0) D(3,0), drag A to insert_lin=2
+    // Expected: B A C D
+    let p = vec![
+        shift_pos(0, 0),
+        shift_pos(1, 0),
+        shift_pos(2, 0),
+        shift_pos(3, 0),
+    ];
+    let r = apply_shift_insert(&p, 0, 2, 4);
+    assert_eq!(r[0], shift_pos(1, 0)); // A -> lin 1
+    assert_eq!(r[1], shift_pos(0, 0)); // B -> lin 0
+    assert_eq!(r[2], shift_pos(2, 0)); // C stays
+    assert_eq!(r[3], shift_pos(3, 0)); // D stays
+}
+
+#[test]
+fn test_shift_drag_left_between_a_and_b() {
+    // A(0,0) B(1,0) C(2,0) D(3,0), drag D to insert_lin=1
+    // Expected: A D B C
+    let p = vec![
+        shift_pos(0, 0),
+        shift_pos(1, 0),
+        shift_pos(2, 0),
+        shift_pos(3, 0),
+    ];
+    let r = apply_shift_insert(&p, 3, 1, 4);
+    assert_eq!(r[0], shift_pos(0, 0)); // A stays
+    assert_eq!(r[1], shift_pos(2, 0)); // B -> lin 2
+    assert_eq!(r[2], shift_pos(3, 0)); // C -> lin 3
+    assert_eq!(r[3], shift_pos(1, 0)); // D -> lin 1
+}
+
+#[test]
+fn test_shift_cross_row() {
+    // 3 cols: A(0,0) B(1,0) C(2,0) / D(0,1) E(1,1)
+    // Drag A to insert_lin=4
+    let p = vec![
+        shift_pos(0, 0),
+        shift_pos(1, 0),
+        shift_pos(2, 0),
+        shift_pos(0, 1),
+        shift_pos(1, 1),
+    ];
+    let r = apply_shift_insert(&p, 0, 4, 3);
+    assert_eq!(r[0], shift_pos(0, 1)); // A -> lin 3
+    assert_eq!(r[1], shift_pos(0, 0)); // B -> lin 0
+    assert_eq!(r[2], shift_pos(1, 0)); // C -> lin 1
+    assert_eq!(r[3], shift_pos(2, 0)); // D -> lin 2
+    assert_eq!(r[4], shift_pos(1, 1)); // E stays
+}
+
+#[test]
+fn test_shift_same_position_noop() {
+    let p = vec![shift_pos(0, 0), shift_pos(1, 0), shift_pos(2, 0)];
+    let r = apply_shift_insert(&p, 1, 1, 3);
+    assert_eq!(r, p);
+}
+
+#[test]
+fn test_shift_single_item() {
+    let p = vec![shift_pos(2, 1)];
+    let r = apply_shift_insert(&p, 0, 0, 3);
+    assert_eq!(r[0], shift_pos(0, 0));
+}
+
+#[test]
+fn test_shift_two_items_right() {
+    // A(0,0) B(1,0), drag A to insert_lin=2
+    let p = vec![shift_pos(0, 0), shift_pos(1, 0)];
+    let r = apply_shift_insert(&p, 0, 2, 2);
+    assert_eq!(r[0], shift_pos(1, 0)); // A -> lin 1
+    assert_eq!(r[1], shift_pos(0, 0)); // B -> lin 0
 }

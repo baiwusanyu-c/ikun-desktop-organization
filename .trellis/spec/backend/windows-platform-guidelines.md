@@ -723,6 +723,70 @@ Before implementing drag-and-drop on layered windows:
 
 ---
 
+
+## Drag Visual Feedback
+
+### Drag-Over State Computation
+
+The drag-over visual feedback uses a pure function `compute_drag_over_state` to determine whether to show an insert separator or a replace highlight:
+
+```rust
+// Pure function - easily testable without HWND
+fn compute_drag_over_state(
+    ratio_x: f32,           // cursor X position within cell (0.0~1.0)
+    col: i32, row: i32,     // grid cell coordinates
+    max_cols: i32,          // grid column count
+    item_at_cell: Option<i32>, // item index at target cell
+    insert_threshold: f32,  // zone threshold (typically 0.30)
+) -> (i32, i32, i32)       // (drag_over_item, insert_col, insert_row)
+```
+
+**Zone logic:**
+- `ratio_x < threshold` → Insert mode (separator at left edge)
+- `ratio_x > 1.0 - threshold` → Insert mode (separator at right edge)
+- Center zone → Replace mode (highlight background)
+
+### Shift-Insert Algorithm
+
+When dropping in insert mode, items are shifted to make room:
+
+```rust
+// Pure function - shifts grid positions for insert
+fn apply_shift_insert(
+    positions: &[(i32, i32)], // current (col, row) for all items
+    dragged_idx: usize,       // index of dragged item
+    insert_lin: i32,          // target linear position
+    cols: i32,                // grid column count
+) -> Vec<(i32, i32)>         // updated positions
+```
+
+**Drag right** (drag_lin < insert_lin): shift items in `(drag_lin, insert_lin)` left by 1, place dragged at `insert_lin - 1`.
+
+**Drag left** (drag_lin > insert_lin): shift items in `[insert_lin, drag_lin)` right by 1, place dragged at `insert_lin`.
+
+### Cross-Box Visual Feedback
+
+Cross-box drag-over uses `WM_USER_DRAG_OVER_UPDATE` message with cursor screen coordinates packed in LPARAM:
+
+```rust
+let lparam = ((screen_y as isize) << 16) | ((screen_x as isize) & 0xFFFF);
+PostMessageW(target_hwnd, WM_USER_DRAG_OVER_UPDATE, 0, lparam);
+```
+
+### State Lifecycle
+
+1. **Timer poll** (8ms): detect cursor position, update `drag_over_*` fields, trigger re-render
+2. **Drop**: save `drag_over_insert_col/row` BEFORE clearing, pass to drop handler
+3. **Drag leave**: clear all `drag_over_*` fields, re-render
+
+### Checklist
+
+- [ ] Use pure functions for state computation (testable without HWND)
+- [ ] Save insert state before clearing in end_drag
+- [ ] Use `WM_USER_DRAG_OVER_UPDATE` for cross-box visual feedback
+- [ ] Clear drag-over state in WM_USER_DRAG_LEAVE handler
+- [ ] Separator color: pure white `(255, 255, 255, 255)`, width 1px
+
 ## Related Files
 
 - `src/platform/windows/drag_handler.rs` - Drag state management

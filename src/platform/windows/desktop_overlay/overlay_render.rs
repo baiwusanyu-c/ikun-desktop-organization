@@ -1,4 +1,4 @@
-﻿//! 桌面覆盖窗口渲染
+//! 桌面覆盖窗口渲染
 //!
 //! 阶段 2 在透明覆盖窗口上绘制未进入分类框的桌面图标。渲染管线与分类框一致：
 //! Direct2D/DirectWrite → 32-bit DIB → `UpdateLayeredWindow`。
@@ -613,4 +613,3 @@ fn d2d_rect(l: f32, t: f32, r: f32, b: f32) -> D2D_RECT_F {
         bottom: b,
     }
 }
-
