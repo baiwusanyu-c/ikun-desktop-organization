@@ -793,3 +793,72 @@ PostMessageW(target_hwnd, WM_USER_DRAG_OVER_UPDATE, 0, lparam);
 - `src/platform/windows/drag_image.rs` - Drag ghost window
 - `src/platform/windows/desktop_overlay/overlay_wnd_proc.rs` - Overlay drag handling
 - `src/platform/windows/desktop_overlay/overlay_window.rs` - Overlay state management
+
+
+## Icon Position Snapshot and Restore
+
+### Problem
+
+When the application exits, it restores hidden icons to the desktop via `restore_all_hidden_icons()`. 
+Windows SysListView32 automatically arranges these icons, causing them to appear at incorrect positions 
+instead of their original desktop locations.
+
+### Solution
+
+The application implements a snapshot/restore mechanism:
+
+1. **Snapshot at startup**: After restoring hidden icons but before hiding SysListView32, 
+   `AppRuntime::snapshot_desktop_positions()` captures all desktop icon positions via 
+   `icon_manager::snapshot_all_desktop_positions()`.
+
+2. **Restore at exit**: After restoring hidden icons during cleanup, 
+   `AppRuntime::restore_desktop_positions()` uses `icon_manager::set_icon_position_by_name()` 
+   to move icons back to their snapshot positions.
+
+### Implementation Details
+
+- **Snapshot storage**: Positions are stored in `AppRuntime.desktop_positions_snapshot` 
+  (runtime-only, not persisted to config file).
+- **Coordinate system**: Uses SysListView32 client coordinates (via `LVM_GETITEMPOSITION`).
+- **Timing**: 500ms delay after `restore_all_hidden_icons()` to allow Windows to complete 
+  icon restoration before attempting position correction.
+- **Auto-arrange handling**: `set_icon_position_by_name()` temporarily disables desktop 
+  auto-arrange, sets positions, then restores the original auto-arrange state.
+
+### Code Flow
+
+```
+Startup:
+  restore_layout()
+    -> restore_all_hidden_icons()  // Restore icons from vault
+    -> snapshot_desktop_positions() // Capture positions before hiding
+    -> ensure_native_icons_hidden() // Hide SysListView32
+    -> create overlay and boxes
+
+Exit:
+  cleanup()
+    -> save config
+    -> destroy boxes and overlay
+    -> restore_native_icons()      // Show SysListView32
+    -> restore_all_hidden_icons()  // Restore icons from vault
+    -> sleep(500ms)                // Wait for Windows
+    -> restore_desktop_positions() // Move icons to snapshot positions
+```
+
+### Related Functions
+
+| Function | Location | Purpose |
+|----------|----------|---------|
+| `snapshot_all_desktop_positions()` | `icon_manager.rs` | Capture all icon positions from SysListView32 |
+| `set_icon_position_by_name()` | `icon_manager.rs` | Set icon position by display name |
+| `AppRuntime::snapshot_desktop_positions()` | `app_runtime.rs` | Store snapshot in runtime |
+| `AppRuntime::restore_desktop_positions()` | `app_runtime.rs` | Restore from snapshot |
+
+### Checklist
+
+- [ ] Snapshot happens AFTER restoring hidden icons (so vault icons are visible)
+- [ ] Snapshot happens BEFORE hiding SysListView32 (so positions are readable)
+- [ ] Restore happens AFTER restoring hidden icons during cleanup
+- [ ] Sufficient delay (500ms) between restore and position correction
+- [ ] Auto-arrange is temporarily disabled during position setting
+- [ ] Positions are stored in runtime memory, not config file

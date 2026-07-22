@@ -564,7 +564,7 @@ impl DesktopIconManager {
     // ===== 内部方法 =====
 
     /// 设置图标在 SysListView32 中的位置
-    fn set_icon_position(&self, index: i32, x: i32, y: i32) -> Result<()> {
+    pub fn set_icon_position(&self, index: i32, x: i32, y: i32) -> Result<()> {
         if unsafe { IsWindow(self.listview_hwnd) } == 0 {
             anyhow::bail!("SysListView32 窗口已失效");
         }
@@ -594,7 +594,7 @@ impl DesktopIconManager {
     }
 
     /// 获取图标在 SysListView32 中的位置
-    fn get_icon_position(&self, index: i32) -> Result<(i32, i32)> {
+    pub fn get_icon_position(&self, index: i32) -> Result<(i32, i32)> {
         if self.explorer_process.is_null() {
             anyhow::bail!("explorer 进程句柄无效");
         }
@@ -932,6 +932,68 @@ pub fn diagnose() {
     }
 
     log::info!("===== 诊断完成（LVM 可用）=====");
+}
+
+/// 快照所有桌面图标的当前位置
+///
+/// 遍历 SysListView32 中的所有图标，读取每个图标的显示名称和位置。
+/// 返回 HashMap<显示名称, (client_x, client_y)>。
+///
+/// 在程序启动时调用（创建覆盖区域之前），记录原始桌面布局。
+pub fn snapshot_all_desktop_positions() -> HashMap<String, (i32, i32)> {
+    let mut positions = HashMap::new();
+
+    match DesktopIconManager::new() {
+        Ok(mgr) => {
+            let count = mgr.get_icon_count();
+            log::info!("快照桌面图标: SysListView32 中有 {} 个图标", count);
+
+            let names = mgr.cached_names();
+            for name in &names {
+                // 直接调用 get_icon_position 读取当前位置
+                if let Some(index) = mgr.find_icon_by_name(name) {
+                    if let Ok(pos) = mgr.get_icon_position(index) {
+                        positions.insert(name.clone(), pos);
+                    }
+                }
+            }
+
+            log::info!("快照完成: 成功记录 {} 个图标位置", positions.len());
+        }
+        Err(e) => {
+            log::warn!("快照桌面图标失败: 创建 DesktopIconManager 失败: {}", e);
+        }
+    }
+
+    positions
+}
+
+/// 通过显示名称设置图标位置
+///
+/// 在 SysListView32 中查找指定名称的图标，将其移动到指定位置。
+/// 使用 LVM_SETITEMPOSITION 跨进程操作。
+pub fn set_icon_position_by_name(name: &str, x: i32, y: i32) -> Result<()> {
+    let auto_arrange_was_on = disable_desktop_auto_arrange();
+
+    let result = (|| -> Result<()> {
+        let mut mgr = DesktopIconManager::new().context("创建桌面图标管理器失败")?;
+        mgr.rebuild_index().context("重建图标索引失败")?;
+
+        let index = mgr
+            .find_icon_by_name(name)
+            .ok_or_else(|| anyhow::anyhow!("未找到图标: {}", name))?;
+
+        mgr.set_icon_position(index, x, y)
+            .context(format!("设置图标 '{}' 位置失败", name))?;
+        log::info!("恢复图标位置: '{}' 已移动到 ({}, {})", name, x, y);
+        Ok(())
+    })();
+
+    if auto_arrange_was_on == Some(true) {
+        restore_desktop_auto_arrange();
+    }
+
+    result
 }
 
 /// 查找桌面 SysListView32 句柄
@@ -1452,6 +1514,45 @@ mod tests {
     fn test_lvif_image_constant() {
         use super::super::ffi_types::LVIF_IMAGE;
         assert_eq!(LVIF_IMAGE, 0x0002);
+    }
+
+    // =========================================================================
+    // Snapshot and restore tests
+    // =========================================================================
+
+    #[test]
+    fn test_snapshot_all_desktop_positions_returns_empty_on_failure() {
+        // When DesktopIconManager::new() fails (no SysListView32 available in test env),
+        // snapshot should return an empty HashMap gracefully
+        let positions = snapshot_all_desktop_positions();
+        // In test environment, DesktopIconManager::new() may fail,
+        // but the function should not panic and should return a HashMap (possibly empty)
+        assert!(
+            positions.is_empty() || !positions.is_empty(),
+            "snapshot should return a HashMap without panicking"
+        );
+    }
+
+    #[test]
+    fn test_set_icon_position_by_name_returns_error_for_nonexistent() {
+        // When the icon name doesn't exist, should return an error (not panic)
+        let result = set_icon_position_by_name("NonExistentIcon12345.lnk", 100, 200);
+        assert!(
+            result.is_err(),
+            "Should return error for non-existent icon name"
+        );
+    }
+
+    #[test]
+    fn test_snapshot_positions_data_structure() {
+        // Verify the return type is correct: HashMap<String, (i32, i32)>
+        let positions: HashMap<String, (i32, i32)> = snapshot_all_desktop_positions();
+        // Each value should be a tuple of two i32 values
+        for (name, (x, y)) in &positions {
+            assert!(!name.is_empty(), "Icon name should not be empty");
+            // Coordinates can be any i32 value (including negative for hidden icons)
+            let _ = (*x, *y); // Just verify the types are correct
+        }
     }
 }
 

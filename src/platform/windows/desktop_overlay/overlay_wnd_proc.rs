@@ -68,13 +68,13 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             0
         }
         WM_LBUTTONUP => {
-            log::info!("[DIAG] overlay WM_LBUTTONUP received");
+            log::info!("overlay WM_LBUTTONUP received");
             handle_lbutton_up(hwnd);
             0
         }
         // ===== 拖拽轮询定时器（替代 SetCapture）=====
         WM_TIMER => {
-            log::debug!("[DIAG] overlay WM_TIMER received: wparam={:#X}", wparam);
+            log::debug!("overlay WM_TIMER received: wparam={:#X}", wparam);
             if wparam == TIMER_ID_OVERLAY_DRAG {
                 handle_overlay_drag_timer(hwnd);
             }
@@ -339,13 +339,13 @@ fn forward_lbutton_to_desktop(screen_x: i32, screen_y: i32) {
 /// 检测鼠标左键状态，如果已释放则结束拖拽。
 /// 这是 WS_EX_LAYERED 窗口上拖拽的标准做法，避免 SetCapture 的不稳定性。
 fn handle_overlay_drag_timer(hwnd: HWND) {
-    log::debug!("[DIAG] handle_overlay_drag_timer called");
+    log::debug!("handle_overlay_drag_timer called");
     let is_dragging = match get_overlay_data(hwnd) {
         Some(data) => data.drag_active,
         None => return,
     };
     if !is_dragging {
-        log::warn!("[DIAG] handle_overlay_drag_timer: drag_active=false, 清理残影");
+        log::warn!("handle_overlay_drag_timer: drag_active=false, 清理残影");
         unsafe {
             KillTimer(hwnd, TIMER_ID_OVERLAY_DRAG);
             crate::platform::windows::drag_image::destroy_drag_overlay();
@@ -386,7 +386,7 @@ fn handle_overlay_drag_timer(hwnd: HWND) {
     // 检测鼠标左键是否仍然按下
     let lbutton_down = unsafe { GetAsyncKeyState(VK_LBUTTON) } & 0x8000u16 as i16 != 0;
     if !lbutton_down {
-        log::info!("[DIAG] overlay drag timer: 鼠标已释放，结束拖拽");
+        log::info!("overlay drag timer: 鼠标已释放，结束拖拽");
         end_overlay_drag(hwnd);
     }
 }
@@ -478,10 +478,7 @@ fn handle_lbutton_up(hwnd: HWND) {
     let was_drag_active = get_overlay_data(hwnd)
         .map(|data| data.drag_active)
         .unwrap_or(false);
-    log::info!(
-        "[DIAG] handle_lbutton_up: was_drag_active={}",
-        was_drag_active
-    );
+    log::info!("handle_lbutton_up: was_drag_active={}", was_drag_active);
     if was_drag_active {
         end_overlay_drag(hwnd);
         return;
@@ -540,7 +537,7 @@ fn handle_right_click(hwnd: HWND, x: i32, y: i32) {
 }
 
 fn start_overlay_drag(hwnd: HWND) {
-    log::info!("[DIAG] start_overlay_drag called");
+    log::info!("start_overlay_drag called");
     let (icon_handle, icon_size, cell_w, display_name) = match get_overlay_data(hwnd) {
         Some(data) => {
             let item_idx = data.selected_item;
@@ -576,14 +573,14 @@ fn start_overlay_drag(hwnd: HWND) {
         crate::platform::windows::drag_image::update_drag_overlay();
         // WS_EX_LAYERED 窗口上 SetCapture 不稳定，使用 Timer 轮询检测鼠标释放
         log::info!(
-            "[DIAG] start_overlay_drag: before SetTimer, drag_active={}",
+            "start_overlay_drag: before SetTimer, drag_active={}",
             get_overlay_data(hwnd)
                 .map(|d| d.drag_active)
                 .unwrap_or(false)
         );
         SetTimer(hwnd, TIMER_ID_OVERLAY_DRAG, 8, std::ptr::null_mut());
         log::info!(
-            "[DIAG] start_overlay_drag: after SetTimer, drag_active={}",
+            "start_overlay_drag: after SetTimer, drag_active={}",
             get_overlay_data(hwnd)
                 .map(|d| d.drag_active)
                 .unwrap_or(false)
@@ -592,7 +589,7 @@ fn start_overlay_drag(hwnd: HWND) {
 }
 
 fn end_overlay_drag(hwnd: HWND) {
-    log::info!("[DIAG] end_overlay_drag called");
+    log::info!("end_overlay_drag called");
     let item_idx = match get_overlay_data(hwnd) {
         Some(data) => {
             let item_idx = data.drag_item_index;

@@ -326,7 +326,7 @@ pub(crate) fn refresh_desktop_overlay_icons(hwnd: HWND) {
     // 拖拽期间跳过刷新：刷新会重置 drag_active 等状态，导致残影卡死
     if let Some(data) = get_overlay_data(hwnd) {
         if data.drag_active || data.drag_pending {
-            log::info!("[DIAG] refresh_desktop_overlay_icons: 拖拽中，跳过刷新");
+            log::info!("refresh_desktop_overlay_icons: 拖拽中，跳过刷新");
             return;
         }
     }
@@ -594,6 +594,7 @@ fn overlay_icon_position(config: &OverlayConfig, path: &str) -> Option<[f32; 2]>
 }
 
 pub(crate) fn save_overlay_icon_positions() {
+    log::info!("save_overlay_icon_positions: 开始保存覆盖窗口图标位置");
     let mut positions = std::collections::HashMap::new();
     let windows = match OVERLAY_WINDOWS.lock() {
         Ok(windows) => windows.iter().map(|window| window.hwnd).collect::<Vec<_>>(),
@@ -622,6 +623,22 @@ pub(crate) fn save_overlay_icon_positions() {
         log::warn!("保存覆盖窗口位置前加载配置失败，使用默认配置: {}", e);
         AppConfig::default()
     });
+    log::info!(
+        "save_overlay_icon_positions: 当前覆盖窗口图标数={}, 保存位置数={}, 原有位置数={}",
+        positions.len() / 2, // 除以2因为每个图标有两个key（原路径和normalized）
+        positions.len(),
+        config.overlay.icon_positions.len()
+    );
+    // 检查是否有位置丢失
+    for (path, pos) in &config.overlay.icon_positions {
+        if !positions.contains_key(path) {
+            log::warn!(
+                "save_overlay_icon_positions: 位置丢失! path={}, pos={:?}",
+                path,
+                pos
+            );
+        }
+    }
     config.overlay.icon_positions = positions;
     config.last_modified = chrono::Utc::now();
     if let Err(e) = config.save() {

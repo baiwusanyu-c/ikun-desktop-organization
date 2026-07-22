@@ -108,7 +108,7 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
         None => return false,
     };
 
-    log::info!("[DIAG] end_drag called: drag_active={}", data.drag_active);
+    log::info!("end_drag called: drag_active={}", data.drag_active);
 
     if !data.drag_active {
         return false;
@@ -184,7 +184,7 @@ pub(crate) fn handle_grid_drag_timer(hwnd: HWND) {
         None => return,
     };
     if !data.drag_active {
-        log::warn!("[DIAG] handle_grid_drag_timer: drag_active=false, 清理残影");
+        log::warn!("handle_grid_drag_timer: drag_active=false, 清理残影");
         unsafe {
             KillTimer(hwnd, TIMER_ID_GRID_DRAG);
             super::drag_image::destroy_drag_overlay();
@@ -218,7 +218,7 @@ pub(crate) fn handle_grid_drag_timer(hwnd: HWND) {
     // 检测鼠标左键是否仍然按下
     let lbutton_down = unsafe { GetAsyncKeyState(VK_LBUTTON) } & 0x8000u16 as i16 != 0;
     if !lbutton_down {
-        log::info!("[DIAG] grid drag timer: 鼠标已释放，结束拖拽");
+        log::info!("grid drag timer: 鼠标已释放，结束拖拽");
         end_drag(hwnd);
     }
 }

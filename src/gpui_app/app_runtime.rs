@@ -185,6 +185,10 @@ pub struct AppRuntime {
     pub edit_dialog_needs_open: bool,
     /// 编辑对话框的 config_id
     pub edit_dialog_config_id: Option<uuid::Uuid>,
+
+    // ---- 桌面图标位置快照 ----
+    /// 启动时记录的桌面图标位置：名称 → (client_x, client_y)
+    desktop_positions_snapshot: std::collections::HashMap<String, (i32, i32)>,
     /// 编辑对话框的初始名称
     pub edit_dialog_initial_name: String,
 }
@@ -206,6 +210,7 @@ impl AppRuntime {
             edit_dialog_needs_open: false,
             edit_dialog_config_id: None,
             edit_dialog_initial_name: String::new(),
+            desktop_positions_snapshot: std::collections::HashMap::new(),
         }
     }
 
@@ -589,6 +594,22 @@ impl AppRuntime {
         }
     }
 
+    /// 快照当前桌面图标位置
+    ///
+    /// 在程序启动时调用，记录所有桌面图标的当前位置，
+    /// 以便在退出时恢复到这些位置。
+    fn snapshot_desktop_positions(&mut self) {
+        log::info!("开始快照桌面图标位置");
+
+        self.desktop_positions_snapshot =
+            crate::platform::windows::icon_manager::snapshot_all_desktop_positions();
+
+        log::info!(
+            "快照完成，记录了 {} 个图标位置",
+            self.desktop_positions_snapshot.len()
+        );
+    }
+
     fn restore_layout(&mut self) {
         if !self.ctx.config.general.restore_layout_on_start {
             log::info!("启动恢复布局已禁用");
@@ -596,6 +617,11 @@ impl AppRuntime {
         }
 
         restore_all_hidden_icons();
+
+        // 在隐藏 SysListView32 之前，快照所有桌面图标位置
+        // 必须在 restore_all_hidden_icons 之后，确保仓库图标已还原到桌面
+        self.snapshot_desktop_positions();
+
         self.ensure_native_icons_hidden();
         if let Err(e) = create_desktop_overlay() {
             log::warn!("创建桌面覆盖窗口失败: {}", e);
@@ -717,9 +743,18 @@ impl AppRuntime {
     }
 
     fn merge_latest_overlay_config(&mut self) {
+        log::info!("开始合并覆盖窗口配置");
         match AppConfig::load() {
             Ok(config) => {
+                log::info!(
+                    "从磁盘加载的 icon_positions 数={}",
+                    config.overlay.icon_positions.len()
+                );
                 self.ctx.config.overlay = config.overlay;
+                log::info!(
+                    "合并后 icon_positions 数={}",
+                    self.ctx.config.overlay.icon_positions.len()
+                );
             }
             Err(e) => {
                 log::warn!("保存配置前读取覆盖窗口配置失败: {}", e);
@@ -741,13 +776,51 @@ impl AppRuntime {
         self.quit_requested
     }
 
+    /// 恢复桌面图标到快照的位置
+    ///
+    /// 在程序退出时调用，将所有图标移回到启动时记录的位置。
+    fn restore_desktop_positions(&self) {
+        log::info!("开始恢复桌面图标位置");
+
+        let positions = &self.desktop_positions_snapshot;
+
+        if positions.is_empty() {
+            log::info!("没有快照位置，跳过恢复");
+            return;
+        }
+
+        let mut success_count = 0;
+        for (name, &(x, y)) in positions {
+            // 尝试通过名称或路径设置位置
+            if let Err(e) =
+                crate::platform::windows::icon_manager::set_icon_position_by_name(name, x, y)
+            {
+                log::debug!("恢复图标位置失败: '{}': {}", name, e);
+            } else {
+                success_count += 1;
+            }
+        }
+
+        log::info!(
+            "位置恢复完成，成功设置 {}/{} 个图标",
+            success_count,
+            positions.len()
+        );
+    }
+
     fn cleanup(&mut self) {
-        log::info!("执行清理");
+        log::info!("开始执行清理");
 
         let layout = collect_grid_layout();
+        log::info!("收集到 {} 个分类框", layout.len());
         if !layout.is_empty() {
             self.ctx.config.layout.boxes = layout;
+            log::info!("调用 merge_latest_overlay_config");
             self.merge_latest_overlay_config();
+            log::info!(
+                "merge 完成, overlay.icon_positions 数={}",
+                self.ctx.config.overlay.icon_positions.len()
+            );
             if let Err(e) = self.ctx.save_config() {
                 log::warn!("退出前保存布局失败: {}", e);
             }
@@ -765,6 +838,12 @@ impl AppRuntime {
             self.ctx.state.icons_hidden = false;
         }
         restore_all_hidden_icons();
+
+        // 等待 Windows 处理图标还原
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        // 恢复图标到快照的位置
+        self.restore_desktop_positions();
     }
 
     // =================================================================

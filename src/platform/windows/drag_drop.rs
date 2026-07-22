@@ -158,6 +158,10 @@ pub(crate) fn handle_same_box_drop(
 
 /// 框→框移动：从源框移除项，添加到目标框
 pub(crate) fn handle_box_to_box_move(source_hwnd: HWND, target_hwnd: HWND, item_index: usize) {
+    log::info!(
+        "handle_box_to_box_move: 开始框→框移动, item_index={}",
+        item_index
+    );
     let data = match unsafe { get_data(source_hwnd) } {
         Some(d) => d,
         None => return,
@@ -198,7 +202,11 @@ pub(crate) fn handle_box_to_box_move(source_hwnd: HWND, target_hwnd: HWND, item_
     };
     if item_index < data.items.len() {
         let removed = data.items.remove(item_index);
-        log::info!("框→框移动: '{}' 已从源框移除", removed.display_name);
+        log::info!(
+            "handle_box_to_box_move: '{}' 已从源框移除, file_path={}",
+            removed.display_name,
+            removed.file_path
+        );
         if data.selected_item >= data.items.len() as i32 {
             data.selected_item = -1;
         }
@@ -215,6 +223,7 @@ pub(crate) fn handle_box_to_desktop(
     drop_y: i32,
     target_is_overlay: bool,
 ) {
+    log::info!("handle_box_to_desktop: 开始框→桌面/覆盖, item_index={}, drop=({}, {}), target_is_overlay={}", item_index, drop_x, drop_y, target_is_overlay);
     let data = match unsafe { get_data(hwnd) } {
         Some(d) => d,
         None => return,
@@ -353,9 +362,17 @@ pub(crate) fn handle_drag_leave(hwnd: HWND) {
 
 /// 处理 WM_USER_DRAG_ITEM_ADDED（框→框移动 或 桌面→框 时，目标框添加项）
 pub(crate) fn handle_drag_item_added(hwnd: HWND) {
+    log::info!("handle_drag_item_added: 目标框接收到项");
     if let Some((file_path, display_name, drop_x, drop_y, insert_col, insert_row)) =
         super::drop_target::take_pending_add_item()
     {
+        log::info!(
+            "handle_drag_item_added: file_path={}, display_name={}, drop=({}, {})",
+            file_path,
+            display_name,
+            drop_x,
+            drop_y
+        );
         // 检查是否已存在
         if let Some(data) = unsafe { get_data(hwnd) } {
             if data.items.iter().any(|i| i.file_path == file_path) {
@@ -375,7 +392,7 @@ pub(crate) fn handle_drag_item_added(hwnd: HWND) {
             // 计算释放位置对应的网格坐标
             let (target_col, target_row) = compute_drop_grid_position(hwnd, drop_x, drop_y, data);
             log::info!(
-                "[DIAG] 释放位置计算: drop=({}, {}) -> grid=({}, {})",
+                "释放位置计算: drop=({}, {}) -> grid=({}, {})",
                 drop_x,
                 drop_y,
                 target_col,
@@ -415,7 +432,7 @@ pub(crate) fn handle_drag_item_added(hwnd: HWND) {
                     grid_row: insert_row,
                 });
                 log::info!(
-                    "[DIAG] 项已插入到框: '{}', insert=({}, {})",
+                    "项已插入到框: '{}', insert=({}, {})",
                     display_name,
                     insert_col,
                     insert_row
@@ -430,7 +447,7 @@ pub(crate) fn handle_drag_item_added(hwnd: HWND) {
                     grid_row: target_row,
                 });
                 log::info!(
-                    "[DIAG] 项已添加到框: '{}', grid=({}, {})",
+                    "项已添加到框: '{}', grid=({}, {})",
                     display_name,
                     target_col,
                     target_row

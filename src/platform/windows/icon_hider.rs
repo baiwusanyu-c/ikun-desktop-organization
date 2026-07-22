@@ -436,12 +436,18 @@ pub fn resolve_icon_read_path(logical_path: &str) -> Option<PathBuf> {
 
 /// 收入仓库：用户桌面移动，公共桌面只读复制
 pub fn ingest_icon(logical_path: &str) -> Result<()> {
+    log::info!("收入仓库: logical_path={}", logical_path);
     // 虚拟 Shell 对象（回收站、此电脑等）无需收入仓库，它们始终存在
     if logical_path.starts_with("::{") {
         return Ok(());
     }
     let vault = vault_path_for(logical_path)?;
     let src = Path::new(logical_path);
+    log::info!(
+        "收入仓库: vault={}, src.exists={}",
+        vault.display(),
+        src.exists()
+    );
 
     if vault.exists() {
         if is_user_desktop_path(logical_path) && src.exists() {
@@ -544,6 +550,7 @@ pub fn delete_vault_copy(logical_path: &str) {
 /// (`user__` / `public__`) 还原原始桌面路径，将 .lnk 文件移回桌面，
 /// 并通知 Shell 刷新。已在桌面上存在的文件不会被覆盖。
 pub fn restore_all_hidden_icons() {
+    log::info!("开始还原所有隐藏的图标");
     let managed_dir = match get_managed_dir() {
         Ok(d) => d,
         Err(e) => {
@@ -551,7 +558,9 @@ pub fn restore_all_hidden_icons() {
             return;
         }
     };
-    restore_icons_from_dir(&managed_dir);
+    log::info!("还原图标: managed_dir={}", managed_dir.display());
+    let (restored, skipped) = restore_icons_from_dir(&managed_dir);
+    log::info!("还原图标完成: 还原={}, 跳过={}", restored, skipped);
 }
 
 /// 删除分类框后，将仓库中不再被任何剩余分类框管理的图标还原到桌面。
