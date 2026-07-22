@@ -158,8 +158,8 @@ fn start_cut_monitor(hwnd: HWND, logical_path: String) {
     let hwnd_usize = hwnd as usize;
     std::thread::spawn(move || {
         let hwnd = hwnd_usize as HWND;
-        for _ in 0..300 {
-            std::thread::sleep(std::time::Duration::from_secs(1));
+        for _ in 0..100 {
+            std::thread::sleep(std::time::Duration::from_secs(3));
             if !super::icon_hider::icon_exists_for_box(&logical_path) {
                 unsafe { PostMessageW(hwnd, WM_USER_CUT_FILE_MOVED, 0, 0); }
                 return;
