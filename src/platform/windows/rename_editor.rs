@@ -1,7 +1,7 @@
 //! Inline rename editor for icon labels
 //!
-//! Creates a temporary EDIT control overlay on icon text for F2-style rename.
-//! Uses Windows native EDIT control class for IME support and proper text handling.
+//! Creates a top-level popup window with an EDIT control for F2-style rename.
+//! This approach avoids z-order issues with layered windows.
 //!
 //! Behavior:
 //! - Enter: confirm rename
@@ -19,6 +19,7 @@ const GWLP_WNDPROC: i32 = -4;
 
 struct RenameState {
     edit_hwnd: HWND,
+    container_hwnd: HWND,
     result: Option<Option<String>>,
     orig_wnd_proc: isize,
 }
@@ -40,22 +41,50 @@ pub fn show_rename_editor(
     _dpi: u32,
 ) -> Option<String> {
     unsafe {
-        // ES_AUTOHSCROLL = 0x0080, WS_POPUP = 0x80000000, WS_VISIBLE = 0x10000000, WS_BORDER = 0x00800000
-        let style = 0x80000000_u32 | 0x10000000 | 0x00800000 | 0x0080;
-
-        log::info!("Creating rename EDIT control at ({}, {}), size {}x{}, parent {:?}", 
-            screen_x, screen_y, width, height, parent_hwnd);
+        log::info!("Creating rename EDIT control at ({}, {}), size {}x{}", 
+            screen_x, screen_y, width, height);
         
-        let edit_hwnd = CreateWindowExW(
-            0x00000200, // WS_EX_CLIENTEDGE
-            EDIT_CLASS.as_ptr(),
+        // Create a top-level popup window
+        // WS_POPUP = 0x80000000, WS_VISIBLE = 0x10000000
+        // WS_EX_TOOLWINDOW = 0x00000080 (no taskbar icon)
+        // WS_EX_TOPMOST = 0x00000008 (always on top)
+        let ex_style = 0x00000080 | 0x00000008;
+        let style = 0x80000000_u32 | 0x10000000;
+        
+        let static_class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+        let container_hwnd = CreateWindowExW(
+            ex_style,
+            static_class.as_ptr(),
             std::ptr::null(),
             style,
             screen_x,
             screen_y,
             width,
             height,
-            parent_hwnd,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            GetModuleHandleW(std::ptr::null()),
+            std::ptr::null_mut(),
+        );
+        
+        if container_hwnd.is_null() {
+            log::warn!("Failed to create container window");
+            return None;
+        }
+        
+        // Create EDIT control as child of container
+        // ES_AUTOHSCROLL = 0x0080, WS_CHILD = 0x40000000, WS_VISIBLE = 0x10000000
+        let edit_style = 0x40000000_u32 | 0x10000000 | 0x00800000 | 0x0080;
+        let edit_hwnd = CreateWindowExW(
+            0x00000200, // WS_EX_CLIENTEDGE
+            EDIT_CLASS.as_ptr(),
+            std::ptr::null(),
+            edit_style,
+            0,
+            0,
+            width,
+            height,
+            container_hwnd,
             std::ptr::null_mut(),
             GetModuleHandleW(std::ptr::null()),
             std::ptr::null_mut(),
@@ -63,6 +92,7 @@ pub fn show_rename_editor(
 
         if edit_hwnd.is_null() {
             log::warn!("Failed to create rename EDIT control");
+            DestroyWindow(container_hwnd);
             return None;
         }
         log::info!("Rename EDIT control created: {:?}", edit_hwnd);
@@ -71,6 +101,7 @@ pub fn show_rename_editor(
 
         *RENAME_STATE.lock().unwrap() = Some(RenameState {
             edit_hwnd,
+            container_hwnd,
             result: None,
             orig_wnd_proc: orig_proc,
         });
@@ -84,7 +115,7 @@ pub fn show_rename_editor(
         SendMessageW(edit_hwnd, 0x00B1 /* EM_SETSEL */, 0, stem_len as LPARAM);
 
         SetFocus(edit_hwnd);
-        SetForegroundWindow(edit_hwnd);
+        SetForegroundWindow(container_hwnd);
 
         // Message loop
         let mut msg: MSG = std::mem::zeroed();
@@ -107,6 +138,9 @@ pub fn show_rename_editor(
         if let Some(ref s) = *state {
             if IsWindow(s.edit_hwnd) != 0 {
                 DestroyWindow(s.edit_hwnd);
+            }
+            if IsWindow(s.container_hwnd) != 0 {
+                DestroyWindow(s.container_hwnd);
             }
         }
         *state = None;
@@ -136,6 +170,18 @@ unsafe fn get_edit_text(hwnd: HWND) -> String {
     String::from_utf16_lossy(&buf[..end])
 }
 
+fn destroy_container() {
+    if let Ok(mut state) = RENAME_STATE.lock() {
+        if let Some(ref s) = *state {
+            unsafe {
+                if IsWindow(s.container_hwnd) != 0 {
+                    DestroyWindow(s.container_hwnd);
+                }
+            }
+        }
+    }
+}
+
 unsafe extern "system" fn rename_edit_subclass(
     hwnd: HWND,
     msg: u32,
@@ -158,21 +204,23 @@ unsafe extern "system" fn rename_edit_subclass(
             match wparam {
                 0x0D /* VK_RETURN */ => {
                     let text = get_edit_text(hwnd);
+                    log::info!("Rename confirmed with: {}", text);
                     if let Ok(mut state) = RENAME_STATE.lock() {
                         if let Some(ref mut s) = *state {
                             s.result = Some(Some(text));
                         }
                     }
-                    DestroyWindow(hwnd);
+                    destroy_container();
                     return 0;
                 }
                 0x1B /* VK_ESCAPE */ => {
+                    log::info!("Rename cancelled");
                     if let Ok(mut state) = RENAME_STATE.lock() {
                         if let Some(ref mut s) = *state {
                             s.result = Some(None);
                         }
                     }
-                    DestroyWindow(hwnd);
+                    destroy_container();
                     return 0;
                 }
                 _ => {}
@@ -181,6 +229,7 @@ unsafe extern "system" fn rename_edit_subclass(
         0x0008 /* WM_KILLFOCUS */ => {
             let text = get_edit_text(hwnd);
             if !text.is_empty() {
+                log::info!("Rename lost focus, confirming with: {}", text);
                 if let Ok(mut state) = RENAME_STATE.lock() {
                     if let Some(ref mut s) = *state {
                         if s.result.is_none() {
@@ -189,7 +238,7 @@ unsafe extern "system" fn rename_edit_subclass(
                     }
                 }
             }
-            DestroyWindow(hwnd);
+            destroy_container();
             return 0;
         }
         _ => {}

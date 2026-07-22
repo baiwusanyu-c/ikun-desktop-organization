@@ -35,6 +35,7 @@ pub enum ShellMenuResult {
 }
 
 
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DesktopRegistryMenuItem {
     key_name: &'static str,
@@ -74,6 +75,7 @@ pub fn take_pending_create_box() -> bool {
     PENDING_CREATE_BOX.swap(false, Ordering::SeqCst)
 }
 
+// Our custom menu item IDs (below FCIDM_SHVIEWFIRST to avoid conflicts)
 /// 显示文件的 Shell 右键菜单（尝试 windows crate 高级绑定 → ShellExecuteW 回退）
 pub fn show_shell_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResult {
     let menu_path = resolve_shell_menu_path(file_path);
