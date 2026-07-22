@@ -84,6 +84,25 @@ pub fn show_shell_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResult {
         log::debug!("Shell 菜单路径已解析: {} → {}", file_path, menu_path);
     }
 
+    // If the file is in vault (managed_icons), export it to desktop first
+    // This ensures Shell operations like Cut use the correct filename
+    let menu_path = if menu_path.contains("managed_icons") {
+        log::info!("File is in vault, exporting to desktop for Shell menu");
+        match crate::platform::windows::icon_hider::export_icon(file_path) {
+            Ok((_, desktop_path)) => {
+                let desktop_str = desktop_path.to_string_lossy().to_string();
+                log::info!("Exported to desktop: {}", desktop_str);
+                desktop_str
+            }
+            Err(e) => {
+                log::warn!("Failed to export for Shell menu: {}", e);
+                menu_path
+            }
+        }
+    } else {
+        menu_path
+    };
+
     // 尝试使用 windows crate 获取完整 Shell 上下文菜单
     let result = try_windows_crate_context_menu(hwnd, &menu_path);
     if !matches!(result, ShellMenuResult::Cancelled) {
