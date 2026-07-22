@@ -544,6 +544,181 @@ pub fn delete_vault_copy(logical_path: &str) {
     }
 }
 
+
+/// Permanently delete icon file (desktop + vault copy)
+pub fn delete_icon_permanently(logical_path: &str) -> Result<()> {
+    log::info!("delete icon permanently: {}", logical_path);
+    if logical_path.starts_with("::{") {
+        return Err(anyhow::anyhow!("virtual shell object cannot be deleted"));
+    }
+    let mut deleted_any = false;
+    let desktop_path = Path::new(logical_path);
+    if desktop_path.exists() {
+        std::fs::remove_file(desktop_path).map_err(|e| {
+            anyhow::anyhow!("delete desktop file failed {}: {}", logical_path, e)
+        })?;
+        log::info!("deleted desktop file: {}", logical_path);
+        deleted_any = true;
+    }
+    if let Ok(vault) = vault_path_for(logical_path) {
+        if vault.exists() {
+            std::fs::remove_file(&vault).map_err(|e| {
+                anyhow::anyhow!("delete vault copy failed {}: {}", vault.display(), e)
+            })?;
+            log::info!("deleted vault copy: {}", vault.display());
+            deleted_any = true;
+        }
+    }
+    if deleted_any {
+        let shcne_delete: u32 = 0x0000_4000;
+        use std::os::windows::ffi::OsStrExt;
+        let wide: Vec<u16> = Path::new(logical_path)
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        unsafe {
+            super::ffi_imports::SHChangeNotify(
+                shcne_delete,
+                SHCNF_PATHW | SHCNF_FLUSH,
+                wide.as_ptr() as *const _,
+                std::ptr::null(),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Delete vault copy only (used when shell moves file to Recycle Bin)
+pub fn delete_vault_copy_for(logical_path: &str) {
+    match vault_path_for(logical_path) {
+        Ok(vault) => {
+            if vault.exists() {
+                if let Err(e) = std::fs::remove_file(&vault) {
+                    log::warn!("delete vault copy failed {}: {}", vault.display(), e);
+                } else {
+                    log::info!("deleted vault copy: {}", vault.display());
+                }
+            }
+        }
+        Err(e) => log::warn!("get vault path failed: {}", e),
+    }
+}
+
+/// Rename icon file (desktop + vault copy), returns new logical path
+pub fn rename_icon_file(logical_path: &str, new_name: &str) -> Result<String> {
+    log::info!("rename icon: {} -> {}", logical_path, new_name);
+    if logical_path.starts_with("::{") {
+        return Err(anyhow::anyhow!("virtual shell object cannot be renamed"));
+    }
+    let old_path = Path::new(logical_path);
+    let parent = old_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("cannot get parent dir: {}", logical_path))?;
+    let new_path = parent.join(new_name);
+    let new_logical = new_path.to_string_lossy().to_string();
+    if new_path == old_path {
+        return Ok(new_logical);
+    }
+    // 1. Rename desktop file
+    if old_path.exists() {
+        std::fs::rename(old_path, &new_path).map_err(|e| {
+            anyhow::anyhow!("rename desktop file failed {} -> {}: {}", old_path.display(), new_path.display(), e)
+        })?;
+        log::info!("renamed desktop file: {} -> {}", old_path.display(), new_path.display());
+        let shcne_delete: u32 = 0x0000_4000;
+        use std::os::windows::ffi::OsStrExt;
+        let old_wide: Vec<u16> = old_path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        unsafe {
+            super::ffi_imports::SHChangeNotify(
+                shcne_delete,
+                SHCNF_PATHW | SHCNF_FLUSH,
+                old_wide.as_ptr() as *const _,
+                std::ptr::null(),
+            );
+        }
+        notify_shell_path(&new_logical);
+    }
+    // 2. Rename vault copy
+    if let Ok(old_vault) = vault_path_for(logical_path) {
+        if old_vault.exists() {
+            if let Ok(new_vault) = vault_path_for(&new_logical) {
+                match std::fs::rename(&old_vault, &new_vault) {
+                    Ok(()) => log::info!("renamed vault copy: {} -> {}", old_vault.display(), new_vault.display()),
+                    Err(e) => log::warn!("rename vault copy failed: {}", e),
+                }
+            }
+        }
+    }
+    Ok(new_logical)
+}
+
+/// Put icon file path into clipboard with cut (move) semantics
+pub fn cut_icon_to_clipboard(logical_path: &str) -> Result<()> {
+    log::info!("cut icon to clipboard: {}", logical_path);
+    let actual_path = resolve_icon_read_path(logical_path)
+        .ok_or_else(|| anyhow::anyhow!("icon file not readable: {}", logical_path))?;
+    let actual_str = actual_path.to_string_lossy().to_string();
+    let path_wide: Vec<u16> = actual_str.encode_utf16().chain(std::iter::once(0)).collect();
+    let dropfiles_size = std::mem::size_of::<super::ffi_types::DROPFILES>();
+    let total_bytes = dropfiles_size + (path_wide.len() + 1) * 2;
+    unsafe {
+        if super::ffi_imports::OpenClipboard(std::ptr::null_mut()) == 0 {
+            return Err(anyhow::anyhow!("cannot open clipboard"));
+        }
+        super::ffi_imports::EmptyClipboard();
+        let hmem = super::ffi_imports::GlobalAlloc(super::ffi_types::GHND, total_bytes);
+        if hmem.is_null() {
+            super::ffi_imports::CloseClipboard();
+            return Err(anyhow::anyhow!("GlobalAlloc failed"));
+        }
+        let ptr = super::ffi_imports::GlobalLock(hmem) as *mut u8;
+        if ptr.is_null() {
+            super::ffi_imports::GlobalFree(hmem);
+            super::ffi_imports::CloseClipboard();
+            return Err(anyhow::anyhow!("GlobalLock failed"));
+        }
+        let drop_files = super::ffi_types::DROPFILES {
+            p_files: dropfiles_size as u32,
+            pt_x: 0,
+            pt_y: 0,
+            f_nc: 0,
+            f_wide: 1,
+        };
+        std::ptr::copy_nonoverlapping(
+            &drop_files as *const _ as *const u8,
+            ptr,
+            dropfiles_size,
+        );
+        let path_ptr = ptr.add(dropfiles_size) as *mut u16;
+        std::ptr::copy_nonoverlapping(path_wide.as_ptr(), path_ptr, path_wide.len());
+        super::ffi_imports::GlobalUnlock(hmem);
+        super::ffi_imports::SetClipboardData(super::ffi_types::CF_HDROP, hmem);
+        // Set Preferred DropEffect = MOVE
+        let fmt_wide: Vec<u16> = "Preferred DropEffect ".encode_utf16().collect();
+        let fmt_id = super::ffi_imports::RegisterClipboardFormatW(fmt_wide.as_ptr());
+        if fmt_id != 0 {
+            let effect_mem = super::ffi_imports::GlobalAlloc(super::ffi_types::GHND, std::mem::size_of::<u32>());
+            if !effect_mem.is_null() {
+                let effect_ptr = super::ffi_imports::GlobalLock(effect_mem) as *mut u32;
+                if !effect_ptr.is_null() {
+                    *effect_ptr = super::ffi_types::DROPEFFECT_MOVE;
+                    super::ffi_imports::GlobalUnlock(effect_mem);
+                }
+                super::ffi_imports::SetClipboardData(fmt_id, effect_mem);
+            }
+        }
+        super::ffi_imports::CloseClipboard();
+    }
+    log::info!("put icon path in clipboard (move): {}", actual_str);
+    Ok(())
+}
+
+
 /// 程序退出时将所有仓库中的图标还原到桌面。
 ///
 /// 遍历 `managed_icons/` 目录下的所有文件，根据文件名前缀

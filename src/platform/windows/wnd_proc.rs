@@ -62,6 +62,109 @@ fn remove_grid_item_if_missing_after_shell_menu(hwnd: HWND, logical_path: &str) 
     render_layered_window(hwnd);
     super::drag_handler::save_config();
 }
+
+
+/// Handle shell menu result for grid window
+fn handle_shell_menu_result(hwnd: HWND, file_path: &str, hit_index: i32, result: super::shell_menu::ShellMenuResult) {
+    use super::shell_menu::ShellMenuResult;
+    
+    match result {
+        ShellMenuResult::Cancelled => {}
+        ShellMenuResult::Completed(_) => {
+            // Check if file still exists after shell operation
+            remove_grid_item_if_missing_after_shell_menu(hwnd, file_path);
+        }
+        ShellMenuResult::NeedsRename(path) => {
+            // Show inline editor and rename file
+            let Some(data) = (unsafe { get_data(hwnd) }) else { return };
+            let mut wr = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+            unsafe { GetWindowRect(hwnd, &mut wr) };
+            let dpi = unsafe { GetDpiForWindow(hwnd) };
+            let dpi = if dpi > 0 { dpi } else { 96 };
+            let view_params = get_view_params(&data.view_mode, dpi);
+            let layout = calculate_grid(wr.right - wr.left, data.title_h, &view_params, dpi);
+            
+            let item_idx = hit_index as usize;
+            if item_idx >= data.items.len() { return; }
+            
+            let item = &data.items[item_idx];
+            let current_name = item.display_name.clone();
+            
+            let (cell_x, cell_y) = if item.grid_col >= 0 && item.grid_row >= 0 {
+                (layout.grid_left + item.grid_col * layout.cell_w,
+                 layout.grid_top + item.grid_row * layout.cell_h)
+            } else {
+                let cols = layout.cols.max(1);
+                let col = (item_idx as i32) % cols;
+                let row = (item_idx as i32) / cols;
+                (layout.grid_left + col * layout.cell_w,
+                 layout.grid_top + row * layout.cell_h - data.scroll_offset)
+            };
+            
+            let icon_size = data.icon_size;
+            let text_y = cell_y + icon_size + 4;
+            let text_height = 20_i32 * dpi as i32 / 96;
+            let text_width = layout.cell_w - 8;
+            let screen_x = wr.left + cell_x + 4;
+            let screen_y = wr.top + text_y;
+            
+            if let Some(new_name) = super::rename_editor::show_rename_editor(
+                hwnd, &current_name, screen_x, screen_y, text_width, text_height, dpi,
+            ) {
+                if new_name.is_empty() || new_name == current_name { return; }
+                match super::icon_hider::rename_icon_file(&path, &new_name) {
+                    Ok(new_path) => {
+                        log::info!("rename ok: {} -> {}", path, new_path);
+                        let data = unsafe { get_data(hwnd) }.unwrap();
+                        if let Some(item) = data.items.get_mut(hit_index as usize) {
+                            item.file_path = new_path.clone();
+                            let new_display = std::path::Path::new(&new_name)
+                                .file_stem()
+                                .map(|s| s.to_string_lossy().to_string())
+                                .unwrap_or(new_name);
+                            item.display_name = new_display;
+                            if let Some(icon_info) = super::icon_extract::extract_file_icon(&item.file_path) {
+                                if !item.icon_handle.is_null() {
+                                    super::icon_extract::destroy_icon(item.icon_handle);
+                                }
+                                item.icon_handle = icon_info.hicon;
+                            }
+                        }
+                        render_layered_window(hwnd);
+                        super::drag_handler::save_config();
+                    }
+                    Err(e) => { log::warn!("rename failed: {}", e); }
+                }
+            }
+        }
+        ShellMenuResult::NeedsCutMonitor(path) => {
+            log::info!("starting cut monitor for: {}", path);
+            start_cut_monitor(hwnd, path);
+        }
+        ShellMenuResult::NeedsDelete(path) => {
+            // Shell moved file to Recycle Bin, delete vault copy and remove from UI
+            super::icon_hider::delete_vault_copy_for(&path);
+            remove_grid_item_if_missing_after_shell_menu(hwnd, &path);
+        }
+    }
+}
+
+/// Start cut monitor: background thread checks if file is moved (pasted elsewhere)
+fn start_cut_monitor(hwnd: HWND, logical_path: String) {
+    let hwnd_usize = hwnd as usize;
+    std::thread::spawn(move || {
+        let hwnd = hwnd_usize as HWND;
+        for _ in 0..60 {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            if !super::icon_hider::icon_exists_for_box(&logical_path) {
+                unsafe { PostMessageW(hwnd, WM_USER_CUT_FILE_MOVED, 0, 0); }
+                return;
+            }
+        }
+        log::debug!("cut monitor timeout, file not pasted: {}", logical_path);
+    });
+}
+
 /// 格子窗口消息处理过程
 ///
 /// 处理标题栏拖拽、边缘缩放、锁定按钮、图标选中、双击打开、右键菜单等。
@@ -722,6 +825,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             let click_y = get_y_lparam(lparam);
 
             let mut file_path: Option<String> = None;
+            let mut hit_index: i32 = -1;
             if let Some(data) = get_data(hwnd) {
                 let mut wr = RECT {
                     left: 0,
@@ -738,18 +842,50 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                     data.selected_item = hit;
                     if (hit as usize) < data.items.len() {
                         file_path = Some(data.items[hit as usize].file_path.clone());
+                        hit_index = hit;
                     }
                     render_layered_window(hwnd);
                 }
             }
 
             if let Some(ref path) = file_path {
-                show_shell_context_menu(hwnd, path);
-                remove_grid_item_if_missing_after_shell_menu(hwnd, path);
+                let result = show_shell_context_menu(hwnd, path);
+                handle_shell_menu_result(hwnd, path, hit_index, result);
             } else {
                 show_desktop_context_menu(hwnd, false);
                 // shell_menu.rs 会在用户点击「创建分类框」时设置 PENDING_CREATE_BOX 标志，
                 // app.rs 的 update 循环轮询该标志并打开 egui viewport 对话框。
+            }
+            0
+        }
+
+        // ===== cut file moved (pasted elsewhere) =====
+        WM_USER_CUT_FILE_MOVED => {
+            if let Some(data) = get_data(hwnd) {
+                let mut removed_any = false;
+                let mut i = 0;
+                while i < data.items.len() {
+                    if !super::icon_hider::icon_exists_for_box(&data.items[i].file_path) {
+                        let removed = data.items.remove(i);
+                        if !removed.icon_handle.is_null() {
+                            super::icon_extract::destroy_icon(removed.icon_handle);
+                        }
+                        log::info!("cut file moved, removed from box: {}", removed.display_name);
+                        removed_any = true;
+                    } else {
+                        i += 1;
+                    }
+                }
+                if removed_any {
+                    if data.selected_item >= data.items.len() as i32 {
+                        data.selected_item = -1;
+                    }
+                    if data.hovered_item >= data.items.len() as i32 {
+                        data.hovered_item = -1;
+                    }
+                    render_layered_window(hwnd);
+                    super::drag_handler::save_config();
+                }
             }
             0
         }

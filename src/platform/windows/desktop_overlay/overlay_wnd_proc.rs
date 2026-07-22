@@ -102,6 +102,31 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             refresh_desktop_overlay_icons(hwnd);
             0
         }
+        WM_USER_CUT_FILE_MOVED => {
+            if let Some(data) = get_overlay_data(hwnd) {
+                let mut removed_any = false;
+                let mut i = 0;
+                while i < data.icons.len() {
+                    if !crate::platform::windows::icon_hider::icon_exists_for_box(&data.icons[i].file_path) {
+                        let removed = data.icons.remove(i);
+                        if !removed.icon_handle.is_null() {
+                            crate::platform::windows::icon_extract::destroy_icon(removed.icon_handle);
+                        }
+                        log::info!("cut file moved from overlay: {}", removed.display_name);
+                        removed_any = true;
+                    } else {
+                        i += 1;
+                    }
+                }
+                if removed_any {
+                    if data.selected_item >= data.icons.len() as i32 { data.selected_item = -1; }
+                    if data.hovered_item >= data.icons.len() as i32 { data.hovered_item = -1; }
+                    render_desktop_overlay(hwnd);
+                    save_overlay_icon_positions();
+                }
+            }
+            0
+        }
         WM_DPICHANGED => {
             let new_dpi = dpi_from_wparam(wparam);
             if let Some(data) = get_overlay_data(hwnd) {
@@ -519,7 +544,7 @@ fn handle_double_click(hwnd: HWND, x: i32, y: i32) {
 }
 
 fn handle_right_click(hwnd: HWND, x: i32, y: i32) {
-    let path = match get_overlay_data(hwnd) {
+    let (path, hit_index) = match get_overlay_data(hwnd) {
         Some(data) => {
             let hit = overlay_hit_test(data, x, y);
             if hit < 0 || (hit as usize) >= data.icons.len() {
@@ -528,12 +553,112 @@ fn handle_right_click(hwnd: HWND, x: i32, y: i32) {
             }
             data.selected_item = hit;
             data.drag_pending = false;
-            data.icons[hit as usize].file_path.clone()
+            let p = data.icons[hit as usize].file_path.clone();
+            (p, hit)
         }
         None => return,
     };
     render_desktop_overlay(hwnd);
-    crate::platform::windows::shell_menu::show_shell_context_menu(hwnd, &path);
+    let result = crate::platform::windows::shell_menu::show_shell_context_menu(hwnd, &path);
+    handle_overlay_shell_menu_result(hwnd, &path, hit_index, result);
+}
+
+/// Handle shell menu result for overlay window
+fn handle_overlay_shell_menu_result(
+    hwnd: HWND,
+    file_path: &str,
+    hit_index: i32,
+    result: crate::platform::windows::shell_menu::ShellMenuResult,
+) {
+    use crate::platform::windows::shell_menu::ShellMenuResult;
+    
+    match result {
+        ShellMenuResult::Cancelled => {}
+        ShellMenuResult::Completed(_) => {
+            if !crate::platform::windows::icon_hider::icon_exists_for_box(file_path) {
+                remove_overlay_item(hwnd, file_path);
+            }
+        }
+        ShellMenuResult::NeedsRename(path) => {
+            let (sx, sy, tw, th, dpi, current_name) = match get_overlay_data(hwnd) {
+                Some(data) => {
+                    let idx = hit_index as usize;
+                    if idx >= data.icons.len() { return; }
+                    let mut wr = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+                    unsafe { GetWindowRect(hwnd, &mut wr) };
+                    let icon = &data.icons[idx];
+                    let tx = icon.x as i32 - data.cell_w / 2 + 4;
+                    let ty = icon.y as i32 + data.icon_size / 2 + 4;
+                    let name = icon.display_name.clone();
+                    (wr.left + tx, wr.top + ty, data.cell_w - 8, 20_i32 * data.dpi as i32 / 96, data.dpi, name)
+                }
+                None => return,
+            };
+            if let Some(new_name) = crate::platform::windows::rename_editor::show_rename_editor(
+                hwnd, &current_name, sx, sy, tw, th, dpi,
+            ) {
+                if new_name.is_empty() || new_name == current_name { return; }
+                match crate::platform::windows::icon_hider::rename_icon_file(&path, &new_name) {
+                    Ok(new_path) => {
+                        if let Some(data) = get_overlay_data(hwnd) {
+                            if let Some(item) = data.icons.get_mut(hit_index as usize) {
+                                item.file_path = new_path;
+                                let nd = std::path::Path::new(&new_name).file_stem()
+                                    .map(|s| s.to_string_lossy().to_string())
+                                    .unwrap_or(new_name);
+                                item.display_name = nd;
+                            }
+                        }
+                        render_desktop_overlay(hwnd);
+                        save_overlay_icon_positions();
+                    }
+                    Err(e) => { log::warn!("overlay rename failed: {}", e); }
+                }
+            }
+        }
+        ShellMenuResult::NeedsCutMonitor(path) => {
+            log::info!("starting overlay cut monitor for: {}", path);
+            start_overlay_cut_monitor(hwnd, path);
+        }
+        ShellMenuResult::NeedsDelete(path) => {
+            crate::platform::windows::icon_hider::delete_vault_copy_for(&path);
+            if !crate::platform::windows::icon_hider::icon_exists_for_box(&path) {
+                remove_overlay_item(hwnd, &path);
+            }
+        }
+    }
+}
+
+/// Remove icon item from overlay window
+fn remove_overlay_item(hwnd: HWND, logical_path: &str) {
+    if let Some(data) = get_overlay_data(hwnd) {
+        if let Some(index) = data.icons.iter().position(|item| item.file_path == logical_path) {
+            let removed = data.icons.remove(index);
+            if !removed.icon_handle.is_null() {
+                crate::platform::windows::icon_extract::destroy_icon(removed.icon_handle);
+            }
+            if data.selected_item >= data.icons.len() as i32 { data.selected_item = -1; }
+            if data.hovered_item >= data.icons.len() as i32 { data.hovered_item = -1; }
+            log::info!("overlay item removed: {}", removed.display_name);
+            render_desktop_overlay(hwnd);
+            save_overlay_icon_positions();
+        }
+    }
+}
+
+/// Start cut monitor for overlay window
+fn start_overlay_cut_monitor(hwnd: HWND, logical_path: String) {
+    let hwnd_usize = hwnd as usize;
+    std::thread::spawn(move || {
+        let hwnd = hwnd_usize as HWND;
+        for _ in 0..60 {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            if !crate::platform::windows::icon_hider::icon_exists_for_box(&logical_path) {
+                unsafe { PostMessageW(hwnd, WM_USER_CUT_FILE_MOVED, 0, 0); }
+                return;
+            }
+        }
+    });
 }
 
 fn start_overlay_drag(hwnd: HWND) {

@@ -19,6 +19,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// （仅在 COM 失败的回退菜单路径中使用）
 static PENDING_CREATE_BOX: AtomicBool = AtomicBool::new(false);
 
+/// Result of shell context menu operation
+#[derive(Debug, Clone)]
+pub enum ShellMenuResult {
+    /// User cancelled the menu
+    Cancelled,
+    /// Shell operation completed (verb name if known)
+    Completed(Option<String>),
+    /// User selected rename - needs custom handling
+    NeedsRename(String), // file_path
+    /// User selected cut - needs monitoring
+    NeedsCutMonitor(String), // file_path
+    /// User selected delete - needs vault cleanup
+    NeedsDelete(String), // file_path
+}
+
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DesktopRegistryMenuItem {
     key_name: &'static str,
@@ -59,7 +75,7 @@ pub fn take_pending_create_box() -> bool {
 }
 
 /// 显示文件的 Shell 右键菜单（尝试 windows crate 高级绑定 → ShellExecuteW 回退）
-pub fn show_shell_context_menu(hwnd: HWND, file_path: &str) {
+pub fn show_shell_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResult {
     let menu_path = resolve_shell_menu_path(file_path);
 
     if menu_path != file_path {
@@ -67,11 +83,12 @@ pub fn show_shell_context_menu(hwnd: HWND, file_path: &str) {
     }
 
     // 尝试使用 windows crate 获取完整 Shell 上下文菜单
-    if try_windows_crate_context_menu(hwnd, &menu_path) {
-        return;
+    let result = try_windows_crate_context_menu(hwnd, &menu_path);
+    if !matches!(result, ShellMenuResult::Cancelled) {
+        return result;
     }
     // 回退：ShellExecuteW 增强菜单
-    show_shell_fallback_menu(hwnd, &menu_path);
+    show_shell_fallback_menu(hwnd, &menu_path)
 }
 
 fn resolve_shell_menu_path(file_path: &str) -> String {
@@ -102,11 +119,12 @@ fn resolve_shell_menu_path_with(
 /// 而非将绝对 PIDL 直接传给桌面文件夹的 GetUIObjectOf。
 /// 使用 windows crate 自带的 QueryContextMenu/InvokeCommand 方法，
 /// 避免手动 vtable 调用导致的 ABI 兼容性问题。
-fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> bool {
+fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResult {
     use windows::core::PCWSTR;
     use windows::Win32::UI::Shell::{
         IContextMenu, ILFree, IShellFolder, SHBindToParent, SHParseDisplayName,
     };
+    use windows::core::PSTR;
 
     unsafe {
         let path_wide: Vec<u16> = file_path.encode_utf16().chain(std::iter::once(0)).collect();
@@ -117,7 +135,7 @@ fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> bool {
             || full_pidl.is_null()
         {
             log::warn!("windows crate: SHParseDisplayName 失败");
-            return false;
+            return ShellMenuResult::Cancelled;
         }
 
         // 2. 获取父文件夹和相对 PIDL（关键修复）
@@ -133,14 +151,14 @@ fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> bool {
             Err(e) => {
                 log::warn!("windows crate: SHBindToParent 失败: {:?}", e);
                 let _ = ILFree(Some(full_pidl));
-                return false;
+                return ShellMenuResult::Cancelled;
             }
         };
 
         if rel_pidl.is_null() {
             log::warn!("windows crate: SHBindToParent 返回空相对 PIDL");
             let _ = ILFree(Some(full_pidl));
-            return false;
+            return ShellMenuResult::Cancelled;
         }
 
         // 3. 使用父文件夹 + 相对 PIDL 获取 IContextMenu
@@ -178,25 +196,89 @@ fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> bool {
                             std::ptr::null(),
                         );
                         if cmd > 0 {
-                            // 5. 使用 windows crate 的 InvokeCommand
-                            let invoke_info = windows::Win32::UI::Shell::CMINVOKECOMMANDINFO {
-                                cbSize: std::mem::size_of::<
-                                    windows::Win32::UI::Shell::CMINVOKECOMMANDINFO,
-                                >() as u32,
-                                fMask: 0,
-                                hwnd: windows::Win32::Foundation::HWND(hwnd),
-                                lpVerb: windows::core::PCSTR(
-                                    ((cmd as u32 - FCIDM_SHVIEWFIRST) as usize) as *const u8,
-                                ),
-                                lpParameters: windows::core::PCSTR(std::ptr::null()),
-                                lpDirectory: windows::core::PCSTR(std::ptr::null()),
-                                nShow: SW_SHOW,
-                                dwHotKey: 0,
-                                hIcon: windows::Win32::Foundation::HANDLE(std::ptr::null_mut()),
+                            // 5. Get verb string to determine action
+                            let verb_ordinal = (cmd as u32 - FCIDM_SHVIEWFIRST) as usize;
+                            let mut verb_buf: Vec<u8> = vec![0; 256];
+                            let verb = match cm.GetCommandString(
+                                verb_ordinal,
+                                windows::Win32::UI::Shell::GCS_VERBA,
+                                None,
+                                PSTR(verb_buf.as_mut_ptr()),
+                                verb_buf.len() as u32,
+                            ) {
+                                Ok(_) => {
+                                    let end = verb_buf.iter().position(|&c| c == 0).unwrap_or(0);
+                                    String::from_utf8_lossy(&verb_buf[..end]).to_lowercase()
+                                }
+                                Err(_) => String::new(),
                             };
-                            if let Err(e) = cm.InvokeCommand(&invoke_info) {
-                                log::warn!("windows crate: InvokeCommand 失败: {:?}", e);
-                            }
+                            
+                            log::info!("Shell menu verb: '{}'", verb);
+                            
+                            // Handle special verbs
+                            let result = match verb.as_str() {
+                                "rename" => {
+                                    // Don't call InvokeCommand for rename - we handle it ourselves
+                                    return ShellMenuResult::NeedsRename(file_path.to_string());
+                                }
+                                "cut" => {
+                                    // Call InvokeCommand to set up clipboard
+                                    let invoke_info = windows::Win32::UI::Shell::CMINVOKECOMMANDINFO {
+                                        cbSize: std::mem::size_of::<windows::Win32::UI::Shell::CMINVOKECOMMANDINFO>() as u32,
+                                        fMask: 0,
+                                        hwnd: windows::Win32::Foundation::HWND(hwnd),
+                                        lpVerb: windows::core::PCSTR(verb_ordinal as *const u8),
+                                        lpParameters: windows::core::PCSTR(std::ptr::null()),
+                                        lpDirectory: windows::core::PCSTR(std::ptr::null()),
+                                        nShow: SW_SHOW,
+                                        dwHotKey: 0,
+                                        hIcon: windows::Win32::Foundation::HANDLE(std::ptr::null_mut()),
+                                    };
+                                    if let Err(e) = cm.InvokeCommand(&invoke_info) {
+                                        log::warn!("cut InvokeCommand failed: {:?}", e);
+                                    }
+                                    return ShellMenuResult::NeedsCutMonitor(file_path.to_string());
+                                }
+                                "delete" => {
+                                    // Call InvokeCommand to move to Recycle Bin
+                                    let invoke_info = windows::Win32::UI::Shell::CMINVOKECOMMANDINFO {
+                                        cbSize: std::mem::size_of::<windows::Win32::UI::Shell::CMINVOKECOMMANDINFO>() as u32,
+                                        fMask: 0,
+                                        hwnd: windows::Win32::Foundation::HWND(hwnd),
+                                        lpVerb: windows::core::PCSTR(verb_ordinal as *const u8),
+                                        lpParameters: windows::core::PCSTR(std::ptr::null()),
+                                        lpDirectory: windows::core::PCSTR(std::ptr::null()),
+                                        nShow: SW_SHOW,
+                                        dwHotKey: 0,
+                                        hIcon: windows::Win32::Foundation::HANDLE(std::ptr::null_mut()),
+                                    };
+                                    if let Err(e) = cm.InvokeCommand(&invoke_info) {
+                                        log::warn!("delete InvokeCommand failed: {:?}", e);
+                                    }
+                                    return ShellMenuResult::NeedsDelete(file_path.to_string());
+                                }
+                                _ => {
+                                    // Other verbs: call InvokeCommand normally
+                                    let invoke_info = windows::Win32::UI::Shell::CMINVOKECOMMANDINFO {
+                                        cbSize: std::mem::size_of::<windows::Win32::UI::Shell::CMINVOKECOMMANDINFO>() as u32,
+                                        fMask: 0,
+                                        hwnd: windows::Win32::Foundation::HWND(hwnd),
+                                        lpVerb: windows::core::PCSTR(verb_ordinal as *const u8),
+                                        lpParameters: windows::core::PCSTR(std::ptr::null()),
+                                        lpDirectory: windows::core::PCSTR(std::ptr::null()),
+                                        nShow: SW_SHOW,
+                                        dwHotKey: 0,
+                                        hIcon: windows::Win32::Foundation::HANDLE(std::ptr::null_mut()),
+                                    };
+                                    if let Err(e) = cm.InvokeCommand(&invoke_info) {
+                                        log::warn!("InvokeCommand failed: {:?}", e);
+                                    }
+                                    ShellMenuResult::Completed(Some(verb))
+                                }
+                            };
+                            return result;
+                        } else {
+                            return ShellMenuResult::Cancelled;
                         }
                     }
                     Err(e) => {
@@ -206,19 +288,19 @@ fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> bool {
                 DestroyMenu(menu);
                 drop(cm); // Release COM object
                 let _ = ILFree(Some(full_pidl));
-                true
+                ShellMenuResult::Completed(None)
             }
             Err(e) => {
                 log::warn!("windows crate: GetUIObjectOf 失败: {:?}", e);
                 let _ = ILFree(Some(full_pidl));
-                false
+                ShellMenuResult::Cancelled
             }
         }
     }
 }
 
 /// ShellExecuteW 回退菜单
-fn show_shell_fallback_menu(hwnd: HWND, file_path: &str) {
+fn show_shell_fallback_menu(hwnd: HWND, file_path: &str) -> ShellMenuResult {
     unsafe {
         let path_wide: Vec<u16> = file_path.encode_utf16().chain(std::iter::once(0)).collect();
 
@@ -244,7 +326,8 @@ fn show_shell_fallback_menu(hwnd: HWND, file_path: &str) {
         AppendMenuW(menu, MF_STRING, 5, props_text.as_ptr());
 
         let cmd = TrackPopupMenu(menu, TPM_RETURNCMD, pt.x, pt.y, 0, hwnd, std::ptr::null());
-        match cmd {
+        let result = match cmd {
+            0 => ShellMenuResult::Cancelled,
             1 => {
                 let op: Vec<u16> = "open\0".encode_utf16().collect();
                 ShellExecuteW(
@@ -255,6 +338,7 @@ fn show_shell_fallback_menu(hwnd: HWND, file_path: &str) {
                     std::ptr::null(),
                     SW_SHOW,
                 );
+                ShellMenuResult::Completed(Some("open".to_string()))
             }
             2 => {
                 let op: Vec<u16> = "explore\0".encode_utf16().collect();
@@ -266,6 +350,7 @@ fn show_shell_fallback_menu(hwnd: HWND, file_path: &str) {
                     std::ptr::null(),
                     SW_SHOW,
                 );
+                ShellMenuResult::Completed(Some("explore".to_string()))
             }
             3 => {
                 let op: Vec<u16> = "runas\0".encode_utf16().collect();
@@ -277,6 +362,7 @@ fn show_shell_fallback_menu(hwnd: HWND, file_path: &str) {
                     std::ptr::null(),
                     SW_SHOW,
                 );
+                ShellMenuResult::Completed(Some("runas".to_string()))
             }
             4 => {
                 let op: Vec<u16> = "delete\0".encode_utf16().collect();
@@ -288,6 +374,7 @@ fn show_shell_fallback_menu(hwnd: HWND, file_path: &str) {
                     std::ptr::null(),
                     SW_SHOW,
                 );
+                ShellMenuResult::NeedsDelete(file_path.to_string())
             }
             5 => {
                 let op: Vec<u16> = "properties\0".encode_utf16().collect();
@@ -299,10 +386,12 @@ fn show_shell_fallback_menu(hwnd: HWND, file_path: &str) {
                     std::ptr::null(),
                     SW_SHOW,
                 );
+                ShellMenuResult::Completed(Some("properties".to_string()))
             }
-            _ => {}
-        }
+            _ => ShellMenuResult::Completed(None),
+        };
         DestroyMenu(menu);
+        result
     }
 }
 

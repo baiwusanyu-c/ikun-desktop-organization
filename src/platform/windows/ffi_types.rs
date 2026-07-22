@@ -630,6 +630,7 @@ pub struct WINDOWPOS {
 pub const WM_USER_PUSH_GRIDS_BELOW: u32 = WM_APP + 15;
 /// 通知目标框：更新拖拽覆盖可视化状态（lparam = 光标屏幕坐标）
 pub const WM_USER_DRAG_OVER_UPDATE: u32 = WM_APP + 16;
+pub const WM_USER_CUT_FILE_MOVED: u32 = WM_APP + 17;
 
 /// 拖拽项信息（用于框间拖拽数据传递）
 #[derive(Debug, Clone)]

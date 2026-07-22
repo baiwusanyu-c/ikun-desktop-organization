@@ -335,6 +335,13 @@ extern "system" {
     pub fn GlobalLock(hMem: HGLOBAL) -> *mut c_void;
     pub fn GlobalUnlock(hMem: HGLOBAL) -> i32;
     pub fn GlobalFree(hMem: HGLOBAL) -> HGLOBAL;
+    // Clipboard operations (cut/copy support)
+    pub fn OpenClipboard(hWndNewOwner: HWND) -> i32;
+    pub fn CloseClipboard() -> i32;
+    pub fn EmptyClipboard() -> i32;
+    pub fn SetClipboardData(uFormat: u32, hMem: HGLOBAL) -> HGLOBAL;
+    pub fn GetClipboardData(uFormat: u32) -> HGLOBAL;
+    pub fn IsClipboardFormatAvailable(format: u32) -> i32;
 
     // COM 实例创建（IDragSourceHelper）
     pub fn CoCreateInstance(
