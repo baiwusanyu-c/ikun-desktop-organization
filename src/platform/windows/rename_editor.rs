@@ -43,6 +43,9 @@ pub fn show_rename_editor(
         // ES_AUTOHSCROLL = 0x0080, WS_POPUP = 0x80000000, WS_VISIBLE = 0x10000000, WS_BORDER = 0x00800000
         let style = 0x80000000_u32 | 0x10000000 | 0x00800000 | 0x0080;
 
+        log::info!("Creating rename EDIT control at ({}, {}), size {}x{}, parent {:?}", 
+            screen_x, screen_y, width, height, parent_hwnd);
+        
         let edit_hwnd = CreateWindowExW(
             0x00000200, // WS_EX_CLIENTEDGE
             EDIT_CLASS.as_ptr(),
@@ -62,6 +65,7 @@ pub fn show_rename_editor(
             log::warn!("Failed to create rename EDIT control");
             return None;
         }
+        log::info!("Rename EDIT control created: {:?}", edit_hwnd);
 
         let orig_proc = SetWindowLongPtrW(edit_hwnd, GWLP_WNDPROC, rename_edit_subclass as *const () as isize);
 

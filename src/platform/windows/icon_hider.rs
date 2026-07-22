@@ -660,10 +660,20 @@ pub fn rename_icon_file(logical_path: &str, new_name: &str) -> Result<String> {
 /// Put icon file path into clipboard with cut (move) semantics
 pub fn cut_icon_to_clipboard(logical_path: &str) -> Result<()> {
     log::info!("cut icon to clipboard: {}", logical_path);
-    let actual_path = resolve_icon_read_path(logical_path)
-        .ok_or_else(|| anyhow::anyhow!("icon file not readable: {}", logical_path))?;
-    let actual_str = actual_path.to_string_lossy().to_string();
-    let path_wide: Vec<u16> = actual_str.encode_utf16().chain(std::iter::once(0)).collect();
+    
+    // Export vault file to desktop first (if it's in vault)
+    let clipboard_path = match export_icon(logical_path) {
+        Ok((_, desktop_path)) => {
+            log::info!("exported vault file to desktop for cut: {}", desktop_path.display());
+            desktop_path.to_string_lossy().to_string()
+        }
+        Err(e) => {
+            log::warn!("export failed, using logical path: {}", e);
+            logical_path.to_string()
+        }
+    };
+    
+    let path_wide: Vec<u16> = clipboard_path.encode_utf16().chain(std::iter::once(0)).collect();
     let dropfiles_size = std::mem::size_of::<super::ffi_types::DROPFILES>();
     let total_bytes = dropfiles_size + (path_wide.len() + 1) * 2;
     unsafe {
@@ -714,7 +724,7 @@ pub fn cut_icon_to_clipboard(logical_path: &str) -> Result<()> {
         }
         super::ffi_imports::CloseClipboard();
     }
-    log::info!("put icon path in clipboard (move): {}", actual_str);
+    log::info!("put icon path in clipboard (move): {}", clipboard_path);
     Ok(())
 }
 

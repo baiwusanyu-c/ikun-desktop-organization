@@ -75,8 +75,12 @@ fn handle_shell_menu_result(hwnd: HWND, file_path: &str, hit_index: i32, result:
             remove_grid_item_if_missing_after_shell_menu(hwnd, file_path);
         }
         ShellMenuResult::NeedsRename(path) => {
+            log::info!("Rename requested for: {}", path);
             // Show inline editor and rename file
-            let Some(data) = (unsafe { get_data(hwnd) }) else { return };
+            let Some(data) = (unsafe { get_data(hwnd) }) else { 
+                log::warn!("Failed to get grid data for rename");
+                return; 
+            };
             let mut wr = RECT { left: 0, top: 0, right: 0, bottom: 0 };
             unsafe { GetWindowRect(hwnd, &mut wr) };
             let dpi = unsafe { GetDpiForWindow(hwnd) };
@@ -154,8 +158,8 @@ fn start_cut_monitor(hwnd: HWND, logical_path: String) {
     let hwnd_usize = hwnd as usize;
     std::thread::spawn(move || {
         let hwnd = hwnd_usize as HWND;
-        for _ in 0..60 {
-            std::thread::sleep(std::time::Duration::from_secs(5));
+        for _ in 0..300 {
+            std::thread::sleep(std::time::Duration::from_secs(1));
             if !super::icon_hider::icon_exists_for_box(&logical_path) {
                 unsafe { PostMessageW(hwnd, WM_USER_CUT_FILE_MOVED, 0, 0); }
                 return;

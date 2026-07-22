@@ -580,6 +580,7 @@ fn handle_overlay_shell_menu_result(
             }
         }
         ShellMenuResult::NeedsRename(path) => {
+            log::info!("Overlay rename requested for: {}", path);
             let (sx, sy, tw, th, dpi, current_name) = match get_overlay_data(hwnd) {
                 Some(data) => {
                     let idx = hit_index as usize;
@@ -594,9 +595,12 @@ fn handle_overlay_shell_menu_result(
                 }
                 None => return,
             };
+            log::info!("Showing overlay rename editor at ({}, {}), size {}x{}, current name: '{}'", 
+                sx, sy, tw, th, current_name);
             if let Some(new_name) = crate::platform::windows::rename_editor::show_rename_editor(
                 hwnd, &current_name, sx, sy, tw, th, dpi,
             ) {
+                log::info!("Overlay rename editor returned: '{}'", new_name);
                 if new_name.is_empty() || new_name == current_name { return; }
                 match crate::platform::windows::icon_hider::rename_icon_file(&path, &new_name) {
                     Ok(new_path) => {
@@ -651,8 +655,8 @@ fn start_overlay_cut_monitor(hwnd: HWND, logical_path: String) {
     let hwnd_usize = hwnd as usize;
     std::thread::spawn(move || {
         let hwnd = hwnd_usize as HWND;
-        for _ in 0..60 {
-            std::thread::sleep(std::time::Duration::from_secs(5));
+        for _ in 0..300 {
+            std::thread::sleep(std::time::Duration::from_secs(1));
             if !crate::platform::windows::icon_hider::icon_exists_for_box(&logical_path) {
                 unsafe { PostMessageW(hwnd, WM_USER_CUT_FILE_MOVED, 0, 0); }
                 return;
