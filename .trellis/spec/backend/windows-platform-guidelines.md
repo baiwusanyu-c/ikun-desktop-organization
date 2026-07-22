@@ -862,3 +862,44 @@ Exit:
 - [ ] Sufficient delay (500ms) between restore and position correction
 - [ ] Auto-arrange is temporarily disabled during position setting
 - [ ] Positions are stored in runtime memory, not config file
+
+## Resize Edge Hover Indicator
+
+分类框边缘拖拽 resize 时，鼠标悬停的边缘会显示半透明指示条，提示用户可拖拽调整尺寸。
+
+### 圆角适配
+
+分类框使用 `D2D1_ROUNDED_RECT` 绘制圆角背景（默认 radius=16），边缘指示条需要避开圆角区域，避免直角矩形突出于圆角背景的视觉冲突。
+
+### 实现方式
+
+使用纯函数 `compute_edge_rect()` 计算边缘条矩形，根据 `hover_edge` 值返回避开圆角的坐标：
+
+```rust
+pub fn compute_edge_rect(
+    hover_edge: i32,      // 0=无, 1=左, 2=右, 3=上, 4=下
+    window_width: f32,
+    window_height: f32,
+    border_width: f32,
+    corner_radius: f32,
+) -> (f32, f32, f32, f32) // (left, top, right, bottom)
+```
+
+**边缘条避让规则**：
+- 左/右边缘：top 起点 ≥ corner_radius，bottom 终点 ≤ height - corner_radius
+- 上/下边缘：left 起点 ≥ corner_radius，right 终点 ≤ width - corner_radius
+
+### 相关文件
+
+- `src/platform/windows/d2d_render.rs` — `compute_edge_rect()` 函数及渲染逻辑
+- `src/platform/windows/wnd_proc.rs` — `WM_NCHITTEST` 中 `hover_edge` 状态更新
+
+### 单元测试
+
+`d2d_render.rs` 中包含 11 个单元测试覆盖：
+- 四个方向边缘的矩形计算
+- 无边缘 / 无效边缘 / 负边缘值
+- 边界约束验证
+- 圆角避让验证
+- DPI 缩放兼容性
+- 小窗口场景

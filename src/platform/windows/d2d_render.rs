@@ -546,19 +546,15 @@ pub fn render_layered_window(hwnd: HWND) {
     unsafe { target.PopAxisAlignedClip() };
 
     // ===== 绘制边缘拖拽指示条（未锁定时鼠标悬停边缘显示）=====
+    // 边缘条避开圆角区域，避免直角突出于圆角背景。
     if !data.locked && data.hover_edge > 0 {
         let edge_brush =
             unsafe { target.CreateSolidColorBrush(&d2d_color(120, 180, 255, 100), None) };
         if let Ok(ref eb) = edge_brush {
             let border_w = scale_for_dpi(3, dpi) as f32;
-            let edge_rect = match data.hover_edge {
-                1 => d2d_rect(0.0, 0.0, border_w, hh),     // 左边缘
-                2 => d2d_rect(ww - border_w, 0.0, ww, hh), // 右边缘
-                3 => d2d_rect(0.0, 0.0, ww, border_w),     // 上边缘
-                4 => d2d_rect(0.0, hh - border_w, ww, hh), // 下边缘
-                _ => d2d_rect(0.0, 0.0, 0.0, 0.0),
-            };
-            unsafe { target.FillRectangle(&edge_rect, eb) };
+            let corner_r = 16.0_f32; // 与背景圆角一致
+            let (l, t, r, b) = compute_edge_rect(data.hover_edge, ww, hh, border_w, corner_r);
+            unsafe { target.FillRectangle(&d2d_rect(l, t, r, b), eb) };
         }
     }
 
@@ -1364,5 +1360,169 @@ pub fn render_drag_overlay_bitmap(
         ReleaseDC(std::ptr::null_mut(), screen_dc);
 
         dib
+    }
+}
+
+/// 计算边缘拖拽指示条的矩形区域
+/// 
+/// 根据 hover_edge 值计算边缘条的矩形，边缘条避开圆角区域以避免视觉冲突。
+/// 
+/// # Arguments
+/// * `hover_edge` - 边缘标识：0=无, 1=左, 2=右, 3=上, 4=下
+/// * `window_width` - 窗口宽度
+/// * `window_height` - 窗口高度  
+/// * `border_width` - 边缘条宽度
+/// * `corner_radius` - 圆角半径
+/// 
+/// # Returns
+/// (left, top, right, bottom) 格式的矩形坐标
+pub fn compute_edge_rect(
+    hover_edge: i32,
+    window_width: f32,
+    window_height: f32,
+    border_width: f32,
+    corner_radius: f32,
+) -> (f32, f32, f32, f32) {
+    match hover_edge {
+        1 => (0.0, corner_radius, border_width, window_height - corner_radius), // 左边缘
+        2 => (window_width - border_width, corner_radius, window_width, window_height - corner_radius), // 右边缘
+        3 => (corner_radius, 0.0, window_width - corner_radius, border_width), // 上边缘
+        4 => (corner_radius, window_height - border_width, window_width - corner_radius, window_height), // 下边缘
+        _ => (0.0, 0.0, 0.0, 0.0), // 无边缘
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ===== compute_edge_rect 单元测试 =====
+    // 测试边缘拖拽指示条的矩形计算，验证边缘条避开圆角区域。
+
+    #[test]
+    fn test_edge_rect_left_edge() {
+        let (l, t, r, b) = compute_edge_rect(1, 400.0, 600.0, 3.0, 16.0);
+        assert_eq!(l, 0.0);
+        assert_eq!(t, 16.0); // 避开上方圆角
+        assert_eq!(r, 3.0);
+        assert_eq!(b, 584.0); // 避开下方圆角 (600 - 16)
+    }
+
+    #[test]
+    fn test_edge_rect_right_edge() {
+        let (l, t, r, b) = compute_edge_rect(2, 400.0, 600.0, 3.0, 16.0);
+        assert_eq!(l, 397.0); // 400 - 3
+        assert_eq!(t, 16.0); // 避开上方圆角
+        assert_eq!(r, 400.0);
+        assert_eq!(b, 584.0); // 避开下方圆角
+    }
+
+    #[test]
+    fn test_edge_rect_top_edge() {
+        let (l, t, r, b) = compute_edge_rect(3, 400.0, 600.0, 3.0, 16.0);
+        assert_eq!(l, 16.0); // 避开左侧圆角
+        assert_eq!(t, 0.0);
+        assert_eq!(r, 384.0); // 避开右侧圆角 (400 - 16)
+        assert_eq!(b, 3.0);
+    }
+
+    #[test]
+    fn test_edge_rect_bottom_edge() {
+        let (l, t, r, b) = compute_edge_rect(4, 400.0, 600.0, 3.0, 16.0);
+        assert_eq!(l, 16.0); // 避开左侧圆角
+        assert_eq!(t, 597.0); // 600 - 3
+        assert_eq!(r, 384.0); // 避开右侧圆角
+        assert_eq!(b, 600.0);
+    }
+
+    #[test]
+    fn test_edge_rect_no_edge() {
+        let (l, t, r, b) = compute_edge_rect(0, 400.0, 600.0, 3.0, 16.0);
+        assert_eq!(l, 0.0);
+        assert_eq!(t, 0.0);
+        assert_eq!(r, 0.0);
+        assert_eq!(b, 0.0);
+    }
+
+    #[test]
+    fn test_edge_rect_invalid_edge() {
+        let (l, t, r, b) = compute_edge_rect(5, 400.0, 600.0, 3.0, 16.0);
+        assert_eq!(l, 0.0);
+        assert_eq!(t, 0.0);
+        assert_eq!(r, 0.0);
+        assert_eq!(b, 0.0);
+    }
+
+    #[test]
+    fn test_edge_rect_negative_edge() {
+        let (l, t, r, b) = compute_edge_rect(-1, 400.0, 600.0, 3.0, 16.0);
+        assert_eq!(l, 0.0);
+        assert_eq!(t, 0.0);
+        assert_eq!(r, 0.0);
+        assert_eq!(b, 0.0);
+    }
+
+    /// 验证边缘条不超出窗口边界
+    #[test]
+    fn test_edge_rect_within_bounds() {
+        for edge in 1..=4 {
+            let (l, t, r, b) = compute_edge_rect(edge, 400.0, 600.0, 3.0, 16.0);
+            assert!(l >= 0.0, "left edge {} should be >= 0", l);
+            assert!(t >= 0.0, "top edge {} should be >= 0", t);
+            assert!(r <= 400.0, "right edge {} should be <= 400", r);
+            assert!(b <= 600.0, "bottom edge {} should be <= 600", b);
+        }
+    }
+
+    /// 验证边缘条避开圆角区域（边缘条起点/终点不应在圆角区域内）
+    #[test]
+    fn test_edge_rect_avoids_corners() {
+        let corner_r = 16.0_f32;
+        let ww = 400.0_f32;
+        let hh = 600.0_f32;
+        let bw = 3.0_f32;
+
+        // 左边缘：top >= corner_r, bottom <= hh - corner_r
+        let (_l, t, _r, b) = compute_edge_rect(1, ww, hh, bw, corner_r);
+        assert!(t >= corner_r, "left edge top should be >= corner_r");
+        assert!(b <= hh - corner_r, "left edge bottom should be <= hh - corner_r");
+
+        // 右边缘：top >= corner_r, bottom <= hh - corner_r
+        let (_l, t, _r, b) = compute_edge_rect(2, ww, hh, bw, corner_r);
+        assert!(t >= corner_r, "right edge top should be >= corner_r");
+        assert!(b <= hh - corner_r, "right edge bottom should be <= hh - corner_r");
+
+        // 上边缘：left >= corner_r, right <= ww - corner_r
+        let (l, _t, r, _b) = compute_edge_rect(3, ww, hh, bw, corner_r);
+        assert!(l >= corner_r, "top edge left should be >= corner_r");
+        assert!(r <= ww - corner_r, "top edge right should be <= ww - corner_r");
+
+        // 下边缘：left >= corner_r, right <= ww - corner_r
+        let (l, _t, r, _b) = compute_edge_rect(4, ww, hh, bw, corner_r);
+        assert!(l >= corner_r, "bottom edge left should be >= corner_r");
+        assert!(r <= ww - corner_r, "bottom edge right should be <= ww - corner_r");
+    }
+
+    /// 验证不同 DPI 缩放下的边缘条宽度计算（scale_for_dpi 逻辑验证）
+    #[test]
+    fn test_edge_rect_with_dpi_scaled_border() {
+        // 模拟 150% DPI：scale_for_dpi(3, 144) = 3 * 144 / 96 = 4
+        let border_w_150 = 4.0_f32;
+        let (l, _t, r, _b) = compute_edge_rect(1, 400.0, 600.0, border_w_150, 16.0);
+        assert_eq!(r - l, 4.0, "border width should match DPI-scaled value");
+
+        // 模拟 200% DPI：scale_for_dpi(3, 192) = 3 * 192 / 96 = 6
+        let border_w_200 = 6.0_f32;
+        let (l, _t, r, _b) = compute_edge_rect(2, 400.0, 600.0, border_w_200, 16.0);
+        assert_eq!(r - l, 6.0, "border width should match DPI-scaled value");
+    }
+
+    /// 验证小窗口场景（窗口尺寸接近圆角直径）
+    #[test]
+    fn test_edge_rect_small_window() {
+        // 窗口 40x40，圆角 16：边缘条只有 40-16*2=8 像素可用
+        let (_l, t, _r, b) = compute_edge_rect(1, 40.0, 40.0, 3.0, 16.0);
+        assert!(t < b, "left edge should have positive height: t={}, b={}", t, b);
+        assert_eq!(b - t, 8.0, "edge height should be 40 - 16*2 = 8");
     }
 }
