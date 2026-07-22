@@ -13,9 +13,9 @@ use super::ffi_imports::{
     SetTimer, TrackPopupMenu,
 };
 use super::ffi_types::{
-    HWND, HWND_MESSAGE, LPARAM, LRESULT, MF_STRING, POINT, TPM_LEFTALIGN, TPM_LEFTBUTTON,
-    TPM_RETURNCMD, TPM_TOPALIGN, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP, WM_TIMER,
-    WNDCLASSEXW, WPARAM,
+    HWND, HWND_MESSAGE, LPARAM, LRESULT, MF_CHECKED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, POINT,
+    TPM_LEFTALIGN, TPM_LEFTBUTTON, TPM_RETURNCMD, TPM_TOPALIGN, WM_LBUTTONDBLCLK, WM_LBUTTONUP,
+    WM_RBUTTONUP, WM_TIMER, WNDCLASSEXW, WPARAM,
 };
 use anyhow::{anyhow, Context};
 use std::ffi::c_void;
@@ -39,17 +39,20 @@ const SINGLE_CLICK_DELAY_MS: u32 = 240;
 const CMD_OPEN_PANEL: usize = 1001;
 const CMD_CREATE_BOX: usize = 1002;
 const CMD_AI_CLASSIFY: usize = 1003;
+const CMD_TOGGLE_AUTO_START: usize = 1005;
 const CMD_QUIT: usize = 1004;
 
 const ACTION_NONE: u8 = 0;
 const ACTION_OPEN_PANEL: u8 = 1;
 const ACTION_CREATE_BOX: u8 = 2;
 const ACTION_AI_CLASSIFY: u8 = 3;
+const ACTION_TOGGLE_AUTO_START: u8 = 5;
 const ACTION_QUIT: u8 = 4;
 
 static TRAY_HWND: AtomicIsize = AtomicIsize::new(0);
 static PENDING_ACTION: AtomicU8 = AtomicU8::new(ACTION_NONE);
 static IGNORE_NEXT_LBUTTONUP: AtomicBool = AtomicBool::new(false);
+static AUTO_START_ENABLED: AtomicBool = AtomicBool::new(false);
 type TrayActionWaker = Box<dyn Fn() + Send + Sync>;
 static ACTION_WAKER: OnceLock<Mutex<Option<TrayActionWaker>>> = OnceLock::new();
 
@@ -68,6 +71,14 @@ pub fn register_tray_action_waker(waker: impl Fn() + Send + Sync + 'static) {
             log::warn!("注册系统托盘动作唤醒回调失败: {}", e);
         }
     }
+}
+
+/// 更新系统托盘菜单中的开机自启勾选状态。
+///
+/// 调用方在加载配置或切换自启状态后调用，使菜单显示正确的勾选标记。
+pub fn set_tray_auto_start_state(enabled: bool) {
+    AUTO_START_ENABLED.store(enabled, Ordering::SeqCst);
+    log::debug!("系统托盘开机自启状态已更新: {}", enabled);
 }
 
 /// 初始化系统托盘图标。
@@ -154,6 +165,7 @@ pub fn take_pending_tray_action() -> Option<SystemTrayAction> {
         ACTION_OPEN_PANEL => Some(SystemTrayAction::OpenControlPanel),
         ACTION_CREATE_BOX => Some(SystemTrayAction::CreateBox),
         ACTION_AI_CLASSIFY => Some(SystemTrayAction::AiClassify),
+        ACTION_TOGGLE_AUTO_START => Some(SystemTrayAction::ToggleAutoStart),
         ACTION_QUIT => Some(SystemTrayAction::Quit),
         _ => None,
     }
@@ -224,6 +236,10 @@ fn show_tray_menu(hwnd: HWND) {
         append_menu_item(menu, CMD_OPEN_PANEL, "打开控制面板");
         append_menu_item(menu, CMD_CREATE_BOX, "创建分类框");
         append_menu_item(menu, CMD_AI_CLASSIFY, "一键AI分类");
+        append_separator(menu);
+        let auto_start = AUTO_START_ENABLED.load(Ordering::SeqCst);
+        append_checkable_menu_item(menu, CMD_TOGGLE_AUTO_START, "开机自启", auto_start);
+        append_separator(menu);
         append_menu_item(menu, CMD_QUIT, "退出应用");
 
         let mut pt = POINT { x: 0, y: 0 };
@@ -251,6 +267,7 @@ fn show_tray_menu(hwnd: HWND) {
             CMD_OPEN_PANEL => set_pending_action(SystemTrayAction::OpenControlPanel),
             CMD_CREATE_BOX => set_pending_action(SystemTrayAction::CreateBox),
             CMD_AI_CLASSIFY => set_pending_action(SystemTrayAction::AiClassify),
+            CMD_TOGGLE_AUTO_START => set_pending_action(SystemTrayAction::ToggleAutoStart),
             CMD_QUIT => set_pending_action(SystemTrayAction::Quit),
             _ => {}
         }
@@ -262,6 +279,19 @@ fn append_menu_item(menu: *mut c_void, id: usize, text: &str) {
     let ok = unsafe { AppendMenuW(menu, MF_STRING, id, label.as_ptr()) };
     if ok == 0 {
         log::warn!("添加托盘菜单项失败: {}", text);
+    }
+}
+
+fn append_separator(menu: *mut c_void) {
+    unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null()) };
+}
+
+fn append_checkable_menu_item(menu: *mut c_void, id: usize, text: &str, checked: bool) {
+    let label = wide_null(text);
+    let flags = MF_STRING | if checked { MF_CHECKED } else { MF_UNCHECKED };
+    let ok = unsafe { AppendMenuW(menu, flags, id, label.as_ptr()) };
+    if ok == 0 {
+        log::warn!("添加托盘菜单勾选项失败: {}", text);
     }
 }
 
@@ -296,6 +326,7 @@ fn action_to_u8(action: SystemTrayAction) -> u8 {
         SystemTrayAction::OpenControlPanel => ACTION_OPEN_PANEL,
         SystemTrayAction::CreateBox => ACTION_CREATE_BOX,
         SystemTrayAction::AiClassify => ACTION_AI_CLASSIFY,
+        SystemTrayAction::ToggleAutoStart => ACTION_TOGGLE_AUTO_START,
         SystemTrayAction::Quit => ACTION_QUIT,
     }
 }
@@ -363,6 +394,22 @@ mod tests {
         assert_eq!(action_to_u8(SystemTrayAction::CreateBox), 2);
         assert_eq!(action_to_u8(SystemTrayAction::AiClassify), 3);
         assert_eq!(action_to_u8(SystemTrayAction::Quit), 4);
+        assert_eq!(action_to_u8(SystemTrayAction::ToggleAutoStart), 5);
+    }
+
+    #[test]
+    fn test_tray_auto_start_state_default() {
+        // Default should be false
+        assert!(!AUTO_START_ENABLED.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_set_tray_auto_start_state() {
+        set_tray_auto_start_state(true);
+        assert!(AUTO_START_ENABLED.load(Ordering::SeqCst));
+
+        set_tray_auto_start_state(false);
+        assert!(!AUTO_START_ENABLED.load(Ordering::SeqCst));
     }
 
     #[test]

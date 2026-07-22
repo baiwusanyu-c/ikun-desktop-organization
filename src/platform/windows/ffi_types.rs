@@ -169,6 +169,12 @@ pub const TIMER_ID_OVERLAY_DRAG: usize = 0x4F56_0001;
 pub const TIMER_ID_GRID_DRAG: usize = 0x4F56_0002;
 pub const WM_MOUSEWHEEL: u32 = 0x020A;
 pub const WM_TIMER: u32 = 0x0113;
+pub const WM_HOTKEY: u32 = 0x0312;
+pub const MOD_ALT: u32 = 0x0001;
+pub const MOD_CONTROL: u32 = 0x0002;
+pub const MOD_SHIFT: u32 = 0x0004;
+pub const MOD_WIN: u32 = 0x0008;
+pub const MOD_NOREPEAT: u32 = 0x4000;
 pub const WM_ACTIVATE: u32 = 0x0006;
 pub const WM_WINDOWPOSCHANGING: u32 = 0x0046;
 
@@ -258,6 +264,7 @@ pub const WS_OVERLAPPEDWINDOW: u32 = 0x00CF0000;
 // ===== Registry Constants =====
 pub const HKEY_CURRENT_USER: isize = 0x80000001u32 as isize;
 pub const KEY_WRITE: u32 = 0x20006;
+pub const KEY_READ: u32 = 0x20019;
 pub const REG_SZ: u32 = 1;
 pub const REG_OPTION_NON_VOLATILE: u32 = 0;
 

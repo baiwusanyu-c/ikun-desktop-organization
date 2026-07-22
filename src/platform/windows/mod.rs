@@ -27,6 +27,7 @@ pub mod drag_visual;
 mod drop_target;
 pub mod ffi_imports;
 pub mod ffi_types;
+pub mod global_hotkey;
 pub mod grid_layout;
 pub mod grid_window;
 pub mod icon_extract;
@@ -51,6 +52,8 @@ pub use drop_target::{
 };
 #[allow(unused_imports)] // 公共 API 预留
 pub use ffi_types::{IkunBoxDragData, IkunDragItemData};
+#[allow(unused_imports)]
+pub use global_hotkey::{setup_global_hotkey, take_hotkey_toggle, unregister_global_hotkey};
 pub use grid_window::{
     collect_grid_layout, create_grid_window, destroy_all_grid_windows, get_grid_count,
     update_grid_window_title, GridCreateParams, GridFileItem,
@@ -73,7 +76,8 @@ pub use ole_dnd::{get_box_drag_format_id, start_box_drag};
 pub use shell_menu::{cleanup_desktop_registry, setup_desktop_registry, take_pending_create_box};
 #[allow(unused_imports)] // 公共 API 预留
 pub use sys_tray::{
-    cleanup_system_tray, register_tray_action_waker, setup_system_tray, take_pending_tray_action,
+    cleanup_system_tray, register_tray_action_waker, set_tray_auto_start_state, setup_system_tray,
+    take_pending_tray_action,
 };
 #[allow(unused_imports)] // Z-order 公共 API 预留
 pub use zorder::{find_grid_window_at_point, push_other_grids_below, set_drag_in_progress};

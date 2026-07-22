@@ -41,8 +41,9 @@ use crate::platform::{
     create_grid_window, destroy_all_grid_windows, destroy_desktop_overlay, extract_file_icon,
     get_grid_count, get_primary_monitor_dpi, get_screen_resolution, hide_control_panel_window,
     hide_native_icons, icon_exists_for_box, native_icons_hidden, resolve_icon_read_path,
-    restore_all_hidden_icons, restore_native_icons, setup_desktop_registry, setup_system_tray,
-    show_control_panel_window, take_pending_create_box, take_pending_tray_action,
+    restore_all_hidden_icons, restore_native_icons, set_tray_auto_start_state,
+    setup_desktop_registry, setup_global_hotkey, setup_system_tray, show_control_panel_window,
+    take_hotkey_toggle, take_pending_create_box, take_pending_tray_action,
     update_grid_window_title, DesktopIcon, DesktopManagerTrait, GridCreateParams, GridFileItem,
     SystemTrayAction,
 };
@@ -244,6 +245,22 @@ impl AppRuntime {
 
         self.ensure_desktop_overlay_running();
 
+        // 注册全局热键
+        let hotkey_str = self.ctx.config.hotkeys.toggle_panel.clone();
+        if let Err(e) = setup_global_hotkey(&hotkey_str) {
+            log::warn!("注册全局热键失败: {} (热键: {})", e, hotkey_str);
+        }
+
+        // 同步开机自启状态
+        #[cfg(windows)]
+        {
+            let auto_start = self.ctx.config.general.auto_start;
+            set_tray_auto_start_state(auto_start);
+            if let Err(e) = crate::utils::platform::set_auto_start(auto_start) {
+                log::warn!("同步开机自启状态失败: {}", e);
+            }
+        }
+
         log::info!("GPUI AppRuntime 初始化完成");
     }
 
@@ -286,7 +303,18 @@ impl AppRuntime {
             changed = true;
         }
 
-        // 4. Shell 右键菜单待创建分类框
+        // 4. 全局热键切换面板
+        if take_hotkey_toggle() {
+            log::info!("全局热键触发: 切换控制面板");
+            if self.ctx.state.panel_visible {
+                self.hide_control_panel();
+            } else {
+                self.open_control_panel();
+            }
+            changed = true;
+        }
+
+        // 5. Shell 右键菜单待创建分类框
         if take_pending_create_box() {
             self.open_create_box_dialog();
             changed = true;
@@ -315,6 +343,31 @@ impl AppRuntime {
         self.ctx.state.panel_visible
     }
 
+    /// 切换开机自启状态。
+    ///
+    /// 翻转配置中的 `general.auto_start`，同步写入注册表并更新托盘菜单勾选。
+    fn toggle_auto_start(&mut self) {
+        let new_state = !self.ctx.config.general.auto_start;
+        self.ctx.config.general.auto_start = new_state;
+
+        // 持久化配置
+        if let Err(e) = self.ctx.config.save() {
+            log::warn!("保存开机自启配置失败: {}", e);
+        }
+
+        // 同步注册表
+        #[cfg(windows)]
+        {
+            if let Err(e) = crate::utils::platform::set_auto_start(new_state) {
+                log::warn!("切换开机自启失败: {}", e);
+            }
+        }
+
+        // 更新托盘菜单勾选
+        set_tray_auto_start_state(new_state);
+        log::info!("开机自启已切换: {}", new_state);
+    }
+
     // =================================================================
     // 托盘动作分发
     // =================================================================
@@ -330,6 +383,9 @@ impl AppRuntime {
             SystemTrayAction::AiClassify => {
                 log::info!("托盘菜单: 一键AI分类");
                 self.perform_auto_classify();
+            }
+            SystemTrayAction::ToggleAutoStart => {
+                self.toggle_auto_start();
             }
             SystemTrayAction::Quit => {
                 log::info!("托盘菜单: 退出");

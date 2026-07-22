@@ -65,7 +65,8 @@ src/
 │   │   ├── drag_visual.rs     #   拖拽可视化反馈（插入分隔线/替换高亮 + 纯逻辑函数）
 │   │   ├── icon_manager.rs    #   图标管理器（SysListView32 跨进程操作 + 图像列表提取 + 位置快照/恢复）
 │   │   ├── control_panel_window.rs # 控制面板 Win32 显示/隐藏辅助（托盘优先生命周期）
-│   │   └── sys_tray.rs        #   系统托盘入口（隐藏消息窗口 + 固定菜单动作队列）
+│   │   ├── sys_tray.rs        #   系统托盘入口（隐藏消息窗口 + 固定菜单动作队列）
+│   │   └── global_hotkey.rs   #   全局热键（RegisterHotKey + 消息窗口 + 快捷键解析）
 │   └── macos/
 │       ├── mod.rs             #   macOS 平台入口 + stub 函数
 │       ├── desktop_manager.rs #   桌面图标枚举（NSWorkspace + FileManager）
@@ -214,7 +215,8 @@ platform/windows/
 ├── drag_visual.rs     # 拖拽可视化反馈（插入分隔线/替换高亮 + 纯逻辑函数）
 ├── icon_manager.rs    # 图标管理器（SysListView32 跨进程操作 + 图像列表提取）
 ├── control_panel_window.rs # GPUI/eframe 控制面板 Win32 显示/隐藏辅助
-└── sys_tray.rs        # 系统托盘入口
+├── sys_tray.rs        # 系统托盘入口
+└── global_hotkey.rs   # 全局热键模块
 ```
 
 ---

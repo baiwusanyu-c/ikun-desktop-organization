@@ -31,6 +31,8 @@ pub enum SystemTrayAction {
     CreateBox,
     /// 一键 AI 分类（当前仅占位）。
     AiClassify,
+    /// 切换开机自启。
+    ToggleAutoStart,
     /// 退出应用。
     Quit,
 }
@@ -51,9 +53,10 @@ pub use windows::{
     get_primary_monitor_work_area_phys, get_screen_resolution, hide_control_panel_window,
     hide_native_icons, icon_exists_for_box, native_icons_hidden, register_tray_action_waker,
     reposition_and_resize_window, reposition_window_by_title, resolve_icon_read_path,
-    restore_all_hidden_icons, restore_native_icons, setup_desktop_registry, setup_system_tray,
-    show_control_panel_window, take_pending_create_box, take_pending_tray_action,
-    update_grid_window_title, GridCreateParams, GridFileItem,
+    restore_all_hidden_icons, restore_native_icons, set_tray_auto_start_state,
+    setup_desktop_registry, setup_global_hotkey, setup_system_tray, show_control_panel_window,
+    take_hotkey_toggle, take_pending_create_box, take_pending_tray_action,
+    unregister_global_hotkey, update_grid_window_title, GridCreateParams, GridFileItem,
 };
 
 // =============================================================================
@@ -298,6 +301,23 @@ mod macos_stubs {
     pub fn show_control_panel_window(_title: &str) -> bool {
         false
     }
+
+    pub fn setup_global_hotkey(_hotkey_str: &str) -> anyhow::Result<()> {
+        log::debug!("macOS: setup_global_hotkey (no-op)");
+        Ok(())
+    }
+
+    pub fn unregister_global_hotkey() {
+        log::debug!("macOS: unregister_global_hotkey (no-op)");
+    }
+
+    pub fn take_hotkey_toggle() -> bool {
+        false
+    }
+
+    pub fn set_tray_auto_start_state(_enabled: bool) {
+        log::debug!("macOS: set_tray_auto_start_state (no-op)");
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -307,9 +327,10 @@ pub use macos_stubs::{
     get_primary_monitor_dpi, get_primary_monitor_work_area_phys, hide_control_panel_window,
     icon_exists_for_box, native_icons_hidden, reposition_and_resize_window,
     reposition_window_by_title, resolve_icon_read_path, restore_all_hidden_icons,
-    setup_desktop_registry, setup_system_tray, show_control_panel_window, take_pending_create_box,
-    take_pending_tray_action, update_grid_window_title, FileIconInfo, GridCreateParams,
-    GridFileItem, HICON,
+    set_tray_auto_start_state, setup_desktop_registry, setup_global_hotkey, setup_system_tray,
+    show_control_panel_window, take_hotkey_toggle, take_pending_create_box,
+    take_pending_tray_action, unregister_global_hotkey, update_grid_window_title, FileIconInfo,
+    GridCreateParams, GridFileItem, HICON,
 };
 
 /// 桌面管理器 trait（跨平台）

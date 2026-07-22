@@ -212,6 +212,10 @@ extern "system" {
     pub fn UnhookWindowsHookEx(hhk: HHOOK) -> i32;
     pub fn CallNextHookEx(hhk: HHOOK, nCode: i32, wParam: WPARAM, lParam: LPARAM) -> LRESULT;
 
+    // Hotkey
+    pub fn RegisterHotKey(hWnd: HWND, id: i32, fsModifiers: u32, vk: u32) -> i32;
+    pub fn UnregisterHotKey(hWnd: HWND, id: i32) -> i32;
+
     // Common Controls (InitCommonControlsEx already declared above)
 
     // Registry
@@ -236,6 +240,14 @@ extern "system" {
     ) -> i32;
     pub fn RegCloseKey(hKey: isize) -> i32;
     pub fn RegDeleteKeyW(hKey: isize, lpSubKey: *const u16) -> i32;
+    pub fn RegDeleteValueW(hKey: isize, lpValueName: *const u16) -> i32;
+    pub fn RegOpenKeyExW(
+        hKey: isize,
+        lpSubKey: *const u16,
+        ulOptions: u32,
+        samDesired: u32,
+        phkResult: *mut isize,
+    ) -> i32;
 
     // GDI - Font
     pub fn CreateFontW(
