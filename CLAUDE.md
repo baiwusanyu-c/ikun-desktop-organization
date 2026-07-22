@@ -1,4 +1,4 @@
-# CLAUDE.md
+﻿# CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -31,7 +31,7 @@ cargo watch -x check             # 自动检查（需 cargo install cargo-watch�
 
 **日志级别**：通过 `RUST_LOG` 环境变量控制（`trace` / `debug` / `info` / `warn` / `error`）
 
-**控制台窗口**：所有构建均通过 `#![windows_subsystem = "windows"]` 禁用控制台，日志写入 `~/.ikun_organizer.log` 文件
+**控制台窗口**：所有构建均通过 `#![windows_subsystem = "windows"]` 禁用控制台，日志写入 `~/.ikun_organizer_log/` 目录（按日期和序号分文件）
 
 ---
 
@@ -157,7 +157,7 @@ src/
 │
 ├── utils/                     # 工具层
 │   ├── mod.rs                 #   模块导出
-│   ├── logger.rs              #   日志初始化（文件输出）+ 自定义宏
+│   ├── logger.rs              #   日志系统（滚动文件输出 + 自定义宏 + 发行版日志）
 │   ├── platform.rs            #   跨平台工具（开机自启、配置目录）
 │   ├── dpi.rs                 #   DPI 缩放工具
 │   └── string_utils.rs        #   UTF-16 字符串转换
@@ -340,10 +340,12 @@ main.rs
 
 ### 日志
 - 使用 `log::{debug, info, warn, error}`
-- 日志写入 `~/.ikun_organizer.log` 文件（无控制台输出）
+- 日志写入 `~/.ikun_organizer_log/` 目录，文件命名：`.ikun_organizer_log_YYYYMMDD_N`（如 `.ikun_organizer_log_20260722_1`）
+- 单文件超过 2MB 自动切换到下一个序号文件
+- 启动时自动清理超过 7 天的日志文件
 - 日志级别通过 `RUST_LOG` 环境变量控制
-- 自定义宏：`log_debug!`、`log_info!`、`log_warn!`、`log_error!`（自动附加文件/模块信息）
-
+- 开发日志宏：`log_debug!`、`log_info!`、`log_warn!`、`log_error!`（自动附加文件/模块信息）
+- 发行版日志宏：`release_info!`、`release_warn!`、`release_error!`（带 `[RELEASE]` 前缀，用于生产环境问题排查，不应作为调试代码删除）
 ---
 
 ## 功能需求（待实现）
@@ -401,7 +403,6 @@ main.rs
 - [Windows Shell API](https://learn.microsoft.com/en-us/windows/win32/shell/)
 - 架构重构方案：`todo/架构重构.md`
 - 需求 PRD：`todo/desktop-prd.md`
-
 
 
 

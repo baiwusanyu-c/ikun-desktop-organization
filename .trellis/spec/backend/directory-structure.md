@@ -1,4 +1,4 @@
-# Directory Structure
+﻿# Directory Structure
 
 > 项目代码组织方式（v2.0 架构）
 
@@ -113,7 +113,7 @@ src/
 │
 ├── utils/                     # 工具层
 │   ├── mod.rs                 #   模块导出
-│   ├── logger.rs              #   日志初始化（文件输出）+ 自定义宏
+│   ├── logger.rs              #   日志系统（滚动文件输出 + 自定义宏 + 发行版日志）
 │   ├── platform.rs            #   跨平台工具（开机自启、配置目录）
 │   ├── dpi.rs                 #   DPI 缩放工具
 │   └── string_utils.rs        #   UTF-16 字符串转换
