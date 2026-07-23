@@ -486,8 +486,11 @@ fn update_overlay_drag_over_visual(hwnd: HWND, screen_x: i32, screen_y: i32) {
     // 计算光标所在的网格列和行（列优先布局）
     let total = data.icons.len().max(1) as i32;
     let rows = (total + cols - 1) / cols;
+    // 行的上限基于覆盖窗口的实际高度（而非图标数量），
+    // 确保分隔线能跟随光标在全屏范围内的 Y 位置移动。
+    let max_rows = ((data.height - padding * 2) / cell_h).max(1);
     let col = ((local_x - padding) / cell_w).min(cols - 1).max(0);
-    let row = ((local_y - padding) / cell_h).min(rows - 1).max(0);
+    let row = ((local_y - padding) / cell_h).min(max_rows - 1).max(0);
 
     // 计算光标在单元格内的相对X位置（0.0 ~ 1.0）
     let cell_offset_x = local_x - padding - col * cell_w;
