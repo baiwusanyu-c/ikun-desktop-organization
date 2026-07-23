@@ -15,6 +15,7 @@ use std::ffi::c_void;
 extern "system" {
     // Window management
     pub fn GetModuleHandleW(lpModuleName: *const u16) -> HINSTANCE;
+    pub fn GetLastError() -> u32;
     pub fn RegisterClassExW(lpwcx: *const WNDCLASSEXW) -> u16;
     pub fn CreateWindowExW(
         dwExStyle: u32,
@@ -290,6 +291,9 @@ extern "system" {
     // Process / Memory（跨进程 SysListView32 操作）
     pub fn IsWindow(hWnd: HWND) -> i32;
     pub fn GetWindowThreadProcessId(hWnd: HWND, lpdwProcessId: *mut u32) -> u32;
+    pub fn GetForegroundWindow() -> HWND;
+    pub fn AttachThreadInput(idAttach: u32, idAttachTo: u32, fAttach: i32) -> i32;
+    pub fn GetCurrentThreadId() -> u32;
     pub fn OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) -> HANDLE;
     pub fn CloseHandle(hObject: HANDLE) -> i32;
     pub fn VirtualAllocEx(

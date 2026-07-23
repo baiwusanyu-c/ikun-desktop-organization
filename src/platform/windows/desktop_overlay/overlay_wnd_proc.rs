@@ -37,18 +37,6 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             handle_mouse_move(hwnd, local_x, local_y);
             0
         }
-        WM_KEYDOWN => {
-            // Escape 键取消选中
-            if wparam == VK_ESCAPE as WPARAM {
-                if let Some(data) = get_overlay_data(hwnd) {
-                    if data.selected_item != -1 {
-                        data.selected_item = -1;
-                        render_desktop_overlay(hwnd);
-                    }
-                }
-            }
-            0
-        }
         WM_MOUSELEAVE => {
             // WS_EX_LAYERED 窗口在 alpha=0 像素上会持续触发 WM_MOUSELEAVE
             // 忽略此消息，hover 状态由 WM_MOUSEMOVE 自然管理
@@ -73,7 +61,50 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             0
         }
         // ===== 拖拽轮询定时器（替代 SetCapture）=====
-        WM_TIMER => {
+        // 处理重命名结果消息
+        msg if msg == crate::platform::windows::rename_editor::get_rename_result_message() => {
+            let item_index = wparam as i32;
+            let text_ptr = lparam as *mut String;
+            
+            if !text_ptr.is_null() && item_index >= 0 {
+                let new_name = unsafe { Box::from_raw(text_ptr) };
+                log::info!("Overlay rename result for item {}: '{}'", item_index, *new_name);
+                
+                if let Some(data) = get_overlay_data(hwnd) {
+                    if (item_index as usize) < data.icons.len() {
+                        let old_path = data.icons[item_index as usize].file_path.clone();
+                        let old_name = data.icons[item_index as usize].display_name.clone();
+                        
+                        if !new_name.is_empty() && *new_name != old_name {
+                            match crate::platform::windows::icon_hider::rename_icon_file(&old_path, &new_name) {
+                                Ok(new_path) => {
+                                    log::info!("Overlay renamed: {} -> {}", old_path, new_path);
+                                    
+                                    // 更新数据
+                                    if let Some(icon) = data.icons.get_mut(item_index as usize) {
+                                        icon.file_path = new_path;
+                                        let stem = std::path::Path::new(&icon.file_path)
+                                            .file_stem()
+                                            .map(|s| s.to_string_lossy().to_string())
+                                            .unwrap_or_else(|| icon.file_path.clone());
+                                        icon.display_name = stem;
+                                    }
+                                    
+                                    // 保存并重绘
+                                    save_overlay_icon_positions();
+                                    render_desktop_overlay(hwnd);
+                                }
+                                Err(e) => {
+                                    log::error!("Overlay rename failed: {}", e);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            0
+        }
+                WM_TIMER => {
             log::debug!("overlay WM_TIMER received: wparam={:#X}", wparam);
             if wparam == TIMER_ID_OVERLAY_DRAG {
                 handle_overlay_drag_timer(hwnd);
@@ -581,43 +612,39 @@ fn handle_overlay_shell_menu_result(
         }
         ShellMenuResult::NeedsRename(path) => {
             log::info!("Overlay rename requested for: {}", path);
-            let (sx, sy, tw, th, dpi, current_name) = match get_overlay_data(hwnd) {
-                Some(data) => {
-                    let idx = hit_index as usize;
-                    if idx >= data.icons.len() { return; }
-                    let mut wr = RECT { left: 0, top: 0, right: 0, bottom: 0 };
-                    unsafe { GetWindowRect(hwnd, &mut wr) };
-                    let icon = &data.icons[idx];
-                    let tx = icon.x as i32 - data.cell_w / 2 + 4;
-                    let ty = icon.y as i32 + data.icon_size / 2 + 4;
-                    let name = icon.display_name.clone();
-                    (wr.left + tx, wr.top + ty, data.cell_w - 8, 20_i32 * data.dpi as i32 / 96, data.dpi, name)
-                }
-                None => return,
-            };
-            log::info!("Showing overlay rename editor at ({}, {}), size {}x{}, current name: '{}'", 
-                sx, sy, tw, th, current_name);
-            if let Some(new_name) = crate::platform::windows::rename_editor::show_rename_editor(
-                hwnd, &current_name, sx, sy, tw, th, dpi,
-            ) {
-                log::info!("Overlay rename editor returned: '{}'", new_name);
-                if new_name.is_empty() || new_name == current_name { return; }
-                match crate::platform::windows::icon_hider::rename_icon_file(&path, &new_name) {
-                    Ok(new_path) => {
-                        if let Some(data) = get_overlay_data(hwnd) {
-                            if let Some(item) = data.icons.get_mut(hit_index as usize) {
-                                item.file_path = new_path;
-                                let nd = std::path::Path::new(&new_name).file_stem()
-                                    .map(|s| s.to_string_lossy().to_string())
-                                    .unwrap_or(new_name);
-                                item.display_name = nd;
-                            }
-                        }
-                        render_desktop_overlay(hwnd);
-                        save_overlay_icon_positions();
-                    }
-                    Err(e) => { log::warn!("overlay rename failed: {}", e); }
-                }
+            let Some(data) = get_overlay_data(hwnd) else { return; };
+            let idx = hit_index as usize;
+            if idx >= data.icons.len() { return; }
+
+            let current_name = data.icons[idx].display_name.clone();
+            
+            // 计算标签位置（屏幕坐标）
+            let mut wr = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+            unsafe { GetWindowRect(hwnd, &mut wr) };
+            
+            let icon = &data.icons[idx];
+            let gap = scale_for_dpi(6, data.dpi);
+            let text_y = icon.y as i32 + data.icon_size + 4 + gap;
+            let text_height = scale_for_dpi(20, data.dpi);
+            let text_width = data.cell_w - 8;
+            let screen_x = wr.left + icon.x as i32 - data.cell_w / 2 + 4;
+            let screen_y = wr.top + text_y;
+            
+            // 使用原生 EDIT 控件（异步模式）
+            let success = crate::platform::windows::rename_editor::show_rename_editor_async(
+                hwnd,
+                &current_name,
+                screen_x,
+                screen_y,
+                text_width,
+                text_height,
+                hit_index,
+            );
+            
+            if success {
+                log::info!("Overlay rename editor shown for item {}: '{}'", hit_index, current_name);
+            } else {
+                log::error!("Failed to show overlay rename editor");
             }
         }
         ShellMenuResult::NeedsCutMonitor(path) => {

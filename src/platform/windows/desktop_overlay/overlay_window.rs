@@ -115,6 +115,7 @@ pub(crate) struct OverlayWindowData {
     pub(crate) wic_factory: Option<IWICImagingFactory>,
     /// DC RenderTarget
     pub(crate) d2d_target: Option<ID2D1DCRenderTarget>,
+    // ===== 重命名状态 =====
 }
 
 unsafe impl Send for OverlayWindowData {}

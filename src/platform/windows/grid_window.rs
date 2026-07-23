@@ -184,6 +184,8 @@ pub(crate) struct GridWindowData {
     /// 图标网格 Y 轴滚动偏移量（像素，0 = 顶部）
     pub(crate) scroll_offset: i32,
 
+    // ===== 重命名状态 =====
+
     // ===== D2D/DirectWrite 设备缓存（窗口级） =====
     pub(crate) d2d_factory: Option<ID2D1Factory>,
     pub(crate) dw_factory: Option<IDWriteFactory>,

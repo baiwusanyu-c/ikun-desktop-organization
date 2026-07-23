@@ -135,6 +135,7 @@ pub const WS_THICKFRAME: u32 = 0x00040000;
 pub const WS_EX_LAYERED: u32 = 0x00080000;
 pub const WS_EX_TOOLWINDOW: u32 = 0x00000080;
 #[allow(dead_code)]
+pub const GWL_EXSTYLE: i32 = -20;
 pub const WS_EX_TOPMOST: u32 = 0x00000008;
 pub const WS_EX_TRANSPARENT: u32 = 0x00000020;
 

@@ -76,11 +76,16 @@ fn handle_shell_menu_result(hwnd: HWND, file_path: &str, hit_index: i32, result:
         }
         ShellMenuResult::NeedsRename(path) => {
             log::info!("Rename requested for: {}", path);
-            // Show inline editor and rename file
-            let Some(data) = (unsafe { get_data(hwnd) }) else { 
+            let Some(data) = (unsafe { get_data(hwnd) }) else {
                 log::warn!("Failed to get grid data for rename");
-                return; 
+                return;
             };
+            let item_idx = hit_index as usize;
+            if item_idx >= data.items.len() { return; }
+
+            let current_name = data.items[item_idx].display_name.clone();
+            
+            // 计算标签位置（屏幕坐标）
             let mut wr = RECT { left: 0, top: 0, right: 0, bottom: 0 };
             unsafe { GetWindowRect(hwnd, &mut wr) };
             let dpi = unsafe { GetDpiForWindow(hwnd) };
@@ -88,57 +93,37 @@ fn handle_shell_menu_result(hwnd: HWND, file_path: &str, hit_index: i32, result:
             let view_params = get_view_params(&data.view_mode, dpi);
             let layout = calculate_grid(wr.right - wr.left, data.title_h, &view_params, dpi);
             
-            let item_idx = hit_index as usize;
-            if item_idx >= data.items.len() { return; }
-            
-            let item = &data.items[item_idx];
-            let current_name = item.display_name.clone();
-            
-            let (cell_x, cell_y) = if item.grid_col >= 0 && item.grid_row >= 0 {
-                (layout.grid_left + item.grid_col * layout.cell_w,
-                 layout.grid_top + item.grid_row * layout.cell_h)
+            let (cell_x, cell_y) = if data.items[item_idx].grid_col >= 0 && data.items[item_idx].grid_row >= 0 {
+                (layout.grid_left + data.items[item_idx].grid_col * layout.cell_w,
+                 layout.grid_top + data.items[item_idx].grid_row * layout.cell_h)
             } else {
-                let cols = layout.cols.max(1);
-                let col = (item_idx as i32) % cols;
-                let row = (item_idx as i32) / cols;
-                (layout.grid_left + col * layout.cell_w,
-                 layout.grid_top + row * layout.cell_h - data.scroll_offset)
+                let col = (item_idx as i32) % layout.cols;
+                let row = (item_idx as i32) / layout.cols;
+                (layout.grid_left + col * layout.cell_w, layout.grid_top + row * layout.cell_h)
             };
             
-            let icon_size = data.icon_size;
-            let text_y = cell_y + icon_size + 4;
-            let text_height = 20_i32 * dpi as i32 / 96;
-            let text_width = layout.cell_w - 8;
-            let screen_x = wr.left + cell_x + 4;
+            let gap = scale_for_dpi(6, dpi);
+            let text_y = cell_y + data.icon_size + 4 + gap;
+            let text_height = scale_for_dpi(20, dpi);
+            let text_width = layout.cell_w - 4;
+            let screen_x = wr.left + cell_x + 2;
             let screen_y = wr.top + text_y;
             
-            if let Some(new_name) = super::rename_editor::show_rename_editor(
-                hwnd, &current_name, screen_x, screen_y, text_width, text_height, dpi,
-            ) {
-                if new_name.is_empty() || new_name == current_name { return; }
-                match super::icon_hider::rename_icon_file(&path, &new_name) {
-                    Ok(new_path) => {
-                        log::info!("rename ok: {} -> {}", path, new_path);
-                        let data = unsafe { get_data(hwnd) }.unwrap();
-                        if let Some(item) = data.items.get_mut(hit_index as usize) {
-                            item.file_path = new_path.clone();
-                            let new_display = std::path::Path::new(&new_name)
-                                .file_stem()
-                                .map(|s| s.to_string_lossy().to_string())
-                                .unwrap_or(new_name);
-                            item.display_name = new_display;
-                            if let Some(icon_info) = super::icon_extract::extract_file_icon(&item.file_path) {
-                                if !item.icon_handle.is_null() {
-                                    super::icon_extract::destroy_icon(item.icon_handle);
-                                }
-                                item.icon_handle = icon_info.hicon;
-                            }
-                        }
-                        render_layered_window(hwnd);
-                        super::drag_handler::save_config();
-                    }
-                    Err(e) => { log::warn!("rename failed: {}", e); }
-                }
+            // 使用原生 EDIT 控件（异步模式）
+            let success = super::rename_editor::show_rename_editor_async(
+                hwnd,
+                &current_name,
+                screen_x,
+                screen_y,
+                text_width,
+                text_height,
+                hit_index,
+            );
+            
+            if success {
+                log::info!("Rename editor shown for item {}: '{}'", hit_index, current_name);
+            } else {
+                log::error!("Failed to show rename editor");
             }
         }
         ShellMenuResult::NeedsCutMonitor(path) => {
@@ -811,15 +796,6 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
 
-        // ===== 键盘字符输入：名称编辑模式 =====
-        WM_CHAR => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
-
-        // ===== 键盘按键：名称编辑模式特殊键 =====
-        WM_KEYDOWN => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
-
-        // ===== IME 组合完成：插入中文等 CJK 字符 =====
-        WM_IME_COMPOSITION => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
-
         // ===== 失去焦点：取消名称编辑 =====
         WM_KILLFOCUS => 0,
 
@@ -956,7 +932,50 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         }
 
         // ===== 窗口销毁 =====
-        WM_DESTROY => {
+        // 处理重命名结果消息
+        msg if msg == super::rename_editor::get_rename_result_message() => {
+            let item_index = wparam as i32;
+            let text_ptr = lparam as *mut String;
+            
+            if !text_ptr.is_null() && item_index >= 0 {
+                let new_name = unsafe { Box::from_raw(text_ptr) };
+                log::info!("Rename result for item {}: '{}'", item_index, *new_name);
+                
+                if let Some(data) = unsafe { get_data(hwnd) } {
+                    if (item_index as usize) < data.items.len() {
+                        let old_path = data.items[item_index as usize].file_path.clone();
+                        let old_name = data.items[item_index as usize].display_name.clone();
+                        
+                        if !new_name.is_empty() && *new_name != old_name {
+                            match super::icon_hider::rename_icon_file(&old_path, &new_name) {
+                                Ok(new_path) => {
+                                    log::info!("Renamed: {} -> {}", old_path, new_path);
+                                    
+                                    // 更新数据
+                                    if let Some(item) = data.items.get_mut(item_index as usize) {
+                                        item.file_path = new_path;
+                                        let stem = std::path::Path::new(&item.file_path)
+                                            .file_stem()
+                                            .map(|s| s.to_string_lossy().to_string())
+                                            .unwrap_or_else(|| item.file_path.clone());
+                                        item.display_name = stem;
+                                    }
+                                    
+                                    // 保存配置并重新渲染
+                                    super::drag_handler::save_config();
+                                    render_layered_window(hwnd);
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to rename: {}", e);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            0
+        }
+                WM_DESTROY => {
             let data_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GridWindowData;
             if !data_ptr.is_null() {
                 let data = Box::from_raw(data_ptr);
