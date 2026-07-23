@@ -835,6 +835,9 @@ impl AppRuntime {
     /// 恢复桌面图标到快照的位置
     ///
     /// 在程序退出时调用，将所有图标移回到启动时记录的位置。
+    /// 由于 restore_all_hidden_icons() 将文件移回桌面后，Windows 需要时间
+    /// 处理 Shell 通知并将图标添加到 SysListView32，因此采用重试机制：
+    /// 最多重试 4 次，每次间隔递增（500ms, 1000ms, 1500ms, 2000ms）。
     fn restore_desktop_positions(&self) {
         log::info!("开始恢复桌面图标位置");
 
@@ -845,22 +848,72 @@ impl AppRuntime {
             return;
         }
 
+        let total = positions.len();
+        // 第一轮：尝试设置所有图标位置，收集未找到的图标
+        let mut pending: Vec<(&str, i32, i32)> = Vec::new();
         let mut success_count = 0;
+
         for (name, &(x, y)) in positions {
-            // 尝试通过名称或路径设置位置
-            if let Err(e) =
-                crate::platform::windows::icon_manager::set_icon_position_by_name(name, x, y)
-            {
-                log::debug!("恢复图标位置失败: '{}': {}", name, e);
-            } else {
-                success_count += 1;
+            match crate::platform::windows::icon_manager::set_icon_position_by_name(name, x, y) {
+                Ok(()) => success_count += 1,
+                Err(e) => {
+                    let msg = format!("{}", e);
+                    if msg.contains("未找到图标") {
+                        log::info!("图标 '{}' 尚未出现在 SysListView32，加入重试队列", name);
+                        pending.push((name.as_str(), x, y));
+                    } else {
+                        log::debug!("恢复图标位置失败: '{}': {}", name, e);
+                    }
+                }
             }
+        }
+
+        // 重试轮次：等待 Windows 将刚还原的图标加入 SysListView32
+        let retry_delays = [500u64, 1000, 1500, 2000];
+        for (attempt, &delay_ms) in retry_delays.iter().enumerate() {
+            if pending.is_empty() {
+                break;
+            }
+            log::info!(
+                "等待 {}ms 后重试（第 {} 次），剩余 {} 个图标未找到",
+                delay_ms,
+                attempt + 1,
+                pending.len()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+
+            let mut still_pending = Vec::new();
+            for &(name, x, y) in &pending {
+                match crate::platform::windows::icon_manager::set_icon_position_by_name(name, x, y) {
+                    Ok(()) => {
+                        log::info!("重试成功: '{}' 已找到并恢复位置", name);
+                        success_count += 1;
+                    }
+                    Err(e) => {
+                        let msg = format!("{}", e);
+                        if msg.contains("未找到图标") {
+                            still_pending.push((name, x, y));
+                        } else {
+                            log::debug!("重试时恢复图标位置失败: '{}': {}", name, e);
+                        }
+                    }
+                }
+            }
+            pending = still_pending;
+        }
+
+        if !pending.is_empty() {
+            log::warn!(
+                "以下 {} 个图标始终未在 SysListView32 中找到，无法恢复位置: {}",
+                pending.len(),
+                pending.iter().map(|(n, _, _)| *n).collect::<Vec<_>>().join(", ")
+            );
         }
 
         log::info!(
             "位置恢复完成，成功设置 {}/{} 个图标",
             success_count,
-            positions.len()
+            total
         );
     }
 
