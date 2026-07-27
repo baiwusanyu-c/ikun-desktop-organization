@@ -73,7 +73,7 @@ fn handle_shell_menu_result(
     use super::shell_menu::ShellMenuResult;
 
     match result {
-        ShellMenuResult::Cancelled => {}
+        ShellMenuResult::Cancelled | ShellMenuResult::Dismissed => {}
         ShellMenuResult::Completed(_) => {
             // Check if file still exists after shell operation
             remove_grid_item_if_missing_after_shell_menu(hwnd, file_path);

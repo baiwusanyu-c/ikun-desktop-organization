@@ -22,8 +22,10 @@ static PENDING_CREATE_BOX: AtomicBool = AtomicBool::new(false);
 /// Result of shell context menu operation
 #[derive(Debug, Clone)]
 pub enum ShellMenuResult {
-    /// User cancelled the menu
+    /// User cancelled the menu (menu was NOT shown, e.g. COM failure)
     Cancelled,
+    /// Menu was shown successfully but user dismissed it without selecting an item
+    Dismissed,
     /// Shell operation completed (verb name if known)
     Completed(Option<String>),
     /// User selected rename - needs custom handling
@@ -75,6 +77,13 @@ pub fn take_pending_create_box() -> bool {
 
 // Our custom menu item IDs (below FCIDM_SHVIEWFIRST to avoid conflicts)
 /// 显示文件的 Shell 右键菜单（尝试 windows crate 高级绑定 → ShellExecuteW 回退）
+/// 纯函数：判断 ShellMenuResult 是否应跳过回退菜单。
+/// 仅当菜单未能显示（Cancelled）时才需要回退，
+/// 菜单已显示但用户关闭（Dismissed）或其他结果均不需要回退。
+fn should_skip_fallback(result: &ShellMenuResult) -> bool {
+    !matches!(result, ShellMenuResult::Cancelled)
+}
+
 pub fn show_shell_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResult {
     let menu_path = resolve_shell_menu_path(file_path);
 
@@ -103,10 +112,11 @@ pub fn show_shell_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResult {
 
     // 尝试使用 windows crate 获取完整 Shell 上下文菜单
     let result = try_windows_crate_context_menu(hwnd, &menu_path);
-    if !matches!(result, ShellMenuResult::Cancelled) {
+    if should_skip_fallback(&result) {
+        // Completed / Dismissed / NeedsRename / NeedsCutMonitor / NeedsDelete → 直接返回
         return result;
     }
-    // 回退：ShellExecuteW 增强菜单
+    // 仅当 try_windows_crate_context_menu 未能显示菜单（Cancelled）时才回退
     show_shell_fallback_menu(hwnd, &menu_path)
 }
 
@@ -315,7 +325,7 @@ fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResul
                             };
                             return result;
                         } else {
-                            return ShellMenuResult::Cancelled;
+                            return ShellMenuResult::Dismissed;
                         }
                     }
                     Err(e) => {
@@ -946,5 +956,89 @@ mod tests {
         );
 
         assert_eq!(resolved, r"C:\Users\chenzhihui\Desktop\Missing.lnk");
+    }
+    // ===== ShellMenuResult fallback guard tests =====
+
+    #[test]
+    fn test_should_skip_fallback_returns_false_for_cancelled() {
+        // Cancelled = menu failed to show -> should NOT skip fallback (i.e. should fall back)
+        assert!(!should_skip_fallback(&ShellMenuResult::Cancelled));
+    }
+
+    #[test]
+    fn test_should_skip_fallback_returns_true_for_dismissed() {
+        // Dismissed = menu was shown but user closed it -> should skip fallback
+        assert!(should_skip_fallback(&ShellMenuResult::Dismissed));
+    }
+
+    #[test]
+    fn test_should_skip_fallback_returns_true_for_completed() {
+        // Completed = user selected a menu item -> should skip fallback
+        assert!(should_skip_fallback(&ShellMenuResult::Completed(Some(
+            "open".to_string()
+        ))));
+        assert!(should_skip_fallback(&ShellMenuResult::Completed(None)));
+    }
+
+    #[test]
+    fn test_should_skip_fallback_returns_true_for_needs_rename() {
+        assert!(should_skip_fallback(&ShellMenuResult::NeedsRename(
+            "C:/test.lnk".to_string()
+        )));
+    }
+
+    #[test]
+    fn test_should_skip_fallback_returns_true_for_needs_cut_monitor() {
+        assert!(should_skip_fallback(&ShellMenuResult::NeedsCutMonitor(
+            "C:/test.lnk".to_string()
+        )));
+    }
+
+    #[test]
+    fn test_should_skip_fallback_returns_true_for_needs_delete() {
+        assert!(should_skip_fallback(&ShellMenuResult::NeedsDelete(
+            "C:/test.lnk".to_string()
+        )));
+    }
+
+    #[test]
+    fn test_dismissed_is_distinct_from_cancelled() {
+        // Dismissed and Cancelled are different variants
+        let dismissed = ShellMenuResult::Dismissed;
+        let cancelled = ShellMenuResult::Cancelled;
+
+        // matches! patterns distinguish them
+        assert!(matches!(dismissed, ShellMenuResult::Dismissed));
+        assert!(!matches!(dismissed, ShellMenuResult::Cancelled));
+        assert!(matches!(cancelled, ShellMenuResult::Cancelled));
+        assert!(!matches!(cancelled, ShellMenuResult::Dismissed));
+
+        // The fallback guard correctly differentiates them
+        assert!(should_skip_fallback(&dismissed));
+        assert!(!should_skip_fallback(&cancelled));
+    }
+
+    #[test]
+    fn test_all_variants_cover_fallback_guard() {
+        // Exhaustive check: every non-Cancelled variant skips fallback
+        let results = vec![
+            ShellMenuResult::Dismissed,
+            ShellMenuResult::Completed(Some("explore".to_string())),
+            ShellMenuResult::Completed(None),
+            ShellMenuResult::NeedsRename("path".to_string()),
+            ShellMenuResult::NeedsCutMonitor("path".to_string()),
+            ShellMenuResult::NeedsDelete("path".to_string()),
+        ];
+
+        for result in &results {
+            assert!(
+                should_skip_fallback(result),
+                "Expected skip for {:?}",
+                result
+            );
+        }
+
+        // Only Cancelled triggers fallback
+        assert!(!should_skip_fallback(&ShellMenuResult::Cancelled));
     }
 }

@@ -312,7 +312,7 @@ main.rs
 顶层窗口 > 普通应用 > **分类框窗口** > **桌面覆盖窗口 DesktopOrgOverlay** > 桌面图标 (SysListView32，隐藏) > 壁纸 (Progman/WorkerW)
 ```
 
-**Shell 右键菜单**：文件菜单使用 `SHParseDisplayName → SHBindToParent → IShellFolder::GetUIObjectOf(IContextMenu)`，桌面背景菜单使用 `IShellFolder → IShellView::GetItemObject(SVGIO_BACKGROUND)` 获取真实 Shell 菜单；`InvokeCommand` 使用 `cmd - FCIDM_SHVIEWFIRST` 作为 verb 偏移，避免绝对/相对 PIDL 混用。COM 菜单链优先使用 `windows` crate 类型，失败时回退到自定义 `ShellExecuteW` 菜单。
+**Shell 右键菜单**：文件菜单使用 `SHParseDisplayName → SHBindToParent → IShellFolder::GetUIObjectOf(IContextMenu)`，桌面背景菜单使用 `IShellFolder → IShellView::GetItemObject(SVGIO_BACKGROUND)` 获取真实 Shell 菜单；`InvokeCommand` 使用 `cmd - FCIDM_SHVIEWFIRST` 作为 verb 偏移，避免绝对/相对 PIDL 混用。COM 菜单链优先使用 `windows` crate 类型，失败时回退到自定义 `ShellExecuteW` 菜单。`ShellMenuResult` 区分 `Cancelled`（菜单未能显示，触发回退）和 `Dismissed`（菜单已显示但用户关闭，不触发回退），避免关闭菜单后误弹回退菜单。
 
 **桌面右键动作**：通过 Windows 注册表 (`HKCU\...\Directory\Background\shell\IkunOpenPanel` / `IkunCreateBox` / `IkunAiClassify` / `IkunQuit`) 注入菜单项，Shell 自动合并到 `QueryContextMenu` 结果（覆盖初始菜单和“显示更多选项”legacy 菜单）。程序启动时先清理旧残留再注册，退出时清理，确保不运行时无残留。用户点击时通过命令行参数（如 `--create-box`）写入临时信号文件；运行实例由 `AppRuntime::tick()` 轮询消费后打开 GPUI 控制面板、独立创建分类框窗口、执行 AI 分类或退出。多屏定位通过 Win32 `FindWindowW` + `SetWindowPos` 物理像素坐标实现。
 

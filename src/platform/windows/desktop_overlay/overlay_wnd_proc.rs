@@ -634,7 +634,7 @@ fn handle_overlay_shell_menu_result(
     use crate::platform::windows::shell_menu::ShellMenuResult;
 
     match result {
-        ShellMenuResult::Cancelled => {}
+        ShellMenuResult::Cancelled | ShellMenuResult::Dismissed => {}
         ShellMenuResult::Completed(_) => {
             if !crate::platform::windows::icon_hider::icon_exists_for_box(file_path) {
                 remove_overlay_item(hwnd, file_path);

@@ -863,6 +863,75 @@ Exit:
 - [ ] Auto-arrange is temporarily disabled during position setting
 - [ ] Positions are stored in runtime memory, not config file
 
+## Shell Context Menu Result Handling (ShellMenuResult)
+
+`shell_menu.rs` 的 `show_shell_context_menu` 使用 COM Shell API 获取右键菜单，失败时回退到自定义 `ShellExecuteW` 菜单。正确区分菜单结果至关重要。
+
+### ShellMenuResult 语义
+
+| 变体 | 含义 | 是否触发回退菜单 |
+|------|------|:---:|
+| `Cancelled` | 菜单**未能显示**（COM 创建失败、PIDL 解析失败等） | ✅ 触发 |
+| `Dismissed` | 菜单**已成功显示**，用户点击关闭（TrackPopupMenu 返回 0） | ❌ 不触发 |
+| `Completed(verb)` | 用户选择了菜单项并执行了操作 | ❌ 不触发 |
+| `NeedsRename(path)` | 用户选择了重命名动词 | ❌ 不触发 |
+| `NeedsCutMonitor(path)` | 用户选择了剪切操作 | ❌ 不触发 |
+| `NeedsDelete(path)` | 用户选择了删除操作 | ❌ 不触发 |
+
+### Common Pitfall: Cancelled vs Dismissed
+
+`TrackPopupMenu` 返回 0 表示**菜单已显示但用户未选择任何项**（左键点击外部关闭、按 Esc 等）。这与菜单未能显示是完全不同的情况。
+
+`
+ust
+// WRONG: TrackPopupMenu 返回 0 时返回 Cancelled，导致误触发回退菜单
+if cmd > 0 {
+    // handle selection...
+} else {
+    return ShellMenuResult::Cancelled;  // BUG: 关闭菜单后会弹出回退菜单!
+}
+
+// CORRECT: 区分已显示但关闭和未能显示
+if cmd > 0 {
+    // handle selection...
+} else {
+    return ShellMenuResult::Dismissed;  // 菜单已成功显示，用户关闭，无需回退
+}
+`
+
+### 回退守卫模式
+
+`
+ust
+pub fn show_shell_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResult {
+    let result = try_windows_crate_context_menu(hwnd, &menu_path);
+    if should_skip_fallback(&result) {
+        return result;
+    }
+    // 仅在 Cancelled 时回退
+    show_shell_fallback_menu(hwnd, &menu_path)
+}
+
+/// 纯函数：判断是否跳过回退菜单
+fn should_skip_fallback(result: &ShellMenuResult) -> bool {
+    !matches!(result, ShellMenuResult::Cancelled)
+}
+`
+
+### Related Files
+
+- `src/platform/windows/shell_menu.rs` — ShellMenuResult 枚举 + show_shell_context_menu + should_skip_fallback
+- `src/platform/windows/wnd_proc.rs` — handle_shell_menu_result (分类框)
+- `src/platform/windows/desktop_overlay/overlay_wnd_proc.rs` — handle_overlay_shell_menu_result (覆盖窗口)
+
+### Checklist
+
+- [ ] TrackPopupMenu 返回 0 时使用 `Dismissed` 而非 `Cancelled`
+- [ ] 回退守卫仅对 `Cancelled` 触发回退菜单
+- [ ] `handle_shell_menu_result` 和 `handle_overlay_shell_menu_result` 的 match 覆盖 `Dismissed` 分支
+
+---
+
 ## Resize Edge Hover Indicator
 
 分类框边缘拖拽 resize 时，鼠标悬停的边缘会显示半透明指示条，提示用户可拖拽调整尺寸。
