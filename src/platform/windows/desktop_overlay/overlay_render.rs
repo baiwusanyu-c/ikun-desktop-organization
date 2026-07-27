@@ -342,6 +342,7 @@ fn draw_desktop_icons(
                 .and_then(|format| unsafe { dw_factory.CreateEllipsisTrimmingSign(format).ok() });
             cached_label_dpi = icon_dpi;
         }
+        if index as i32 != data.renaming_item_index {
         if let Some(ref format) = cached_label_format {
             let label_h = scale_for_dpi(36, icon_dpi);
             let label: Vec<u16> = icon.display_name.encode_utf16().collect();
@@ -397,6 +398,7 @@ fn draw_desktop_icons(
                     }
                 }
             }
+        }
         }
     }
 

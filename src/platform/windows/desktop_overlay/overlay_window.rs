@@ -116,6 +116,8 @@ pub(crate) struct OverlayWindowData {
     /// DC RenderTarget
     pub(crate) d2d_target: Option<ID2D1DCRenderTarget>,
     // ===== 重命名状态 =====
+    /// 正在重命名的项索引（-1 = 无重命名）
+    pub(crate) renaming_item_index: i32,
 }
 
 unsafe impl Send for OverlayWindowData {}
@@ -241,6 +243,7 @@ pub fn create_desktop_overlay() -> Result<()> {
         dw_factory: None,
         wic_factory: None,
         d2d_target: None,
+        renaming_item_index: -1,
     });
     let data_ptr = Box::into_raw(data);
     unsafe {
@@ -886,6 +889,7 @@ mod tests {
             dw_factory: None,
             wic_factory: None,
             d2d_target: None,
+            renaming_item_index: -1,
         };
         assert_eq!(data.width, 1920);
         assert_eq!(data.height, 1080);
@@ -918,6 +922,7 @@ mod tests {
             dw_factory: None,
             wic_factory: None,
             d2d_target: None,
+            renaming_item_index: -1,
         };
 
         reset_overlay_interaction_state(&mut data);

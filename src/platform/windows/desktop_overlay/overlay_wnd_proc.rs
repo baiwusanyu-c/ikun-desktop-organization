@@ -71,6 +71,8 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
                 log::info!("Overlay rename result for item {}: '{}'", item_index, *new_name);
                 
                 if let Some(data) = get_overlay_data(hwnd) {
+                    data.renaming_item_index = -1;
+                    render_desktop_overlay(hwnd);
                     if (item_index as usize) < data.icons.len() {
                         let old_path = data.icons[item_index as usize].file_path.clone();
                         let old_name = data.icons[item_index as usize].display_name.clone();
@@ -112,6 +114,14 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
                         }
                     }
                 }
+            }
+            0
+        }
+        msg if msg == crate::platform::windows::rename_editor::get_rename_cancel_message() => {
+            log::info!("Overlay rename cancelled for item {}", wparam);
+            if let Some(data) = get_overlay_data(hwnd) {
+                data.renaming_item_index = -1;
+                render_desktop_overlay(hwnd);
             }
             0
         }
@@ -660,6 +670,8 @@ fn handle_overlay_shell_menu_result(
             
             if success {
                 log::info!("Overlay rename editor shown for item {}: '{}'", hit_index, current_name);
+                data.renaming_item_index = hit_index;
+                render_desktop_overlay(hwnd);
             } else {
                 log::error!("Failed to show overlay rename editor");
             }
