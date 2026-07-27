@@ -875,6 +875,8 @@ impl OverlayWindowData {
             wic_factory: None,
             d2d_target: None,
             renaming_item_index: -1,
+            drop_target_ptr: std::ptr::null_mut(),
+            external_drag_hover: false,
         }
     }
 }
@@ -910,6 +912,8 @@ mod tests {
             wic_factory: None,
             d2d_target: None,
             renaming_item_index: -1,
+            drop_target_ptr: std::ptr::null_mut(),
+            external_drag_hover: false,
         };
         assert_eq!(data.width, 1920);
         assert_eq!(data.height, 1080);
@@ -943,6 +947,8 @@ mod tests {
             wic_factory: None,
             d2d_target: None,
             renaming_item_index: -1,
+            drop_target_ptr: std::ptr::null_mut(),
+            external_drag_hover: false,
         };
 
         reset_overlay_interaction_state(&mut data);

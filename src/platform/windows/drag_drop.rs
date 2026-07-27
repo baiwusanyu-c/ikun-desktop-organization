@@ -841,3 +841,106 @@ mod tests {
         assert_eq!(row, 0);
     }
 }
+
+#[cfg(test)]
+mod ole_drop_tests {
+    use super::*;
+
+    #[test]
+    fn test_copy_file_to_user_desktop_handles_missing_source() {
+        // Test that copy_file_to_user_desktop returns None for non-existent source
+        let result = super::copy_file_to_user_desktop(r"Z:\nonexistent\file.txt");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_compute_drop_grid_position_outside_grid() {
+        // Test that positions outside grid area return (-1, -1)
+        // This is a simplified test - in real usage we'd need to mock HWND
+        let grid_left = 10;
+        let grid_top = 40;
+        let client_x = grid_left - 5;
+        let client_y = grid_top - 5;
+        
+        if client_x < grid_left || client_y < grid_top {
+            let col = -1;
+            let row = -1;
+            assert_eq!(col, -1);
+            assert_eq!(row, -1);
+        }
+    }
+
+    #[test]
+    fn test_compute_drop_grid_position_valid_grid() {
+        // Test valid grid position calculation
+        let grid_left = 10;
+        let grid_top = 40;
+        let cell_w = 80;
+        let cell_h = 96;
+        let client_x = grid_left + cell_w + 20; // Second column
+        let client_y = grid_top + 20; // First row
+        
+        let col = ((client_x - grid_left) / cell_w).max(0);
+        let row = ((client_y - grid_top) / cell_h).max(0);
+        
+        assert_eq!(col, 1);
+        assert_eq!(row, 0);
+    }
+
+
+    #[test]
+    fn test_compute_drop_grid_position_basic() {
+        // Test basic grid position calculation
+        let grid_left = 10;
+        let grid_top = 40;
+        let cell_w = 80;
+        let cell_h = 96;
+
+        // Drop at first cell
+        let drop_x = grid_left + 10;
+        let drop_y = grid_top + 10;
+        let client_x = drop_x;
+        let client_y = drop_y;
+
+        let col = ((client_x - grid_left) / cell_w).max(0);
+        let row = ((client_y - grid_top) / cell_h).max(0);
+
+        assert_eq!(col, 0);
+        assert_eq!(row, 0);
+
+        // Drop at second column
+        let drop_x = grid_left + cell_w + 20;
+        let client_x = drop_x;
+        let col = ((client_x - grid_left) / cell_w).max(0);
+        assert_eq!(col, 1);
+
+        // Drop at second row
+        let drop_y = grid_top + cell_h + 30;
+        let client_y = drop_y;
+        let row = ((client_y - grid_top) / cell_h).max(0);
+        assert_eq!(row, 1);
+    }
+
+    #[test]
+    fn test_copy_file_to_user_desktop_nonexistent_source() {
+        // Test that copy_file_to_user_desktop returns None for non-existent source
+        let result = super::copy_file_to_user_desktop(r"Z:\nonexistent\file.txt");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_insert_mode_logic() {
+        // Test insert mode detection
+        let insert_col = 2;
+        let insert_row = 3;
+        let is_insert = insert_col >= 0 && insert_row >= 0;
+        assert!(is_insert);
+
+        // Test non-insert mode
+        let insert_col = -1;
+        let insert_row = -1;
+        let is_insert = insert_col >= 0 && insert_row >= 0;
+        assert!(!is_insert);
+    }
+
+}

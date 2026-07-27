@@ -414,3 +414,83 @@ pub fn unregister_box_drop_target(hwnd: HWND, target_ptr: *mut c_void) {
     }
     log::info!("已撤销拖拽目标: hwnd={:?}", hwnd);
 }
+
+
+#[cfg(test)]
+mod pending_drop_tests {
+    use super::*;
+
+    #[test]
+    fn test_pending_drop_with_insert_state() {
+        let pending = PendingDrop {
+            file_paths: vec!["test.lnk".to_string()],
+            box_data: None,
+            drop_x: 100,
+            drop_y: 200,
+            insert_col: 2,
+            insert_row: 3,
+        };
+        
+        assert_eq!(pending.file_paths.len(), 1);
+        assert_eq!(pending.file_paths[0], "test.lnk");
+        assert_eq!(pending.drop_x, 100);
+        assert_eq!(pending.drop_y, 200);
+        assert_eq!(pending.insert_col, 2);
+        assert_eq!(pending.insert_row, 3);
+        assert!(pending.box_data.is_none());
+    }
+
+    #[test]
+    fn test_pending_drop_no_insert_mode() {
+        let pending = PendingDrop {
+            file_paths: vec!["file1.lnk".to_string(), "file2.lnk".to_string()],
+            box_data: None,
+            drop_x: 50,
+            drop_y: 75,
+            insert_col: -1,
+            insert_row: -1,
+        };
+        
+        assert_eq!(pending.file_paths.len(), 2);
+        assert_eq!(pending.insert_col, -1);
+        assert_eq!(pending.insert_row, -1);
+    }
+
+    #[test]
+    fn test_take_pending_drop_empty() {
+        // Clear any existing pending drop
+        if let Ok(mut g) = PENDING_DROP.lock() {
+            *g = None;
+        }
+        
+        let result = take_pending_drop();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_take_pending_drop_with_data() {
+        // Set up a pending drop
+        if let Ok(mut g) = PENDING_DROP.lock() {
+            *g = Some(PendingDrop {
+                file_paths: vec!["test.lnk".to_string()],
+                box_data: None,
+                drop_x: 100,
+                drop_y: 200,
+                insert_col: 1,
+                insert_row: 2,
+            });
+        }
+        
+        let result = take_pending_drop();
+        assert!(result.is_some());
+        
+        let drop = result.unwrap();
+        assert_eq!(drop.file_paths[0], "test.lnk");
+        assert_eq!(drop.insert_col, 1);
+        assert_eq!(drop.insert_row, 2);
+        
+        // Verify it's cleared after taking
+        let result2 = take_pending_drop();
+        assert!(result2.is_none());
+    }
+}

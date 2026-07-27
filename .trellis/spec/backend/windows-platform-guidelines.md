@@ -417,6 +417,20 @@ let target_hwnd = crate::platform::windows::grid_window::find_grid_window_at_poi
 
 OLE DoDragDrop is a blocking modal call. During execution, Windows performs hit-testing on all windows to find IDropTarget objects. If WM_WINDOWPOSCHANGING forces grid windows to HWND_BOTTOM during drag, the grid may end up below the overlay window, preventing OLE from triggering DragEnter/Drop on the grid's IDropTarget.
 
+**Overlay OLE Drag-Drop Support**
+
+The overlay window also registers as an IDropTarget to receive files dragged from Windows Explorer. This requires:
+
+1. **bg_alpha=1**: The overlay window must have non-transparent background to receive OLE events
+2. **WM_NCHITTEST**: Returns HTTRANSPARENT for blank areas to allow desktop clicks to pass through
+3. **Visual feedback**: Uses the same update_overlay_drag_over_visual function as internal drags
+4. **Grid positioning**: Uses dd_icon_to_overlay_with_grid to snap dropped files to the grid
+
+**Key Implementation**:
+- overlay_drop_target.rs: IDropTarget implementation for overlay window
+- PendingOverlayDrop: Stores drop coordinates and insert mode state
+- WM_USER_OVERLAY_DROP: Custom message to trigger drop handling in UI thread
+
 **Solution**: Set a thread-local DRAG_IN_PROGRESS flag before DoDragDrop and clear it after. The WM_WINDOWPOSCHANGING handler skips Z-order intervention when this flag is true.
 
 `

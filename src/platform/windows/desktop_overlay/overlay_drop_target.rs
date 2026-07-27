@@ -319,3 +319,72 @@ pub fn unregister_overlay_drop_target(hwnd: HWND, target_ptr: *mut c_void) {
     }
     log::info!("覆盖窗口已撤销拖拽目标: hwnd={:?}", hwnd);
 }
+
+
+
+#[cfg(test)]
+mod pending_overlay_drop_tests {
+    use super::*;
+
+    #[test]
+    fn test_pending_overlay_drop_basic() {
+        let pending = PendingOverlayDrop {
+            file_paths: vec!["test.lnk".to_string()],
+            drop_x: 100,
+            drop_y: 200,
+        };
+        
+        assert_eq!(pending.file_paths.len(), 1);
+        assert_eq!(pending.file_paths[0], "test.lnk");
+        assert_eq!(pending.drop_x, 100);
+        assert_eq!(pending.drop_y, 200);
+    }
+
+    #[test]
+    fn test_pending_overlay_drop_multiple_files() {
+        let pending = PendingOverlayDrop {
+            file_paths: vec!["file1.lnk".to_string(), "file2.lnk".to_string()],
+            drop_x: 50,
+            drop_y: 75,
+        };
+        
+        assert_eq!(pending.file_paths.len(), 2);
+        assert_eq!(pending.drop_x, 50);
+        assert_eq!(pending.drop_y, 75);
+    }
+
+    #[test]
+    fn test_take_pending_overlay_drop_empty() {
+        // Clear any existing pending drop
+        if let Ok(mut g) = PENDING_OVERLAY_DROP.lock() {
+            *g = None;
+        }
+        
+        let result = take_pending_overlay_drop();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_take_pending_overlay_drop_with_data() {
+        // Set up a pending drop
+        if let Ok(mut g) = PENDING_OVERLAY_DROP.lock() {
+            *g = Some(PendingOverlayDrop {
+                file_paths: vec!["test.lnk".to_string()],
+                drop_x: 100,
+                drop_y: 200,
+            });
+        }
+        
+        let result = take_pending_overlay_drop();
+        assert!(result.is_some());
+        
+        let drop = result.unwrap();
+        assert_eq!(drop.file_paths[0], "test.lnk");
+        assert_eq!(drop.drop_x, 100);
+        assert_eq!(drop.drop_y, 200);
+        
+        // Verify it's cleared after taking
+        let result2 = take_pending_overlay_drop();
+        assert!(result2.is_none());
+    }
+}
