@@ -6,8 +6,8 @@
 use super::overlay_grid::{overlay_grid_to_logical, overlay_snap_to_grid};
 use super::overlay_render::render_desktop_overlay;
 use super::overlay_window::{
-    get_overlay_data, overlay_hit_test, overlay_layout_params, refresh_desktop_overlay_icons,
-    save_overlay_icon_positions,
+    get_overlay_data, overlay_hit_test, overlay_icon_cell_x, overlay_icon_cell_y,
+    overlay_layout_params, refresh_desktop_overlay_icons, save_overlay_icon_positions,
 };
 use crate::platform::windows::ffi_imports::*;
 use crate::platform::windows::ffi_types::*;
@@ -75,8 +75,19 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
                         let old_path = data.icons[item_index as usize].file_path.clone();
                         let old_name = data.icons[item_index as usize].display_name.clone();
                         
-                        if !new_name.is_empty() && *new_name != old_name {
-                            match crate::platform::windows::icon_hider::rename_icon_file(&old_path, &new_name) {
+                        // Preserve file extension if user didn't provide one
+                        let final_name = if std::path::Path::new(new_name.as_str()).extension().is_none() {
+                            if let Some(ext) = std::path::Path::new(&old_path).extension() {
+                                format!("{}.{}", *new_name, ext.to_string_lossy())
+                            } else {
+                                (*new_name).clone()
+                            }
+                        } else {
+                            (*new_name).clone()
+                        };
+                        
+                        if !final_name.is_empty() && final_name != old_name {
+                            match crate::platform::windows::icon_hider::rename_icon_file(&old_path, &final_name) {
                                 Ok(new_path) => {
                                     log::info!("Overlay renamed: {} -> {}", old_path, new_path);
                                     
@@ -625,13 +636,16 @@ fn handle_overlay_shell_menu_result(
             let mut wr = RECT { left: 0, top: 0, right: 0, bottom: 0 };
             unsafe { GetWindowRect(hwnd, &mut wr) };
             
-            let icon = &data.icons[idx];
-            let gap = scale_for_dpi(6, data.dpi);
-            let text_y = icon.y as i32 + data.icon_size + 4 + gap;
+            // Use the same coordinate calculation as rendering (logical -> physical)
+            let grid_layout = overlay_layout_params(wr.right - wr.left, data.dpi);
+            let cell_x = overlay_icon_cell_x(data, idx, &grid_layout);
+            let cell_y = overlay_icon_cell_y(data, idx, &grid_layout);
+            let icon_size = grid_layout.icon_size;
+            let label_y = cell_y + scale_for_dpi(4, data.dpi) + icon_size + scale_for_dpi(6, data.dpi);
             let text_height = scale_for_dpi(20, data.dpi);
-            let text_width = data.cell_w - 8;
-            let screen_x = wr.left + icon.x as i32 - data.cell_w / 2 + 4;
-            let screen_y = wr.top + text_y;
+            let text_width = grid_layout.cell_w - 8;
+            let screen_x = wr.left + cell_x + 2;
+            let screen_y = wr.top + label_y;
             
             // 使用原生 EDIT 控件（异步模式）
             let success = crate::platform::windows::rename_editor::show_rename_editor_async(
