@@ -34,8 +34,6 @@ pub enum ShellMenuResult {
     NeedsDelete(String), // file_path
 }
 
-
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DesktopRegistryMenuItem {
     key_name: &'static str,
@@ -142,10 +140,10 @@ fn resolve_shell_menu_path_with(
 /// 避免手动 vtable 调用导致的 ABI 兼容性问题。
 fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResult {
     use windows::core::PCWSTR;
+    use windows::core::PSTR;
     use windows::Win32::UI::Shell::{
         IContextMenu, ILFree, IShellFolder, SHBindToParent, SHParseDisplayName,
     };
-    use windows::core::PSTR;
 
     unsafe {
         let path_wide: Vec<u16> = file_path.encode_utf16().chain(std::iter::once(0)).collect();
@@ -233,9 +231,9 @@ fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResul
                                 }
                                 Err(_) => String::new(),
                             };
-                            
+
                             log::info!("Shell menu verb: '{}'", verb);
-                            
+
                             // Handle special verbs
                             let result = match verb.as_str() {
                                 "rename" => {
@@ -244,17 +242,23 @@ fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResul
                                 }
                                 "cut" => {
                                     // Call InvokeCommand to set up clipboard
-                                    let invoke_info = windows::Win32::UI::Shell::CMINVOKECOMMANDINFO {
-                                        cbSize: std::mem::size_of::<windows::Win32::UI::Shell::CMINVOKECOMMANDINFO>() as u32,
-                                        fMask: 0,
-                                        hwnd: windows::Win32::Foundation::HWND(hwnd),
-                                        lpVerb: windows::core::PCSTR(verb_ordinal as *const u8),
-                                        lpParameters: windows::core::PCSTR(std::ptr::null()),
-                                        lpDirectory: windows::core::PCSTR(std::ptr::null()),
-                                        nShow: SW_SHOW,
-                                        dwHotKey: 0,
-                                        hIcon: windows::Win32::Foundation::HANDLE(std::ptr::null_mut()),
-                                    };
+                                    let invoke_info =
+                                        windows::Win32::UI::Shell::CMINVOKECOMMANDINFO {
+                                            cbSize: std::mem::size_of::<
+                                                windows::Win32::UI::Shell::CMINVOKECOMMANDINFO,
+                                            >()
+                                                as u32,
+                                            fMask: 0,
+                                            hwnd: windows::Win32::Foundation::HWND(hwnd),
+                                            lpVerb: windows::core::PCSTR(verb_ordinal as *const u8),
+                                            lpParameters: windows::core::PCSTR(std::ptr::null()),
+                                            lpDirectory: windows::core::PCSTR(std::ptr::null()),
+                                            nShow: SW_SHOW,
+                                            dwHotKey: 0,
+                                            hIcon: windows::Win32::Foundation::HANDLE(
+                                                std::ptr::null_mut(),
+                                            ),
+                                        };
                                     if let Err(e) = cm.InvokeCommand(&invoke_info) {
                                         log::warn!("cut InvokeCommand failed: {:?}", e);
                                     }
@@ -262,17 +266,23 @@ fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResul
                                 }
                                 "delete" => {
                                     // Call InvokeCommand to move to Recycle Bin
-                                    let invoke_info = windows::Win32::UI::Shell::CMINVOKECOMMANDINFO {
-                                        cbSize: std::mem::size_of::<windows::Win32::UI::Shell::CMINVOKECOMMANDINFO>() as u32,
-                                        fMask: 0,
-                                        hwnd: windows::Win32::Foundation::HWND(hwnd),
-                                        lpVerb: windows::core::PCSTR(verb_ordinal as *const u8),
-                                        lpParameters: windows::core::PCSTR(std::ptr::null()),
-                                        lpDirectory: windows::core::PCSTR(std::ptr::null()),
-                                        nShow: SW_SHOW,
-                                        dwHotKey: 0,
-                                        hIcon: windows::Win32::Foundation::HANDLE(std::ptr::null_mut()),
-                                    };
+                                    let invoke_info =
+                                        windows::Win32::UI::Shell::CMINVOKECOMMANDINFO {
+                                            cbSize: std::mem::size_of::<
+                                                windows::Win32::UI::Shell::CMINVOKECOMMANDINFO,
+                                            >()
+                                                as u32,
+                                            fMask: 0,
+                                            hwnd: windows::Win32::Foundation::HWND(hwnd),
+                                            lpVerb: windows::core::PCSTR(verb_ordinal as *const u8),
+                                            lpParameters: windows::core::PCSTR(std::ptr::null()),
+                                            lpDirectory: windows::core::PCSTR(std::ptr::null()),
+                                            nShow: SW_SHOW,
+                                            dwHotKey: 0,
+                                            hIcon: windows::Win32::Foundation::HANDLE(
+                                                std::ptr::null_mut(),
+                                            ),
+                                        };
                                     if let Err(e) = cm.InvokeCommand(&invoke_info) {
                                         log::warn!("delete InvokeCommand failed: {:?}", e);
                                     }
@@ -280,17 +290,23 @@ fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResul
                                 }
                                 _ => {
                                     // Other verbs: call InvokeCommand normally
-                                    let invoke_info = windows::Win32::UI::Shell::CMINVOKECOMMANDINFO {
-                                        cbSize: std::mem::size_of::<windows::Win32::UI::Shell::CMINVOKECOMMANDINFO>() as u32,
-                                        fMask: 0,
-                                        hwnd: windows::Win32::Foundation::HWND(hwnd),
-                                        lpVerb: windows::core::PCSTR(verb_ordinal as *const u8),
-                                        lpParameters: windows::core::PCSTR(std::ptr::null()),
-                                        lpDirectory: windows::core::PCSTR(std::ptr::null()),
-                                        nShow: SW_SHOW,
-                                        dwHotKey: 0,
-                                        hIcon: windows::Win32::Foundation::HANDLE(std::ptr::null_mut()),
-                                    };
+                                    let invoke_info =
+                                        windows::Win32::UI::Shell::CMINVOKECOMMANDINFO {
+                                            cbSize: std::mem::size_of::<
+                                                windows::Win32::UI::Shell::CMINVOKECOMMANDINFO,
+                                            >()
+                                                as u32,
+                                            fMask: 0,
+                                            hwnd: windows::Win32::Foundation::HWND(hwnd),
+                                            lpVerb: windows::core::PCSTR(verb_ordinal as *const u8),
+                                            lpParameters: windows::core::PCSTR(std::ptr::null()),
+                                            lpDirectory: windows::core::PCSTR(std::ptr::null()),
+                                            nShow: SW_SHOW,
+                                            dwHotKey: 0,
+                                            hIcon: windows::Win32::Foundation::HANDLE(
+                                                std::ptr::null_mut(),
+                                            ),
+                                        };
                                     if let Err(e) = cm.InvokeCommand(&invoke_info) {
                                         log::warn!("InvokeCommand failed: {:?}", e);
                                     }

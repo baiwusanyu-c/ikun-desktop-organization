@@ -56,7 +56,8 @@ src/
 │   │   ├── shell_menu.rs      #   Shell 右键菜单 + 桌面背景注册表菜单（覆盖区域含 Ikun 动作，分类框不含）
 │   │   ├── app_icon.rs        #   嵌入 logo.ico 项目图标（托盘/菜单）
 │   │   ├── icon_extract.rs    #   图标提取（SHDefExtractIconW + .lnk 解析目标图标）
-│   │   ├── icon_hider.rs      #   图标隐藏/恢复 + managed_icons vault + 删除分类框后还原非管理图标
+│   │   ├── icon_hider.rs      #   图标隐藏/恢复 + managed_icons vault
+├── rename_editor.rs   #   内联重命名编辑器（独立线程 EDIT 控件 + 异步消息通信） + 删除分类框后还原非管理图标
 │   │   ├── drag_image.rs      #   拖拽残影覆盖窗口（D2D 渲染跟随光标的半透明图标）
 │   │   ├── ole_dnd.rs         #   OLE 拖拽源（IDropSource + IDataObject 实现）
 │   │   ├── drop_target.rs     #   分类框拖放目标（IDropTarget 实现）

@@ -343,39 +343,53 @@ fn draw_desktop_icons(
             cached_label_dpi = icon_dpi;
         }
         if index as i32 != data.renaming_item_index {
-        if let Some(ref format) = cached_label_format {
-            let label_h = scale_for_dpi(36, icon_dpi);
-            let label: Vec<u16> = icon.display_name.encode_utf16().collect();
-            let text_layout = unsafe {
-                dw_factory
-                    .CreateTextLayout(&label, format, (icon_cell_w - 4) as f32, label_h as f32)
-                    .ok()
-            };
-            if let Some(ref text_layout) = text_layout {
-                if let Some(ref sign) = cached_ellipsis_sign {
-                    let trimming = DWRITE_TRIMMING {
-                        granularity: DWRITE_TRIMMING_GRANULARITY_WORD,
-                        delimiter: 0,
-                        delimiterCount: 0,
-                    };
-                    let _ = unsafe { text_layout.SetTrimming(&trimming, sign) };
-                }
+            if let Some(ref format) = cached_label_format {
+                let label_h = scale_for_dpi(36, icon_dpi);
+                let label: Vec<u16> = icon.display_name.encode_utf16().collect();
+                let text_layout = unsafe {
+                    dw_factory
+                        .CreateTextLayout(&label, format, (icon_cell_w - 4) as f32, label_h as f32)
+                        .ok()
+                };
+                if let Some(ref text_layout) = text_layout {
+                    if let Some(ref sign) = cached_ellipsis_sign {
+                        let trimming = DWRITE_TRIMMING {
+                            granularity: DWRITE_TRIMMING_GRANULARITY_WORD,
+                            delimiter: 0,
+                            delimiterCount: 0,
+                        };
+                        let _ = unsafe { text_layout.SetTrimming(&trimming, sign) };
+                    }
 
-                let label_x = cell_x + 2;
-                let label_y = icon_y + icon_size + scale_for_dpi(6, icon_dpi);
-                let shadow_offset = scale_for_dpi(1, icon_dpi) as f32;
-                if let Ok(ref brush) = shadow_brush {
-                    for &(dx, dy) in &[
-                        (shadow_offset, 0.0),
-                        (-shadow_offset, 0.0),
-                        (0.0, shadow_offset),
-                        (0.0, -shadow_offset),
-                    ] {
+                    let label_x = cell_x + 2;
+                    let label_y = icon_y + icon_size + scale_for_dpi(6, icon_dpi);
+                    let shadow_offset = scale_for_dpi(1, icon_dpi) as f32;
+                    if let Ok(ref brush) = shadow_brush {
+                        for &(dx, dy) in &[
+                            (shadow_offset, 0.0),
+                            (-shadow_offset, 0.0),
+                            (0.0, shadow_offset),
+                            (0.0, -shadow_offset),
+                        ] {
+                            unsafe {
+                                target.DrawTextLayout(
+                                    D2D_POINT_2F {
+                                        x: label_x as f32 + dx,
+                                        y: label_y as f32 + dy,
+                                    },
+                                    text_layout,
+                                    brush,
+                                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                                );
+                            }
+                        }
+                    }
+                    if let Ok(ref brush) = label_brush {
                         unsafe {
                             target.DrawTextLayout(
                                 D2D_POINT_2F {
-                                    x: label_x as f32 + dx,
-                                    y: label_y as f32 + dy,
+                                    x: label_x as f32,
+                                    y: label_y as f32,
                                 },
                                 text_layout,
                                 brush,
@@ -384,21 +398,7 @@ fn draw_desktop_icons(
                         }
                     }
                 }
-                if let Ok(ref brush) = label_brush {
-                    unsafe {
-                        target.DrawTextLayout(
-                            D2D_POINT_2F {
-                                x: label_x as f32,
-                                y: label_y as f32,
-                            },
-                            text_layout,
-                            brush,
-                            D2D1_DRAW_TEXT_OPTIONS_NONE,
-                        );
-                    }
-                }
             }
-        }
         }
     }
 

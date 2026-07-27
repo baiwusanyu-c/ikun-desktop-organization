@@ -884,7 +884,8 @@ impl AppRuntime {
 
             let mut still_pending = Vec::new();
             for &(name, x, y) in &pending {
-                match crate::platform::windows::icon_manager::set_icon_position_by_name(name, x, y) {
+                match crate::platform::windows::icon_manager::set_icon_position_by_name(name, x, y)
+                {
                     Ok(()) => {
                         log::info!("重试成功: '{}' 已找到并恢复位置", name);
                         success_count += 1;
@@ -906,15 +907,15 @@ impl AppRuntime {
             log::warn!(
                 "以下 {} 个图标始终未在 SysListView32 中找到，无法恢复位置: {}",
                 pending.len(),
-                pending.iter().map(|(n, _, _)| *n).collect::<Vec<_>>().join(", ")
+                pending
+                    .iter()
+                    .map(|(n, _, _)| *n)
+                    .collect::<Vec<_>>()
+                    .join(", ")
             );
         }
 
-        log::info!(
-            "位置恢复完成，成功设置 {}/{} 个图标",
-            success_count,
-            total
-        );
+        log::info!("位置恢复完成，成功设置 {}/{} 个图标", success_count, total);
     }
 
     fn cleanup(&mut self) {

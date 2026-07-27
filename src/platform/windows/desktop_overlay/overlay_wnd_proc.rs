@@ -65,49 +65,42 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
         msg if msg == crate::platform::windows::rename_editor::get_rename_result_message() => {
             let item_index = wparam as i32;
             let text_ptr = lparam as *mut String;
-            
+
             if !text_ptr.is_null() && item_index >= 0 {
                 let new_name = unsafe { Box::from_raw(text_ptr) };
-                log::info!("Overlay rename result for item {}: '{}'", item_index, *new_name);
-                
+                log::info!(
+                    "Overlay rename result for item {}: '{}'",
+                    item_index,
+                    *new_name
+                );
+
                 if let Some(data) = get_overlay_data(hwnd) {
                     data.renaming_item_index = -1;
                     render_desktop_overlay(hwnd);
                     if (item_index as usize) < data.icons.len() {
                         let old_path = data.icons[item_index as usize].file_path.clone();
                         let old_name = data.icons[item_index as usize].display_name.clone();
-                        
-                        // Always preserve original file extension.
-                        // The rename editor pre-selects only the stem (via EM_SETSEL),
-                        // so user input is always intended as a new stem name.
-                        let final_name = if let Some(ext) = std::path::Path::new(&old_path).extension() {
-                            let ext_str = ext.to_string_lossy();
-                            let with_ext = format!("{}.{}", *new_name, ext_str);
-                            // If user already typed the correct extension, don't double-append
-                            if new_name.ends_with(&format!(".{}", ext_str)) {
-                                (*new_name).clone()
-                            } else {
-                                with_ext
-                            }
-                        } else {
-                            (*new_name).clone()
-                        };
-                        
+
+                        // Use shared helper to build filename with preserved extension
+                        let final_name =
+                            crate::platform::windows::rename_editor::build_rename_filename(
+                                &new_name, &old_path,
+                            );
+
                         if !final_name.is_empty() && final_name != old_name {
-                            match crate::platform::windows::icon_hider::rename_icon_file(&old_path, &final_name) {
+                            match crate::platform::windows::icon_hider::rename_icon_file(
+                                &old_path,
+                                &final_name,
+                            ) {
                                 Ok(new_path) => {
                                     log::info!("Overlay renamed: {} -> {}", old_path, new_path);
-                                    
+
                                     // 更新数据
                                     if let Some(icon) = data.icons.get_mut(item_index as usize) {
                                         icon.file_path = new_path;
-                                        let stem = std::path::Path::new(&icon.file_path)
-                                            .file_stem()
-                                            .map(|s| s.to_string_lossy().to_string())
-                                            .unwrap_or_else(|| icon.file_path.clone());
-                                        icon.display_name = stem;
+                                        icon.display_name = crate::platform::windows::rename_editor::display_name_from_path(&icon.file_path);
                                     }
-                                    
+
                                     // 保存并重绘
                                     save_overlay_icon_positions();
                                     render_desktop_overlay(hwnd);
@@ -130,7 +123,7 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             }
             0
         }
-                WM_TIMER => {
+        WM_TIMER => {
             log::debug!("overlay WM_TIMER received: wparam={:#X}", wparam);
             if wparam == TIMER_ID_OVERLAY_DRAG {
                 handle_overlay_drag_timer(hwnd);
@@ -164,10 +157,14 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
                 let mut removed_any = false;
                 let mut i = 0;
                 while i < data.icons.len() {
-                    if !crate::platform::windows::icon_hider::icon_exists_for_box(&data.icons[i].file_path) {
+                    if !crate::platform::windows::icon_hider::icon_exists_for_box(
+                        &data.icons[i].file_path,
+                    ) {
                         let removed = data.icons.remove(i);
                         if !removed.icon_handle.is_null() {
-                            crate::platform::windows::icon_extract::destroy_icon(removed.icon_handle);
+                            crate::platform::windows::icon_extract::destroy_icon(
+                                removed.icon_handle,
+                            );
                         }
                         log::info!("cut file moved from overlay: {}", removed.display_name);
                         removed_any = true;
@@ -176,8 +173,12 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
                     }
                 }
                 if removed_any {
-                    if data.selected_item >= data.icons.len() as i32 { data.selected_item = -1; }
-                    if data.hovered_item >= data.icons.len() as i32 { data.hovered_item = -1; }
+                    if data.selected_item >= data.icons.len() as i32 {
+                        data.selected_item = -1;
+                    }
+                    if data.hovered_item >= data.icons.len() as i32 {
+                        data.hovered_item = -1;
+                    }
                     render_desktop_overlay(hwnd);
                     save_overlay_icon_positions();
                 }
@@ -631,7 +632,7 @@ fn handle_overlay_shell_menu_result(
     result: crate::platform::windows::shell_menu::ShellMenuResult,
 ) {
     use crate::platform::windows::shell_menu::ShellMenuResult;
-    
+
     match result {
         ShellMenuResult::Cancelled => {}
         ShellMenuResult::Completed(_) => {
@@ -641,27 +642,37 @@ fn handle_overlay_shell_menu_result(
         }
         ShellMenuResult::NeedsRename(path) => {
             log::info!("Overlay rename requested for: {}", path);
-            let Some(data) = get_overlay_data(hwnd) else { return; };
+            let Some(data) = get_overlay_data(hwnd) else {
+                return;
+            };
             let idx = hit_index as usize;
-            if idx >= data.icons.len() { return; }
+            if idx >= data.icons.len() {
+                return;
+            }
 
             let current_name = data.icons[idx].display_name.clone();
-            
+
             // 计算标签位置（屏幕坐标）
-            let mut wr = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+            let mut wr = RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
             unsafe { GetWindowRect(hwnd, &mut wr) };
-            
+
             // Use the same coordinate calculation as rendering (logical -> physical)
             let grid_layout = overlay_layout_params(wr.right - wr.left, data.dpi);
             let cell_x = overlay_icon_cell_x(data, idx, &grid_layout);
             let cell_y = overlay_icon_cell_y(data, idx, &grid_layout);
             let icon_size = grid_layout.icon_size;
-            let label_y = cell_y + scale_for_dpi(4, data.dpi) + icon_size + scale_for_dpi(6, data.dpi);
+            let label_y =
+                cell_y + scale_for_dpi(4, data.dpi) + icon_size + scale_for_dpi(6, data.dpi);
             let text_height = scale_for_dpi(20, data.dpi);
             let text_width = grid_layout.cell_w - 8;
             let screen_x = wr.left + cell_x + 2;
             let screen_y = wr.top + label_y;
-            
+
             // 使用原生 EDIT 控件（异步模式）
             let success = crate::platform::windows::rename_editor::show_rename_editor_async(
                 hwnd,
@@ -672,9 +683,13 @@ fn handle_overlay_shell_menu_result(
                 text_height,
                 hit_index,
             );
-            
+
             if success {
-                log::info!("Overlay rename editor shown for item {}: '{}'", hit_index, current_name);
+                log::info!(
+                    "Overlay rename editor shown for item {}: '{}'",
+                    hit_index,
+                    current_name
+                );
                 data.renaming_item_index = hit_index;
                 render_desktop_overlay(hwnd);
             } else {
@@ -697,13 +712,21 @@ fn handle_overlay_shell_menu_result(
 /// Remove icon item from overlay window
 fn remove_overlay_item(hwnd: HWND, logical_path: &str) {
     if let Some(data) = get_overlay_data(hwnd) {
-        if let Some(index) = data.icons.iter().position(|item| item.file_path == logical_path) {
+        if let Some(index) = data
+            .icons
+            .iter()
+            .position(|item| item.file_path == logical_path)
+        {
             let removed = data.icons.remove(index);
             if !removed.icon_handle.is_null() {
                 crate::platform::windows::icon_extract::destroy_icon(removed.icon_handle);
             }
-            if data.selected_item >= data.icons.len() as i32 { data.selected_item = -1; }
-            if data.hovered_item >= data.icons.len() as i32 { data.hovered_item = -1; }
+            if data.selected_item >= data.icons.len() as i32 {
+                data.selected_item = -1;
+            }
+            if data.hovered_item >= data.icons.len() as i32 {
+                data.hovered_item = -1;
+            }
             log::info!("overlay item removed: {}", removed.display_name);
             render_desktop_overlay(hwnd);
             save_overlay_icon_positions();
@@ -719,7 +742,9 @@ fn start_overlay_cut_monitor(hwnd: HWND, logical_path: String) {
         for _ in 0..100 {
             std::thread::sleep(std::time::Duration::from_secs(3));
             if !crate::platform::windows::icon_hider::icon_exists_for_box(&logical_path) {
-                unsafe { PostMessageW(hwnd, WM_USER_CUT_FILE_MOVED, 0, 0); }
+                unsafe {
+                    PostMessageW(hwnd, WM_USER_CUT_FILE_MOVED, 0, 0);
+                }
                 return;
             }
         }

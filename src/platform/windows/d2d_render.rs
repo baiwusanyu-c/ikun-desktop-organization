@@ -1366,16 +1366,16 @@ pub fn render_drag_overlay_bitmap(
 }
 
 /// 计算边缘拖拽指示条的矩形区域
-/// 
+///
 /// 根据 hover_edge 值计算边缘条的矩形，边缘条避开圆角区域以避免视觉冲突。
-/// 
+///
 /// # Arguments
 /// * `hover_edge` - 边缘标识：0=无, 1=左, 2=右, 3=上, 4=下
 /// * `window_width` - 窗口宽度
 /// * `window_height` - 窗口高度  
 /// * `border_width` - 边缘条宽度
 /// * `corner_radius` - 圆角半径
-/// 
+///
 /// # Returns
 /// (left, top, right, bottom) 格式的矩形坐标
 pub fn compute_edge_rect(
@@ -1386,10 +1386,30 @@ pub fn compute_edge_rect(
     corner_radius: f32,
 ) -> (f32, f32, f32, f32) {
     match hover_edge {
-        1 => (0.0, corner_radius, border_width, window_height - corner_radius), // 左边缘
-        2 => (window_width - border_width, corner_radius, window_width, window_height - corner_radius), // 右边缘
-        3 => (corner_radius, 0.0, window_width - corner_radius, border_width), // 上边缘
-        4 => (corner_radius, window_height - border_width, window_width - corner_radius, window_height), // 下边缘
+        1 => (
+            0.0,
+            corner_radius,
+            border_width,
+            window_height - corner_radius,
+        ), // 左边缘
+        2 => (
+            window_width - border_width,
+            corner_radius,
+            window_width,
+            window_height - corner_radius,
+        ), // 右边缘
+        3 => (
+            corner_radius,
+            0.0,
+            window_width - corner_radius,
+            border_width,
+        ), // 上边缘
+        4 => (
+            corner_radius,
+            window_height - border_width,
+            window_width - corner_radius,
+            window_height,
+        ), // 下边缘
         _ => (0.0, 0.0, 0.0, 0.0), // 无边缘
     }
 }
@@ -1487,22 +1507,34 @@ mod tests {
         // 左边缘：top >= corner_r, bottom <= hh - corner_r
         let (_l, t, _r, b) = compute_edge_rect(1, ww, hh, bw, corner_r);
         assert!(t >= corner_r, "left edge top should be >= corner_r");
-        assert!(b <= hh - corner_r, "left edge bottom should be <= hh - corner_r");
+        assert!(
+            b <= hh - corner_r,
+            "left edge bottom should be <= hh - corner_r"
+        );
 
         // 右边缘：top >= corner_r, bottom <= hh - corner_r
         let (_l, t, _r, b) = compute_edge_rect(2, ww, hh, bw, corner_r);
         assert!(t >= corner_r, "right edge top should be >= corner_r");
-        assert!(b <= hh - corner_r, "right edge bottom should be <= hh - corner_r");
+        assert!(
+            b <= hh - corner_r,
+            "right edge bottom should be <= hh - corner_r"
+        );
 
         // 上边缘：left >= corner_r, right <= ww - corner_r
         let (l, _t, r, _b) = compute_edge_rect(3, ww, hh, bw, corner_r);
         assert!(l >= corner_r, "top edge left should be >= corner_r");
-        assert!(r <= ww - corner_r, "top edge right should be <= ww - corner_r");
+        assert!(
+            r <= ww - corner_r,
+            "top edge right should be <= ww - corner_r"
+        );
 
         // 下边缘：left >= corner_r, right <= ww - corner_r
         let (l, _t, r, _b) = compute_edge_rect(4, ww, hh, bw, corner_r);
         assert!(l >= corner_r, "bottom edge left should be >= corner_r");
-        assert!(r <= ww - corner_r, "bottom edge right should be <= ww - corner_r");
+        assert!(
+            r <= ww - corner_r,
+            "bottom edge right should be <= ww - corner_r"
+        );
     }
 
     /// 验证不同 DPI 缩放下的边缘条宽度计算（scale_for_dpi 逻辑验证）
@@ -1524,7 +1556,12 @@ mod tests {
     fn test_edge_rect_small_window() {
         // 窗口 40x40，圆角 16：边缘条只有 40-16*2=8 像素可用
         let (_l, t, _r, b) = compute_edge_rect(1, 40.0, 40.0, 3.0, 16.0);
-        assert!(t < b, "left edge should have positive height: t={}, b={}", t, b);
+        assert!(
+            t < b,
+            "left edge should have positive height: t={}, b={}",
+            t,
+            b
+        );
         assert_eq!(b - t, 8.0, "edge height should be 40 - 16*2 = 8");
     }
 }

@@ -903,3 +903,82 @@ pub fn compute_edge_rect(
 - 圆角避让验证
 - DPI 缩放兼容性
 - 小窗口场景
+
+## Inline Rename (Async EDIT Control)
+
+### Problem
+
+GPUI's message loop does not dispatch Windows messages to child controls. A synchronous EDIT control
+created on the main thread blocks the GPUI event loop and cannot receive keyboard input (especially IME
+for CJK characters).
+
+### Solution
+
+Run the EDIT control on a **dedicated background thread** with its own standard Windows message loop.
+Communicate results back to the parent window via PostMessage with custom WM_USER_* messages.
+
+### Architecture
+
+`
+Parent Window (grid/overlay)
+  │
+  ├── show_rename_editor_async()      # Spawns background thread
+  │     │
+  │     └── edit_thread_main()        # Creates STATIC container + EDIT child
+  │           │
+  │           ├── edit_subclass()     # Handles Enter/Escape/KillFocus
+  │           │     ├── VK_RETURN → PostQuitMessage(0)
+  │           │     ├── VK_ESCAPE → EDIT_RESULT = Cancel
+  │           │     └── WM_KILLFOCUS → deferred focus check
+  │           │
+  │           └── cleanup_and_notify() # Sends WM_USER_RENAME_RESULT or WM_USER_RENAME_CANCEL
+  │
+  ├── WM_USER_RENAME_RESULT handler   # Performs actual file rename
+  │     ├── build_rename_filename()   # Preserves file extension
+  │     ├── icon_hider::rename_icon_file()
+  │     └── display_name_from_path()  # Updates display name
+  │
+  └── WM_USER_RENAME_CANCEL handler   # Clears renaming_item_index
+`
+
+### Key Implementation Details
+
+1. **Thread safety**: EDIT_THREAD_ACTIVE AtomicBool prevents concurrent rename editors
+2. **Extension preservation**: uild_rename_filename() always preserves original extension;
+   the EDIT control pre-selects only the filename stem via EM_SETSEL
+3. **Label hiding**: During rename, 
+enaming_item_index tells the renderer to skip
+   drawing the icon label (the EDIT control shows it instead)
+4. **Focus-lost handling**: WM_KILLFOCUS posts a deferred WM_USER_QUIT_EDIT message
+   to check if focus truly left the EDIT (allows quick re-click)
+5. **Font consistency**: EDIT uses the same "Microsoft YaHei UI" font as icon labels,
+   scaled to the parent window's DPI
+
+### Shared Pure Functions (in rename_editor.rs)
+
+| Function | Purpose | Testable |
+|----------|---------|----------|
+| uild_rename_filename(new_name, old_path) | Build final filename preserving extension | ✅ 9 tests |
+| display_name_from_path(file_path) | Extract display name (stem) from path | ✅ 6 tests |
+| get_name_stem_len(name) | Calculate stem length for EM_SETSEL | ✅ 8 tests |
+
+### Checklist
+
+- [ ] EDIT control runs on its own thread (not main thread)
+- [ ] 
+enaming_item_index set before showing editor, cleared on result/cancel
+- [ ] Extension always preserved (user edits stem only)
+- [ ] Label hidden during rename (rendering checks 
+enaming_item_index)
+- [ ] Font matches icon label font (Microsoft YaHei UI, DPI-scaled)
+- [ ] EDIT_THREAD_ACTIVE prevents concurrent editors
+- [ ] Result communicated via PostMessage (not blocking calls)
+
+### Related Files
+
+- src/platform/windows/rename_editor.rs — Thread-based EDIT control + shared helpers
+- src/platform/windows/wnd_proc.rs — Grid window rename result handling
+- src/platform/windows/desktop_overlay/overlay_wnd_proc.rs — Overlay rename result handling
+- src/platform/windows/d2d_render.rs — Label hiding during rename
+- src/platform/windows/desktop_overlay/overlay_render.rs — Overlay label hiding during rename
+

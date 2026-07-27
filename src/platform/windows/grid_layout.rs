@@ -257,6 +257,7 @@ mod tests {
             dw_factory: None,
             wic_factory: None,
             d2d_target: None,
+            renaming_item_index: -1,
         }
     }
 
