@@ -1,4 +1,4 @@
-//! 桌面覆盖窗口消息处理
+﻿//! 桌面覆盖窗口消息处理
 //!
 //! 阶段 3 在图标区域接管鼠标事件：hover、选中、双击打开、右键菜单和拖入分类框。
 //! 空白区域由覆盖窗口处理桌面背景菜单，避免把右键/新建转发给已隐藏的原生桌面。
@@ -148,6 +148,12 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             log::debug!("覆盖窗口 WM_MOUSEACTIVATE: 返回 MA_NOACTIVATE");
             MA_NOACTIVATE as LRESULT
         }
+        // ===== OLE 拖拽放置：外部文件拖入覆盖区域（由 overlay IDropTarget PostMessage 触发）=====
+        WM_USER_OVERLAY_DROP => {
+            handle_overlay_ole_drop(hwnd);
+            0
+        }
+
         WM_USER_REFRESH_OVERLAY => {
             refresh_desktop_overlay_icons(hwnd);
             0
@@ -475,7 +481,7 @@ fn handle_overlay_drag_timer(hwnd: HWND) {
 }
 
 /// 更新覆盖窗口的拖拽可视化反馈
-fn update_overlay_drag_over_visual(hwnd: HWND, screen_x: i32, screen_y: i32) {
+pub(crate) fn update_overlay_drag_over_visual(hwnd: HWND, screen_x: i32, screen_y: i32) {
     let data = match get_overlay_data(hwnd) {
         Some(d) => d,
         None => return,
@@ -526,7 +532,7 @@ fn update_overlay_drag_over_visual(hwnd: HWND, screen_x: i32, screen_y: i32) {
     // 查找该单元格上是否有图标（列优先：index = col * rows + row）
     let item_at_cell = {
         let idx = (col * rows + row) as usize;
-        if idx < data.icons.len() && (idx as i32) != dragged_idx {
+        if idx < data.icons.len() && (dragged_idx < 0 || (idx as i32) != dragged_idx) {
             idx as i32
         } else {
             -1
@@ -964,6 +970,144 @@ fn screen_to_overlay_client(hwnd: HWND, screen_x: i32, screen_y: i32) -> (i32, i
     };
     unsafe { GetWindowRect(hwnd, &mut wr) };
     (screen_x - wr.left, screen_y - wr.top)
+}
+
+/// 处理外部文件拖拽到覆盖区域（由 WM_USER_OVERLAY_DROP 触发）
+///
+/// 核心逻辑：将文件复制到用户桌面（模拟原生桌面拖拽行为），
+/// 然后在覆盖窗口的鼠标释放位置显示图标。
+fn handle_overlay_ole_drop(_hwnd: HWND) {
+    let drop = match super::overlay_drop_target::take_pending_overlay_drop() {
+        Some(d) => d,
+        None => {
+            log::debug!("覆盖窗口 OLE drop: 无待处理数据");
+            return;
+        }
+    };
+
+    log::info!(
+        "覆盖窗口 OLE drop: {} 个文件, drop=({}, {})",
+        drop.file_paths.len(),
+        drop.drop_x,
+        drop.drop_y
+    );
+
+    let mut added = 0;
+    for file_path in &drop.file_paths {
+        let is_desktop_file = crate::platform::windows::icon_hider::is_user_desktop_path(file_path)
+            || crate::platform::windows::icon_hider::is_public_desktop_path(file_path);
+
+        // 对于非桌面文件：复制到用户桌面（模拟原生桌面拖拽的复制行为）
+        let effective_path = if !is_desktop_file {
+            match copy_file_to_desktop(file_path) {
+                Some(desktop_path) => {
+                    log::info!(
+                        "覆盖窗口 drop: 非桌面文件已复制到桌面: {} -> {}",
+                        file_path,
+                        desktop_path
+                    );
+                    desktop_path
+                }
+                None => {
+                    log::warn!("覆盖窗口 drop: 复制文件到桌面失败: {}", file_path);
+                    file_path.clone()
+                }
+            }
+        } else {
+            file_path.clone()
+        };
+
+        // 提取显示名称和图标
+        let icon_info = crate::platform::windows::icon_extract::extract_file_icon(&effective_path);
+        let display_name = match &icon_info {
+            Some(info) => info.display_name.clone(),
+            None => std::path::Path::new(&effective_path)
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| effective_path.clone()),
+        };
+
+        // 添加到覆盖窗口（在鼠标释放位置显示）
+        let shown = super::overlay_window::add_icon_to_overlay(
+            effective_path.clone(),
+            display_name.clone(),
+            drop.drop_x,
+            drop.drop_y,
+        );
+
+        if shown {
+            added += 1;
+            log::info!("覆盖窗口 drop: '{}' 已添加到覆盖区域", display_name);
+        }
+
+        // 对于桌面文件，收入仓库（与现有桌面→框行为一致）
+        if is_desktop_file {
+            if let Err(e) = crate::platform::windows::icon_hider::ingest_icon(&effective_path) {
+                log::warn!("覆盖窗口 drop: 收入仓库失败 '{}': {}", display_name, e);
+            }
+        }
+    }
+
+    if added > 0 {
+        log::info!("覆盖窗口 OLE drop: 添加 {} 个图标到覆盖区域", added);
+        // 强制刷新覆盖窗口，确保图标立即显示
+        super::overlay_window::request_desktop_overlay_refresh();
+    }
+}
+
+/// 将文件复制到用户桌面，返回桌面路径
+fn copy_file_to_desktop(source_path: &str) -> Option<String> {
+    use std::path::Path;
+
+    let source = Path::new(source_path);
+    if !source.exists() {
+        log::warn!("copy_file_to_desktop: 源文件不存在: {}", source_path);
+        return None;
+    }
+
+    let file_name = source.file_name()?.to_string_lossy().to_string();
+    let desktop = dirs::desktop_dir()?;
+    let dest = desktop.join(&file_name);
+
+    // 如果桌面已有同名文件，生成唯一名称
+    let dest = if dest.exists() {
+        let stem = source.file_stem()?.to_string_lossy().to_string();
+        let ext = source
+            .extension()
+            .map(|e| format!(".{}", e.to_string_lossy()))
+            .unwrap_or_default();
+        let mut counter = 1;
+        loop {
+            let new_name = format!("{} ({}){}", stem, counter, ext);
+            let new_dest = desktop.join(&new_name);
+            if !new_dest.exists() {
+                break new_dest;
+            }
+            counter += 1;
+            if counter > 100 {
+                log::warn!("copy_file_to_desktop: 无法生成唯一文件名");
+                return None;
+            }
+        }
+    } else {
+        dest
+    };
+
+    match std::fs::copy(source, &dest) {
+        Ok(_) => {
+            crate::platform::windows::icon_hider::notify_shell_path(&dest.to_string_lossy());
+            Some(dest.to_string_lossy().to_string())
+        }
+        Err(e) => {
+            log::warn!(
+                "copy_file_to_desktop: 复制失败 {} -> {}: {}",
+                source_path,
+                dest.display(),
+                e
+            );
+            None
+        }
+    }
 }
 
 #[cfg(test)]

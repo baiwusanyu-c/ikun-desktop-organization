@@ -1,4 +1,4 @@
-//! Win32 FFI 类型定义、C 结构体和常量
+﻿//! Win32 FFI 类型定义、C 结构体和常量
 //!
 //! 本模块包含所有 Win32 FFI 所需的类型别名、结构体定义和常量。
 //! 被 grid_window、win32_ffi、shell_menu、d2d_render 等模块共享使用。
@@ -632,6 +632,8 @@ pub const WM_USER_PUSH_GRIDS_BELOW: u32 = WM_APP + 15;
 /// 通知目标框：更新拖拽覆盖可视化状态（lparam = 光标屏幕坐标）
 pub const WM_USER_DRAG_OVER_UPDATE: u32 = WM_APP + 16;
 pub const WM_USER_CUT_FILE_MOVED: u32 = WM_APP + 17;
+/// 通知覆盖窗口：外部文件拖拽放置完成（由 overlay IDropTarget PostMessage 触发）
+pub const WM_USER_OVERLAY_DROP: u32 = WM_APP + 18;
 
 /// 拖拽项信息（用于框间拖拽数据传递）
 #[derive(Debug, Clone)]

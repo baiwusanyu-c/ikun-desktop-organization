@@ -1,4 +1,4 @@
-//! OLE 拖拽目标实现（IDropTarget）
+﻿//! OLE 拖拽目标实现（IDropTarget）
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -28,6 +28,9 @@ pub struct PendingDrop {
     /// 放置目标的屏幕坐标
     pub drop_x: i32,
     pub drop_y: i32,
+    /// 拖拽悬停时的插入模式状态（来自 drag_over 可视化反馈）
+    pub insert_col: i32,
+    pub insert_row: i32,
 }
 
 static PENDING_DROP: Mutex<Option<PendingDrop>> = Mutex::new(None);
@@ -177,7 +180,7 @@ unsafe extern "system" fn drop_target_drag_enter(
 }
 
 unsafe extern "system" fn drop_target_drag_over(
-    _this: *mut c_void,
+    this: *mut c_void,
     _ks: u32,
     _pt: i64,
     effect: *mut u32,
@@ -185,6 +188,18 @@ unsafe extern "system" fn drop_target_drag_over(
     if *effect & DROPEFFECT_MOVE != 0 {
         *effect = DROPEFFECT_MOVE;
     }
+
+    // 显示拖拽覆盖可视化（分割线/高亮）—— 仅在无内部拖拽时更新
+    let target = &*(this as *const BoxDropTarget);
+    let should_update = super::grid_window::get_data(target.target_hwnd)
+        .map(|d| !d.drag_active)
+        .unwrap_or(false);
+    if should_update {
+        let mut cursor_pt = POINT { x: 0, y: 0 };
+        unsafe { GetCursorPos(&mut cursor_pt) };
+        super::drag_visual::handle_cross_box_drag_over(target.target_hwnd, cursor_pt.x, cursor_pt.y);
+    }
+
     S_OK
 }
 
@@ -226,6 +241,8 @@ unsafe extern "system" fn drop_target_drop(
             box_data: box_data.clone(),
             drop_x,
             drop_y,
+            insert_col: super::grid_window::get_data(target.target_hwnd).map(|d| d.drag_over_insert_col).unwrap_or(-1),
+            insert_row: super::grid_window::get_data(target.target_hwnd).map(|d| d.drag_over_insert_row).unwrap_or(-1),
         });
     }
 

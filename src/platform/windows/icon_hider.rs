@@ -1,4 +1,4 @@
-//! 隐藏/恢复原生桌面图标 + 图标仓库（Vault）
+﻿//! 隐藏/恢复原生桌面图标 + 图标仓库（Vault）
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -384,7 +384,7 @@ fn logical_path_from_vault_name(vault_name: &str) -> Option<PathBuf> {
     }
 }
 
-fn notify_shell_path(path: &str) {
+pub(crate) fn notify_shell_path(path: &str) {
     use std::os::windows::ffi::OsStrExt;
     let wide: Vec<u16> = Path::new(path)
         .as_os_str()

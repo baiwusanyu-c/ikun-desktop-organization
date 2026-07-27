@@ -1,4 +1,4 @@
-//! Drag-and-drop operations: same-box drop, box-to-box move, box-to-desktop.
+﻿//! Drag-and-drop operations: same-box drop, box-to-box move, box-to-desktop.
 //!
 //! Handles all drop scenarios when a drag gesture ends, including
 //! grid snap, swap, shift-insert, and OLE drop from external sources.
@@ -522,6 +522,62 @@ fn compute_drop_grid_position(
 }
 
 /// 触发。从 `PENDING_DROP` 读取文件路径，添加到目标分类框，并隐藏桌面图标。
+/// 将非桌面文件复制到用户桌面，返回桌面路径字符串。
+/// 用于模拟原生桌面拖拽行为：从资源管理器拖拽文件到桌面时，Windows 会复制文件。
+fn copy_file_to_user_desktop(source_path: &str) -> Option<String> {
+    use std::path::Path;
+
+    let source = Path::new(source_path);
+    if !source.exists() {
+        log::warn!("copy_file_to_user_desktop: 源文件不存在: {}", source_path);
+        return None;
+    }
+
+    let file_name = source.file_name()?.to_string_lossy().to_string();
+    let desktop = dirs::desktop_dir()?;
+    let dest = desktop.join(&file_name);
+
+    // 如果桌面已有同名文件，生成唯一名称
+    let dest = if dest.exists() {
+        let stem = source.file_stem()?.to_string_lossy().to_string();
+        let ext = source
+            .extension()
+            .map(|e| format!(".{}", e.to_string_lossy()))
+            .unwrap_or_default();
+        let mut counter = 1;
+        loop {
+            let new_name = format!("{} ({}){}", stem, counter, ext);
+            let new_dest = desktop.join(&new_name);
+            if !new_dest.exists() {
+                break new_dest;
+            }
+            counter += 1;
+            if counter > 100 {
+                log::warn!("copy_file_to_user_desktop: 无法生成唯一文件名");
+                return None;
+            }
+        }
+    } else {
+        dest
+    };
+
+    match std::fs::copy(source, &dest) {
+        Ok(_) => {
+            super::icon_hider::notify_shell_path(&dest.to_string_lossy());
+            Some(dest.to_string_lossy().to_string())
+        }
+        Err(e) => {
+            log::warn!(
+                "copy_file_to_user_desktop: 复制失败 {} -> {}: {}",
+                source_path,
+                dest.display(),
+                e
+            );
+            None
+        }
+    }
+}
+
 pub(crate) fn handle_ole_drop(hwnd: HWND) {
     let drop = match super::drop_target::take_pending_drop() {
         Some(d) => d,
@@ -553,31 +609,95 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
             continue;
         }
 
-        // 提取图标
-        let icon_info = super::icon_extract::extract_file_icon(file_path);
+        let is_desktop_file = !is_box_drag
+            && (super::icon_hider::is_user_desktop_path(file_path)
+                || super::icon_hider::is_public_desktop_path(file_path));
+
+        // 对于非桌面、非框间拖拽的外部文件：先复制到用户桌面（模拟原生桌面拖拽行为）
+        let effective_path = if !is_box_drag && !is_desktop_file {
+            match copy_file_to_user_desktop(file_path) {
+                Some(desktop_path) => {
+                    log::info!(
+                        "OLE drop: 非桌面文件已复制到桌面: {} -> {}",
+                        file_path,
+                        desktop_path
+                    );
+                    desktop_path
+                }
+                None => {
+                    log::warn!("OLE drop: 复制文件到桌面失败: {}", file_path);
+                    file_path.clone()
+                }
+            }
+        } else {
+            file_path.clone()
+        };
+
+        // 提取图标（使用有效路径）
+        let icon_info = super::icon_extract::extract_file_icon(&effective_path);
         let (icon_handle, display_name) = match icon_info {
             Some(info) => (info.hicon, info.display_name),
             None => {
-                let name = std::path::Path::new(file_path)
+                let name = std::path::Path::new(&effective_path)
                     .file_stem()
                     .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| file_path.clone());
+                    .unwrap_or_else(|| effective_path.clone());
                 (std::ptr::null_mut(), name)
             }
         };
 
+        // 计算释放位置对应的网格坐标（遵循分类框的栅格布局规则）
+        let (target_col, target_row) = compute_drop_grid_position(hwnd, drop.drop_x, drop.drop_y, data);
+
+        // 检查是否有插入模式（来自拖拽悬停可视化反馈）
+        let is_insert = drop.insert_col >= 0 && drop.insert_row >= 0;
+        let (final_col, final_row) = if is_insert {
+            (drop.insert_col, drop.insert_row)
+        } else {
+            (target_col, target_row)
+        };
+
+        log::info!(
+            "OLE drop grid: drop=({}, {}) -> grid=({}, {}), insert=({}, {})",
+            drop.drop_x, drop.drop_y, target_col, target_row, drop.insert_col, drop.insert_row
+        );
+
+        if is_insert {
+            // 插入模式：将现有项右移，新项插入到指定位置
+            let cols = data.cols;
+            let insert_lin = drop.insert_row * cols + drop.insert_col;
+
+            // 物化所有自动布局位置
+            for (i, item) in data.items.iter_mut().enumerate() {
+                if item.grid_col < 0 {
+                    item.grid_col = (i as i32) % cols;
+                    item.grid_row = (i as i32) / cols;
+                }
+            }
+
+            // 将插入位置及之后的项右移
+            for item in data.items.iter_mut() {
+                let item_lin = item.grid_row * cols + item.grid_col;
+                if item_lin >= insert_lin {
+                    let new_lin = item_lin + 1;
+                    item.grid_col = new_lin % cols;
+                    item.grid_row = new_lin / cols;
+                }
+            }
+        }
+
         data.items.push(super::grid_window::GridFileItem {
-            file_path: file_path.clone(),
+            file_path: effective_path.clone(),
             display_name: display_name.clone(),
             icon_handle,
-            grid_col: -1,
-            grid_row: -1,
+            grid_col: final_col,
+            grid_row: final_row,
         });
         added += 1;
 
         if !is_box_drag {
-            // 桌面→框：收入仓库
-            if let Err(e) = super::icon_hider::ingest_icon(file_path) {
+            // 外部→框：收入仓库（桌面文件直接收入，非桌面文件的桌面副本收入）
+            if let Err(e) = super::icon_hider::ingest_icon(&effective_path) {
                 log::warn!("OLE drop: 收入仓库失败 '{}': {}", display_name, e);
             } else {
                 log::info!("OLE drop: '{}' 已收入仓库", display_name);
@@ -590,6 +710,11 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
         super::d2d_render::render_layered_window(hwnd);
         save_config();
     }
+
+    // 清除拖拽悬停可视化状态
+    data.drag_over_item = -1;
+    data.drag_over_insert_col = -1;
+    data.drag_over_insert_row = -1;
 }
 
 #[cfg(test)]

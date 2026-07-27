@@ -1,4 +1,4 @@
-//! 桌面覆盖窗口模块
+﻿//! 桌面覆盖窗口模块
 //!
 //! 通过全屏分层窗口覆盖桌面，在原生 SysListView32 被隐藏后由应用自行渲染
 //! 桌面图标与处理交互。当前已接入未管理桌面图标渲染、命中测试、选择、
@@ -9,6 +9,7 @@ mod overlay_grid;
 mod overlay_render;
 mod overlay_window;
 mod overlay_wnd_proc;
+mod overlay_drop_target;
 
 #[allow(unused_imports)] // 公共 API 预留
 pub(crate) use overlay_window::{

@@ -1,4 +1,4 @@
-//! 桌面覆盖窗口创建与生命周期管理
+﻿//! 桌面覆盖窗口创建与生命周期管理
 //!
 //! 阶段 1 创建一个覆盖主显示器工作区的全透明分层窗口，放在较低 Z-order，
 //! 用于后续自行渲染桌面图标。窗口不抢焦点，当前阶段鼠标事件全部穿透。
@@ -118,6 +118,10 @@ pub(crate) struct OverlayWindowData {
     // ===== 重命名状态 =====
     /// 正在重命名的项索引（-1 = 无重命名）
     pub(crate) renaming_item_index: i32,
+    /// OLE 拖拽目标指针（用于覆盖窗口接收外部拖拽）
+    pub(crate) drop_target_ptr: *mut std::ffi::c_void,
+    /// 外部拖拽悬停状态（从资源管理器等外部源拖拽时设为 true，使背景不透明以接收 drop）
+    pub(crate) external_drag_hover: bool,
 }
 
 unsafe impl Send for OverlayWindowData {}
@@ -244,10 +248,21 @@ pub fn create_desktop_overlay() -> Result<()> {
         wic_factory: None,
         d2d_target: None,
         renaming_item_index: -1,
+        drop_target_ptr: std::ptr::null_mut(),
+            external_drag_hover: false,
     });
     let data_ptr = Box::into_raw(data);
     unsafe {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, data_ptr as isize);
+    }
+
+    // 注册 OLE 拖拽目标（使覆盖窗口可接收外部拖入的文件）
+    let drop_target = super::overlay_drop_target::register_overlay_drop_target(hwnd);
+    if !drop_target.is_null() {
+        unsafe {
+            let data_ref = &mut *data_ptr;
+            data_ref.drop_target_ptr = drop_target;
+        }
     }
 
     // 阶段 2：使用 per-pixel alpha 渲染未管理桌面图标。
