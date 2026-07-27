@@ -951,12 +951,17 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                         let old_path = data.items[item_index as usize].file_path.clone();
                         let old_name = data.items[item_index as usize].display_name.clone();
                         
-                        // Preserve file extension if user didn't provide one
-                        let final_name = if std::path::Path::new(new_name.as_str()).extension().is_none() {
-                            if let Some(ext) = std::path::Path::new(&old_path).extension() {
-                                format!("{}.{}", *new_name, ext.to_string_lossy())
-                            } else {
+                        // Always preserve original file extension.
+                        // The rename editor pre-selects only the stem (via EM_SETSEL),
+                        // so user input is always intended as a new stem name.
+                        let final_name = if let Some(ext) = std::path::Path::new(&old_path).extension() {
+                            let ext_str = ext.to_string_lossy();
+                            let with_ext = format!("{}.{}", *new_name, ext_str);
+                            // If user already typed the correct extension, don't double-append
+                            if new_name.ends_with(&format!(".{}", ext_str)) {
                                 (*new_name).clone()
+                            } else {
+                                with_ext
                             }
                         } else {
                             (*new_name).clone()
