@@ -122,6 +122,9 @@ fn handle_shell_menu_result(hwnd: HWND, file_path: &str, hit_index: i32, result:
             
             if success {
                 log::info!("Rename editor shown for item {}: '{}'", hit_index, current_name);
+                // 标记正在重命名的项，隐藏标签文本
+                data.renaming_item_index = hit_index;
+                super::d2d_render::render_layered_window(hwnd);
             } else {
                 log::error!("Failed to show rename editor");
             }
@@ -942,6 +945,8 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 log::info!("Rename result for item {}: '{}'", item_index, *new_name);
                 
                 if let Some(data) = unsafe { get_data(hwnd) } {
+                    // 清除重命名状态
+                    data.renaming_item_index = -1;
                     if (item_index as usize) < data.items.len() {
                         let old_path = data.items[item_index as usize].file_path.clone();
                         let old_name = data.items[item_index as usize].display_name.clone();
@@ -972,6 +977,14 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                         }
                     }
                 }
+            }
+            0
+        }
+        msg if msg == super::rename_editor::get_rename_cancel_message() => {
+            log::info!("Rename cancelled for item {}", wparam);
+            if let Some(data) = unsafe { get_data(hwnd) } {
+                data.renaming_item_index = -1;
+                render_layered_window(hwnd);
             }
             0
         }

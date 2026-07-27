@@ -541,6 +541,7 @@ pub fn render_layered_window(hwnd: HWND) {
         data.drag_over_item,
         data.drag_over_insert_col,
         data.drag_over_insert_row,
+        data.renaming_item_index,
     );
 
     unsafe { target.PopAxisAlignedClip() };
@@ -645,6 +646,7 @@ pub fn render_icon_grid(
     drag_over_item: i32,
     drag_over_insert_col: i32,
     drag_over_insert_row: i32,
+    renaming_item_index: i32,
 ) {
     let icon_size = view_params.icon_size;
     let cell_w = layout.cell_w;
@@ -777,7 +779,7 @@ pub fn render_icon_grid(
         }
 
         // 绘制图标标签文字（DirectWrite）
-        if view_params.show_label {
+        if view_params.show_label && i as i32 != renaming_item_index {
             if let Ok(ref lf) = label_format {
                 let label: Vec<u16> = item.display_name.encode_utf16().collect();
                 let label_x = cell_x + 2;

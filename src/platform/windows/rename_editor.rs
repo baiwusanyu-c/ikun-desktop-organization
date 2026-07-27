@@ -1,4 +1,4 @@
-﻿//! 使用原生 Windows EDIT 控件实现内联重命名
+//! 使用原生 Windows EDIT 控件实现内联重命名
 //!
 //! 在独立线程上创建 EDIT 控件并运行标准消息循环。
 //! 这样即使 GPUI 的消息循环不分发，EDIT 控件也能正常接收键盘输入。
@@ -11,6 +11,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 const WM_USER_RENAME_RESULT: u32 = 0x8100;
+const WM_USER_RENAME_CANCEL: u32 = 0x8102;
 const WM_USER_QUIT_EDIT: u32 = 0x8101;
 
 struct RenameState {
@@ -19,6 +20,7 @@ struct RenameState {
     parent_hwnd: HWND,
     item_index: i32,
     original_name: String,
+    font_handle: HGDIOBJ,
 }
 
 unsafe impl Send for RenameState {}
@@ -147,6 +149,28 @@ unsafe fn edit_thread_main(params: ThreadParams) {
     
     log::info!("[rename] Thread: Container={:?}, EDIT={:?}", container_hwnd, edit_hwnd);
     
+    // 设置字体（与图标标签字体一致：Microsoft YaHei UI，13px at 96 DPI）
+    let dpi = GetDpiForWindow(parent_hwnd);
+    let dpi = if dpi > 0 { dpi } else { 96 };
+    let font_height = -scale_for_dpi(13, dpi);
+    let font_name_w: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
+    let font_handle = CreateFontW(
+        font_height, 0, 0, 0,
+        400,  // FW_NORMAL
+        0, 0, 0,
+        1,    // DEFAULT_CHARSET
+        0, 5, 0,  // OUT_TT_PRECIS, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS
+        0x02 | 0x20,  // FF_SWISS | VARIABLE_PITCH
+        font_name_w.as_ptr(),
+    );
+    if !font_handle.is_null() {
+        // WM_SETFONT = 0x0030, wParam = HFONT, lParam = TRUE (redraw)
+        SendMessageW(edit_hwnd, 0x0030, font_handle as WPARAM, 1);
+        log::info!("[rename] Font set: height={}, dpi={}", font_height, dpi);
+    } else {
+        log::warn!("[rename] Failed to create font");
+    }
+    
     // 保存状态
     *RENAME_STATE.lock().unwrap() = Some(RenameState {
         edit_hwnd,
@@ -154,6 +178,7 @@ unsafe fn edit_thread_main(params: ThreadParams) {
         parent_hwnd,
         item_index,
         original_name: current_name.clone(),
+        font_handle,
     });
     
     // 设置文本
@@ -281,14 +306,22 @@ unsafe fn cleanup_and_notify(parent_hwnd: HWND, item_index: i32, edit_hwnd: HWND
         DestroyWindow(container_hwnd);
     }
     
-    // 清理状态
-    RENAME_STATE.lock().unwrap().take();
+    // 清理状态和字体资源
+    if let Some(state) = RENAME_STATE.lock().unwrap().take() {
+        if !state.font_handle.is_null() {
+            DeleteObject(state.font_handle);
+            log::info!("[rename] Font deleted");
+        }
+    }
     
     // 发送结果给父窗口
     if !cancelled && !text.is_empty() && item_index >= 0 {
         let boxed = Box::new(text);
         let ptr = Box::into_raw(boxed);
         PostMessageW(parent_hwnd, WM_USER_RENAME_RESULT, item_index as WPARAM, ptr as LPARAM);
+    } else if item_index >= 0 {
+        // 重命名取消或文本为空，通知父窗口清除重命名状态
+        PostMessageW(parent_hwnd, WM_USER_RENAME_CANCEL, item_index as WPARAM, 0);
     }
 }
 
@@ -296,6 +329,10 @@ unsafe fn cleanup_and_notify(parent_hwnd: HWND, item_index: i32, edit_hwnd: HWND
 
 pub fn get_rename_result_message() -> u32 {
     WM_USER_RENAME_RESULT
+}
+
+pub fn get_rename_cancel_message() -> u32 {
+    WM_USER_RENAME_CANCEL
 }
 
 fn get_name_stem_len(name: &str) -> i32 {

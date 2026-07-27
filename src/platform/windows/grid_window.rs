@@ -185,6 +185,8 @@ pub(crate) struct GridWindowData {
     pub(crate) scroll_offset: i32,
 
     // ===== 重命名状态 =====
+    /// 正在重命名的项索引（-1 = 无重命名）
+    pub(crate) renaming_item_index: i32,
 
     // ===== D2D/DirectWrite 设备缓存（窗口级） =====
     pub(crate) d2d_factory: Option<ID2D1Factory>,
@@ -237,6 +239,7 @@ impl GridWindowData {
             drag_over_insert_row: -1,
             drop_target_ptr: std::ptr::null_mut(),
             scroll_offset: 0,
+            renaming_item_index: -1,
             d2d_factory: None,
             dw_factory: None,
             wic_factory: None,
@@ -446,6 +449,7 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         drag_over_insert_row: -1,
         drop_target_ptr: std::ptr::null_mut(),
         scroll_offset: 0,
+        renaming_item_index: -1,
         d2d_factory: None,
         dw_factory: None,
         wic_factory: None,
