@@ -3,7 +3,7 @@
 //! 阶段 3 在图标区域接管鼠标事件：hover、选中、双击打开、右键菜单和拖入分类框。
 //! 空白区域由覆盖窗口处理桌面背景菜单，避免把右键/新建转发给已隐藏的原生桌面。
 
-use super::overlay_grid::{overlay_grid_to_logical, overlay_snap_to_grid};
+use super::overlay_grid::{overlay_first_free_cell, overlay_grid_to_logical, overlay_snap_to_grid};
 use super::overlay_render::render_desktop_overlay;
 use super::overlay_window::{
     get_overlay_data, overlay_hit_test, overlay_icon_cell_x, overlay_icon_cell_y,
@@ -488,9 +488,7 @@ pub(crate) fn update_overlay_drag_over_visual(hwnd: HWND, screen_x: i32, screen_
     };
 
     let dragged_idx = data.drag_item_index;
-    if dragged_idx < 0 {
-        return;
-    }
+    // dragged_idx == -1 表示外部 OLE 拖拽，仍需显示可视化反馈
 
     // 转换为overlay窗口坐标
     let local_x = screen_x - data.x;
