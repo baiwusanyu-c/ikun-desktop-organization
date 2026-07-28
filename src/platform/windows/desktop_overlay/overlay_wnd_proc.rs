@@ -150,6 +150,22 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             log::debug!("覆盖窗口 WM_MOUSEACTIVATE: 返回 MA_NOACTIVATE");
             MA_NOACTIVATE as LRESULT
         }
+        // ===== Z-order 管理：强制覆盖窗口保持在 HWND_BOTTOM =====
+        // 与分类框的 WM_WINDOWPOSCHANGING 类似，确保覆盖窗口始终低于其他应用窗口，
+        // 避免图标覆盖在 Chrome 等应用窗口上方。
+        WM_WINDOWPOSCHANGING => {
+            // OLE 拖拽期间不干预 Z-order，否则 hit-testing 无法到达目标窗口
+            if !crate::platform::windows::zorder::is_drag_in_progress() {
+                let windowpos = lparam as *mut WINDOWPOS;
+                if !windowpos.is_null() {
+                    let wp = unsafe { &mut *windowpos };
+                    if wp.flags & SWP_NOZORDER == 0 {
+                        wp.hwnd_insert_after = HWND_BOTTOM;
+                    }
+                }
+            }
+            0
+        }
         // ===== OLE 拖拽放置：外部文件拖入覆盖区域（由 overlay IDropTarget PostMessage 触发）=====
         WM_USER_OVERLAY_DROP => {
             handle_overlay_ole_drop(hwnd);
@@ -470,10 +486,9 @@ fn handle_overlay_drag_timer(hwnd: HWND) {
             PostMessageW(target_hwnd, WM_USER_DRAG_OVER_UPDATE, 0, lparam as LPARAM);
         }
     } else {
-        // 检测外部窗口（Explorer 等），临时隐藏覆盖窗口以获得准确的 hit-testing
-        unsafe { ShowWindow(hwnd, SW_HIDE); }
+        // 检测外部窗口（Explorer 等）— find_external_window_at_point 使用 EnumWindows
+        // 遍历所有顶层窗口的包围盒，无需隐藏覆盖窗口即可准确检测，避免频繁 SW_HIDE 导致图标闪烁
         let ext_hwnd = crate::platform::windows::zorder::find_external_window_at_point(pt.x, pt.y);
-        unsafe { ShowWindow(hwnd, SW_SHOWNA); }
         if !ext_hwnd.is_null() {
             start_overlay_ole_drag(hwnd, ext_hwnd);
             return;
