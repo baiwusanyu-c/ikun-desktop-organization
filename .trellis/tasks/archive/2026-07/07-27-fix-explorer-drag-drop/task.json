@@ -1,9 +1,9 @@
-{
+﻿{
   "id": "fix-explorer-drag-drop",
   "name": "fix-explorer-drag-drop",
   "title": "fix: 修复从资源管理器拖拽文件到覆盖区域和分类框的两个bug",
   "description": "",
-  "status": "planning",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "claude-agent",
   "assignee": "claude-agent",
   "createdAt": "2026-07-27",
-  "completedAt": null,
+  "completedAt": "2026-07-28",
   "branch": null,
   "base_branch": "master",
   "worktree_path": null,
