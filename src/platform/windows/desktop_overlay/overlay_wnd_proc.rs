@@ -21,10 +21,12 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
 ) -> LRESULT {
     match msg {
         WM_NCHITTEST => {
-            // 始终返回 HTCLIENT：让覆盖窗口接收所有鼠标事件
-            // 空白区域的点击穿透在 WM_LBUTTONDOWN 中通过转发实现
-            // 返回 HTTRANSPARENT 会导致 WM_MOUSELEAVE 触发，引起 hover 闪烁
-            HTCLIENT as LRESULT
+            // OLE 拖拽期间返回 HTTRANSPARENT，让 DoDragDrop 能检测到 Explorer 的 IDropTarget
+            if crate::platform::windows::zorder::is_drag_in_progress() {
+                HTTRANSPARENT as LRESULT
+            } else {
+                HTCLIENT as LRESULT
+            }
         }
         WM_SETCURSOR => {
             let cursor = unsafe { LoadCursorW(std::ptr::null_mut(), IDC_ARROW_ID as *const u16) };
@@ -468,7 +470,14 @@ fn handle_overlay_drag_timer(hwnd: HWND) {
             PostMessageW(target_hwnd, WM_USER_DRAG_OVER_UPDATE, 0, lparam as LPARAM);
         }
     } else {
-        // 光标在overlay区域：更新overlay的可视化反馈
+        // 检测外部窗口（Explorer 等），临时隐藏覆盖窗口以获得准确的 hit-testing
+        unsafe { ShowWindow(hwnd, SW_HIDE); }
+        let ext_hwnd = crate::platform::windows::zorder::find_external_window_at_point(pt.x, pt.y);
+        unsafe { ShowWindow(hwnd, SW_SHOWNA); }
+        if !ext_hwnd.is_null() {
+            start_overlay_ole_drag(hwnd, ext_hwnd);
+            return;
+        }
         update_overlay_drag_over_visual(hwnd, pt.x, pt.y);
     }
 
@@ -481,6 +490,66 @@ fn handle_overlay_drag_timer(hwnd: HWND) {
 }
 
 /// 更新覆盖窗口的拖拽可视化反馈
+/// 在定时器中检测到外部窗口时调用，启动 OLE 拖拽
+fn start_overlay_ole_drag(hwnd: HWND, external_hwnd: HWND) {
+    log::info!("start_overlay_ole_drag: 外部窗口 {:?}", external_hwnd);
+    unsafe { KillTimer(hwnd, TIMER_ID_OVERLAY_DRAG); }
+
+    let item_idx = match get_overlay_data(hwnd) {
+        Some(data) => {
+            let idx = data.drag_item_index;
+            data.drag_pending = false;
+            data.drag_active = false;
+            data.drag_item_index = -1;
+            data.drag_over_item = -1;
+            data.drag_over_insert_col = -1;
+            data.drag_over_insert_row = -1;
+            idx
+        }
+        None => return,
+    };
+
+    let (file_path, display_name, icon_handle) = match get_overlay_data(hwnd) {
+        Some(data) if item_idx >= 0 && (item_idx as usize) < data.icons.len() => {
+            let item = &data.icons[item_idx as usize];
+            (item.file_path.clone(), item.display_name.clone(), item.icon_handle)
+        }
+        _ => {
+            unsafe { crate::platform::windows::drag_image::destroy_drag_overlay(); }
+            render_desktop_overlay(hwnd);
+            return;
+        }
+    };
+
+    unsafe { crate::platform::windows::drag_image::destroy_drag_overlay(); }
+    log::info!("覆盖窗口→Explorer OLE: \'{}\' (path={})", display_name, file_path);
+
+    let box_drag_data = IkunBoxDragData {
+        source_hwnd: hwnd as usize,
+        source_config_id: String::new(),
+        items: vec![IkunDragItemData {
+            index: item_idx as usize,
+            file_path: file_path.clone(),
+            display_name: display_name.clone(),
+        }],
+    };
+
+    // 隐藏覆盖窗口，让 OLE hit-testing 能到达 Explorer
+    unsafe { ShowWindow(hwnd, SW_HIDE); }
+    let drop_succeeded = crate::platform::windows::ole_dnd::start_box_drag(
+        vec![file_path], box_drag_data, icon_handle,
+    );
+    unsafe { ShowWindow(hwnd, SW_SHOWNA); }
+
+    if drop_succeeded {
+        log::info!("OLE 复制成功，图标保持原位");
+    } else {
+        log::info!("OLE 取消，图标保持原位");
+    }
+    // 图标始终保持原位（复制操作，不是移动）
+    render_desktop_overlay(hwnd);
+}
+
 pub(crate) fn update_overlay_drag_over_visual(hwnd: HWND, screen_x: i32, screen_y: i32) {
     let data = match get_overlay_data(hwnd) {
         Some(d) => d,

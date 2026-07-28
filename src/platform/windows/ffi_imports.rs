@@ -176,6 +176,11 @@ extern "system" {
     pub fn GetParent(hWnd: HWND) -> HWND;
     pub fn GetClassNameW(hWnd: HWND, lpClassName: *mut u16, nMaxCount: i32) -> i32;
     pub fn WindowFromPoint(pt: POINT) -> HWND;
+    pub fn IsWindowVisible(hWnd: HWND) -> i32;
+    pub fn EnumWindows(
+        lpEnumFunc: Option<unsafe extern "system" fn(HWND, LPARAM) -> i32>,
+        lParam: LPARAM,
+    ) -> i32;
     pub fn PostMessageW(hWnd: HWND, Msg: u32, wParam: WPARAM, lParam: LPARAM) -> i32;
     pub fn PostThreadMessageW(idThread: u32, Msg: u32, wParam: WPARAM, lParam: LPARAM) -> i32;
     pub fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> HWND;

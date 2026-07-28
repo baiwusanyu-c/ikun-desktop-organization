@@ -119,6 +119,36 @@ pub fn find_grid_window_at_point(screen_x: i32, screen_y: i32) -> HWND {
     std::ptr::null_mut()
 }
 
+/// 查找光标下的外部窗口（Explorer 等），跳过本应用窗口和桌面窗口
+pub fn find_external_window_at_point(screen_x: i32, screen_y: i32) -> HWND {
+    struct EnumData { x: i32, y: i32, result: HWND }
+
+    unsafe extern "system" fn enum_callback(hwnd: HWND, lparam: LPARAM) -> i32 {
+        let data = &mut *(lparam as *mut EnumData);
+        if !data.result.is_null() { return 0; }
+        if IsWindowVisible(hwnd) == 0 { return 1; }
+        let mut class_name = [0u16; 64];
+        let len = GetClassNameW(hwnd, class_name.as_mut_ptr(), class_name.len() as i32);
+        if len > 0 {
+            let name = String::from_utf16_lossy(&class_name[..len as usize]);
+            if name != "CabinetWClass" { return 1; }
+        } else { return 1; }
+        let mut rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        if GetWindowRect(hwnd, &mut rect) != 0
+            && data.x >= rect.left && data.x < rect.right
+            && data.y >= rect.top && data.y < rect.bottom
+        {
+            data.result = hwnd;
+            return 0;
+        }
+        1
+    }
+
+    let mut data = EnumData { x: screen_x, y: screen_y, result: std::ptr::null_mut() };
+    unsafe { EnumWindows(Some(enum_callback), &mut data as *mut EnumData as LPARAM); }
+    data.result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

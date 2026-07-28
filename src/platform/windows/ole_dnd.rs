@@ -251,6 +251,17 @@ unsafe extern "system" fn data_object_get_data(
             }
         }
         DV_E_FORMATETC
+    } else if fmt.cf_format == CF_HDROP {
+        let file_paths = &*obj.file_paths;
+        match build_drop_files_hglobal(file_paths) {
+            Some(hglobal) => {
+                (*medium).tymed = TYMED_HGLOBAL as u32;
+                (*medium).h_global = hglobal;
+                (*medium).unk_for_release = std::ptr::null_mut();
+                S_OK
+            }
+            None => E_OUTOFMEMORY,
+        }
     } else {
         DV_E_FORMATETC
     }
@@ -277,6 +288,7 @@ unsafe extern "system" fn data_object_query_get_data(
 
     if (fmt.cf_format == obj.custom_format_id && obj.custom_format_id != 0)
         || (!obj.drag_image_medium.is_null() && fmt.cf_format == obj.drag_image_format)
+        || fmt.cf_format == CF_HDROP
     {
         S_OK
     } else {
@@ -391,7 +403,7 @@ unsafe extern "system" fn data_object_enum_format_etc(
         return E_NOTIMPL;
     }
 
-    // 构建格式列表（不暴露 CF_HDROP，避免 Shell 尝试文件操作触发域安全策略）
+    // 构建格式列表：CF_HDROP（文件路径）+ 自定义格式
     let mut count: u32 = 0;
     let mut formats = [FORMATETC {
         cf_format: 0,
@@ -401,7 +413,22 @@ unsafe extern "system" fn data_object_enum_format_etc(
         tymed: TYMED_HGLOBAL,
     }; 4];
 
-    // 自定义格式（框间移动）— 唯一对外暴露的格式
+    // CF_HDROP 格式（Explorer/其他应用使用）
+    if !obj.file_paths.is_null() {
+        let paths = &*obj.file_paths;
+        if !paths.is_empty() {
+            formats[count as usize] = FORMATETC {
+                cf_format: CF_HDROP,
+                ptd: std::ptr::null_mut(),
+                dw_aspect: DVASPECT_CONTENT,
+                lindex: -1,
+                tymed: TYMED_HGLOBAL,
+            };
+            count += 1;
+        }
+    }
+
+    // 自定义格式（框间移动）
     if obj.custom_format_id != 0 {
         formats[count as usize] = FORMATETC {
             cf_format: obj.custom_format_id,
@@ -662,18 +689,16 @@ unsafe extern "system" fn drop_source_release(this: *mut c_void) -> u32 {
 unsafe extern "system" fn drop_source_query_continue_drag(
     _this: *mut c_void,
     escape_pressed: i32,
-    key_state: u32,
+    _key_state: u32,
 ) -> HRESULT {
-    // 检查 Esc 键
     if escape_pressed != 0 {
         return DRAGDROP_S_CANCEL;
     }
-
-    // 检查鼠标左键是否已释放（MK_LBUTTON = 0x0001）
-    if key_state & 0x0001 == 0 {
+    // 使用 GetAsyncKeyState 检查物理鼠标状态（避免消息队列状态不准确）
+    let lbutton_down = GetAsyncKeyState(VK_LBUTTON) & 0x8000u16 as i16 != 0;
+    if !lbutton_down {
         return DRAGDROP_S_DROP;
     }
-
     S_OK
 }
 
@@ -807,11 +832,12 @@ unsafe fn build_hglobal_from_bytes(data: &[u8]) -> Option<HGLOBAL> {
 /// 返回实际执行的拖拽效果：
 /// - `DROPEFFECT_MOVE` (2): 文件被移动（拖到桌面或另一个框）
 /// - `DROPEFFECT_NONE` (0): 拖拽被取消
+/// 返回 true 表示 drop 成功 (DRAGDROP_S_DROP)，false 表示取消
 pub fn start_box_drag(
     file_paths: Vec<String>,
     box_drag_data: IkunBoxDragData,
     _icon_handle: HICON,
-) -> u32 {
+) -> bool {
     let custom_format_id = get_box_drag_format_id();
 
     // 序列化框间数据为 JSON
@@ -819,7 +845,7 @@ pub fn start_box_drag(
         Ok(json) => json,
         Err(e) => {
             log::error!("序列化拖拽数据失败: {}", e);
-            return DROPEFFECT_NONE;
+            return false;
         }
     };
 
@@ -851,15 +877,10 @@ pub fn start_box_drag(
     // 否则分类框被强制 HWND_BOTTOM 后可能低于 overlay，导致 OLE hit-testing 失败。
     super::zorder::set_drag_in_progress(true);
     let mut effect = DROPEFFECT_NONE;
-    let hr = unsafe { DoDragDrop(data_obj_ptr, drop_src_ptr, DROPEFFECT_MOVE, &mut effect) };
+    let hr = unsafe { DoDragDrop(data_obj_ptr, drop_src_ptr, DROPEFFECT_COPY, &mut effect) };
     super::zorder::set_drag_in_progress(false);
 
-    // 根据返回码确定结果
-    let result_effect = if hr == DRAGDROP_S_DROP {
-        effect
-    } else {
-        DROPEFFECT_NONE
-    };
+    let drop_succeeded = hr == DRAGDROP_S_DROP;
 
     // 释放 COM 对象（DoDragDrop 内部会 AddRef，这里释放初始引用）
     unsafe {
@@ -867,13 +888,9 @@ pub fn start_box_drag(
         drop_source_release(drop_src_ptr);
     }
 
-    match hr {
-        DRAGDROP_S_DROP => log::info!("拖拽完成: effect={}", result_effect),
-        DRAGDROP_S_CANCEL => log::info!("拖拽已取消"),
-        _ => log::warn!("DoDragDrop 返回意外值: hr={:#010X}", hr as u32),
-    }
+    log::info!("DoDragDrop: hr={:#010X}, effect={}, drop_succeeded={}", hr as u32, effect, drop_succeeded);
 
-    result_effect
+    drop_succeeded
 }
 
 // =============================================================================
