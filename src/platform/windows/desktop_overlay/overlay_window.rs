@@ -122,6 +122,10 @@ pub(crate) struct OverlayWindowData {
     pub(crate) drop_target_ptr: *mut std::ffi::c_void,
     /// 外部拖拽悬停状态（从资源管理器等外部源拖拽时设为 true，使背景不透明以接收 drop）
     pub(crate) external_drag_hover: bool,
+    /// 拖拽时光标的屏幕坐标 X（用于获取光标所在显示器的 DPI）
+    pub(crate) drag_cursor_screen_x: i32,
+    /// 拖拽时光标的屏幕坐标 Y
+    pub(crate) drag_cursor_screen_y: i32,
 }
 
 unsafe impl Send for OverlayWindowData {}
@@ -250,6 +254,8 @@ pub fn create_desktop_overlay() -> Result<()> {
         renaming_item_index: -1,
         drop_target_ptr: std::ptr::null_mut(),
             external_drag_hover: false,
+            drag_cursor_screen_x: 0,
+            drag_cursor_screen_y: 0,
     });
     let data_ptr = Box::into_raw(data);
     unsafe {
@@ -877,6 +883,8 @@ impl OverlayWindowData {
             renaming_item_index: -1,
             drop_target_ptr: std::ptr::null_mut(),
             external_drag_hover: false,
+            drag_cursor_screen_x: 0,
+            drag_cursor_screen_y: 0,
         }
     }
 }
@@ -914,6 +922,8 @@ mod tests {
             renaming_item_index: -1,
             drop_target_ptr: std::ptr::null_mut(),
             external_drag_hover: false,
+            drag_cursor_screen_x: 0,
+            drag_cursor_screen_y: 0,
         };
         assert_eq!(data.width, 1920);
         assert_eq!(data.height, 1080);
@@ -949,6 +959,8 @@ mod tests {
             renaming_item_index: -1,
             drop_target_ptr: std::ptr::null_mut(),
             external_drag_hover: false,
+            drag_cursor_screen_x: 0,
+            drag_cursor_screen_y: 0,
         };
 
         reset_overlay_interaction_state(&mut data);

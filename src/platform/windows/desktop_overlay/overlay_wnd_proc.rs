@@ -574,11 +574,17 @@ pub(crate) fn update_overlay_drag_over_visual(hwnd: HWND, screen_x: i32, screen_
     let dragged_idx = data.drag_item_index;
     // dragged_idx == -1 表示外部 OLE 拖拽，仍需显示可视化反馈
 
+    // 存储光标屏幕坐标（用于渲染时获取本地 DPI）
+    data.drag_cursor_screen_x = screen_x;
+    data.drag_cursor_screen_y = screen_y;
+
     // 转换为overlay窗口坐标
     let local_x = screen_x - data.x;
     let local_y = screen_y - data.y;
 
-    let grid_layout = super::overlay_window::overlay_layout_params(data.width, data.dpi);
+    // 使用光标所在显示器的本地 DPI 计算网格参数
+    let local_dpi = crate::platform::windows::desktop_overlay::overlay_window::dpi_at_screen_point(screen_x, screen_y);
+    let grid_layout = super::overlay_window::overlay_layout_params(data.width, local_dpi);
     let padding = grid_layout.padding;
     let cell_w = grid_layout.cell_w;
     let cell_h = grid_layout.cell_h;

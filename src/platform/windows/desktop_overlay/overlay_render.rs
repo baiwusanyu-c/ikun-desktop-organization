@@ -404,25 +404,30 @@ fn draw_desktop_icons(
 
     // ===== 拖拽插入指示器（垂直分隔线）=====
     if data.drag_over_insert_col >= 0 && data.drag_over_insert_row >= 0 {
-        let grid_layout = overlay_layout_params(width, dpi);
         let sep_col = data.drag_over_insert_col;
-
-        // 分隔线 X/Y 都使用网格计算位置（而非 overlay_icon_cell_x/y 的保存位置），
-        // 跟随光标的网格列/行位置移动，高度为单个格子高度 (cell_h)。
-        let separator_x = (grid_layout.padding + sep_col * grid_layout.cell_w) as f32;
         let sep_row = data.drag_over_insert_row;
+
+        // 使用光标所在显示器的本地 DPI 计算网格参数（每个显示器独立网格）
+        let local_dpi = dpi_at_screen_point(data.drag_cursor_screen_x, data.drag_cursor_screen_y);
+        let grid_layout = overlay_layout_params(width, local_dpi);
+
+        // 位置使用本地 DPI 网格（与拖拽检测一致）
+        let separator_x = (grid_layout.padding + sep_col * grid_layout.cell_w) as f32;
         let separator_top = (grid_layout.padding + sep_row * grid_layout.cell_h) as f32;
         let separator_bottom = separator_top + grid_layout.cell_h as f32;
-        let separator_w = scale_for_dpi(1, dpi) as f32;
+
+        // 线宽和内边距也使用本地 DPI
+        let separator_w = scale_for_dpi(2, local_dpi) as f32;
+        let sep_pad = scale_for_dpi(4, local_dpi) as f32;
 
         let insert_brush =
             unsafe { target.CreateSolidColorBrush(&d2d_color(255, 255, 255, 255), None) };
         if let Ok(ref ib) = insert_brush {
             let line_rect = d2d_rect(
                 separator_x - separator_w / 2.0,
-                separator_top + scale_for_dpi(4, dpi) as f32,
+                separator_top + sep_pad,
                 separator_x + separator_w / 2.0,
-                separator_bottom - scale_for_dpi(4, dpi) as f32,
+                separator_bottom - sep_pad,
             );
             unsafe { target.FillRectangle(&line_rect, ib) };
         }
