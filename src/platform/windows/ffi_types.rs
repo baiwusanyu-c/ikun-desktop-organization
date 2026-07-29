@@ -185,6 +185,8 @@ pub const WM_EXITSIZEMOVE: u32 = 0x0232;
 pub const WM_MOVING: u32 = 0x0216;
 pub const WM_SIZING: u32 = 0x0214;
 pub const TIMER_ID_ALIGNMENT: usize = 0x4F56_0003;
+/// Timer ID for overlay hover polling (clears hover state when cursor leaves icon area via alpha=0 pixels)
+pub const TIMER_ID_OVERLAY_HOVER: usize = 0x4F56_0004;
 
 // ===== Hit Test Constants =====
 pub const HTCLIENT: i32 = 1;

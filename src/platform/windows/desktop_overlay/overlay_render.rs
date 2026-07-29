@@ -309,7 +309,12 @@ fn draw_desktop_icons(
         let label_x = (cell_x + 2) as f32;
         let label_y = (icon_y + icon_size + scale_for_dpi(6, icon_dpi)) as f32;
         let label_w = (icon_cell_w - 4) as f32;
-        let label_h = scale_for_dpi(36, icon_dpi) as f32;
+        // 选中项显示完整名称（与分类框一致）；未选中项使用 2 行截断
+        let (label_h, apply_ellipsis) = if is_selected {
+            (scale_for_dpi(36 * 3, icon_dpi) as f32, false)
+        } else {
+            (scale_for_dpi(36, icon_dpi) as f32, true)
+        };
 
         draw_icon_with_label(
             target,
@@ -325,7 +330,7 @@ fn draw_desktop_icons(
             label_w,
             label_h,
             icon_dpi,
-            true, // 覆盖区域始终应用字符级省略号截断
+            apply_ellipsis,
         );
     }
     // ===== 拖拽插入指示器（垂直分隔线）=====

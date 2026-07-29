@@ -129,6 +129,8 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             log::debug!("overlay WM_TIMER received: wparam={:#X}", wparam);
             if wparam == TIMER_ID_OVERLAY_DRAG {
                 handle_overlay_drag_timer(hwnd);
+            } else if wparam == TIMER_ID_OVERLAY_HOVER {
+                handle_hover_timer(hwnd);
             }
             0
         }
@@ -267,6 +269,7 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             0
         }
         WM_DESTROY => {
+            unsafe { KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER) };
             if let Some(data) = get_overlay_data(hwnd) {
                 log::info!(
                     "桌面覆盖窗口销毁: hwnd={:?}, area=({}, {}) {}x{} dpi={}",
@@ -288,6 +291,46 @@ fn overlay_nchittest_result(_hit: i32) -> LRESULT {
     // 无论点击图标还是空白区域，都返回 HTCLIENT
     // 这样覆盖窗口能捕获所有点击，处理完后再决定是否转发给桌面
     HTCLIENT as LRESULT
+}
+
+/// Timer-based hover state management for layered window.
+///
+/// WS_EX_LAYERED windows with alpha=0 pixels don't receive WM_MOUSEMOVE
+/// when cursor moves to transparent (blank) areas. This timer periodically
+/// checks the cursor position and clears hover state when the cursor
+/// is no longer over any icon, ensuring the hover highlight reverts.
+fn handle_hover_timer(hwnd: HWND) {
+    let data = match get_overlay_data(hwnd) {
+        Some(d) => d,
+        None => return,
+    };
+
+    // Don't interfere with drag operations
+    if data.drag_active {
+        unsafe { KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER) };
+        return;
+    }
+
+    // Check if cursor is still over an icon
+    let mut pt = POINT { x: 0, y: 0 };
+    unsafe { GetCursorPos(&mut pt) };
+    let (local_x, local_y) = screen_to_overlay_client(hwnd, pt.x, pt.y);
+    let hit = overlay_hit_test(data, local_x, local_y);
+
+    if data.hovered_item != hit {
+        log::debug!(
+            "[HOVER_TIMER] cursor at ({}, {}), hit={}, hovered={}",
+            local_x, local_y, hit, data.hovered_item
+        );
+        data.hovered_item = hit;
+        render_desktop_overlay(hwnd);
+    }
+
+    // Kill timer when no icon is hovered and nothing is selected
+    // (no visual state to track)
+    if data.hovered_item < 0 && data.selected_item < 0 {
+        unsafe { KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER) };
+    }
 }
 
 fn handle_mouse_move(hwnd: HWND, x: i32, y: i32) {
@@ -338,6 +381,18 @@ fn handle_mouse_move(hwnd: HWND, x: i32, y: i32) {
     if should_render {
         render_desktop_overlay(hwnd);
     }
+
+    // Start hover tracking timer when an icon is hovered.
+    // WS_EX_LAYERED windows with alpha=0 pixels don't receive WM_MOUSEMOVE
+    // when cursor moves to transparent areas, so we need a timer to detect
+    // when the cursor leaves the icon and clear the hover highlight.
+    if let Some(data) = get_overlay_data(hwnd) {
+        if data.hovered_item >= 0 && !data.drag_active {
+            unsafe { SetTimer(hwnd, TIMER_ID_OVERLAY_HOVER, 50, std::ptr::null_mut()) };
+        } else {
+            unsafe { KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER) };
+        }
+    }
 }
 
 fn handle_lbutton_down(hwnd: HWND, local_x: i32, local_y: i32, screen_x: i32, screen_y: i32) {
@@ -359,6 +414,8 @@ fn handle_lbutton_down(hwnd: HWND, local_x: i32, local_y: i32, screen_x: i32, sc
             data.drag_item_index = -1;
             data.drag_start_x = local_x;
             data.drag_start_y = local_y;
+            // Start hover timer to track cursor position (layered window alpha=0 issue)
+            unsafe { SetTimer(hwnd, TIMER_ID_OVERLAY_HOVER, 50, std::ptr::null_mut()) };
             log::info!("图标选中: {}", data.icons[hit as usize].display_name);
         } else {
             // 点击空白区域：取消选中 + 转发给桌面
