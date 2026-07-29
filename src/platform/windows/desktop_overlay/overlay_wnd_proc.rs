@@ -725,6 +725,7 @@ fn handle_right_click(hwnd: HWND, x: i32, y: i32) {
         Some(data) => {
             let hit = overlay_hit_test(data, x, y);
             if hit < 0 || (hit as usize) >= data.icons.len() {
+            log::info!("[MENU-DEBUG] overlay_wnd_proc: 右键点击框覆盖区域, 调用 show_desktop_context_menu(include_ikun_items=true)");
                 crate::platform::windows::shell_menu::show_desktop_context_menu(hwnd, true);
                 return;
             }
@@ -736,6 +737,7 @@ fn handle_right_click(hwnd: HWND, x: i32, y: i32) {
         None => return,
     };
     render_desktop_overlay(hwnd);
+    log::info!("[MENU-DEBUG] overlay_wnd_proc: 右键点击图标, 调用 show_shell_context_menu(path=\"{}\")", path);
     let result = crate::platform::windows::shell_menu::show_shell_context_menu(hwnd, &path);
     handle_overlay_shell_menu_result(hwnd, &path, hit_index, result);
 }

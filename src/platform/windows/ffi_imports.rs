@@ -153,6 +153,14 @@ extern "system" {
     ) -> i32;
     pub fn DestroyMenu(hMenu: HMENU) -> i32;
     pub fn GetMenuItemCount(hMenu: HMENU) -> i32;
+    pub fn GetMenuStringW(
+        hMenu: HMENU,
+        uItem: u32,
+        lpString: *mut u16,
+        cch: i32,
+        flags: u32,
+    ) -> i32;
+    pub fn GetMenuItemID(hMenu: HMENU, nPos: i32) -> u32;
     pub fn SetMenuItemBitmaps(
         hMenu: HMENU,
         uPosition: u32,

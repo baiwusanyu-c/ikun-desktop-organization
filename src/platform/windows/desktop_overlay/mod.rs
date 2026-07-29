@@ -9,6 +9,7 @@ mod overlay_drop_target;
 mod overlay_grid;
 mod overlay_render;
 mod overlay_window;
+mod overlay_mouse_hook;
 mod overlay_wnd_proc;
 
 #[allow(unused_imports)] // 公共 API 预留
@@ -17,3 +18,10 @@ pub(crate) use overlay_window::{
     request_desktop_overlay_refresh,
 };
 pub use overlay_window::{create_desktop_overlay, destroy_desktop_overlay};
+
+// 鼠标钩子 API
+pub use overlay_mouse_hook::{
+    install_overlay_mouse_hook, uninstall_overlay_mouse_hook,
+};
+
+pub use overlay_mouse_hook::take_pending_overlay_right_click;

@@ -19,6 +19,65 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// （仅在 COM 失败的回退菜单路径中使用）
 static PENDING_CREATE_BOX: AtomicBool = AtomicBool::new(false);
 
+/// [DEBUG] 枚举并记录 HMENU 中的所有菜单项
+fn log_menu_items(menu: HMENU, label: &str) {
+    unsafe {
+        let count = GetMenuItemCount(menu);
+        log::info!("[MENU-DEBUG] === {} === 菜单项总数: {}", label, count);
+        for i in 0..count {
+            let mut buf: Vec<u16> = vec![0; 512];
+            let _len = GetMenuStringW(
+                menu,
+                i as u32,
+                buf.as_mut_ptr(),
+                buf.len() as i32,
+                MF_BYPOSITION,
+            );
+            let cmd_id = GetMenuItemID(menu, i);
+            let end = buf.iter().position(|&c| c == 0).unwrap_or(0);
+            let text = String::from_utf16_lossy(&buf[..end]);
+            if text.is_empty() && cmd_id == 0 {
+                log::info!("[MENU-DEBUG]   [{}] SEPARATOR", i);
+            } else {
+                log::info!(
+                    "[MENU-DEBUG]   [{}] id={} text=\"{}\"",
+                    i, cmd_id, text
+                );
+            }
+        }
+        log::info!("[MENU-DEBUG] === {} === 枚举结束", label);
+    }
+}
+/// [DEBUG] 检查菜单中是否已包含 Ikun 菜单项（用于去重）
+fn menu_has_ikun_items(menu: HMENU) -> bool {
+    unsafe {
+        let count = GetMenuItemCount(menu);
+        for i in 0..count {
+            let mut buf: Vec<u16> = vec![0; 512];
+            GetMenuStringW(
+                menu,
+                i as u32,
+                buf.as_mut_ptr(),
+                buf.len() as i32,
+                MF_BYPOSITION,
+            );
+            let end = buf.iter().position(|&c| c == 0).unwrap_or(0);
+            let text = String::from_utf16_lossy(&buf[..end]);
+            // 检查是否包含 Ikun 菜单项的特征文本
+            if text.contains("打开控制面板") ||
+               text.contains("创建分类框") ||
+               text.contains("一键AI分类") ||
+               text.contains("退出应用") {
+                log::info!("[MENU-DEBUG] 菜单中已包含 Ikun 项: \"{}\"", text);
+                return true;
+            }
+        }
+    }
+    false
+}
+
+
+
 /// Result of shell context menu operation
 #[derive(Debug, Clone)]
 pub enum ShellMenuResult {
@@ -85,6 +144,7 @@ fn should_skip_fallback(result: &ShellMenuResult) -> bool {
 }
 
 pub fn show_shell_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResult {
+    log::info!("[MENU-DEBUG] show_shell_context_menu 入口: file_path=\"{}\"", file_path);
     let menu_path = resolve_shell_menu_path(file_path);
 
     if menu_path != file_path {
@@ -215,6 +275,8 @@ fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResul
                 match cm.QueryContextMenu(hmenu, 0, FCIDM_SHVIEWFIRST, MENU_CMD_ID_LAST, flags) {
                     Ok(()) => {
                         log::debug!("windows crate: QueryContextMenu 成功");
+                        log_menu_items(menu, "try_windows_crate:after-QCM");
+                        log::info!("[MENU-DEBUG] TrackPopupMenu 即将调用: pt=({}, {}), hwnd={:?}, 菜单项数={}", pt.x, pt.y, hwnd, GetMenuItemCount(menu));
                         let cmd = TrackPopupMenu(
                             menu,
                             TPM_RETURNCMD,
@@ -224,6 +286,7 @@ fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResul
                             hwnd,
                             std::ptr::null(),
                         );
+                        log::info!("[MENU-DEBUG] TrackPopupMenu 返回: cmd={}", cmd);
                         if cmd > 0 {
                             // 5. Get verb string to determine action
                             let verb_ordinal = (cmd as u32 - FCIDM_SHVIEWFIRST) as usize;
@@ -348,6 +411,7 @@ fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResul
 
 /// ShellExecuteW 回退菜单
 fn show_shell_fallback_menu(hwnd: HWND, file_path: &str) -> ShellMenuResult {
+    log::info!("[MENU-DEBUG] show_shell_fallback_menu 入口: file_path=\"{}\"", file_path);
     unsafe {
         let path_wide: Vec<u16> = file_path.encode_utf16().chain(std::iter::once(0)).collect();
 
@@ -451,6 +515,7 @@ fn show_shell_fallback_menu(hwnd: HWND, file_path: &str) -> ShellMenuResult {
 /// 「创建分类框」选项通过注册表注入（`desktop_hook.rs`），Shell 会自动将其合并到此菜单中，
 /// 同时覆盖初始菜单和"显示更多选项"legacy 菜单。程序退出时清理注册表，确保无残留。
 pub fn show_desktop_context_menu(hwnd: HWND, include_ikun_items: bool) {
+    log::info!("[MENU-DEBUG] show_desktop_context_menu 入口: include_ikun_items={}", include_ikun_items);
     use windows::Win32::UI::Shell::{
         IContextMenu, IShellFolder, IShellView, SHGetDesktopFolder, SVGIO_BACKGROUND,
     };
@@ -494,6 +559,7 @@ pub fn show_desktop_context_menu(hwnd: HWND, include_ikun_items: bool) {
                 match cm.QueryContextMenu(hmenu, 0, FCIDM_SHVIEWFIRST, MENU_CMD_ID_LAST, flags) {
                     Ok(()) => {
                         log::debug!("桌面菜单: QueryContextMenu 成功");
+                        log_menu_items(menu, "show_desktop_ctx:after-QCM");
 
                         // 显式追加 Ikun 菜单项（Shell API 不保证自动合并注册表项到自定义窗口）
                         // 仅覆盖区域右键菜单需要，分类框空白处右键不需要
@@ -502,7 +568,11 @@ pub fn show_desktop_context_menu(hwnd: HWND, include_ikun_items: bool) {
                         const IKUN_CMD_AI_CLASSIFY: u32 = 12;
                         const IKUN_CMD_QUIT: u32 = 13;
 
-                        if include_ikun_items {
+                        let pre_count = GetMenuItemCount(menu);
+                        log::info!("[MENU-DEBUG] 准备显式追加 Ikun 菜单项, 追加前项数: {}", pre_count);
+                        let already_has_ikun = menu_has_ikun_items(menu);
+                        log::info!("[MENU-DEBUG] 菜单是否已含 Ikun 项: {}", already_has_ikun);
+                        if include_ikun_items && !already_has_ikun {
                             AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
 
                             let open_panel: Vec<u16> =
@@ -538,8 +608,12 @@ pub fn show_desktop_context_menu(hwnd: HWND, include_ikun_items: bool) {
                                     SetMenuItemBitmaps(menu, i as u32, MF_BYPOSITION, hbmp, hbmp);
                                 }
                             }
+                        let post_count = GetMenuItemCount(menu);
+                        log::info!("[MENU-DEBUG] 显式追加 Ikun 菜单项后, 总数: {}", post_count);
+                        log_menu_items(menu, "show_desktop_ctx:after-ikun-append");
                         }
 
+                        log::info!("[MENU-DEBUG] TrackPopupMenu 即将调用: pt=({}, {}), hwnd={:?}, 菜单项数={}", pt.x, pt.y, hwnd, GetMenuItemCount(menu));
                         let cmd = TrackPopupMenu(
                             menu,
                             TPM_RETURNCMD,
@@ -549,6 +623,7 @@ pub fn show_desktop_context_menu(hwnd: HWND, include_ikun_items: bool) {
                             hwnd,
                             std::ptr::null(),
                         );
+                        log::info!("[MENU-DEBUG] TrackPopupMenu 返回: cmd={}", cmd);
                         if cmd > 0 {
                             match cmd as u32 {
                                 IKUN_CMD_OPEN_PANEL if include_ikun_items => {
@@ -617,6 +692,7 @@ pub fn show_desktop_context_menu(hwnd: HWND, include_ikun_items: bool) {
 
 /// 桌面背景右键菜单回退方案（ShellExecuteW 自定义菜单）
 fn show_desktop_fallback_menu(hwnd: HWND) {
+    log::info!("[MENU-DEBUG] show_desktop_fallback_menu 入口: 创建自定义回退菜单");
     use crate::platform::SystemTrayAction;
 
     const CMD_OPEN_PANEL: usize = 10;
@@ -682,6 +758,7 @@ fn show_desktop_fallback_menu(hwnd: HWND) {
 ///
 /// **必须在程序退出时调用 `cleanup_desktop_registry()` 清理**。
 pub fn setup_desktop_registry() {
+    log::info!("[MENU-DEBUG] setup_desktop_registry 入口");
     let exe_path = match std::env::current_exe() {
         Ok(p) => p.to_string_lossy().to_string(),
         Err(e) => {
@@ -694,6 +771,28 @@ pub fn setup_desktop_registry() {
     let icon_path = format!("\"{}\",0", exe_path);
 
     unsafe {
+        // [DEBUG] 检查注册表项是否已存在
+        for check_item in desktop_registry_menu_items() {
+            let check_path = format!(
+                "Software\\Classes\\Directory\\Background\\shell\\{}\0",
+                check_item.key_name
+            );
+            let check_wide: Vec<u16> = check_path.encode_utf16().collect();
+            let mut check_hkey: isize = 0;
+            let ret = RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                check_wide.as_ptr(),
+                0,
+                KEY_READ,
+                &mut check_hkey,
+            );
+            if ret == 0 {
+                log::warn!("[MENU-DEBUG] 注册表项已存在(可能上次未清理): {}", check_item.key_name);
+                RegCloseKey(check_hkey);
+            } else {
+                log::info!("[MENU-DEBUG] 注册表项不存在(正常首次注册): {}", check_item.key_name);
+            }
+        }
         for item in desktop_registry_menu_items() {
             let key_name = item.key_name;
             let menu_text = item.menu_text;
@@ -784,7 +883,7 @@ pub fn setup_desktop_registry() {
             );
             RegCloseKey(cmd_hkey);
 
-            log::info!("注册表: {} 已注册", key_name);
+            log::info!("[MENU-DEBUG] 注册表: {} 已注册 (menu_text=\"{}\",  cmd_arg=\"{}\")", key_name, menu_text, cmd_arg);
         }
 
         log::info!(
@@ -803,6 +902,7 @@ pub fn setup_desktop_registry() {
 /// - 程序启动时（清理上次崩溃残留）
 /// - 程序退出时（确保不运行时无残留）
 pub fn cleanup_desktop_registry() {
+    log::info!("[MENU-DEBUG] cleanup_desktop_registry 入口");
     let key_names = desktop_registry_menu_items()
         .iter()
         .map(|item| item.key_name);
@@ -826,10 +926,10 @@ pub fn cleanup_desktop_registry() {
             let ret2 = RegDeleteKeyW(HKEY_CURRENT_USER, key.as_ptr());
 
             if ret1 == 0 || ret2 == 0 {
-                log::info!("已清理注册表项: {}", key_name);
+                log::info!("[MENU-DEBUG] 已清理注册表项: {} (ret_cmd={}, ret_key={})", key_name, ret1, ret2);
             }
         }
-        log::debug!("注册表清理完成");
+        log::info!("[MENU-DEBUG] 注册表清理完成");
     }
 }
 

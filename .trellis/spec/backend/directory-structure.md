@@ -197,6 +197,7 @@ platform/windows/
 ├── ffi_imports.rs     # FFI 函数声明
 ├── desktop_manager.rs # DesktopManagerTrait 实现 + 虚拟 Shell 对象（CLSID）枚举
 ├── desktop_overlay/   # 桌面覆盖窗口（渲染/交互/Grid 吸附/DPI 自适应）
+│   ├── overlay_mouse_hook.rs # 全局鼠标钩子（WH_MOUSE_LL + 独立线程消息泵）
 ├── alignment_guide/   # 对齐参考线（对齐检测 + 动态对比色 + overlay 渲染）
 ├── d2d_render.rs      # D2D/DirectWrite 渲染
 ├── grid_window.rs     # 窗口创建/销毁/数据模型

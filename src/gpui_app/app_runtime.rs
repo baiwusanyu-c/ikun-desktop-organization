@@ -40,12 +40,13 @@ use crate::platform::{
     cleanup_desktop_registry, cleanup_system_tray, collect_grid_layout, create_desktop_overlay,
     create_grid_window, destroy_all_grid_windows, destroy_desktop_overlay, extract_file_icon,
     get_grid_count, get_primary_monitor_dpi, get_screen_resolution, hide_control_panel_window,
-    hide_native_icons, icon_exists_for_box, native_icons_hidden, resolve_icon_read_path,
-    restore_all_hidden_icons, restore_native_icons, set_tray_auto_start_state,
-    setup_desktop_registry, setup_global_hotkey, setup_system_tray, show_control_panel_window,
-    take_hotkey_toggle, take_pending_create_box, take_pending_tray_action,
-    update_grid_window_title, DesktopIcon, DesktopManagerTrait, GridCreateParams, GridFileItem,
-    SystemTrayAction,
+    hide_native_icons, icon_exists_for_box, install_overlay_mouse_hook, native_icons_hidden,
+    resolve_icon_read_path, restore_all_hidden_icons, restore_native_icons,
+    set_tray_auto_start_state, setup_desktop_registry, setup_global_hotkey, setup_system_tray,
+    show_control_panel_window, show_desktop_context_menu, take_hotkey_toggle,
+    take_pending_create_box, take_pending_overlay_right_click, take_pending_tray_action,
+    uninstall_overlay_mouse_hook, update_grid_window_title, DesktopIcon, DesktopManagerTrait,
+    GridCreateParams, GridFileItem, SystemTrayAction,
 };
 use std::sync::{Arc, Mutex};
 
@@ -315,6 +316,14 @@ impl AppRuntime {
         }
 
         // 5. Shell 右键菜单待创建分类框
+        // 覆盖区域右键菜单（通过鼠标钩子拦截）
+        if take_pending_overlay_right_click() {
+            // 使用桌面窗口作为父窗口显示桌面右键菜单
+            use crate::platform::windows::ffi_imports::GetDesktopWindow;
+            let desktop_hwnd = unsafe { GetDesktopWindow() };
+            show_desktop_context_menu(desktop_hwnd, true);
+        }
+
         if take_pending_create_box() {
             self.open_create_box_dialog();
             changed = true;
@@ -574,6 +583,7 @@ impl AppRuntime {
         let _ = self.ctx.save_config();
 
         destroy_all_grid_windows();
+        uninstall_overlay_mouse_hook();
         destroy_desktop_overlay();
 
         if self.ctx.state.icons_hidden {
@@ -682,6 +692,9 @@ impl AppRuntime {
         if let Err(e) = create_desktop_overlay() {
             log::warn!("创建桌面覆盖窗口失败: {}", e);
         }
+
+        // 在主线程安装鼠标钩子（WH_MOUSE_LL 需要在有消息循环的线程上安装）
+        install_overlay_mouse_hook();
 
         let boxes = self.ctx.config.layout.boxes.clone();
         if boxes.is_empty() {
@@ -796,6 +809,9 @@ impl AppRuntime {
         if let Err(e) = create_desktop_overlay() {
             log::warn!("创建桌面覆盖窗口失败: {}", e);
         }
+
+        // 在主线程安装鼠标钩子
+        install_overlay_mouse_hook();
     }
 
     fn merge_latest_overlay_config(&mut self) {
@@ -937,6 +953,7 @@ impl AppRuntime {
         }
 
         destroy_all_grid_windows();
+        uninstall_overlay_mouse_hook();
         destroy_desktop_overlay();
         cleanup_system_tray();
         cleanup_desktop_registry();

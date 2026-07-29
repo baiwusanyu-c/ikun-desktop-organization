@@ -858,7 +858,8 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 let result = show_shell_context_menu(hwnd, path);
                 handle_shell_menu_result(hwnd, path, hit_index, result);
             } else {
-                show_desktop_context_menu(hwnd, false);
+                log::info!("[MENU-DEBUG] wnd_proc: 右键点击框空白区域, 调用 show_desktop_context_menu(include_ikun_items=true)");
+                show_desktop_context_menu(hwnd, true);  // 显式注入 Ikun 菜单项
                 // shell_menu.rs 会在用户点击「创建分类框」时设置 PENDING_CREATE_BOX 标志，
                 // app.rs 的 update 循环轮询该标志并打开 egui viewport 对话框。
             }
