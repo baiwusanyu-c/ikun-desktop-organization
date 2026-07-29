@@ -37,7 +37,6 @@ const IID_IPERSISTFILE: [u8; 16] = [
     0x0B, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
 ];
 
-
 // IID_IShellItemImageFactory = {bcc18b79-ba16-442f-80c4-8a59c30c463b}
 
 #[repr(C)]
@@ -90,8 +89,6 @@ struct IShellLinkW {
 struct IPersistFile {
     lpVtbl: *const IPersistFileVtbl,
 }
-
-
 
 /// ITEMIDLIST 占位类型（仅用于指针传递，不需要解引用）
 #[repr(C)]
@@ -357,8 +354,6 @@ fn extract_clsid_icon(clsid_path: &str) -> Option<FileIconInfo> {
     })
 }
 
-
-
 /// Use IShellItemImageFactory to extract file thumbnails (windows crate safe API)
 ///
 /// Returns HBITMAP with actual content preview for supported files (images, videos, docs).
@@ -366,18 +361,23 @@ fn extract_clsid_icon(clsid_path: &str) -> Option<FileIconInfo> {
 /// Does not use SIIGBF_THUMBNAILONLY, allowing on-demand thumbnail generation.
 /// Returns 32-bit premultiplied alpha HBITMAP, caller responsible for release.
 fn extract_file_thumbnail(file_path: &str, size: i32) -> Option<RawHBITMAP> {
-    use windows::Win32::UI::Shell::{IShellItemImageFactory, SHCreateItemFromParsingName};
-    use windows::Win32::Foundation::SIZE;
     use windows::core::PCWSTR;
+    use windows::Win32::Foundation::SIZE;
+    use windows::Win32::UI::Shell::{IShellItemImageFactory, SHCreateItemFromParsingName};
 
     let path_wide: Vec<u16> = file_path.encode_utf16().chain(std::iter::once(0)).collect();
     let pcwstr = PCWSTR(path_wide.as_ptr());
 
     // 1. Create IShellItem and get IShellItemImageFactory
-    let factory: IShellItemImageFactory = match unsafe { SHCreateItemFromParsingName(pcwstr, None) } {
+    let factory: IShellItemImageFactory = match unsafe { SHCreateItemFromParsingName(pcwstr, None) }
+    {
         Ok(item) => item,
         Err(e) => {
-            log::info!("[thumbnail] SHCreateItemFromParsingName failed: {}: {}", e, file_path);
+            log::info!(
+                "[thumbnail] SHCreateItemFromParsingName failed: {}: {}",
+                e,
+                file_path
+            );
             return None;
         }
     };
@@ -385,7 +385,12 @@ fn extract_file_thumbnail(file_path: &str, size: i32) -> Option<RawHBITMAP> {
 
     // 2. Get thumbnail (no THUMBNAILONLY flag = generate on demand)
     let requested_size = SIZE { cx: size, cy: size };
-    match unsafe { factory.GetImage(requested_size, windows::Win32::UI::Shell::SIIGBF_RESIZETOFIT) } {
+    match unsafe {
+        factory.GetImage(
+            requested_size,
+            windows::Win32::UI::Shell::SIIGBF_RESIZETOFIT,
+        )
+    } {
         Ok(hbitmap) => {
             log::info!("[thumbnail] OK: {} ({}x{})", file_path, size, size);
             Some(hbitmap.0 as RawHBITMAP)
@@ -402,8 +407,7 @@ fn extract_file_thumbnail(file_path: &str, size: i32) -> Option<RawHBITMAP> {
 /// The converted HICON is rendered through draw_icon_d2d.
 fn thumbnail_to_hicon(hbitmap: RawHBITMAP) -> HICON {
     use windows::Win32::Graphics::Gdi::{
-        GetDC, ReleaseDC, DeleteObject, CreateBitmap,
-        HBITMAP as WinHBITMAP,
+        CreateBitmap, DeleteObject, GetDC, ReleaseDC, HBITMAP as WinHBITMAP,
     };
     use windows::Win32::UI::WindowsAndMessaging::{CreateIconIndirect, ICONINFO};
 
@@ -483,7 +487,13 @@ fn thumbnail_to_hicon(hbitmap: RawHBITMAP) -> HICON {
     let row_bytes = ((bmp_w + 31) / 32) * 4;
     let mask_bits = vec![0u8; row_bytes as usize * bmp_h as usize];
     let mask_bitmap = unsafe {
-        CreateBitmap(bmp_w, bmp_h, 1, 1, Some(mask_bits.as_ptr() as *const c_void))
+        CreateBitmap(
+            bmp_w,
+            bmp_h,
+            1,
+            1,
+            Some(mask_bits.as_ptr() as *const c_void),
+        )
     };
     if mask_bitmap.is_invalid() {
         log::info!("[thumbnail] thumbnail_to_hicon: CreateBitmap mask failed");
@@ -515,7 +525,10 @@ fn thumbnail_to_hicon(hbitmap: RawHBITMAP) -> HICON {
             win_hicon.0 as HICON
         }
         Err(e) => {
-            log::info!("[thumbnail] thumbnail_to_hicon: CreateIconIndirect failed: {}", e);
+            log::info!(
+                "[thumbnail] thumbnail_to_hicon: CreateIconIndirect failed: {}",
+                e
+            );
             std::ptr::null_mut()
         }
     }
@@ -589,7 +602,6 @@ pub fn extract_file_icon(file_path: &str) -> Option<FileIconInfo> {
             });
         }
     }
-
 
     // 1. 尝试高质量图标提取（128×128，缩放后不失真）
     let mut hq_icon: HICON = std::ptr::null_mut();
@@ -667,8 +679,6 @@ pub fn destroy_icon(hicon: HICON) {
     }
 }
 
-
-
 #[cfg(test)]
 mod thumbnail_tests {
     use super::*;
@@ -702,13 +712,17 @@ mod thumbnail_tests {
             r"C:\Windows\System32\notepad.exe",
             r"C:\Windows\explorer.exe",
         ];
-        
+
         for path in &test_paths {
             if std::path::Path::new(path).exists() {
                 let result = extract_file_icon(path);
                 // Should get an icon (either thumbnail or fallback)
                 if let Some(info) = result {
-                    assert!(!info.hicon.is_null(), "HICON should not be null for {}", path);
+                    assert!(
+                        !info.hicon.is_null(),
+                        "HICON should not be null for {}",
+                        path
+                    );
                     // Clean up
                     destroy_icon(info.hicon);
                 }
