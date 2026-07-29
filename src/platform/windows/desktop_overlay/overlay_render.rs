@@ -7,18 +7,15 @@ use std::ffi::c_void;
 
 use windows::Win32::Graphics::Direct2D::{
     Common::{
-        D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT, D2D_POINT_2F, D2D_RECT_F, D2D_SIZE_U,
+        D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT, D2D_RECT_F, D2D_SIZE_U,
     },
     D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
-    D2D1_BITMAP_PROPERTIES, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1_BITMAP_PROPERTIES, D2D1_FACTORY_TYPE_SINGLE_THREADED,
     D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
     D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWriteCreateFactory, IDWriteFactory, DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL,
-    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
-    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_WORD,
-    DWRITE_WORD_WRAPPING_WRAP,
+    DWriteCreateFactory, IDWriteFactory, DWRITE_FACTORY_TYPE_SHARED,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::HDC as GdiHDC;
@@ -32,6 +29,7 @@ use super::overlay_window::{
     dpi_at_screen_point, get_overlay_data, overlay_icon_cell_x, overlay_icon_cell_y,
     overlay_layout_params, OverlayIconItem, OverlayWindowData,
 };
+use crate::platform::windows::d2d_render::draw_icon_with_label;
 
 /// 初始化覆盖窗口的 D2D/DirectWrite/WIC 设备。
 pub(crate) fn init_overlay_d2d_devices(data: &mut OverlayWindowData) {
@@ -243,22 +241,12 @@ fn draw_desktop_icons(
     // 网格定位仍使用窗口级 DPI（保持网格一致性）
     let grid_layout = overlay_layout_params(width, dpi);
 
-    let shadow_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(0, 0, 0, 220), None) };
-    let label_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(250, 250, 255, 255), None) };
     let hover_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(70, 90, 130, 70), None) };
     let selected_brush =
         unsafe { target.CreateSolidColorBrush(&d2d_color(60, 80, 120, 120), None) };
 
-    let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
-    let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
 
     // per-DPI 缓存：避免同一 DPI 的图标重复创建 DirectWrite 资源
-    let mut cached_label_dpi: u32 = 0;
-    let mut cached_label_format: Option<windows::Win32::Graphics::DirectWrite::IDWriteTextFormat> =
-        None;
-    let mut cached_ellipsis_sign: Option<
-        windows::Win32::Graphics::DirectWrite::IDWriteInlineObject,
-    > = None;
 
     for (index, icon) in icons.iter().enumerate() {
         let cell_x = overlay_icon_cell_x(data, index, &grid_layout);
@@ -275,8 +263,6 @@ fn draw_desktop_icons(
         let icon_cell_w = icon_layout.cell_w;
         let icon_cell_h = icon_layout.cell_h;
 
-        let icon_x = cell_x + (icon_cell_w - icon_size) / 2;
-        let icon_y = cell_y + scale_for_dpi(4, icon_dpi);
 
         let is_selected = index as i32 == selected_item;
         let is_hovered = index as i32 == hovered_item;
@@ -317,95 +303,31 @@ fn draw_desktop_icons(
             }
         }
 
-        if !icon.icon_handle.is_null() {
-            draw_icon_d2d(target, icon.icon_handle, icon_x, icon_y, icon_size);
-        }
+        // 绘制图标 + 标签文字（公共方法，与分类框完全一致）
+        let icon_x = cell_x + (icon_cell_w - icon_size) / 2;
+        let icon_y = cell_y + scale_for_dpi(4, icon_dpi);
+        let label_x = (cell_x + 2) as f32;
+        let label_y = (icon_y + icon_size + scale_for_dpi(6, icon_dpi)) as f32;
+        let label_w = (icon_cell_w - 4) as f32;
+        let label_h = scale_for_dpi(36, icon_dpi) as f32;
 
-        // 文字标签：使用 per-icon DPI，按 DPI 缓存 label_format 避免重复创建
-        if cached_label_dpi != icon_dpi {
-            cached_label_format = unsafe {
-                dw_factory
-                    .CreateTextFormat::<_, _, _>(
-                        windows::core::PCWSTR(font_name.as_ptr()),
-                        None,
-                        DWRITE_FONT_WEIGHT_NORMAL,
-                        DWRITE_FONT_STYLE_NORMAL,
-                        DWRITE_FONT_STRETCH_NORMAL,
-                        scale_for_dpi(13, icon_dpi) as f32,
-                        windows::core::PCWSTR(locale.as_ptr()),
-                    )
-                    .ok()
-            };
-            if let Some(ref format) = cached_label_format {
-                let _ = unsafe { format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER) };
-                let _ = unsafe { format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR) };
-                let _ = unsafe { format.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP) };
-            }
-            cached_ellipsis_sign = cached_label_format
-                .as_ref()
-                .and_then(|format| unsafe { dw_factory.CreateEllipsisTrimmingSign(format).ok() });
-            cached_label_dpi = icon_dpi;
-        }
-        if index as i32 != data.renaming_item_index {
-            if let Some(ref format) = cached_label_format {
-                let label_h = scale_for_dpi(36, icon_dpi);
-                let label: Vec<u16> = icon.display_name.encode_utf16().collect();
-                let text_layout = unsafe {
-                    dw_factory
-                        .CreateTextLayout(&label, format, (icon_cell_w - 4) as f32, label_h as f32)
-                        .ok()
-                };
-                if let Some(ref text_layout) = text_layout {
-                    if let Some(ref sign) = cached_ellipsis_sign {
-                        let trimming = DWRITE_TRIMMING {
-                            granularity: DWRITE_TRIMMING_GRANULARITY_WORD,
-                            delimiter: 0,
-                            delimiterCount: 0,
-                        };
-                        let _ = unsafe { text_layout.SetTrimming(&trimming, sign) };
-                    }
-
-                    let label_x = cell_x + 2;
-                    let label_y = icon_y + icon_size + scale_for_dpi(6, icon_dpi);
-                    let shadow_offset = scale_for_dpi(1, icon_dpi) as f32;
-                    if let Ok(ref brush) = shadow_brush {
-                        for &(dx, dy) in &[
-                            (shadow_offset, 0.0),
-                            (-shadow_offset, 0.0),
-                            (0.0, shadow_offset),
-                            (0.0, -shadow_offset),
-                        ] {
-                            unsafe {
-                                target.DrawTextLayout(
-                                    D2D_POINT_2F {
-                                        x: label_x as f32 + dx,
-                                        y: label_y as f32 + dy,
-                                    },
-                                    text_layout,
-                                    brush,
-                                    D2D1_DRAW_TEXT_OPTIONS_NONE,
-                                );
-                            }
-                        }
-                    }
-                    if let Ok(ref brush) = label_brush {
-                        unsafe {
-                            target.DrawTextLayout(
-                                D2D_POINT_2F {
-                                    x: label_x as f32,
-                                    y: label_y as f32,
-                                },
-                                text_layout,
-                                brush,
-                                D2D1_DRAW_TEXT_OPTIONS_NONE,
-                            );
-                        }
-                    }
-                }
-            }
-        }
+        draw_icon_with_label(
+            target,
+            dw_factory,
+            None,
+            icon.icon_handle,
+            &icon.display_name,
+            icon_x,
+            icon_y,
+            icon_size,
+            label_x,
+            label_y,
+            label_w,
+            label_h,
+            icon_dpi,
+            true, // 覆盖区域始终应用字符级省略号截断
+        );
     }
-
     // ===== 拖拽插入指示器（垂直分隔线）=====
     if data.drag_over_insert_col >= 0 && data.drag_over_insert_row >= 0 {
         let sep_col = data.drag_over_insert_col;

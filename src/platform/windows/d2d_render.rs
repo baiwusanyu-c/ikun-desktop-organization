@@ -33,7 +33,7 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL,
     DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
     DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TRIMMING,
-    DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_TRIMMING_GRANULARITY_WORD,
+    DWRITE_TRIMMING_GRANULARITY_CHARACTER,
     DWRITE_WORD_WRAPPING_NO_WRAP, DWRITE_WORD_WRAPPING_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -657,39 +657,6 @@ pub fn render_icon_grid(
     let grid_top = layout.grid_top;
     let icon_label_h = scale_for_dpi(36, dpi); // 2 行文字高度（支持换行）
 
-    // 创建文字画刷（阴影 + 标签）
-    let shadow_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(0, 0, 0, 200), None) };
-    let label_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(250, 250, 255, 255), None) };
-
-    // 图标标签字体（根据视图模式动态调整）
-    let label_font_size = scale_for_dpi(13, dpi) as f32;
-    let label_format = unsafe {
-        let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
-        let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
-        dw_factory.CreateTextFormat::<_, _, _>(
-            windows::core::PCWSTR(font_name.as_ptr()),
-            None,
-            DWRITE_FONT_WEIGHT_NORMAL,
-            DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL,
-            label_font_size,
-            windows::core::PCWSTR(locale.as_ptr()),
-        )
-    };
-
-    if let Ok(ref lf) = label_format {
-        let _ = unsafe { lf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER) };
-        let _ = unsafe { lf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER) };
-        let _ = unsafe { lf.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP) };
-    }
-
-    // 省略号裁剪标志（line-clamp：最多 2 行 + "..."）
-    let ellipsis_sign = if let Ok(ref lf) = label_format {
-        unsafe { dw_factory.CreateEllipsisTrimmingSign(lf).ok() }
-    } else {
-        None
-    };
-
     // 选中项高亮画刷
     let highlight_brush =
         unsafe { target.CreateSolidColorBrush(&d2d_color(60, 80, 120, 120), None) };
@@ -765,86 +732,38 @@ pub fn render_icon_grid(
             }
         }
 
-        // 绘制图标（HICON → GetDIBits → D2D Bitmap → DrawBitmap）
+        // 绘制图标 + 标签文字（公共方法，与覆盖区域完全一致）
         let icon_x = cell_x + (cell_w - icon_size) / 2;
         let icon_y = cell_y + 4;
-        if !item.icon_handle.is_null() {
-            draw_icon_d2d(
+        let label_x = (cell_x + 2) as f32;
+        let label_y = (icon_y + icon_size + scale_for_dpi(6, dpi)) as f32;
+        let label_w = (cell_w - 4) as f32;
+        let label_h = if is_selected {
+            scale_for_dpi(36 * 3, dpi) as f32
+        } else {
+            icon_label_h as f32
+        };
+
+        if view_params.show_label && i as i32 != renaming_item_index {
+            draw_icon_with_label(
                 target,
+                dw_factory,
                 Some(_wic_factory),
                 item.icon_handle,
+                &item.display_name,
                 icon_x,
                 icon_y,
                 icon_size,
+                label_x,
+                label_y,
+                label_w,
+                label_h,
+                dpi,
+                !is_selected, // 未选中时应用省略号截断
             );
-        }
-
-        // 绘制图标标签文字（DirectWrite）
-        if view_params.show_label && i as i32 != renaming_item_index {
-            if let Ok(ref lf) = label_format {
-                let label: Vec<u16> = item.display_name.encode_utf16().collect();
-                let label_x = cell_x + 2;
-                let label_y = icon_y + icon_size + scale_for_dpi(6, dpi);
-                let label_w = (cell_w - 4) as f32;
-
-                // 选中项：足够高度显示完整名称；未选中：2 行裁剪
-                let (label_h, para_align) = if is_selected {
-                    let max_h = scale_for_dpi(36 * 3, dpi);
-                    (max_h as f32, DWRITE_PARAGRAPH_ALIGNMENT_NEAR)
-                } else {
-                    (icon_label_h as f32, DWRITE_PARAGRAPH_ALIGNMENT_NEAR)
-                };
-
-                let text_layout = unsafe {
-                    target_inner_create_text_layout(
-                        dw_factory,
-                        &label,
-                        lf,
-                        label_w,
-                        label_h,
-                        DWRITE_TEXT_ALIGNMENT_CENTER,
-                        para_align,
-                    )
-                };
-
-                if let Some(ref tl) = text_layout {
-                    // 未选中：应用 line-clamp（2 行 + 省略号）
-                    if !is_selected {
-                        if let Some(ref sign) = ellipsis_sign {
-                            let trimming = DWRITE_TRIMMING {
-                                granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
-                                delimiter: 0,
-                                delimiterCount: 0,
-                            };
-                            let _ = unsafe { tl.SetTrimming(&trimming, sign) };
-                        }
-                    }
-
-                    // 阴影描边
-                    let lsh = scale_for_dpi(1, dpi) as f32;
-                    if let Ok(ref sb) = shadow_brush {
-                        for &(dx, dy) in &[(lsh, 0.0), (-lsh, 0.0), (0.0, lsh), (0.0, -lsh)] {
-                            let origin = D2D_POINT_2F {
-                                x: label_x as f32 + dx,
-                                y: label_y as f32 + dy,
-                            };
-                            unsafe {
-                                target.DrawTextLayout(origin, tl, sb, D2D1_DRAW_TEXT_OPTIONS_NONE);
-                            }
-                        }
-                    }
-                    // 主文字（浅灰白色）
-                    if let Ok(ref lb) = label_brush {
-                        let origin = D2D_POINT_2F {
-                            x: label_x as f32,
-                            y: label_y as f32,
-                        };
-                        unsafe {
-                            target.DrawTextLayout(origin, tl, lb, D2D1_DRAW_TEXT_OPTIONS_NONE);
-                        }
-                    }
-                }
-            }
+        } else if !item.icon_handle.is_null() {
+            // 不显示标签时仅绘制图标
+            draw_icon_d2d(target, Some(_wic_factory), item.icon_handle, icon_x, icon_y, icon_size);
         }
     }
 
@@ -1122,6 +1041,137 @@ unsafe fn get_data<'a>(hwnd: HWND) -> Option<&'a mut GridWindowData> {
     }
 }
 
+/// 绘制图标及其标签文字（分类框与覆盖区域共用）
+///
+/// 统一处理：图标绘制（`draw_icon_d2d`）+ DirectWrite 文本渲染（含截断、阴影）。
+/// 确保分类框和覆盖区域的图标渲染、文本、大小完全一致。
+///
+/// # 参数
+/// - `target`: D2D render target
+/// - `dw_factory`: DirectWrite factory
+/// - `wic_factory`: WIC factory（可选，用于图标绘制）
+/// - `icon_handle`: 图标句柄（HICON）
+/// - `display_name`: 标签文字
+/// - `icon_x`, `icon_y`: 图标左上角坐标
+/// - `icon_size`: 图标渲染尺寸（正方形）
+/// - `label_x`, `label_y`: 标签区域左上角坐标
+/// - `label_w`, `label_h`: 标签区域尺寸
+/// - `dpi`: 当前 DPI（用于字体缩放和阴影偏移）
+/// - `apply_ellipsis`: 是否应用字符级省略号截断（未选中项 = true，选中项 = false）
+pub fn draw_icon_with_label(
+    target: &ID2D1DCRenderTarget,
+    dw_factory: &IDWriteFactory,
+    wic_factory: Option<&IWICImagingFactory>,
+    icon_handle: HICON,
+    display_name: &str,
+    icon_x: i32,
+    icon_y: i32,
+    icon_size: i32,
+    label_x: f32,
+    label_y: f32,
+    label_w: f32,
+    label_h: f32,
+    dpi: u32,
+    apply_ellipsis: bool,
+) {
+    unsafe {
+    // 1. 绘制图标
+    if !icon_handle.is_null() {
+        draw_icon_d2d(target, wic_factory, icon_handle, icon_x, icon_y, icon_size);
+    }
+
+    // 2. 绘制标签文字
+    if display_name.is_empty() {
+        return;
+    }
+
+    let label_font_size = scale_for_dpi(13, dpi) as f32;
+    let text_format = {
+        let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
+        let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
+        dw_factory.CreateTextFormat::<_, _, _>(
+            windows::core::PCWSTR(font_name.as_ptr()),
+            None,
+            DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            label_font_size,
+            windows::core::PCWSTR(locale.as_ptr()),
+        )
+    };
+
+    let text_format = match text_format {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+
+    let _ = text_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    let _ = text_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+    let _ = text_format.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+
+    let text_wide: Vec<u16> = display_name.encode_utf16().collect();
+    let text_layout = {
+        target_inner_create_text_layout(
+            dw_factory,
+            &text_wide,
+            &text_format,
+            label_w,
+            label_h,
+            DWRITE_TEXT_ALIGNMENT_CENTER,
+            DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
+        )
+    };
+
+    if let Some(ref layout) = text_layout {
+        // 应用字符级省略号裁剪
+        if apply_ellipsis {
+            if let Ok(ellipsis) = dw_factory.CreateEllipsisTrimmingSign(&text_format) {
+                let trimming = DWRITE_TRIMMING {
+                    granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+                    delimiter: 0,
+                    delimiterCount: 0,
+                };
+                let _ = layout.SetTrimming(&trimming, &ellipsis);
+            }
+        }
+
+        // 4 方向阴影描边
+        let shadow_offset = scale_for_dpi(1, dpi) as f32;
+        if let Ok(shadow) = target.CreateSolidColorBrush(&d2d_color(0, 0, 0, 200), None) {
+            for &(dx, dy) in &[
+                (shadow_offset, 0.0),
+                (-shadow_offset, 0.0),
+                (0.0, shadow_offset),
+                (0.0, -shadow_offset),
+            ] {
+                    target.DrawTextLayout(
+                        D2D_POINT_2F {
+                            x: label_x + dx,
+                            y: label_y + dy,
+                        },
+                        layout,
+                        &shadow,
+                        D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    );
+            }
+        }
+
+        // 主文字（浅灰白色）
+        if let Ok(brush) = target.CreateSolidColorBrush(&d2d_color(250, 250, 255, 255), None) {
+            target.DrawTextLayout(
+                D2D_POINT_2F {
+                    x: label_x,
+                    y: label_y,
+                },
+                layout,
+                &brush,
+                D2D1_DRAW_TEXT_OPTIONS_NONE,
+            );
+        }
+    }
+    } // unsafe
+}
+
 // =============================================================================
 // 拖拽覆盖位图渲染（D2D + DirectWrite，高质量）
 // =============================================================================
@@ -1261,99 +1311,40 @@ pub fn render_drag_overlay_bitmap(
             a: 0.0,
         }));
 
-        // 绘制图标（居中于覆盖窗口宽度内）
-        if !icon_handle.is_null() {
-            let icon_x = (total_w - icon_size) / 2; // 水平居中
-            draw_icon_d2d(&target, None, icon_handle, icon_x, 0, icon_size);
-        }
+        // 绘制图标 + 标签文字（公共方法，与分类框完全一致）
+        let icon_x = (total_w - icon_size) / 2;
+        let label_x = 2.0_f32;
+        let label_y = (icon_size + gap) as f32;
+        let label_w = (total_w - 4) as f32;
 
-        // 绘制标签文字（DirectWrite，与分类框一致）
-        if !display_name.is_empty() {
-            if let Ok(dw_factory) =
-                DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)
-            {
-                let label_font_size = scale_for_dpi(13, dpi) as f32;
-                let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
-                let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
-
-                if let Ok(text_format) = dw_factory.CreateTextFormat::<_, _, _>(
-                    windows::core::PCWSTR(font_name.as_ptr()),
-                    None,
-                    DWRITE_FONT_WEIGHT_NORMAL,
-                    DWRITE_FONT_STYLE_NORMAL,
-                    DWRITE_FONT_STRETCH_NORMAL,
-                    label_font_size,
-                    windows::core::PCWSTR(locale.as_ptr()),
-                ) {
-                    let _ = text_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-                    let _ = text_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
-                    let _ = text_format.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
-
-                    // 标签位置：图标下方 + 间距，两侧各 2px padding
-                    let label_x = 2.0_f32;
-                    let label_y = (icon_size + gap) as f32;
-                    let label_w = (total_w - 4) as f32;
-
-                    let text_wide: Vec<u16> = display_name.encode_utf16().collect();
-                    if let Some(layout) = target_inner_create_text_layout(
-                        &dw_factory,
-                        &text_wide,
-                        &text_format,
-                        label_w,
-                        label_h as f32,
-                        DWRITE_TEXT_ALIGNMENT_CENTER,
-                        DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
-                    ) {
-                        // 应用 word-level 省略号裁剪（与分类框未选中项一致）
-                        if let Ok(ellipsis) = dw_factory.CreateEllipsisTrimmingSign(&text_format) {
-                            let trimming = DWRITE_TRIMMING {
-                                granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
-                                delimiter: 0,
-                                delimiterCount: 0,
-                            };
-                            let _ = layout.SetTrimming(&trimming, &ellipsis);
-                        }
-
-                        if let Ok(brush) =
-                            target.CreateSolidColorBrush(&d2d_color(250, 250, 255, 255), None)
-                        {
-                            // 4 方向阴影描边（与分类框一致）
-                            let shadow_offset = scale_for_dpi(1, dpi) as f32;
-                            if let Ok(shadow) =
-                                target.CreateSolidColorBrush(&d2d_color(0, 0, 0, 200), None)
-                            {
-                                for &(dx, dy) in &[
-                                    (shadow_offset, 0.0),
-                                    (-shadow_offset, 0.0),
-                                    (0.0, shadow_offset),
-                                    (0.0, -shadow_offset),
-                                ] {
-                                    target.DrawTextLayout(
-                                        D2D_POINT_2F {
-                                            x: label_x + dx,
-                                            y: label_y + dy,
-                                        },
-                                        &layout,
-                                        &shadow,
-                                        D2D1_DRAW_TEXT_OPTIONS_NONE,
-                                    );
-                                }
-                            }
-                            // 主文字（浅灰白色）
-                            target.DrawTextLayout(
-                                D2D_POINT_2F {
-                                    x: label_x,
-                                    y: label_y,
-                                },
-                                &layout,
-                                &brush,
-                                D2D1_DRAW_TEXT_OPTIONS_NONE,
-                            );
-                        }
-                    }
-                }
+        let dw_factory = match DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED) {
+            Ok(f) => f,
+            Err(e) => {
+                log::warn!("拖拽覆盖: DirectWrite Factory 创建失败: {:?}", e);
+                let _ = target.EndDraw(None, None);
+                SelectObject(mem_dc, old_bmp);
+                DeleteDC(mem_dc);
+                ReleaseDC(std::ptr::null_mut(), screen_dc);
+                return dib;
             }
-        }
+        };
+
+        draw_icon_with_label(
+            &target,
+            &dw_factory,
+            None,
+            icon_handle,
+            display_name,
+            icon_x,
+            0,
+            icon_size,
+            label_x,
+            label_y,
+            label_w,
+            label_h as f32,
+            dpi,
+            true, // 覆盖区域始终应用省略号截断
+        );
 
         let _ = target.EndDraw(None, None);
 
