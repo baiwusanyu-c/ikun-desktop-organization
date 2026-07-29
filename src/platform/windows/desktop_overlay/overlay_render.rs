@@ -6,11 +6,8 @@
 use std::ffi::c_void;
 
 use windows::Win32::Graphics::Direct2D::{
-    Common::{
-        D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT,
-    },
-    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory,
-D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT},
+    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, D2D1_FACTORY_TYPE_SINGLE_THREADED,
     D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
     D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT,
 };
@@ -246,7 +243,6 @@ fn draw_desktop_icons(
     let selected_brush =
         unsafe { target.CreateSolidColorBrush(&d2d_color(60, 80, 120, 120), None) };
 
-
     // per-DPI 缓存：避免同一 DPI 的图标重复创建 DirectWrite 资源
 
     for (index, icon) in icons.iter().enumerate() {
@@ -263,7 +259,6 @@ fn draw_desktop_icons(
         let icon_size = icon_layout.icon_size;
         let icon_cell_w = icon_layout.cell_w;
         let icon_cell_h = icon_layout.cell_h;
-
 
         let is_selected = index as i32 == selected_item;
         let is_hovered = index as i32 == hovered_item;
@@ -366,7 +361,6 @@ fn draw_desktop_icons(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     /// 验证选中项与未选中项的标签区域高度计算（与分类框一致）
@@ -386,8 +380,12 @@ mod tests {
             let selected_h = scale_for_dpi(36 * 3, icon_dpi);
 
             // 选中高度始终是未选中的 3 倍
-            assert_eq!(selected_h, unselected_h * 3,
-                "selected label_h should be 3x unselected at DPI {}", dpi);
+            assert_eq!(
+                selected_h,
+                unselected_h * 3,
+                "selected label_h should be 3x unselected at DPI {}",
+                dpi
+            );
 
             // 96 DPI 基准值验证
             if dpi == 96 {
@@ -402,9 +400,16 @@ mod tests {
     fn test_label_width_calculation() {
         for cell_w in [72, 80, 96, 120] {
             let label_w = (cell_w - 4) as f32;
-            assert!(label_w > 0.0, "label_w should be positive for cell_w={}", cell_w);
-            assert_eq!(label_w as i32, cell_w - 4,
-                "label_w should be cell_w - 4 (2px padding each side)");
+            assert!(
+                label_w > 0.0,
+                "label_w should be positive for cell_w={}",
+                cell_w
+            );
+            assert_eq!(
+                label_w as i32,
+                cell_w - 4,
+                "label_w should be cell_w - 4 (2px padding each side)"
+            );
         }
     }
 

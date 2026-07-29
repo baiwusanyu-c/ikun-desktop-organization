@@ -320,7 +320,10 @@ fn handle_hover_timer(hwnd: HWND) {
     if data.hovered_item != hit {
         log::debug!(
             "[HOVER_TIMER] cursor at ({}, {}), hit={}, hovered={}",
-            local_x, local_y, hit, data.hovered_item
+            local_x,
+            local_y,
+            hit,
+            data.hovered_item
         );
         data.hovered_item = hit;
         render_desktop_overlay(hwnd);
@@ -782,7 +785,7 @@ fn handle_right_click(hwnd: HWND, x: i32, y: i32) {
         Some(data) => {
             let hit = overlay_hit_test(data, x, y);
             if hit < 0 || (hit as usize) >= data.icons.len() {
-            log::info!("[MENU-DEBUG] overlay_wnd_proc: 右键点击框覆盖区域, 调用 show_desktop_context_menu(include_ikun_items=true)");
+                log::info!("[MENU-DEBUG] overlay_wnd_proc: 右键点击框覆盖区域, 调用 show_desktop_context_menu(include_ikun_items=true)");
                 crate::platform::windows::shell_menu::show_desktop_context_menu(hwnd, true);
                 return;
             }
@@ -794,7 +797,10 @@ fn handle_right_click(hwnd: HWND, x: i32, y: i32) {
         None => return,
     };
     render_desktop_overlay(hwnd);
-    log::info!("[MENU-DEBUG] overlay_wnd_proc: 右键点击图标, 调用 show_shell_context_menu(path=\"{}\")", path);
+    log::info!(
+        "[MENU-DEBUG] overlay_wnd_proc: 右键点击图标, 调用 show_shell_context_menu(path=\"{}\")",
+        path
+    );
     let result = crate::platform::windows::shell_menu::show_shell_context_menu(hwnd, &path);
     handle_overlay_shell_menu_result(hwnd, &path, hit_index, result);
 }
@@ -1689,7 +1695,10 @@ mod tests {
         let drag_active = false;
 
         let should_start_timer = hovered_item >= 0 && !drag_active;
-        assert!(should_start_timer, "Timer should start when icon is hovered and not dragging");
+        assert!(
+            should_start_timer,
+            "Timer should start when icon is hovered and not dragging"
+        );
     }
 
     #[test]
@@ -1720,7 +1729,10 @@ mod tests {
         let selected_item: i32 = 2;
 
         let should_stop_timer = hovered_item < 0 && selected_item < 0;
-        assert!(!should_stop_timer, "Timer should keep running when item is selected");
+        assert!(
+            !should_stop_timer,
+            "Timer should keep running when item is selected"
+        );
     }
 
     #[test]
@@ -1739,5 +1751,4 @@ mod tests {
         assert_eq!(selected_item, -1);
         assert_eq!(hovered_item, -1);
     }
-
 }
