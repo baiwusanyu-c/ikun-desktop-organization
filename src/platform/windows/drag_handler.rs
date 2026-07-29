@@ -215,12 +215,107 @@ pub(crate) fn handle_grid_drag_timer(hwnd: HWND) {
             PostMessageW(target_hwnd, WM_USER_DRAG_OVER_UPDATE, 0, lparam as LPARAM);
         }
     }
+    // 检测外部窗口（Explorer 等）：当光标不在任何分类框上时，启动 OLE 拖拽
+    if target_hwnd.is_null() {
+        let ext_hwnd = super::zorder::find_external_window_at_point(pt.x, pt.y);
+        if !ext_hwnd.is_null() {
+            start_grid_ole_drag(hwnd, ext_hwnd);
+            return;
+        }
+    }
+
     // 检测鼠标左键是否仍然按下
     let lbutton_down = unsafe { GetAsyncKeyState(VK_LBUTTON) } & 0x8000u16 as i16 != 0;
     if !lbutton_down {
         log::info!("grid drag timer: 鼠标已释放，结束拖拽");
         end_drag(hwnd);
     }
+}
+
+// =============================================================================
+// OLE drag to external windows (Explorer etc.)
+// =============================================================================
+/// 检测到光标在外部窗口（Explorer）上时，启动 OLE 拖拽。
+///
+/// 行为与覆盖区域拖拽到 Explorer 一致：
+/// - 将文件复制到目标位置（CF_HDROP 格式）
+/// - 分类框内图标保持原位（复制操作，不删除）
+fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
+    log::info!("start_grid_ole_drag: 启动分类框→Explorer OLE 拖拽");
+    unsafe { KillTimer(hwnd, TIMER_ID_GRID_DRAG); }
+
+    // 获取拖拽项信息并重置拖拽状态
+    let (item_idx, file_path, display_name, icon_handle) = {
+        let data = match unsafe { get_data(hwnd) } {
+            Some(d) => d,
+            None => return,
+        };
+
+        let idx = data.drag_item_index;
+        data.drag_pending = false;
+        data.drag_active = false;
+        data.drag_item_index = -1;
+        data.drag_over_item = -1;
+        data.drag_over_insert_col = -1;
+        data.drag_over_insert_row = -1;
+
+        if idx < 0 || (idx as usize) >= data.items.len() {
+            unsafe { super::drag_image::destroy_drag_overlay(); }
+            super::d2d_render::render_layered_window(hwnd);
+            return;
+        }
+
+        let item = &data.items[idx as usize];
+        (idx, item.file_path.clone(), item.display_name.clone(), item.icon_handle)
+    };
+
+    // 销毁拖拽残影
+    unsafe { super::drag_image::destroy_drag_overlay(); }
+
+    log::info!(
+        "分类框→Explorer OLE: {} (path={})",
+        display_name,
+        file_path
+    );
+
+    // 构造 OLE 拖拽数据（CF_HDROP + IkunBoxDragData 自定义格式）
+    let box_drag_data = IkunBoxDragData {
+        source_hwnd: hwnd as usize,
+        source_config_id: String::new(),
+        items: vec![IkunDragItemData {
+            index: item_idx as usize,
+            file_path: file_path.clone(),
+            display_name: display_name.clone(),
+        }],
+    };
+
+    // 隐藏覆盖窗口和分类框，让 OLE hit-testing 能到达 Explorer
+    // （覆盖窗口是全屏分层窗口，会拦截 hit-test；分类框也需隐藏以确保 OLE 正确检测）
+    let overlay_hwnd = super::desktop_overlay::get_overlay_window_hwnd();
+    if let Some(ohwnd) = overlay_hwnd {
+        unsafe { ShowWindow(ohwnd, SW_HIDE); }
+    }
+    unsafe { ShowWindow(hwnd, SW_HIDE); }
+
+    let drop_succeeded = super::ole_dnd::start_box_drag(
+        vec![file_path],
+        box_drag_data,
+        icon_handle,
+    );
+
+    // 恢复窗口可见性
+    unsafe { ShowWindow(hwnd, SW_SHOWNA); }
+    if let Some(ohwnd) = overlay_hwnd {
+        unsafe { ShowWindow(ohwnd, SW_SHOWNA); }
+    }
+
+    if drop_succeeded {
+        log::info!("分类框→Explorer OLE 拖拽成功，图标保持原位");
+    } else {
+        log::info!("分类框→Explorer OLE 拖拽取消，图标保持原位");
+    }
+    // 图标始终保持原位（复制操作，不是移动）
+    super::d2d_render::render_layered_window(hwnd);
 }
 
 // =============================================================================

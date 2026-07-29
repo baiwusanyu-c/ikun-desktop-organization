@@ -1,0 +1,4 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/windows-platform-guidelines.md", "reason": "Windows 窗口拖拽和 OLE DnD 相关"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "确保代码质量符合规范"}
