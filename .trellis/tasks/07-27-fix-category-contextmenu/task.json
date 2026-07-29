@@ -3,7 +3,7 @@
   "name": "fix-category-contextmenu",
   "title": "brainstorm: 修复分类框右键菜单关闭后出现额外菜单的问题",
   "description": "",
-  "status": "planning",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
