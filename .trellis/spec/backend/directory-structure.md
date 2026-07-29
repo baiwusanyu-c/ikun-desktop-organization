@@ -199,7 +199,7 @@ platform/windows/
 ├── desktop_overlay/   # 桌面覆盖窗口（渲染/交互/Grid 吸附/DPI 自适应）
 │   ├── overlay_mouse_hook.rs # 全局鼠标钩子（WH_MOUSE_LL + 独立线程消息泵）
 ├── alignment_guide/   # 对齐参考线（对齐检测 + 动态对比色 + overlay 渲染）
-├── d2d_render.rs      # D2D/DirectWrite 渲染
+├── d2d_render.rs      # D2D/DirectWrite 渲染（draw_icon_with_label 统一图标+文本渲染）
 ├── grid_window.rs     # 窗口创建/销毁/数据模型
 ├── grid_layout.rs     # 布局计算/按钮矩形/命中测试/滚动重排
 ├── monitor_utils.rs   # 显示器查询/窗口定位工具

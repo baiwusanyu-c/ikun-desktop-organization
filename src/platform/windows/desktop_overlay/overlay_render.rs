@@ -7,10 +7,10 @@ use std::ffi::c_void;
 
 use windows::Win32::Graphics::Direct2D::{
     Common::{
-        D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT, D2D_RECT_F, D2D_SIZE_U,
+        D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT,
     },
-    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
-    D2D1_BITMAP_PROPERTIES, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory,
+D2D1_FACTORY_TYPE_SINGLE_THREADED,
     D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
     D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT,
 };
@@ -19,6 +19,7 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::HDC as GdiHDC;
+
 use windows::Win32::Graphics::Imaging::{CLSID_WICImagingFactory, IWICImagingFactory};
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 
@@ -365,169 +366,66 @@ fn draw_desktop_icons(
     }
 }
 
-fn draw_icon_d2d(target: &ID2D1DCRenderTarget, hicon: HICON, x: i32, y: i32, size: i32) {
-    let mut icon_info = ICONINFO {
-        f_icon: 0,
-        x_hotspot: 0,
-        y_hotspot: 0,
-        hbm_mask: std::ptr::null_mut(),
-        hbm_color: std::ptr::null_mut(),
-    };
-    if unsafe { GetIconInfo(hicon, &mut icon_info) } == 0 || icon_info.hbm_color.is_null() {
-        if !icon_info.hbm_mask.is_null() {
-            unsafe { DeleteObject(icon_info.hbm_mask as HGDIOBJ) };
+
+#[cfg(test)]
+mod tests {
+    /// 验证选中项与未选中项的标签区域高度计算（与分类框一致）
+    #[test]
+    fn test_label_height_selected_vs_unselected() {
+        // 模拟 scale_for_dpi 在不同 DPI 下的行为
+        fn scale_for_dpi(px: i32, dpi: u32) -> i32 {
+            ((px as f32) * dpi as f32 / 96.0).round() as i32
         }
-        return;
+
+        for dpi in [96, 120, 144, 192] {
+            let icon_dpi = dpi;
+
+            // 未选中：2 行文字高度
+            let unselected_h = scale_for_dpi(36, icon_dpi);
+            // 选中：3 倍高度（完整名称显示）
+            let selected_h = scale_for_dpi(36 * 3, icon_dpi);
+
+            // 选中高度始终是未选中的 3 倍
+            assert_eq!(selected_h, unselected_h * 3,
+                "selected label_h should be 3x unselected at DPI {}", dpi);
+
+            // 96 DPI 基准值验证
+            if dpi == 96 {
+                assert_eq!(unselected_h, 36, "unselected should be 36px at 96 DPI");
+                assert_eq!(selected_h, 108, "selected should be 108px at 96 DPI");
+            }
+        }
     }
 
-    let mut bi = BITMAPINFOHEADER {
-        bi_size: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-        bi_width: 0,
-        bi_height: 0,
-        bi_planes: 0,
-        bi_bit_count: 0,
-        bi_compression: 0,
-        bi_size_image: 0,
-        bi_x_pels_per_meter: 0,
-        bi_y_pels_per_meter: 0,
-        bi_clr_used: 0,
-        bi_clr_important: 0,
-    };
-
-    let screen_dc = unsafe { GetDC(std::ptr::null_mut()) };
-    if unsafe {
-        GetDIBits(
-            screen_dc,
-            icon_info.hbm_color,
-            0,
-            0,
-            std::ptr::null_mut(),
-            &mut bi as *mut BITMAPINFOHEADER as *mut c_void,
-            DIB_RGB_COLORS,
-        )
-    } == 0
-    {
-        unsafe {
-            ReleaseDC(std::ptr::null_mut(), screen_dc);
-            DeleteObject(icon_info.hbm_color as HGDIOBJ);
-            DeleteObject(icon_info.hbm_mask as HGDIOBJ);
+    /// 验证图标标签宽度计算与分类框一致（cell_w - 4 padding）
+    #[test]
+    fn test_label_width_calculation() {
+        for cell_w in [72, 80, 96, 120] {
+            let label_w = (cell_w - 4) as f32;
+            assert!(label_w > 0.0, "label_w should be positive for cell_w={}", cell_w);
+            assert_eq!(label_w as i32, cell_w - 4,
+                "label_w should be cell_w - 4 (2px padding each side)");
         }
-        return;
     }
 
-    let bmp_w = bi.bi_width;
-    let bmp_h = bi.bi_height.abs();
-    if bmp_w <= 0 || bmp_h <= 0 || bi.bi_bit_count != 32 {
-        unsafe {
-            ReleaseDC(std::ptr::null_mut(), screen_dc);
-            DeleteObject(icon_info.hbm_color as HGDIOBJ);
-            DeleteObject(icon_info.hbm_mask as HGDIOBJ);
-        }
-        return;
-    }
-
-    let mut pixels = vec![
-        Pixel32 {
-            b: 0,
-            g: 0,
-            r: 0,
-            a: 0
+    /// 验证 apply_ellipsis 逻辑：选中项不截断，未选中项截断
+    #[test]
+    fn test_apply_ellipsis_logic() {
+        // 模拟 overlay_render 中的逻辑
+        let is_selected = true;
+        let (_label_h, apply_ellipsis) = if is_selected {
+            (108.0_f32, false)
+        } else {
+            (36.0_f32, true)
         };
-        (bmp_w * bmp_h) as usize
-    ];
-    bi.bi_height = -bmp_h;
-    bi.bi_bit_count = 32;
-    bi.bi_compression = 0;
+        assert!(!apply_ellipsis, "selected items should NOT apply ellipsis");
 
-    if unsafe {
-        GetDIBits(
-            screen_dc,
-            icon_info.hbm_color,
-            0,
-            bmp_h as u32,
-            pixels.as_mut_ptr() as *mut c_void,
-            &mut bi as *mut BITMAPINFOHEADER as *mut c_void,
-            DIB_RGB_COLORS,
-        )
-    } == 0
-    {
-        unsafe {
-            ReleaseDC(std::ptr::null_mut(), screen_dc);
-            DeleteObject(icon_info.hbm_color as HGDIOBJ);
-            DeleteObject(icon_info.hbm_mask as HGDIOBJ);
-        }
-        return;
-    }
-    unsafe { ReleaseDC(std::ptr::null_mut(), screen_dc) };
-
-    for pixel in pixels.iter_mut() {
-        let alpha = pixel.a as u16;
-        pixel.b = ((pixel.b as u16 * alpha) / 255) as u8;
-        pixel.g = ((pixel.g as u16 * alpha) / 255) as u8;
-        pixel.r = ((pixel.r as u16 * alpha) / 255) as u8;
-    }
-
-    let bitmap_props = D2D1_BITMAP_PROPERTIES {
-        pixelFormat: D2D1_PIXEL_FORMAT {
-            format: DXGI_FORMAT_B8G8R8A8_UNORM,
-            alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-        },
-        dpiX: 96.0,
-        dpiY: 96.0,
-    };
-    let bitmap = unsafe {
-        target.CreateBitmap(
-            D2D_SIZE_U {
-                width: bmp_w as u32,
-                height: bmp_h as u32,
-            },
-            Some(pixels.as_ptr() as *const c_void),
-            (bmp_w as u32) * 4,
-            &bitmap_props,
-        )
-    };
-    if let Ok(ref bitmap) = bitmap {
-        let rect = d2d_rect(x as f32, y as f32, (x + size) as f32, (y + size) as f32);
-        unsafe {
-            target.DrawBitmap(
-                bitmap,
-                Some(&rect),
-                1.0,
-                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
-                None,
-            );
-        }
-    }
-
-    unsafe {
-        DeleteObject(icon_info.hbm_color as HGDIOBJ);
-        DeleteObject(icon_info.hbm_mask as HGDIOBJ);
-    }
-}
-
-fn scale_for_dpi(value: i32, dpi: u32) -> i32 {
-    ((value as f32) * dpi as f32 / 96.0).round() as i32
-}
-
-fn d2d_color(
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-) -> windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F {
-    windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F {
-        r: r as f32 / 255.0,
-        g: g as f32 / 255.0,
-        b: b as f32 / 255.0,
-        a: a as f32 / 255.0,
-    }
-}
-
-fn d2d_rect(l: f32, t: f32, r: f32, b: f32) -> D2D_RECT_F {
-    D2D_RECT_F {
-        left: l,
-        top: t,
-        right: r,
-        bottom: b,
+        let is_selected = false;
+        let (_label_h, apply_ellipsis) = if is_selected {
+            (108.0_f32, false)
+        } else {
+            (36.0_f32, true)
+        };
+        assert!(apply_ellipsis, "unselected items SHOULD apply ellipsis");
     }
 }

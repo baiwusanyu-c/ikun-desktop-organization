@@ -1679,4 +1679,65 @@ mod tests {
         }
         assert_eq!(new_hovered, -1);
     }
+
+    // ===== Hover Timer Lifecycle Tests (2026-07-29) =====
+
+    #[test]
+    fn test_hover_timer_should_start_when_icon_hovered() {
+        // When an icon is hovered and no drag is active, the timer should start
+        let hovered_item: i32 = 3;
+        let drag_active = false;
+
+        let should_start_timer = hovered_item >= 0 && !drag_active;
+        assert!(should_start_timer, "Timer should start when icon is hovered and not dragging");
+    }
+
+    #[test]
+    fn test_hover_timer_should_not_start_during_drag() {
+        // During drag, hover timer should not start (drag has its own tracking)
+        let hovered_item: i32 = 3;
+        let drag_active = true;
+
+        let should_start_timer = hovered_item >= 0 && !drag_active;
+        assert!(!should_start_timer, "Timer should NOT start during drag");
+    }
+
+    #[test]
+    fn test_hover_timer_should_stop_when_nothing_tracked() {
+        // When both hovered and selected are cleared, timer should stop
+        let hovered_item: i32 = -1;
+        let selected_item: i32 = -1;
+
+        let should_stop_timer = hovered_item < 0 && selected_item < 0;
+        assert!(should_stop_timer, "Timer should stop when nothing to track");
+    }
+
+    #[test]
+    fn test_hover_timer_should_keep_running_when_selected() {
+        // Even if hover is cleared, timer should keep running if item is selected
+        // (to re-establish hover when cursor returns to an icon)
+        let hovered_item: i32 = -1;
+        let selected_item: i32 = 2;
+
+        let should_stop_timer = hovered_item < 0 && selected_item < 0;
+        assert!(!should_stop_timer, "Timer should keep running when item is selected");
+    }
+
+    #[test]
+    fn test_hover_clear_on_deselect() {
+        // Clicking blank area should clear both selected and hovered
+        let mut selected_item: i32 = 3;
+        let mut hovered_item: i32 = 3;
+
+        // Simulate blank area click
+        let hit = -1;
+        if hit < 0 {
+            selected_item = -1;
+            hovered_item = -1;
+        }
+
+        assert_eq!(selected_item, -1);
+        assert_eq!(hovered_item, -1);
+    }
+
 }

@@ -932,6 +932,79 @@ fn should_skip_fallback(result: &ShellMenuResult) -> bool {
 }
 `
 
+
+### Timer-Based Hover Management for Layered Windows
+
+When overlay windows use dynamic alpha (alpha=0 for blank areas, alpha=1 for selected),
+WM_MOUSEMOVE is **not delivered** when the cursor moves from an icon (opaque pixel) to
+a blank area (transparent pixel). This means hovered_item cannot be cleared through
+the normal mouse-move path.
+
+#### Problem
+
+`
+┌──────────────────────────────┐
+│  Overlay (WS_EX_LAYERED)     │
+│  ┌──────────┐                │
+│  │  Icon    │ ← alpha=1, WM_MOUSEMOVE works │
+│  │  (hover) │                │
+│  └──────────┘                │
+│                              │
+│  (blank, alpha=0)            │ ← WM_MOUSEMOVE NOT delivered!
+│                              │
+└──────────────────────────────┘
+`
+
+The cursor moves from icon → blank, but no WM_MOUSEMOVE arrives.
+hovered_item stays set, hover highlight persists visually.
+
+#### Correct Pattern: Polling Timer
+
+`
+ust
+// In handle_mouse_move: when an icon becomes hovered, start timer
+if data.hovered_item >= 0 {
+    SetTimer(hwnd, TIMER_ID_OVERLAY_HOVER, 50, std::ptr::null_mut());
+}
+
+// In WM_TIMER handler: poll cursor position
+WM_TIMER => {
+    if wparam == TIMER_ID_OVERLAY_HOVER {
+        let mut pt = POINT { x: 0, y: 0 };
+        GetCursorPos(&mut pt);
+        let (local_x, local_y) = screen_to_overlay_client(hwnd, pt.x, pt.y);
+        let hit = overlay_hit_test(data, local_x, local_y);
+        if data.hovered_item != hit {
+            data.hovered_item = hit;
+            render();
+        }
+        // Kill timer when no hover and no selection
+        if data.hovered_item < 0 && data.selected_item < 0 {
+            KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER);
+        }
+    }
+}
+
+// In WM_DESTROY: kill timer
+WM_DESTROY => {
+    KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER);
+}
+
+// In deselect path (click blank): kill timer + clear hover
+data.hovered_item = -1;
+KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER);
+`
+
+#### Timer Interval
+
+- **50ms** (20 FPS): Good balance between responsiveness and CPU usage
+- Too fast (8ms): Unnecessary CPU usage for non-drag hover tracking
+- Too slow (200ms): Noticeable lag when cursor leaves icon area
+
+#### Related Constants
+
+- TIMER_ID_OVERLAY_HOVER (defined in fi_types.rs)
+
 ### Related Files
 
 - `src/platform/windows/shell_menu.rs` — ShellMenuResult 枚举 + show_shell_context_menu + should_skip_fallback
@@ -1057,6 +1130,79 @@ enaming_item_index)
 - [ ] EDIT_THREAD_ACTIVE prevents concurrent editors
 - [ ] Result communicated via PostMessage (not blocking calls)
 
+
+### Timer-Based Hover Management for Layered Windows
+
+When overlay windows use dynamic alpha (alpha=0 for blank areas, alpha=1 for selected),
+WM_MOUSEMOVE is **not delivered** when the cursor moves from an icon (opaque pixel) to
+a blank area (transparent pixel). This means hovered_item cannot be cleared through
+the normal mouse-move path.
+
+#### Problem
+
+`
+┌──────────────────────────────┐
+│  Overlay (WS_EX_LAYERED)     │
+│  ┌──────────┐                │
+│  │  Icon    │ ← alpha=1, WM_MOUSEMOVE works │
+│  │  (hover) │                │
+│  └──────────┘                │
+│                              │
+│  (blank, alpha=0)            │ ← WM_MOUSEMOVE NOT delivered!
+│                              │
+└──────────────────────────────┘
+`
+
+The cursor moves from icon → blank, but no WM_MOUSEMOVE arrives.
+hovered_item stays set, hover highlight persists visually.
+
+#### Correct Pattern: Polling Timer
+
+`
+ust
+// In handle_mouse_move: when an icon becomes hovered, start timer
+if data.hovered_item >= 0 {
+    SetTimer(hwnd, TIMER_ID_OVERLAY_HOVER, 50, std::ptr::null_mut());
+}
+
+// In WM_TIMER handler: poll cursor position
+WM_TIMER => {
+    if wparam == TIMER_ID_OVERLAY_HOVER {
+        let mut pt = POINT { x: 0, y: 0 };
+        GetCursorPos(&mut pt);
+        let (local_x, local_y) = screen_to_overlay_client(hwnd, pt.x, pt.y);
+        let hit = overlay_hit_test(data, local_x, local_y);
+        if data.hovered_item != hit {
+            data.hovered_item = hit;
+            render();
+        }
+        // Kill timer when no hover and no selection
+        if data.hovered_item < 0 && data.selected_item < 0 {
+            KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER);
+        }
+    }
+}
+
+// In WM_DESTROY: kill timer
+WM_DESTROY => {
+    KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER);
+}
+
+// In deselect path (click blank): kill timer + clear hover
+data.hovered_item = -1;
+KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER);
+`
+
+#### Timer Interval
+
+- **50ms** (20 FPS): Good balance between responsiveness and CPU usage
+- Too fast (8ms): Unnecessary CPU usage for non-drag hover tracking
+- Too slow (200ms): Noticeable lag when cursor leaves icon area
+
+#### Related Constants
+
+- TIMER_ID_OVERLAY_HOVER (defined in fi_types.rs)
+
 ### Related Files
 
 - src/platform/windows/rename_editor.rs — Thread-based EDIT control + shared helpers
@@ -1114,6 +1260,79 @@ enaming_item_index)
 
 4. **ind_external_window_at_point**：使用 EnumWindows 遍历顶层窗口，
    仅匹配 CabinetWClass（Explorer 窗口类名），跳过本应用窗口。
+
+
+### Timer-Based Hover Management for Layered Windows
+
+When overlay windows use dynamic alpha (alpha=0 for blank areas, alpha=1 for selected),
+WM_MOUSEMOVE is **not delivered** when the cursor moves from an icon (opaque pixel) to
+a blank area (transparent pixel). This means hovered_item cannot be cleared through
+the normal mouse-move path.
+
+#### Problem
+
+`
+┌──────────────────────────────┐
+│  Overlay (WS_EX_LAYERED)     │
+│  ┌──────────┐                │
+│  │  Icon    │ ← alpha=1, WM_MOUSEMOVE works │
+│  │  (hover) │                │
+│  └──────────┘                │
+│                              │
+│  (blank, alpha=0)            │ ← WM_MOUSEMOVE NOT delivered!
+│                              │
+└──────────────────────────────┘
+`
+
+The cursor moves from icon → blank, but no WM_MOUSEMOVE arrives.
+hovered_item stays set, hover highlight persists visually.
+
+#### Correct Pattern: Polling Timer
+
+`
+ust
+// In handle_mouse_move: when an icon becomes hovered, start timer
+if data.hovered_item >= 0 {
+    SetTimer(hwnd, TIMER_ID_OVERLAY_HOVER, 50, std::ptr::null_mut());
+}
+
+// In WM_TIMER handler: poll cursor position
+WM_TIMER => {
+    if wparam == TIMER_ID_OVERLAY_HOVER {
+        let mut pt = POINT { x: 0, y: 0 };
+        GetCursorPos(&mut pt);
+        let (local_x, local_y) = screen_to_overlay_client(hwnd, pt.x, pt.y);
+        let hit = overlay_hit_test(data, local_x, local_y);
+        if data.hovered_item != hit {
+            data.hovered_item = hit;
+            render();
+        }
+        // Kill timer when no hover and no selection
+        if data.hovered_item < 0 && data.selected_item < 0 {
+            KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER);
+        }
+    }
+}
+
+// In WM_DESTROY: kill timer
+WM_DESTROY => {
+    KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER);
+}
+
+// In deselect path (click blank): kill timer + clear hover
+data.hovered_item = -1;
+KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER);
+`
+
+#### Timer Interval
+
+- **50ms** (20 FPS): Good balance between responsiveness and CPU usage
+- Too fast (8ms): Unnecessary CPU usage for non-drag hover tracking
+- Too slow (200ms): Noticeable lag when cursor leaves icon area
+
+#### Related Constants
+
+- TIMER_ID_OVERLAY_HOVER (defined in fi_types.rs)
 
 ### Related Files
 
@@ -1206,6 +1425,79 @@ let trimming = DWRITE_TRIMMING {
 ```
 
 **Reason**: File names without spaces (like `20260729-105446.png`) are treated as single words by DirectWrite, causing aggressive truncation.
+
+
+### Timer-Based Hover Management for Layered Windows
+
+When overlay windows use dynamic alpha (alpha=0 for blank areas, alpha=1 for selected),
+WM_MOUSEMOVE is **not delivered** when the cursor moves from an icon (opaque pixel) to
+a blank area (transparent pixel). This means hovered_item cannot be cleared through
+the normal mouse-move path.
+
+#### Problem
+
+`
+┌──────────────────────────────┐
+│  Overlay (WS_EX_LAYERED)     │
+│  ┌──────────┐                │
+│  │  Icon    │ ← alpha=1, WM_MOUSEMOVE works │
+│  │  (hover) │                │
+│  └──────────┘                │
+│                              │
+│  (blank, alpha=0)            │ ← WM_MOUSEMOVE NOT delivered!
+│                              │
+└──────────────────────────────┘
+`
+
+The cursor moves from icon → blank, but no WM_MOUSEMOVE arrives.
+hovered_item stays set, hover highlight persists visually.
+
+#### Correct Pattern: Polling Timer
+
+`
+ust
+// In handle_mouse_move: when an icon becomes hovered, start timer
+if data.hovered_item >= 0 {
+    SetTimer(hwnd, TIMER_ID_OVERLAY_HOVER, 50, std::ptr::null_mut());
+}
+
+// In WM_TIMER handler: poll cursor position
+WM_TIMER => {
+    if wparam == TIMER_ID_OVERLAY_HOVER {
+        let mut pt = POINT { x: 0, y: 0 };
+        GetCursorPos(&mut pt);
+        let (local_x, local_y) = screen_to_overlay_client(hwnd, pt.x, pt.y);
+        let hit = overlay_hit_test(data, local_x, local_y);
+        if data.hovered_item != hit {
+            data.hovered_item = hit;
+            render();
+        }
+        // Kill timer when no hover and no selection
+        if data.hovered_item < 0 && data.selected_item < 0 {
+            KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER);
+        }
+    }
+}
+
+// In WM_DESTROY: kill timer
+WM_DESTROY => {
+    KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER);
+}
+
+// In deselect path (click blank): kill timer + clear hover
+data.hovered_item = -1;
+KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER);
+`
+
+#### Timer Interval
+
+- **50ms** (20 FPS): Good balance between responsiveness and CPU usage
+- Too fast (8ms): Unnecessary CPU usage for non-drag hover tracking
+- Too slow (200ms): Noticeable lag when cursor leaves icon area
+
+#### Related Constants
+
+- TIMER_ID_OVERLAY_HOVER (defined in fi_types.rs)
 
 ### Related Files
 

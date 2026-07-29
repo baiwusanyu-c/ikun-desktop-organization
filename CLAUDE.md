@@ -91,7 +91,7 @@ src/
 │   │   ├── desktop_overlay/   #   桌面覆盖窗口（渲染未管理图标 + Grid 吸附布局 + 桌面接管生命周期 + 文件监听刷新）
 │   │   │   ├── overlay_mouse_hook.rs # 全局鼠标钩子（WH_MOUSE_LL + 独立线程消息泵，拦截覆盖区域右键）
 │   │   ├── alignment_guide/   #   对齐参考线（对齐检测 + 动态对比色 + overlay 渲染）
-│   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎
+│   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎（draw_icon_with_label 统一图标+文本渲染）
 │   │   ├── grid_window.rs     #   窗口创建/销毁/布局收集/Z-order 管理
 │   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc
 │   │   ├── zorder.rs          #   Z-order 层级管理（分类框低于其他应用窗口 + 坐标查找）
@@ -370,6 +370,7 @@ main.rs
 - [x] 窗口层级管理（分类框始终低于其他应用窗口，分类框之间点击的在最前，WM_WINDOWPOSCHANGING + HWND_BOTTOM + 递归抑制）
 - [x] 图标自动重排（窗口尺寸变化时按线性索引重新映射，保持视觉顺序和空位，支持拖拽后固定位置的动态重排）
 - [x] 统一图标样式（覆盖区域和分类框使用相同的 hover/选中背景色和圆角，暗蓝灰色半透明 + 6px 圆角）
+- [x] 统一图标渲染（draw_icon_with_label 公共函数，分类框/覆盖区域/拖拽残影共用，字体/截断/阴影一致）
 - [x] 拖拽可视化反馈（插入分隔线 + 替换高亮，支持同框/跨框/覆盖区域拖拽，shift-insert 替代 swap）
 - [x] 分类框拖拽文件到资源管理器（OLE CF_HDROP 复制到 Explorer，图标保持原位）
 

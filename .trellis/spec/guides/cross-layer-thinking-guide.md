@@ -115,7 +115,8 @@ For each layer, ask:
 
 Add logs at layer boundaries:
 
-`ust
+`
+ust
 // Platform layer boundary
 WM_MOUSEMOVE => {
     log::debug!("[PLATFORM] WM_MOUSEMOVE ({}, {})", x, y);
@@ -161,7 +162,8 @@ Before implementing cross-layer features:
 
 ### Anti-Pattern 1: "Just Forward the Event"
 
-`ust
+`
+ust
 // ❌ BAD: Complex event forwarding
 if is_blank_area {
     let desktop = FindWindowW(...);
@@ -178,7 +180,8 @@ if is_blank_area {
 
 ### Anti-Pattern 2: "The Documentation Says..."
 
-`ust
+`
+ust
 // ❌ BAD: Trusting documentation without testing
 WM_NCHITTEST => {
     // Docs say HTCLIENT receives all events
@@ -192,7 +195,8 @@ WM_NCHITTEST => {
 
 ### Anti-Pattern 3: "It Works in the Test"
 
-`ust
+`
+ust
 // ❌ BAD: Unit test passes but integration fails
 #[test]
 fn test_hover_logic() {
@@ -226,7 +230,8 @@ fn test_hover_logic() {
 **Root Cause**: Implicit assumption that WM_NCHITTEST controls all mouse routing. Reality: WS_EX_LAYERED has pixel-level alpha testing that happens first.
 
 **Solution**: 
-`ust
+`
+ust
 let bg_alpha = if data.selected_item >= 0 { 1 } else { 0 };
 target.Clear(Some(&d2d_color(0, 0, 0, bg_alpha)));
 `
@@ -247,6 +252,85 @@ target.Clear(Some(&d2d_color(0, 0, 0, bg_alpha)));
 
 - [Layered Windows (Microsoft Docs)](https://docs.microsoft.com/en-us/windows/win32/winmsg/window-features#layered-windows)
 - [Event Routing in Windows](https://docs.microsoft.com/en-us/windows/win32/inputdev/about-mouse-input)
+
+
+---
+
+## Case Study: Overlay Hover Stuck After Moving to Blank Area (2026-07-29)
+
+### Problem
+
+Desktop overlay window uses dynamic alpha for click-through: alpha=0 on blank areas, alpha=1 when selected.
+After hovering over an icon and moving the cursor to a blank area, the hover highlight persists and never clears.
+
+**Timeline**:
+```
+User Action:              Overlay Window:
+hover over icon    →     WM_MOUSEMOVE → hovered_item=3, render (hover bg shown)
+move to blank area →     (no WM_MOUSEMOVE delivered! alpha=0 pixel)
+hover stays stuck  →     hovered_item still = 3, hover highlight persists
+```
+
+### Root Cause
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ Platform Layer (WS_EX_LAYERED)                          │
+│   alpha=0 pixels bypass WM_NCHITTEST                    │
+│   → mouse events pass through to desktop                │
+│   → WM_MOUSEMOVE never delivered for transparent pixels  │
+├─────────────────────────────────────────────────────────┤
+│ UI Layer (overlay_wnd_proc)                             │
+│   WM_MOUSEMOVE → hit_test → update hovered_item         │
+│   Assumes: all cursor movements trigger WM_MOUSEMOVE    │
+│   Reality: blank area cursor movements are invisible     │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Failed Approach: WM_MOUSELEAVE
+
+```rust
+// WRONG: WM_MOUSELEAVE fires repeatedly on alpha=0 pixels
+WM_MOUSELEAVE => {
+    data.hovered_item = -1;  // Causes flickering!
+    render();
+}
+```
+
+### Solution: Timer-Based Hover Polling
+
+```rust
+// Start timer when hovering an icon
+if data.hovered_item >= 0 && !data.drag_active {
+    SetTimer(hwnd, TIMER_ID_OVERLAY_HOVER, 50, std::ptr::null_mut());
+}
+
+// Timer polls cursor position (works regardless of alpha)
+WM_TIMER if wparam == TIMER_ID_OVERLAY_HOVER => {
+    let hit = overlay_hit_test(data, cursor_local_pos);
+    if data.hovered_item != hit {
+        data.hovered_item = hit;
+        render();
+    }
+    // Self-disable when nothing to track
+    if data.hovered_item < 0 && data.selected_item < 0 {
+        KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER);
+    }
+}
+```
+
+### Key Insight
+
+**Use timers to bridge platform gaps**: When the platform layer silently drops
+events (alpha=0 bypass), a polling timer can restore the missing information.
+The timer is only active when needed (hover state exists), minimizing overhead.
+
+### Prevention Checklist
+
+- [ ] Does my layered window have alpha=0 areas? → Need timer for hover tracking
+- [ ] Am I relying on WM_MOUSEMOVE to clear hover? → Will fail on transparent pixels
+- [ ] Is WM_MOUSELEAVE causing flickering? → Ignore it, use timer instead
+- [ ] Did I kill the timer in WM_DESTROY and deselect paths?
 
 ---
 
