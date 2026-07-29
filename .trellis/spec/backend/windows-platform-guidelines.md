@@ -1132,3 +1132,83 @@ enaming_item_index)
 - [ ] 使用 DROPEFFECT_COPY（复制操作，图标保持原位）
 - [ ] set_drag_in_progress(true) 包裹 DoDragDrop 调用
 - [ ] 拖拽完成后重新渲染源窗口
+
+---
+
+## Icon and Thumbnail Extraction
+
+### IShellItemImageFactory for Thumbnails
+
+Windows Explorer displays file thumbnails using `IShellItemImageFactory::GetImage()`. This API returns actual file content previews (images, video frames, PDF first pages) rather than generic file type icons.
+
+#### Correct Pattern: Use windows crate Safe API
+
+```rust
+// CORRECT: Use windows crate IShellItemImageFactory
+use windows::Win32::UI::Shell::{IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_RESIZETOFIT};
+use windows::Win32::Foundation::SIZE;
+use windows::core::PCWSTR;
+
+let factory: IShellItemImageFactory = SHCreateItemFromParsingName(pcwstr, None)?;
+let size = SIZE { cx: 256, cy: 256 };
+let hbitmap = factory.GetImage(size, SIIGBF_RESIZETOFIT)?;
+```
+
+#### Wrong: Manual COM vtable
+
+```rust
+// WRONG: Manual vtable definition (violates quality-guidelines.md Forbidden Pattern #6)
+#[repr(C)]
+struct IShellItemImageFactoryVtbl {
+    query_interface: unsafe extern "system" fn(...) -> HRESULT,
+    get_image: unsafe extern "system" fn(...) -> HRESULT,
+    // ... manual vtable
+}
+```
+
+#### Key Flags
+
+- `SIIGBF_RESIZETOFIT`: Generate thumbnail on-demand if not cached
+- `SIIGBF_THUMBNAILONLY`: Only return cached thumbnails (returns error if not cached)
+
+**Recommendation**: Use `SIIGBF_RESIZETOFIT` without `THUMBNAILONLY` to ensure thumbnails are always available.
+
+#### Conversion to HICON
+
+`IShellItemImageFactory` returns `HBITMAP` (premultiplied alpha). Convert to `HICON` for compatibility with existing rendering pipeline:
+
+```rust
+fn thumbnail_to_hicon(hbitmap: RawHBITMAP) -> HICON {
+    // Get bitmap dimensions via GetDIBits
+    // Create monochrome mask bitmap (all zeros = opaque)
+    // Use CreateIconIndirect to combine color + mask
+    // Release original HBITMAP
+}
+```
+
+### DWRITE Text Trimming
+
+When truncating long file names in icon labels, use `DWRITE_TRIMMING_GRANULARITY_CHARACTER` instead of `WORD`:
+
+```rust
+// CORRECT: Character-level trimming for file names
+let trimming = DWRITE_TRIMMING {
+    granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+    delimiter: 0,
+    delimiterCount: 0,
+};
+
+// WRONG: Word-level trimming treats entire filename as one word
+let trimming = DWRITE_TRIMMING {
+    granularity: DWRITE_TRIMMING_GRANULARITY_WORD,  // "20260729-105446" -> "2..."
+    // ...
+};
+```
+
+**Reason**: File names without spaces (like `20260729-105446.png`) are treated as single words by DirectWrite, causing aggressive truncation.
+
+### Related Files
+
+- `src/platform/windows/icon_extract.rs` -- Thumbnail extraction + HICON conversion
+- `src/platform/windows/d2d_render.rs` -- Text trimming for icon labels
+

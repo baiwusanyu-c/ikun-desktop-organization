@@ -33,7 +33,7 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL,
     DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
     DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TRIMMING,
-    DWRITE_TRIMMING_GRANULARITY_WORD, DWRITE_WORD_WRAPPING_NO_WRAP, DWRITE_WORD_WRAPPING_WRAP,
+    DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_TRIMMING_GRANULARITY_WORD, DWRITE_WORD_WRAPPING_NO_WRAP, DWRITE_WORD_WRAPPING_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::HDC as GdiHDC;
@@ -811,7 +811,7 @@ pub fn render_icon_grid(
                     if !is_selected {
                         if let Some(ref sign) = ellipsis_sign {
                             let trimming = DWRITE_TRIMMING {
-                                granularity: DWRITE_TRIMMING_GRANULARITY_WORD,
+                                granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
                                 delimiter: 0,
                                 delimiterCount: 0,
                             };
@@ -1306,7 +1306,7 @@ pub fn render_drag_overlay_bitmap(
                         // 应用 word-level 省略号裁剪（与分类框未选中项一致）
                         if let Ok(ellipsis) = dw_factory.CreateEllipsisTrimmingSign(&text_format) {
                             let trimming = DWRITE_TRIMMING {
-                                granularity: DWRITE_TRIMMING_GRANULARITY_WORD,
+                                granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
                                 delimiter: 0,
                                 delimiterCount: 0,
                             };
