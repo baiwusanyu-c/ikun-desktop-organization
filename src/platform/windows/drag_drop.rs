@@ -1,4 +1,4 @@
-﻿//! Drag-and-drop operations: same-box drop, box-to-box move, box-to-desktop.
+//! Drag-and-drop operations: same-box drop, box-to-box move, box-to-desktop.
 //!
 //! Handles all drop scenarios when a drag gesture ends, including
 //! grid snap, swap, shift-insert, and OLE drop from external sources.
@@ -647,7 +647,8 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
         };
 
         // 计算释放位置对应的网格坐标（遵循分类框的栅格布局规则）
-        let (target_col, target_row) = compute_drop_grid_position(hwnd, drop.drop_x, drop.drop_y, data);
+        let (target_col, target_row) =
+            compute_drop_grid_position(hwnd, drop.drop_x, drop.drop_y, data);
 
         // 检查是否有插入模式（来自拖拽悬停可视化反馈）
         let is_insert = drop.insert_col >= 0 && drop.insert_row >= 0;
@@ -659,7 +660,12 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
 
         log::info!(
             "OLE drop grid: drop=({}, {}) -> grid=({}, {}), insert=({}, {})",
-            drop.drop_x, drop.drop_y, target_col, target_row, drop.insert_col, drop.insert_row
+            drop.drop_x,
+            drop.drop_y,
+            target_col,
+            target_row,
+            drop.insert_col,
+            drop.insert_row
         );
 
         if is_insert {
@@ -861,7 +867,7 @@ mod ole_drop_tests {
         let grid_top = 40;
         let client_x = grid_left - 5;
         let client_y = grid_top - 5;
-        
+
         if client_x < grid_left || client_y < grid_top {
             let col = -1;
             let row = -1;
@@ -879,14 +885,13 @@ mod ole_drop_tests {
         let cell_h = 96;
         let client_x = grid_left + cell_w + 20; // Second column
         let client_y = grid_top + 20; // First row
-        
+
         let col = ((client_x - grid_left) / cell_w).max(0);
         let row = ((client_y - grid_top) / cell_h).max(0);
-        
+
         assert_eq!(col, 1);
         assert_eq!(row, 0);
     }
-
 
     #[test]
     fn test_compute_drop_grid_position_basic() {
@@ -942,5 +947,4 @@ mod ole_drop_tests {
         let is_insert = insert_col >= 0 && insert_row >= 0;
         assert!(!is_insert);
     }
-
 }

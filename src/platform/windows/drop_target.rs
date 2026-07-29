@@ -1,4 +1,4 @@
-﻿//! OLE 拖拽目标实现（IDropTarget）
+//! OLE 拖拽目标实现（IDropTarget）
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -197,7 +197,11 @@ unsafe extern "system" fn drop_target_drag_over(
     if should_update {
         let mut cursor_pt = POINT { x: 0, y: 0 };
         unsafe { GetCursorPos(&mut cursor_pt) };
-        super::drag_visual::handle_cross_box_drag_over(target.target_hwnd, cursor_pt.x, cursor_pt.y);
+        super::drag_visual::handle_cross_box_drag_over(
+            target.target_hwnd,
+            cursor_pt.x,
+            cursor_pt.y,
+        );
     }
 
     S_OK
@@ -241,8 +245,12 @@ unsafe extern "system" fn drop_target_drop(
             box_data: box_data.clone(),
             drop_x,
             drop_y,
-            insert_col: super::grid_window::get_data(target.target_hwnd).map(|d| d.drag_over_insert_col).unwrap_or(-1),
-            insert_row: super::grid_window::get_data(target.target_hwnd).map(|d| d.drag_over_insert_row).unwrap_or(-1),
+            insert_col: super::grid_window::get_data(target.target_hwnd)
+                .map(|d| d.drag_over_insert_col)
+                .unwrap_or(-1),
+            insert_row: super::grid_window::get_data(target.target_hwnd)
+                .map(|d| d.drag_over_insert_row)
+                .unwrap_or(-1),
         });
     }
 
@@ -415,7 +423,6 @@ pub fn unregister_box_drop_target(hwnd: HWND, target_ptr: *mut c_void) {
     log::info!("已撤销拖拽目标: hwnd={:?}", hwnd);
 }
 
-
 #[cfg(test)]
 mod pending_drop_tests {
     use super::*;
@@ -430,7 +437,7 @@ mod pending_drop_tests {
             insert_col: 2,
             insert_row: 3,
         };
-        
+
         assert_eq!(pending.file_paths.len(), 1);
         assert_eq!(pending.file_paths[0], "test.lnk");
         assert_eq!(pending.drop_x, 100);
@@ -450,7 +457,7 @@ mod pending_drop_tests {
             insert_col: -1,
             insert_row: -1,
         };
-        
+
         assert_eq!(pending.file_paths.len(), 2);
         assert_eq!(pending.insert_col, -1);
         assert_eq!(pending.insert_row, -1);
@@ -462,7 +469,7 @@ mod pending_drop_tests {
         if let Ok(mut g) = PENDING_DROP.lock() {
             *g = None;
         }
-        
+
         let result = take_pending_drop();
         assert!(result.is_none());
     }
@@ -480,15 +487,15 @@ mod pending_drop_tests {
                 insert_row: 2,
             });
         }
-        
+
         let result = take_pending_drop();
         assert!(result.is_some());
-        
+
         let drop = result.unwrap();
         assert_eq!(drop.file_paths[0], "test.lnk");
         assert_eq!(drop.insert_col, 1);
         assert_eq!(drop.insert_row, 2);
-        
+
         // Verify it's cleared after taking
         let result2 = take_pending_drop();
         assert!(result2.is_none());

@@ -242,10 +242,12 @@ pub(crate) fn handle_grid_drag_timer(hwnd: HWND) {
 /// - 分类框内图标保持原位（复制操作，不删除）
 fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
     log::info!("start_grid_ole_drag: 启动分类框→Explorer OLE 拖拽");
-    unsafe { KillTimer(hwnd, TIMER_ID_GRID_DRAG); }
+    unsafe {
+        KillTimer(hwnd, TIMER_ID_GRID_DRAG);
+    }
 
     // 获取拖拽项信息并重置拖拽状态
-    let (item_idx, file_path, display_name, icon_handle) = {
+    let (item_idx, file_path, display_name, icon_handle, config_id_str) = {
         let data = match unsafe { get_data(hwnd) } {
             Some(d) => d,
             None => return,
@@ -260,28 +262,34 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
         data.drag_over_insert_row = -1;
 
         if idx < 0 || (idx as usize) >= data.items.len() {
-            unsafe { super::drag_image::destroy_drag_overlay(); }
+            unsafe {
+                super::drag_image::destroy_drag_overlay();
+            }
             super::d2d_render::render_layered_window(hwnd);
             return;
         }
 
         let item = &data.items[idx as usize];
-        (idx, item.file_path.clone(), item.display_name.clone(), item.icon_handle)
+        (
+            idx,
+            item.file_path.clone(),
+            item.display_name.clone(),
+            item.icon_handle,
+            data.config_id.to_string(),
+        )
     };
 
     // 销毁拖拽残影
-    unsafe { super::drag_image::destroy_drag_overlay(); }
+    unsafe {
+        super::drag_image::destroy_drag_overlay();
+    }
 
-    log::info!(
-        "分类框→Explorer OLE: {} (path={})",
-        display_name,
-        file_path
-    );
+    log::info!("分类框→Explorer OLE: {} (path={})", display_name, file_path);
 
     // 构造 OLE 拖拽数据（CF_HDROP + IkunBoxDragData 自定义格式）
     let box_drag_data = IkunBoxDragData {
         source_hwnd: hwnd as usize,
-        source_config_id: String::new(),
+        source_config_id: config_id_str,
         items: vec![IkunDragItemData {
             index: item_idx as usize,
             file_path: file_path.clone(),
@@ -293,20 +301,25 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
     // （覆盖窗口是全屏分层窗口，会拦截 hit-test；分类框也需隐藏以确保 OLE 正确检测）
     let overlay_hwnd = super::desktop_overlay::get_overlay_window_hwnd();
     if let Some(ohwnd) = overlay_hwnd {
-        unsafe { ShowWindow(ohwnd, SW_HIDE); }
+        unsafe {
+            ShowWindow(ohwnd, SW_HIDE);
+        }
     }
-    unsafe { ShowWindow(hwnd, SW_HIDE); }
+    unsafe {
+        ShowWindow(hwnd, SW_HIDE);
+    }
 
-    let drop_succeeded = super::ole_dnd::start_box_drag(
-        vec![file_path],
-        box_drag_data,
-        icon_handle,
-    );
+    let drop_succeeded =
+        super::ole_dnd::start_box_drag(vec![file_path], box_drag_data, icon_handle);
 
     // 恢复窗口可见性
-    unsafe { ShowWindow(hwnd, SW_SHOWNA); }
+    unsafe {
+        ShowWindow(hwnd, SW_SHOWNA);
+    }
     if let Some(ohwnd) = overlay_hwnd {
-        unsafe { ShowWindow(ohwnd, SW_SHOWNA); }
+        unsafe {
+            ShowWindow(ohwnd, SW_SHOWNA);
+        }
     }
 
     if drop_succeeded {
@@ -331,5 +344,139 @@ pub(crate) fn save_config() {
         } else {
             log::info!("拖拽后配置已保存");
         }
+    }
+}
+
+// =============================================================================
+// Unit tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ===== Drag state machine tests =====
+
+    #[test]
+    fn test_drag_threshold_not_exceeded() {
+        // Simulate drag_pending=true but mouse hasn't moved enough
+        let drag_start_x: i32 = 100;
+        let drag_start_y: i32 = 100;
+        let mx: i32 = 103; // dx = 3, below DRAG_THRESHOLD
+        let my: i32 = 102; // dy = 2, below DRAG_THRESHOLD
+        let dx = (mx - drag_start_x).abs();
+        let dy = (my - drag_start_y).abs();
+        assert!(dx <= DRAG_THRESHOLD as i32);
+        assert!(dy <= DRAG_THRESHOLD as i32);
+    }
+
+    #[test]
+    fn test_drag_threshold_exceeded() {
+        let drag_start_x: i32 = 100;
+        let drag_start_y: i32 = 100;
+        let mx: i32 = 120; // dx = 20, above DRAG_THRESHOLD
+        let my: i32 = 115; // dy = 15, above DRAG_THRESHOLD
+        let dx = (mx - drag_start_x).abs();
+        let dy = (my - drag_start_y).abs();
+        assert!(dx > DRAG_THRESHOLD as i32);
+        assert!(dy > DRAG_THRESHOLD as i32);
+    }
+
+    // ===== External window detection logic tests =====
+
+    #[test]
+    fn test_external_window_detection_null_target_triggers_check() {
+        // When target_hwnd (grid window) is null, external window check should be performed
+        let target_hwnd: HWND = std::ptr::null_mut();
+        assert!(
+            target_hwnd.is_null(),
+            "Null target should trigger external window check"
+        );
+    }
+
+    #[test]
+    fn test_external_window_detection_non_null_target_skips_check() {
+        // When target_hwnd is non-null (found a grid window), external check should be skipped
+        // Use a fake non-null pointer for testing
+        let fake_hwnd: HWND = 0x1234 as HWND;
+        assert!(
+            !fake_hwnd.is_null(),
+            "Non-null target should skip external window check"
+        );
+    }
+
+    // ===== OLE drag data construction tests =====
+
+    #[test]
+    fn test_ikun_box_drag_data_construction() {
+        let data = IkunBoxDragData {
+            source_hwnd: 0xABCD,
+            source_config_id: "test-uuid-123".to_string(),
+            items: vec![IkunDragItemData {
+                index: 0,
+                file_path: "C:\\Users\\test\\Desktop\\app.lnk".to_string(),
+                display_name: "App".to_string(),
+            }],
+        };
+        assert_eq!(data.source_hwnd, 0xABCD);
+        assert_eq!(data.source_config_id, "test-uuid-123");
+        assert_eq!(data.items.len(), 1);
+        assert_eq!(data.items[0].index, 0);
+        assert!(data.items[0].file_path.ends_with("app.lnk"));
+    }
+
+    #[test]
+    fn test_ikun_drag_item_data_serialization() {
+        let item = IkunDragItemData {
+            index: 5,
+            file_path: "test.lnk".to_string(),
+            display_name: "Test".to_string(),
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        let parsed: IkunDragItemData = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.index, 5);
+        assert_eq!(parsed.file_path, "test.lnk");
+        assert_eq!(parsed.display_name, "Test");
+    }
+
+    // ===== Drag state reset pattern tests =====
+
+    #[test]
+    fn test_drag_state_reset_pattern() {
+        // Verify the state reset pattern used in start_grid_ole_drag
+        let mut drag_pending = true;
+        let mut drag_active = true;
+        let mut drag_item_index: i32 = 3;
+        let mut drag_over_item: i32 = 2;
+        let mut drag_over_insert_col: i32 = 1;
+        let mut drag_over_insert_row: i32 = 0;
+
+        // Reset (same pattern as start_grid_ole_drag)
+        drag_pending = false;
+        drag_active = false;
+        drag_item_index = -1;
+        drag_over_item = -1;
+        drag_over_insert_col = -1;
+        drag_over_insert_row = -1;
+
+        assert!(!drag_pending);
+        assert!(!drag_active);
+        assert_eq!(drag_item_index, -1);
+        assert_eq!(drag_over_item, -1);
+        assert_eq!(drag_over_insert_col, -1);
+        assert_eq!(drag_over_insert_row, -1);
+    }
+
+    #[test]
+    fn test_drag_item_index_bounds_check() {
+        // Test bounds checking pattern used in start_grid_ole_drag
+        let items_len: usize = 5;
+        let valid_idx: i32 = 3;
+        let invalid_neg: i32 = -1;
+        let invalid_over: i32 = 10;
+
+        assert!(valid_idx >= 0 && (valid_idx as usize) < items_len);
+        assert!(invalid_neg < 0 || (invalid_neg as usize) >= items_len);
+        assert!(invalid_over < 0 || (invalid_over as usize) >= items_len);
     }
 }

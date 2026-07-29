@@ -888,7 +888,12 @@ pub fn start_box_drag(
         drop_source_release(drop_src_ptr);
     }
 
-    log::info!("DoDragDrop: hr={:#010X}, effect={}, drop_succeeded={}", hr as u32, effect, drop_succeeded);
+    log::info!(
+        "DoDragDrop: hr={:#010X}, effect={}, drop_succeeded={}",
+        hr as u32,
+        effect,
+        drop_succeeded
+    );
 
     drop_succeeded
 }

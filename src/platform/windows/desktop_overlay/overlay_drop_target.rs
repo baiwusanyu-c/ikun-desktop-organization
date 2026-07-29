@@ -1,4 +1,4 @@
-﻿//! OLE 拖拽目标实现（覆盖窗口专用）
+//! OLE 拖拽目标实现（覆盖窗口专用）
 //!
 //! 为桌面覆盖窗口提供接收外部拖拽的能力：
 //! - 接收从资源管理器拖入的文件（Explorer → 覆盖区域）
@@ -136,12 +136,12 @@ unsafe extern "system" fn overlay_drop_drag_over(
     effect: *mut u32,
 ) -> HRESULT {
     *effect = DROPEFFECT_COPY;
-    
+
     // 显示拖拽覆盖可视化（snap-to-grid 预览）
     let target = &*(this as *const OverlayDropTarget);
     let mut cursor_pt = POINT { x: 0, y: 0 };
     GetCursorPos(&mut cursor_pt);
-    
+
     // 更新外部拖拽悬停状态
     {
         let overlay_data = match super::overlay_window::get_overlay_data(target.target_hwnd) {
@@ -153,10 +153,14 @@ unsafe extern "system" fn overlay_drop_drag_over(
             super::overlay_render::render_desktop_overlay(target.target_hwnd);
         }
     }
-    
+
     // 显示 snap-to-grid 预览
-    super::overlay_wnd_proc::update_overlay_drag_over_visual(target.target_hwnd, cursor_pt.x, cursor_pt.y);
-    
+    super::overlay_wnd_proc::update_overlay_drag_over_visual(
+        target.target_hwnd,
+        cursor_pt.x,
+        cursor_pt.y,
+    );
+
     S_OK
 }
 
@@ -320,8 +324,6 @@ pub fn unregister_overlay_drop_target(hwnd: HWND, target_ptr: *mut c_void) {
     log::info!("覆盖窗口已撤销拖拽目标: hwnd={:?}", hwnd);
 }
 
-
-
 #[cfg(test)]
 mod pending_overlay_drop_tests {
     use super::*;
@@ -333,7 +335,7 @@ mod pending_overlay_drop_tests {
             drop_x: 100,
             drop_y: 200,
         };
-        
+
         assert_eq!(pending.file_paths.len(), 1);
         assert_eq!(pending.file_paths[0], "test.lnk");
         assert_eq!(pending.drop_x, 100);
@@ -347,7 +349,7 @@ mod pending_overlay_drop_tests {
             drop_x: 50,
             drop_y: 75,
         };
-        
+
         assert_eq!(pending.file_paths.len(), 2);
         assert_eq!(pending.drop_x, 50);
         assert_eq!(pending.drop_y, 75);
@@ -359,7 +361,7 @@ mod pending_overlay_drop_tests {
         if let Ok(mut g) = PENDING_OVERLAY_DROP.lock() {
             *g = None;
         }
-        
+
         let result = take_pending_overlay_drop();
         assert!(result.is_none());
     }
@@ -374,15 +376,15 @@ mod pending_overlay_drop_tests {
                 drop_y: 200,
             });
         }
-        
+
         let result = take_pending_overlay_drop();
         assert!(result.is_some());
-        
+
         let drop = result.unwrap();
         assert_eq!(drop.file_paths[0], "test.lnk");
         assert_eq!(drop.drop_x, 100);
         assert_eq!(drop.drop_y, 200);
-        
+
         // Verify it's cleared after taking
         let result2 = take_pending_overlay_drop();
         assert!(result2.is_none());

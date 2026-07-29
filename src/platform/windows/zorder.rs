@@ -121,22 +121,41 @@ pub fn find_grid_window_at_point(screen_x: i32, screen_y: i32) -> HWND {
 
 /// 查找光标下的外部窗口（Explorer 等），跳过本应用窗口和桌面窗口
 pub fn find_external_window_at_point(screen_x: i32, screen_y: i32) -> HWND {
-    struct EnumData { x: i32, y: i32, result: HWND }
+    struct EnumData {
+        x: i32,
+        y: i32,
+        result: HWND,
+    }
 
     unsafe extern "system" fn enum_callback(hwnd: HWND, lparam: LPARAM) -> i32 {
         let data = &mut *(lparam as *mut EnumData);
-        if !data.result.is_null() { return 0; }
-        if IsWindowVisible(hwnd) == 0 { return 1; }
+        if !data.result.is_null() {
+            return 0;
+        }
+        if IsWindowVisible(hwnd) == 0 {
+            return 1;
+        }
         let mut class_name = [0u16; 64];
         let len = GetClassNameW(hwnd, class_name.as_mut_ptr(), class_name.len() as i32);
         if len > 0 {
             let name = String::from_utf16_lossy(&class_name[..len as usize]);
-            if name != "CabinetWClass" { return 1; }
-        } else { return 1; }
-        let mut rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+            if name != "CabinetWClass" {
+                return 1;
+            }
+        } else {
+            return 1;
+        }
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
         if GetWindowRect(hwnd, &mut rect) != 0
-            && data.x >= rect.left && data.x < rect.right
-            && data.y >= rect.top && data.y < rect.bottom
+            && data.x >= rect.left
+            && data.x < rect.right
+            && data.y >= rect.top
+            && data.y < rect.bottom
         {
             data.result = hwnd;
             return 0;
@@ -144,8 +163,14 @@ pub fn find_external_window_at_point(screen_x: i32, screen_y: i32) -> HWND {
         1
     }
 
-    let mut data = EnumData { x: screen_x, y: screen_y, result: std::ptr::null_mut() };
-    unsafe { EnumWindows(Some(enum_callback), &mut data as *mut EnumData as LPARAM); }
+    let mut data = EnumData {
+        x: screen_x,
+        y: screen_y,
+        result: std::ptr::null_mut(),
+    };
+    unsafe {
+        EnumWindows(Some(enum_callback), &mut data as *mut EnumData as LPARAM);
+    }
     data.result
 }
 
@@ -253,5 +278,28 @@ mod tests {
     fn test_find_grid_window_at_point_negative_coords() {
         let result = find_grid_window_at_point(-100, -100);
         assert!(result.is_null(), "Should return null for negative coords");
+    }
+
+    // ===== find_external_window_at_point unit tests =====
+
+    #[test]
+    fn test_find_external_window_at_point_no_crash_at_origin() {
+        // Should not crash even at (0, 0)
+        let result = find_external_window_at_point(0, 0);
+        let _ = result;
+    }
+
+    #[test]
+    fn test_find_external_window_at_point_negative_coords() {
+        // Negative coordinates should not crash
+        let result = find_external_window_at_point(-100, -100);
+        let _ = result;
+    }
+
+    #[test]
+    fn test_find_external_window_at_point_off_screen() {
+        // Very large coordinates (off-screen) should return null
+        let result = find_external_window_at_point(99999, 99999);
+        assert!(result.is_null(), "Off-screen should not find Explorer");
     }
 }

@@ -1065,3 +1065,70 @@ enaming_item_index)
 - src/platform/windows/d2d_render.rs — Label hiding during rename
 - src/platform/windows/desktop_overlay/overlay_render.rs — Overlay label hiding during rename
 
+## OLE Drag-to-Explorer Pattern
+
+### Problem
+
+分类框和覆盖区域需要支持拖拽文件到外部窗口（资源管理器/Explorer）。
+由于应用使用 WS_EX_LAYERED 窗口和自定义拖拽（Timer 轮询替代 SetCapture），
+标准 OLE 拖拽无法直接启动，需要在检测到 Explorer 窗口时手动触发 DoDragDrop。
+
+### Solution
+
+在拖拽定时器轮询中检测外部窗口（ind_external_window_at_point），
+当光标悬停在 Explorer（CabinetWClass）窗口上时，启动 OLE 拖拽。
+
+### Architecture
+
+`
+拖拽定时器（handle_grid_drag_timer / handle_overlay_drag_timer）
+  │
+  ├── 光标在分类框上 → 同框/跨框拖拽可视化
+  ├── 光标不在任何分类框上
+  │     │
+  │     └── find_external_window_at_point()
+  │           │
+  │           ├── 找到 CabinetWClass → start_*_ole_drag()
+  │           │     ├── 停止定时器 + 重置拖拽状态
+  │           │     ├── 销毁拖拽残影
+  │           │     ├── 构造 IkunBoxDragData（CF_HDROP + 自定义格式）
+  │           │     ├── 隐藏覆盖窗口和源窗口（让 OLE hit-test 到达 Explorer）
+  │           │     ├── ole_dnd::start_box_drag() → DoDragDrop()
+  │           │     ├── 恢复窗口可见性
+  │           │     └── 重新渲染（图标保持原位，复制操作）
+  │           │
+  │           └── 未找到 → 显示覆盖区域拖拽可视化
+  └── 鼠标释放 → end_*_drag()
+`
+
+### Key Implementation Details
+
+1. **窗口隐藏**：DoDragDrop 是阻塞调用，期间需要 Explorer 能接收到 OLE hit-test。
+   覆盖窗口是全屏分层窗口，会拦截 hit-test，必须先 ShowWindow(SW_HIDE)。
+   分类框也需隐藏以确保 OLE 正确检测。拖拽完成后用 SW_SHOWNA 恢复。
+
+2. **set_drag_in_progress(true)**：DoDragDrop 期间禁止 Z-order 干预，
+   否则分类框被 WM_WINDOWPOSCHANGING 强制 HWND_BOTTOM 后可能低于 overlay。
+
+3. **复制操作**：拖拽到 Explorer 始终使用 DROPEFFECT_COPY，图标保持原位不删除。
+
+4. **ind_external_window_at_point**：使用 EnumWindows 遍历顶层窗口，
+   仅匹配 CabinetWClass（Explorer 窗口类名），跳过本应用窗口。
+
+### Related Files
+
+| File | Role |
+|------|------|
+| drag_handler.rs | 分类框拖拽协调器（start_grid_ole_drag） |
+| desktop_overlay/overlay_wnd_proc.rs | 覆盖区域拖拽协调器（start_overlay_ole_drag） |
+| zorder.rs | ind_external_window_at_point + set_drag_in_progress |
+| ole_dnd.rs | OLE 拖拽源（start_box_drag / DoDragDrop） |
+
+### Checklist
+
+- [ ] 拖拽定时器中检测外部窗口（ind_external_window_at_point）
+- [ ] OLE 拖拽前隐藏覆盖窗口和源窗口
+- [ ] OLE 拖拽后恢复窗口可见性（SW_SHOWNA）
+- [ ] 使用 DROPEFFECT_COPY（复制操作，图标保持原位）
+- [ ] set_drag_in_progress(true) 包裹 DoDragDrop 调用
+- [ ] 拖拽完成后重新渲染源窗口

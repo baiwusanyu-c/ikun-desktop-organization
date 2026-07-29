@@ -1,4 +1,4 @@
-﻿//! 桌面覆盖窗口创建与生命周期管理
+//! 桌面覆盖窗口创建与生命周期管理
 //!
 //! 阶段 1 创建一个覆盖主显示器工作区的全透明分层窗口，放在较低 Z-order，
 //! 用于后续自行渲染桌面图标。窗口不抢焦点，当前阶段鼠标事件全部穿透。
@@ -253,9 +253,9 @@ pub fn create_desktop_overlay() -> Result<()> {
         d2d_target: None,
         renaming_item_index: -1,
         drop_target_ptr: std::ptr::null_mut(),
-            external_drag_hover: false,
-            drag_cursor_screen_x: 0,
-            drag_cursor_screen_y: 0,
+        external_drag_hover: false,
+        drag_cursor_screen_x: 0,
+        drag_cursor_screen_y: 0,
     });
     let data_ptr = Box::into_raw(data);
     unsafe {
@@ -602,7 +602,10 @@ fn normalize_path_key(path: &str) -> String {
 /// 从 HWND 获取覆盖窗口数据。
 /// 获取覆盖窗口句柄（供其他模块使用）
 pub(crate) fn get_overlay_window_hwnd() -> Option<HWND> {
-    OVERLAY_WINDOWS.lock().ok().and_then(|windows| windows.first().map(|w| w.hwnd))
+    OVERLAY_WINDOWS
+        .lock()
+        .ok()
+        .and_then(|windows| windows.first().map(|w| w.hwnd))
 }
 pub(crate) fn get_overlay_data<'a>(hwnd: HWND) -> Option<&'a mut OverlayWindowData> {
     let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut OverlayWindowData;

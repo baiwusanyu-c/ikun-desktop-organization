@@ -1,4 +1,4 @@
-﻿//! 桌面覆盖窗口消息处理
+//! 桌面覆盖窗口消息处理
 //!
 //! 阶段 3 在图标区域接管鼠标事件：hover、选中、双击打开、右键菜单和拖入分类框。
 //! 空白区域由覆盖窗口处理桌面背景菜单，避免把右键/新建转发给已隐藏的原生桌面。
@@ -508,7 +508,9 @@ fn handle_overlay_drag_timer(hwnd: HWND) {
 /// 在定时器中检测到外部窗口时调用，启动 OLE 拖拽
 fn start_overlay_ole_drag(hwnd: HWND, external_hwnd: HWND) {
     log::info!("start_overlay_ole_drag: 外部窗口 {:?}", external_hwnd);
-    unsafe { KillTimer(hwnd, TIMER_ID_OVERLAY_DRAG); }
+    unsafe {
+        KillTimer(hwnd, TIMER_ID_OVERLAY_DRAG);
+    }
 
     let item_idx = match get_overlay_data(hwnd) {
         Some(data) => {
@@ -527,17 +529,29 @@ fn start_overlay_ole_drag(hwnd: HWND, external_hwnd: HWND) {
     let (file_path, display_name, icon_handle) = match get_overlay_data(hwnd) {
         Some(data) if item_idx >= 0 && (item_idx as usize) < data.icons.len() => {
             let item = &data.icons[item_idx as usize];
-            (item.file_path.clone(), item.display_name.clone(), item.icon_handle)
+            (
+                item.file_path.clone(),
+                item.display_name.clone(),
+                item.icon_handle,
+            )
         }
         _ => {
-            unsafe { crate::platform::windows::drag_image::destroy_drag_overlay(); }
+            unsafe {
+                crate::platform::windows::drag_image::destroy_drag_overlay();
+            }
             render_desktop_overlay(hwnd);
             return;
         }
     };
 
-    unsafe { crate::platform::windows::drag_image::destroy_drag_overlay(); }
-    log::info!("覆盖窗口→Explorer OLE: \'{}\' (path={})", display_name, file_path);
+    unsafe {
+        crate::platform::windows::drag_image::destroy_drag_overlay();
+    }
+    log::info!(
+        "覆盖窗口→Explorer OLE: \'{}\' (path={})",
+        display_name,
+        file_path
+    );
 
     let box_drag_data = IkunBoxDragData {
         source_hwnd: hwnd as usize,
@@ -550,11 +564,17 @@ fn start_overlay_ole_drag(hwnd: HWND, external_hwnd: HWND) {
     };
 
     // 隐藏覆盖窗口，让 OLE hit-testing 能到达 Explorer
-    unsafe { ShowWindow(hwnd, SW_HIDE); }
+    unsafe {
+        ShowWindow(hwnd, SW_HIDE);
+    }
     let drop_succeeded = crate::platform::windows::ole_dnd::start_box_drag(
-        vec![file_path], box_drag_data, icon_handle,
+        vec![file_path],
+        box_drag_data,
+        icon_handle,
     );
-    unsafe { ShowWindow(hwnd, SW_SHOWNA); }
+    unsafe {
+        ShowWindow(hwnd, SW_SHOWNA);
+    }
 
     if drop_succeeded {
         log::info!("OLE 复制成功，图标保持原位");
@@ -583,7 +603,9 @@ pub(crate) fn update_overlay_drag_over_visual(hwnd: HWND, screen_x: i32, screen_
     let local_y = screen_y - data.y;
 
     // 使用光标所在显示器的本地 DPI 计算网格参数
-    let local_dpi = crate::platform::windows::desktop_overlay::overlay_window::dpi_at_screen_point(screen_x, screen_y);
+    let local_dpi = crate::platform::windows::desktop_overlay::overlay_window::dpi_at_screen_point(
+        screen_x, screen_y,
+    );
     let grid_layout = super::overlay_window::overlay_layout_params(data.width, local_dpi);
     let padding = grid_layout.padding;
     let cell_w = grid_layout.cell_w;
