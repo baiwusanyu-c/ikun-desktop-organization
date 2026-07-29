@@ -33,6 +33,7 @@ pub mod grid_window;
 pub mod icon_extract;
 pub mod icon_hider;
 pub mod icon_manager;
+mod liquid_glass;
 mod menu_window;
 mod monitor_utils;
 pub mod ole_dnd;
@@ -45,7 +46,10 @@ pub mod zorder;
 // Re-export key items
 pub use control_panel_window::{hide_control_panel_window, show_control_panel_window};
 pub use desktop_manager::{clsid_display_name, DesktopManager};
-pub use desktop_overlay::{create_desktop_overlay, destroy_desktop_overlay, take_pending_overlay_right_click, install_overlay_mouse_hook, uninstall_overlay_mouse_hook};
+pub use desktop_overlay::{
+    create_desktop_overlay, destroy_desktop_overlay, install_overlay_mouse_hook,
+    take_pending_overlay_right_click, uninstall_overlay_mouse_hook,
+};
 #[allow(unused_imports)] // 公共 API 预留
 pub use drop_target::{
     register_box_drop_target, take_pending_drop, take_pending_source_removal,
@@ -74,7 +78,10 @@ pub use monitor_utils::{
 };
 #[allow(unused_imports)] // 公共 API 预留
 pub use ole_dnd::{get_box_drag_format_id, start_box_drag};
-pub use shell_menu::{cleanup_desktop_registry, setup_desktop_registry, show_desktop_context_menu, take_pending_create_box};
+pub use shell_menu::{
+    cleanup_desktop_registry, setup_desktop_registry, show_desktop_context_menu,
+    take_pending_create_box,
+};
 #[allow(unused_imports)] // 公共 API 预留
 pub use sys_tray::{
     cleanup_system_tray, register_tray_action_waker, set_tray_auto_start_state, setup_system_tray,

@@ -295,7 +295,6 @@ pub fn create_desktop_overlay() -> Result<()> {
         log::warn!("启动桌面文件监听失败: {}", e);
     }
 
-
     log::info!(
         "桌面覆盖窗口已创建: hwnd={:?}, area=({}, {}) {}x{}, dpi={}, icons={}",
         hwnd,

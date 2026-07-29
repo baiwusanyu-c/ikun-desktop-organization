@@ -1,0 +1,6 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/windows-platform-guidelines.md", "reason": "分层窗口、预乘 alpha 与 D2D 渲染约束"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Windows 新模块质量与测试要求"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "捕获和 GPU 失败时优雅降级"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "渲染、窗口消息和配置跨层行为"}

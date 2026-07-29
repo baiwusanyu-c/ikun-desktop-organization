@@ -187,6 +187,8 @@ pub const WM_SIZING: u32 = 0x0214;
 pub const TIMER_ID_ALIGNMENT: usize = 0x4F56_0003;
 /// Timer ID for overlay hover polling (clears hover state when cursor leaves icon area via alpha=0 pixels)
 pub const TIMER_ID_OVERLAY_HOVER: usize = 0x4F56_0004;
+/// 分类框液态玻璃刷新定时器（约 30 FPS）
+pub const TIMER_ID_LIQUID_GLASS: usize = 0x4F56_0005;
 
 // ===== Hit Test Constants =====
 pub const HTCLIENT: i32 = 1;

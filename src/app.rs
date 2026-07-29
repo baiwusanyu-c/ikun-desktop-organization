@@ -14,13 +14,12 @@ use crate::platform::{
     create_grid_window, destroy_all_grid_windows, destroy_desktop_overlay, extract_file_icon,
     get_cursor_monitor_work_area_phys, get_grid_count, get_primary_monitor_dpi,
     get_screen_resolution, hide_control_panel_window, hide_native_icons, icon_exists_for_box,
-    native_icons_hidden, register_tray_action_waker, reposition_window_by_title,
-    resolve_icon_read_path, restore_all_hidden_icons, restore_native_icons, setup_desktop_registry,
-    setup_system_tray, show_control_panel_window, show_desktop_context_menu,
-    take_pending_create_box, take_pending_overlay_right_click, take_pending_tray_action,
-    install_overlay_mouse_hook, uninstall_overlay_mouse_hook,
-    DesktopIcon, DesktopManagerTrait, GridCreateParams, GridFileItem,
-    SystemTrayAction,
+    install_overlay_mouse_hook, native_icons_hidden, register_tray_action_waker,
+    reposition_window_by_title, resolve_icon_read_path, restore_all_hidden_icons,
+    restore_native_icons, setup_desktop_registry, setup_system_tray, show_control_panel_window,
+    show_desktop_context_menu, take_pending_create_box, take_pending_overlay_right_click,
+    take_pending_tray_action, uninstall_overlay_mouse_hook, DesktopIcon, DesktopManagerTrait,
+    GridCreateParams, GridFileItem, SystemTrayAction,
 };
 use eframe::egui;
 use std::sync::{Arc, Mutex};

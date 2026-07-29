@@ -18,12 +18,13 @@ use crate::box_core::view_engine::{get_view_params, ViewParams};
 
 use super::grid_window::GridFileItem;
 
+use std::collections::HashMap;
 use std::ffi::c_void;
 
 use windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED;
 use windows::Win32::Graphics::Direct2D::{
     Common::{D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_POINT_2F, D2D_SIZE_U},
-    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, D2D1_ANTIALIAS_MODE_ALIASED,
+    D2D1CreateFactory, ID2D1Bitmap, ID2D1DCRenderTarget, ID2D1Factory, D2D1_ANTIALIAS_MODE_ALIASED,
     D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_BITMAP_PROPERTIES, D2D1_DRAW_TEXT_OPTIONS_NONE,
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES,
     D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT,
@@ -143,11 +144,11 @@ pub fn render_layered_window(hwnd: HWND) {
     // 确保 D2D/DW/WIC 设备已初始化
     init_d2d_devices(data);
 
-    let (Some(ref _d2d_factory), Some(ref dw_factory), Some(ref wic_factory), Some(ref target)) = (
-        &data.d2d_factory,
-        &data.dw_factory,
-        &data.wic_factory,
-        &data.d2d_target,
+    let (Some(_d2d_factory), Some(dw_factory), Some(wic_factory), Some(target)) = (
+        data.d2d_factory.clone(),
+        data.dw_factory.clone(),
+        data.wic_factory.clone(),
+        data.d2d_target.clone(),
     ) else {
         log::warn!("D2D 设备未初始化，跳过渲染");
         RENDERING.store(false, Ordering::SeqCst);
@@ -247,16 +248,19 @@ pub fn render_layered_window(hwnd: HWND) {
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     let _dpi = if dpi > 0 { dpi } else { 96 }; // DPI 预留供后续 DPI 感知渲染使用
 
-    // ===== 绘制圆角背景（整体，四角圆角）=====
-    let bg_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(1, 1, 1, 38), None) };
-    if let Ok(ref brush) = bg_brush {
-        let corner_radius = 16.0_f32;
-        let rounded_rect = D2D1_ROUNDED_RECT {
-            rect: d2d_rect(0.0, 0.0, ww, hh),
-            radiusX: corner_radius,
-            radiusY: corner_radius,
-        };
-        unsafe { target.FillRoundedRectangle(&rounded_rect, brush) };
+    // ===== 绘制液态玻璃背景；GPU 捕获不可用时回退原半透明背景 =====
+    let corner_radius = 16.0_f32;
+    let glass_drawn = draw_liquid_glass_background(&target, wr.left, wr.top, w, h, corner_radius);
+    if !glass_drawn {
+        let bg_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(1, 1, 1, 38), None) };
+        if let Ok(ref brush) = bg_brush {
+            let rounded_rect = D2D1_ROUNDED_RECT {
+                rect: d2d_rect(0.0, 0.0, ww, hh),
+                radiusX: corner_radius,
+                radiusY: corner_radius,
+            };
+            unsafe { target.FillRoundedRectangle(&rounded_rect, brush) };
+        }
     }
 
     // ===== 绘制标题栏与主体的分隔线 =====
@@ -304,7 +308,7 @@ pub fn render_layered_window(hwnd: HWND) {
         let text_max_w = (btn_x as f32 - 10.0).max(40.0);
         let layout = unsafe {
             target_inner_create_text_layout(
-                dw_factory,
+                &dw_factory,
                 &title_text,
                 tf,
                 text_max_w,
@@ -366,7 +370,7 @@ pub fn render_layered_window(hwnd: HWND) {
             let lock_text: Vec<u16> = lock_icon.encode_utf16().collect();
             let lock_layout = unsafe {
                 target_inner_create_text_layout(
-                    dw_factory,
+                    &dw_factory,
                     &lock_text,
                     lf,
                     btn_size as f32,
@@ -455,7 +459,7 @@ pub fn render_layered_window(hwnd: HWND) {
         let more_text: Vec<u16> = more_icon.encode_utf16().collect();
         let more_layout = unsafe {
             target_inner_create_text_layout(
-                dw_factory,
+                &dw_factory,
                 &more_text,
                 mf,
                 mbtn_size as f32,
@@ -527,9 +531,9 @@ pub fn render_layered_window(hwnd: HWND) {
     unsafe { target.PushAxisAlignedClip(&clip_rect, D2D1_ANTIALIAS_MODE_ALIASED) };
 
     render_icon_grid(
-        target,
-        dw_factory,
-        wic_factory,
+        &target,
+        &dw_factory,
+        &wic_factory,
         &data.items,
         &grid_layout,
         &view_params,
@@ -542,6 +546,7 @@ pub fn render_layered_window(hwnd: HWND) {
         data.drag_over_insert_col,
         data.drag_over_insert_row,
         data.renaming_item_index,
+        &mut data.icon_bitmap_cache,
     );
 
     unsafe { target.PopAxisAlignedClip() };
@@ -601,6 +606,55 @@ pub fn render_layered_window(hwnd: HWND) {
     RENDERING.store(false, Ordering::SeqCst);
 }
 
+fn draw_liquid_glass_background(
+    target: &ID2D1DCRenderTarget,
+    screen_x: i32,
+    screen_y: i32,
+    width: i32,
+    height: i32,
+    corner_radius: f32,
+) -> bool {
+    let Some(pixels) =
+        super::liquid_glass::render_background(screen_x, screen_y, width, height, corner_radius)
+    else {
+        return false;
+    };
+
+    let bitmap_props = D2D1_BITMAP_PROPERTIES {
+        pixelFormat: D2D1_PIXEL_FORMAT {
+            format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+        },
+        dpiX: 96.0,
+        dpiY: 96.0,
+    };
+    let bitmap = unsafe {
+        target.CreateBitmap(
+            D2D_SIZE_U {
+                width: width as u32,
+                height: height as u32,
+            },
+            Some(pixels.as_ptr().cast::<c_void>()),
+            width as u32 * std::mem::size_of::<Pixel32>() as u32,
+            &bitmap_props,
+        )
+    };
+    let Ok(bitmap) = bitmap else {
+        return false;
+    };
+
+    unsafe {
+        target.DrawBitmap(
+            &bitmap,
+            Some(&d2d_rect(0.0, 0.0, width as f32, height as f32)),
+            1.0,
+            D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+            None,
+        );
+    }
+    true
+}
+
 /// 渲染图标网格（独立方法，参数化设计）
 ///
 /// 通过 `GridLayout` 确定位置（cols/cell_w/cell_h/grid_left/grid_top），
@@ -647,6 +701,7 @@ pub fn render_icon_grid(
     drag_over_insert_col: i32,
     drag_over_insert_row: i32,
     renaming_item_index: i32,
+    icon_bitmap_cache: &mut HashMap<(usize, i32), ID2D1Bitmap>,
 ) {
     let icon_size = view_params.icon_size;
     let cell_w = layout.cell_w;
@@ -744,7 +799,7 @@ pub fn render_icon_grid(
         };
 
         if view_params.show_label && i as i32 != renaming_item_index {
-            draw_icon_with_label(
+            draw_icon_with_label_cached(
                 target,
                 dw_factory,
                 Some(_wic_factory),
@@ -759,6 +814,7 @@ pub fn render_icon_grid(
                 label_h,
                 dpi,
                 !is_selected, // 未选中时应用省略号截断
+                Some(&mut *icon_bitmap_cache),
             );
         } else if !item.icon_handle.is_null() {
             // 不显示标签时仅绘制图标
@@ -769,6 +825,7 @@ pub fn render_icon_grid(
                 icon_x,
                 icon_y,
                 icon_size,
+                Some(&mut *icon_bitmap_cache),
             );
         }
     }
@@ -864,7 +921,17 @@ fn draw_icon_d2d(
     x: i32,
     y: i32,
     size: i32,
+    mut icon_bitmap_cache: Option<&mut HashMap<(usize, i32), ID2D1Bitmap>>,
 ) {
+    let cache_key = (hicon as usize, size);
+    if let Some(bitmap) = icon_bitmap_cache
+        .as_deref()
+        .and_then(|cache| cache.get(&cache_key))
+    {
+        draw_icon_bitmap(target, bitmap, x, y, size);
+        return;
+    }
+
     // 1. 从 HICON 提取颜色位图
     let mut icon_info = ICONINFO {
         f_icon: 0,
@@ -1015,16 +1082,10 @@ fn draw_icon_d2d(
         )
     };
 
-    if let Ok(ref bmp) = d2d_bitmap {
-        let dest_rect = d2d_rect(x as f32, y as f32, (x + size) as f32, (y + size) as f32);
-        unsafe {
-            target.DrawBitmap(
-                bmp,
-                Some(&dest_rect),
-                1.0,
-                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
-                None,
-            );
+    if let Ok(bmp) = d2d_bitmap {
+        draw_icon_bitmap(target, &bmp, x, y, size);
+        if let Some(cache) = icon_bitmap_cache.as_deref_mut() {
+            cache.insert(cache_key, bmp);
         }
     }
 
@@ -1034,6 +1095,19 @@ fn draw_icon_d2d(
     }
     if !icon_info.hbm_mask.is_null() {
         unsafe { DeleteObject(icon_info.hbm_mask as HGDIOBJ) };
+    }
+}
+
+fn draw_icon_bitmap(target: &ID2D1DCRenderTarget, bitmap: &ID2D1Bitmap, x: i32, y: i32, size: i32) {
+    let dest_rect = d2d_rect(x as f32, y as f32, (x + size) as f32, (y + size) as f32);
+    unsafe {
+        target.DrawBitmap(
+            bitmap,
+            Some(&dest_rect),
+            1.0,
+            D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+            None,
+        );
     }
 }
 
@@ -1080,10 +1154,55 @@ pub fn draw_icon_with_label(
     dpi: u32,
     apply_ellipsis: bool,
 ) {
+    draw_icon_with_label_cached(
+        &target,
+        dw_factory,
+        wic_factory,
+        icon_handle,
+        display_name,
+        icon_x,
+        icon_y,
+        icon_size,
+        label_x,
+        label_y,
+        label_w,
+        label_h,
+        dpi,
+        apply_ellipsis,
+        None,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_icon_with_label_cached(
+    target: &ID2D1DCRenderTarget,
+    dw_factory: &IDWriteFactory,
+    wic_factory: Option<&IWICImagingFactory>,
+    icon_handle: HICON,
+    display_name: &str,
+    icon_x: i32,
+    icon_y: i32,
+    icon_size: i32,
+    label_x: f32,
+    label_y: f32,
+    label_w: f32,
+    label_h: f32,
+    dpi: u32,
+    apply_ellipsis: bool,
+    icon_bitmap_cache: Option<&mut HashMap<(usize, i32), ID2D1Bitmap>>,
+) {
     unsafe {
         // 1. 绘制图标
         if !icon_handle.is_null() {
-            draw_icon_d2d(target, wic_factory, icon_handle, icon_x, icon_y, icon_size);
+            draw_icon_d2d(
+                target,
+                wic_factory,
+                icon_handle,
+                icon_x,
+                icon_y,
+                icon_size,
+                icon_bitmap_cache,
+            );
         }
 
         // 2. 绘制标签文字
