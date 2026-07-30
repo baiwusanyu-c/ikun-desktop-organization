@@ -1,4 +1,4 @@
-//! 桌面覆盖窗口消息处理
+﻿//! 桌面覆盖窗口消息处理
 //!
 //! 阶段 3 在图标区域接管鼠标事件：hover、选中、双击打开、右键菜单和拖入分类框。
 //! 空白区域由覆盖窗口处理桌面背景菜单，避免把右键/新建转发给已隐藏的原生桌面。
@@ -6,8 +6,9 @@
 use super::overlay_grid::{overlay_first_free_cell, overlay_grid_to_logical, overlay_snap_to_grid};
 use super::overlay_render::render_desktop_overlay;
 use super::overlay_window::{
-    get_overlay_data, overlay_hit_test, overlay_icon_cell_x, overlay_icon_cell_y,
-    overlay_layout_params, refresh_desktop_overlay_icons, save_overlay_icon_positions,
+    get_overlay_data, logical_to_physical, overlay_hit_test, overlay_icon_cell_x,
+    overlay_icon_cell_y, overlay_layout_params, refresh_desktop_overlay_icons,
+    save_overlay_icon_positions,
 };
 use crate::platform::windows::ffi_imports::*;
 use crate::platform::windows::ffi_types::*;
@@ -171,6 +172,20 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
         // ===== OLE 拖拽放置：外部文件拖入覆盖区域（由 overlay IDropTarget PostMessage 触发）=====
         WM_USER_OVERLAY_DROP => {
             handle_overlay_ole_drop(hwnd);
+            0
+        }
+
+        // ===== Escape 键清除多选 =====
+        WM_KEYDOWN => {
+            let vk = wparam as u32;
+            if vk == VK_ESCAPE {
+                super::super::multi_select::clear();
+                if let Some(data) = get_overlay_data(hwnd) {
+                    data.selected_item = -1;
+                    data.shift_anchor = -1;
+                    render_desktop_overlay(hwnd);
+                }
+            }
             0
         }
 
@@ -340,6 +355,16 @@ fn handle_mouse_move(hwnd: HWND, x: i32, y: i32) {
     let mut should_render = false;
     let mut should_start_drag = false;
     if let Some(data) = get_overlay_data(hwnd) {
+        // 框选更新：如果框选正在进行，更新当前坐标并重绘
+        if data.marquee_active {
+            if data.marquee_current_x != x || data.marquee_current_y != y {
+                data.marquee_current_x = x;
+                data.marquee_current_y = y;
+                render_desktop_overlay(hwnd);
+            }
+            return;
+        }
+
         let hit = overlay_hit_test(data, x, y);
         log::debug!(
             "[HOVER] at ({}, {}), hit={}, hovered={}, selected={}",
@@ -401,30 +426,88 @@ fn handle_mouse_move(hwnd: HWND, x: i32, y: i32) {
 fn handle_lbutton_down(hwnd: HWND, local_x: i32, local_y: i32, screen_x: i32, screen_y: i32) {
     if let Some(data) = get_overlay_data(hwnd) {
         let hit = overlay_hit_test(data, local_x, local_y);
+        let ctrl_down = unsafe { GetAsyncKeyState(VK_CONTROL) } & 0x8000u16 as i16 != 0;
+        let shift_down = unsafe { GetAsyncKeyState(VK_SHIFT) } & 0x8000u16 as i16 != 0;
+        let container_type = super::super::multi_select::ContainerType::Overlay;
+        let container_id: u64 = 0;
+
         log::info!(
-            "[CLICK] local=({},{}), hit={}, selected={}",
+            "[CLICK] local=({},{}), hit={}, selected={}, ctrl={}, shift={}",
             local_x,
             local_y,
             hit,
-            data.selected_item
+            data.selected_item,
+            ctrl_down,
+            shift_down
         );
 
         if hit >= 0 {
-            // 点击图标：选中 + 准备拖拽
-            data.selected_item = hit;
+            // 点击图标：多选逻辑
+            let hit_idx = hit as usize;
+            let key = super::super::multi_select::SelectionKey {
+                container_type,
+                container_id,
+                item_index: hit_idx,
+            };
+
+            if shift_down && data.shift_anchor >= 0 {
+                let anchor = data.shift_anchor as usize;
+                if ctrl_down {
+                    super::super::multi_select::add_range(
+                        container_type,
+                        container_id,
+                        anchor,
+                        hit_idx,
+                    );
+                } else {
+                    super::super::multi_select::set_range(
+                        container_type,
+                        container_id,
+                        anchor,
+                        hit_idx,
+                    );
+                }
+                data.selected_item = hit;
+            } else if ctrl_down {
+                super::super::multi_select::toggle(key);
+                if super::super::multi_select::is_selected(key) {
+                    data.shift_anchor = hit;
+                    data.selected_item = hit;
+                } else if data.selected_item == hit {
+                    data.selected_item = -1;
+                }
+            } else {
+                super::super::multi_select::clear();
+                super::super::multi_select::add(key);
+                super::super::multi_select::set_anchor(Some(key));
+                data.shift_anchor = hit;
+                data.selected_item = hit;
+            }
+
+            // 准备拖拽
             data.drag_pending = true;
             data.drag_active = false;
             data.drag_item_index = -1;
             data.drag_start_x = local_x;
             data.drag_start_y = local_y;
-            // Start hover timer to track cursor position (layered window alpha=0 issue)
             unsafe { SetTimer(hwnd, TIMER_ID_OVERLAY_HOVER, 50, std::ptr::null_mut()) };
             log::info!("图标选中: {}", data.icons[hit as usize].display_name);
         } else {
-            // 点击空白区域：取消选中 + 转发给桌面
+            // 点击空白区域：清除选择 + 开始框选
+            super::super::multi_select::clear();
             data.selected_item = -1;
+            data.shift_anchor = -1;
             data.drag_pending = false;
-            forward_lbutton_to_desktop(screen_x, screen_y);
+
+            // 开始框选
+            data.marquee_active = true;
+            data.marquee_start_x = local_x;
+            data.marquee_start_y = local_y;
+            data.marquee_current_x = local_x;
+            data.marquee_current_y = local_y;
+
+            // 也转发给桌面（如果框选距离很小）
+            // forward_lbutton_to_desktop(screen_x, screen_y); // 暂时不转发，让框选优先生效
         }
     }
     render_desktop_overlay(hwnd);
@@ -745,8 +828,80 @@ fn handle_lbutton_up(hwnd: HWND) {
         end_overlay_drag(hwnd);
         return;
     }
-    // Timer 已经结束了拖拽，这里是正常的点击释放
+
+    // 框选结束处理
     if let Some(data) = get_overlay_data(hwnd) {
+        if data.marquee_active {
+            let ctrl_down = unsafe { GetAsyncKeyState(VK_CONTROL) } & 0x8000u16 as i16 != 0;
+            data.marquee_active = false;
+
+            let rect_left = data.marquee_start_x.min(data.marquee_current_x);
+            let rect_right = data.marquee_start_x.max(data.marquee_current_x);
+            let rect_top = data.marquee_start_y.min(data.marquee_current_y);
+            let rect_bottom = data.marquee_start_y.max(data.marquee_current_y);
+
+            let dx = (data.marquee_current_x - data.marquee_start_x).abs();
+            let dy = (data.marquee_current_y - data.marquee_start_y).abs();
+            if dx > 3 || dy > 3 {
+                let container_type = super::super::multi_select::ContainerType::Overlay;
+                let container_id: u64 = 0;
+
+                if !ctrl_down {
+                    super::super::multi_select::clear();
+                }
+
+                // 遍历所有图标，检查是否在框选矩形内
+                let grid_layout = overlay_layout_params(data.width, data.dpi);
+                for (i, icon) in data.icons.iter().enumerate() {
+                    let (cell_x, cell_y) = if icon.x >= 0.0 && icon.y >= 0.0 {
+                        (
+                            logical_to_physical(icon.x, data.dpi),
+                            logical_to_physical(icon.y, data.dpi),
+                        )
+                    } else {
+                        let total = data.icons.len().max(1) as i32;
+                        let rows = (total + grid_layout.cols - 1) / grid_layout.cols;
+                        let col = (i as i32) / rows;
+                        let row = (i as i32) % rows;
+                        (
+                            grid_layout.padding + col * grid_layout.cell_w,
+                            grid_layout.padding + row * grid_layout.cell_h,
+                        )
+                    };
+                    let cell_center_x = cell_x + grid_layout.cell_w / 2;
+                    let cell_center_y = cell_y + grid_layout.cell_h / 2;
+
+                    if cell_center_x >= rect_left
+                        && cell_center_x <= rect_right
+                        && cell_center_y >= rect_top
+                        && cell_center_y <= rect_bottom
+                    {
+                        let key = super::super::multi_select::SelectionKey {
+                            container_type,
+                            container_id,
+                            item_index: i,
+                        };
+                        super::super::multi_select::add(key);
+                    }
+                }
+
+                let selected =
+                    super::super::multi_select::selected_in_container(container_type, container_id);
+                if let Some(&first) = selected.first() {
+                    data.shift_anchor = first as i32;
+                    data.selected_item = first as i32;
+                } else {
+                    data.shift_anchor = -1;
+                    data.selected_item = -1;
+                }
+                log::info!("覆盖区域框选完成: 选中 {} 项", selected.len());
+            }
+
+            render_desktop_overlay(hwnd);
+            return;
+        }
+
+        // Timer 已经结束了拖拽，这里是正常的点击释放
         data.drag_pending = false;
         data.drag_item_index = -1;
     }

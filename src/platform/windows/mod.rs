@@ -1,18 +1,18 @@
-//! Windows 平台模块
+﻿//! Windows 平台模块
 //!
-//! 提供 Windows 平台的桌面管理、窗口管理和渲染功能。
+//! 提供 Windows 平台的桌面管理、窗口管理和渲染功能�?
 //!
-//! # 子模块
+//! # 子模�?
 //! - `ffi_types`: Win32 FFI 类型定义、C 结构体和常量
-//! - `ffi_imports`: Win32 FFI 函数声明和 Shell COM 类型
+//! - `ffi_imports`: Win32 FFI 函数声明�?Shell COM 类型
 //! - `desktop_manager`: Windows DesktopManager 实现
 //! - `d2d_render`: Direct2D/DirectWrite 渲染
 //! - `grid_window`: 格子窗口管理
 //! - `icon_extract`: 文件图标提取
 //! - `icon_hider`: 图标仓库（managed_icons，无需管理员）
 //! - `icon_manager`: 逐图标管理（LVM_SETITEMPOSITION 跨进程操作）
-//! - `shell_menu`: Shell 上下文菜单 + 注册表管理
-//! - `sys_tray`: 系统托盘（TODO）
+//! - `shell_menu`: Shell 上下文菜�?+ 注册表管�?
+//! - `sys_tray`: 系统托盘（TODO�?
 
 pub mod alignment_guide;
 pub mod app_icon;
@@ -35,6 +35,7 @@ pub mod icon_hider;
 pub mod icon_manager;
 mod menu_window;
 mod monitor_utils;
+pub mod multi_select;
 pub mod ole_dnd;
 pub mod rename_editor;
 pub mod shell_menu;
@@ -45,7 +46,10 @@ pub mod zorder;
 // Re-export key items
 pub use control_panel_window::{hide_control_panel_window, show_control_panel_window};
 pub use desktop_manager::{clsid_display_name, DesktopManager};
-pub use desktop_overlay::{create_desktop_overlay, destroy_desktop_overlay, take_pending_overlay_right_click, install_overlay_mouse_hook, uninstall_overlay_mouse_hook};
+pub use desktop_overlay::{
+    create_desktop_overlay, destroy_desktop_overlay, install_overlay_mouse_hook,
+    take_pending_overlay_right_click, uninstall_overlay_mouse_hook,
+};
 #[allow(unused_imports)] // 公共 API 预留
 pub use drop_target::{
     register_box_drop_target, take_pending_drop, take_pending_source_removal,
@@ -74,7 +78,10 @@ pub use monitor_utils::{
 };
 #[allow(unused_imports)] // 公共 API 预留
 pub use ole_dnd::{get_box_drag_format_id, start_box_drag};
-pub use shell_menu::{cleanup_desktop_registry, setup_desktop_registry, show_desktop_context_menu, take_pending_create_box};
+pub use shell_menu::{
+    cleanup_desktop_registry, setup_desktop_registry, show_desktop_context_menu,
+    take_pending_create_box,
+};
 #[allow(unused_imports)] // 公共 API 预留
 pub use sys_tray::{
     cleanup_system_tray, register_tray_action_waker, set_tray_auto_start_state, setup_system_tray,
@@ -82,3 +89,10 @@ pub use sys_tray::{
 };
 #[allow(unused_imports)] // Z-order 公共 API 预留
 pub use zorder::{find_grid_window_at_point, push_other_grids_below, set_drag_in_progress};
+
+#[allow(unused_imports)] // multi_select public API
+pub use multi_select::{
+    add, add_range, all_keys, anchor, clear, container_id_from_uuid, count, count_in_container,
+    has_selection, is_selected, remove, selected_in_container, selected_paths_in_container,
+    set_anchor, set_range, toggle, ContainerType, SelectionKey,
+};

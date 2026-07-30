@@ -1,4 +1,4 @@
-//! 格子窗口 - 核心组件（Direct2D/DirectWrite 渲染）
+﻿//! 格子窗口 - 核心组件（Direct2D/DirectWrite 渲染）
 //!
 //! 每个收纳格子是一个独立的 WS_POPUP 分层窗口。
 //! 使用 Direct2D + DirectWrite 渲染到 DIB，通过 UpdateLayeredWindow 提交。
@@ -187,6 +187,20 @@ pub(crate) struct GridWindowData {
     // ===== 重命名状态 =====
     /// 正在重命名的项索引（-1 = 无重命名）
     pub(crate) renaming_item_index: i32,
+
+    // ===== Multi-select fields =====
+    /// Index of the anchor item for shift-click range selection (-1 = no anchor)
+    pub(crate) shift_anchor: i32,
+    /// Whether marquee selection is currently active
+    pub(crate) marquee_active: bool,
+    /// Starting position of marquee selection (window coordinates)
+    pub(crate) marquee_start_x: i32,
+    pub(crate) marquee_start_y: i32,
+    /// Current position of marquee selection (window coordinates)
+    pub(crate) marquee_current_x: i32,
+    pub(crate) marquee_current_y: i32,
+    /// List of selected item indices for multi-select operations
+    pub(crate) multi_drag_items: Vec<usize>,
 
     // ===== D2D/DirectWrite 设备缓存（窗口级） =====
     pub(crate) d2d_factory: Option<ID2D1Factory>,
@@ -450,6 +464,13 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         drop_target_ptr: std::ptr::null_mut(),
         scroll_offset: 0,
         renaming_item_index: -1,
+        shift_anchor: -1,
+        marquee_active: false,
+        marquee_start_x: 0,
+        marquee_start_y: 0,
+        marquee_current_x: 0,
+        marquee_current_y: 0,
+        multi_drag_items: Vec::new(),
         d2d_factory: None,
         dw_factory: None,
         wic_factory: None,

@@ -44,16 +44,40 @@ pub(crate) fn check_drag_threshold(hwnd: HWND, mx: i32, my: i32) -> bool {
         return false;
     }
 
-    let icon_handle = data.items[item_idx as usize].icon_handle;
-    data.drag_active = true;
-    data.drag_item_index = item_idx;
+    // 检查是否有多选
+    let container_type = super::multi_select::ContainerType::GridBox;
+    let container_id = super::multi_select::container_id_from_uuid(data.config_id);
+    let selected_indices = super::multi_select::selected_in_container(container_type, container_id);
 
-    log::info!("自定义拖拽激活: item={}", item_idx);
+    // 如果选中的项包含当前拖动的项，则使用多选模式
+    if selected_indices.len() > 1 && selected_indices.contains(&(item_idx as usize)) {
+        log::info!("多选拖拽激活: {} items", selected_indices.len());
+        data.multi_drag_items = selected_indices;
+    } else {
+        data.multi_drag_items.clear();
+    }
+
+    // 使用第一个选中的项（或当前项）作为拖拽源
+    let drag_source_idx = if !data.multi_drag_items.is_empty() {
+        data.multi_drag_items[0]
+    } else {
+        item_idx as usize
+    };
+
+    let icon_handle = data.items[drag_source_idx].icon_handle;
+    data.drag_active = true;
+    data.drag_item_index = drag_source_idx as i32;
+
+    log::info!(
+        "自定义拖拽激活: item={}, multi_count={}",
+        drag_source_idx,
+        data.multi_drag_items.len()
+    );
 
     // 创建拖拽覆盖窗口（半透明图标 + 名称标签跟随光标，DPI 自适应尺寸）
     let icon_size = data.icon_size;
     let cell_w = data.cell_w;
-    let display_name = data.items[item_idx as usize].display_name.clone();
+    let display_name = data.items[drag_source_idx].display_name.clone();
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     let dpi = if dpi > 0 { dpi } else { 96 };
     unsafe {
@@ -143,27 +167,63 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
     // 因为分类框在 HWND_BOTTOM，WindowFromPoint 会被覆盖窗口拦截
     let target_hwnd = super::zorder::find_grid_window_at_point(pt.x, pt.y);
 
+    // 检查是否有多选拖拽
+    let is_multi_drag = !data.multi_drag_items.is_empty();
+
     if target_hwnd == hwnd {
-        // 同框内拖拽 → grid snap + swap
-        super::drag_drop::handle_same_box_drop(
-            hwnd,
-            item_idx as usize,
-            pt.x,
-            pt.y,
-            saved_insert_col,
-            saved_insert_row,
-        );
+        // 同框内拖拽
+        if is_multi_drag {
+            // 多选同框内拖拽 → 批量 grid snap + swap
+            log::info!("多选同框拖拽释放: {} items", data.multi_drag_items.len());
+            for &drag_idx in &data.multi_drag_items {
+                super::drag_drop::handle_same_box_drop(
+                    hwnd,
+                    drag_idx,
+                    pt.x,
+                    pt.y,
+                    saved_insert_col,
+                    saved_insert_row,
+                );
+            }
+        } else {
+            // 单选同框内拖拽 → grid snap + swap
+            super::drag_drop::handle_same_box_drop(
+                hwnd,
+                item_idx as usize,
+                pt.x,
+                pt.y,
+                saved_insert_col,
+                saved_insert_row,
+            );
+        }
+        data.multi_drag_items.clear();
         return true;
     }
 
     if !target_hwnd.is_null() {
         // === 框→框移动 ===
-        super::drag_drop::handle_box_to_box_move(hwnd, target_hwnd, item_idx as usize);
+        if is_multi_drag {
+            log::info!("多选跨框拖拽释放: {} items", data.multi_drag_items.len());
+            for &drag_idx in &data.multi_drag_items {
+                super::drag_drop::handle_box_to_box_move(hwnd, target_hwnd, drag_idx);
+            }
+        } else {
+            super::drag_drop::handle_box_to_box_move(hwnd, target_hwnd, item_idx as usize);
+        }
     } else {
         // === 框→桌面/覆盖窗口（从框中移除项）===
         // target_hwnd 为 null 表示拖到覆盖区域或桌面
-        super::drag_drop::handle_box_to_desktop(hwnd, item_idx as usize, pt.x, pt.y, true);
+        if is_multi_drag {
+            log::info!("多选拖拽到桌面: {} items", data.multi_drag_items.len());
+            for &drag_idx in &data.multi_drag_items {
+                super::drag_drop::handle_box_to_desktop(hwnd, drag_idx, pt.x, pt.y, true);
+            }
+        } else {
+            super::drag_drop::handle_box_to_desktop(hwnd, item_idx as usize, pt.x, pt.y, true);
+        }
     }
+
+    data.multi_drag_items.clear();
 
     // 清除所有框的高亮
     unsafe { PostMessageW(hwnd, WM_USER_DRAG_LEAVE, 0, 0) };

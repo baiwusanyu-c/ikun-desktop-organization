@@ -1,4 +1,4 @@
-//! 桌面覆盖窗口创建与生命周期管理
+﻿//! 桌面覆盖窗口创建与生命周期管理
 //!
 //! 阶段 1 创建一个覆盖主显示器工作区的全透明分层窗口，放在较低 Z-order，
 //! 用于后续自行渲染桌面图标。窗口不抢焦点，当前阶段鼠标事件全部穿透。
@@ -126,6 +126,20 @@ pub(crate) struct OverlayWindowData {
     pub(crate) drag_cursor_screen_x: i32,
     /// 拖拽时光标的屏幕坐标 Y
     pub(crate) drag_cursor_screen_y: i32,
+
+    // ===== 多选状态 =====
+    /// Shift 范围选择锚点索引（-1 = 无锚点）
+    pub(crate) shift_anchor: i32,
+    /// 框选是否正在进行
+    pub(crate) marquee_active: bool,
+    /// 框选起始位置（窗口坐标）
+    pub(crate) marquee_start_x: i32,
+    pub(crate) marquee_start_y: i32,
+    /// 框选当前位置（窗口坐标）
+    pub(crate) marquee_current_x: i32,
+    pub(crate) marquee_current_y: i32,
+    /// 多选拖拽的项索引列表（拖拽激活时填充）
+    pub(crate) multi_drag_items: Vec<usize>,
 }
 
 unsafe impl Send for OverlayWindowData {}
@@ -256,6 +270,13 @@ pub fn create_desktop_overlay() -> Result<()> {
         external_drag_hover: false,
         drag_cursor_screen_x: 0,
         drag_cursor_screen_y: 0,
+        shift_anchor: -1,
+        marquee_active: false,
+        marquee_start_x: 0,
+        marquee_start_y: 0,
+        marquee_current_x: 0,
+        marquee_current_y: 0,
+        multi_drag_items: Vec::new(),
     });
     let data_ptr = Box::into_raw(data);
     unsafe {
@@ -294,7 +315,6 @@ pub fn create_desktop_overlay() -> Result<()> {
     if let Err(e) = super::desktop_watcher::start_desktop_file_watcher() {
         log::warn!("启动桌面文件监听失败: {}", e);
     }
-
 
     log::info!(
         "桌面覆盖窗口已创建: hwnd={:?}, area=({}, {}) {}x{}, dpi={}, icons={}",
@@ -889,6 +909,13 @@ impl OverlayWindowData {
             external_drag_hover: false,
             drag_cursor_screen_x: 0,
             drag_cursor_screen_y: 0,
+            shift_anchor: -1,
+            marquee_active: false,
+            marquee_start_x: 0,
+            marquee_start_y: 0,
+            marquee_current_x: 0,
+            marquee_current_y: 0,
+            multi_drag_items: Vec::new(),
         }
     }
 }
@@ -928,6 +955,13 @@ mod tests {
             external_drag_hover: false,
             drag_cursor_screen_x: 0,
             drag_cursor_screen_y: 0,
+            shift_anchor: -1,
+            marquee_active: false,
+            marquee_start_x: 0,
+            marquee_start_y: 0,
+            marquee_current_x: 0,
+            marquee_current_y: 0,
+            multi_drag_items: Vec::new(),
         };
         assert_eq!(data.width, 1920);
         assert_eq!(data.height, 1080);
@@ -965,6 +999,13 @@ mod tests {
             external_drag_hover: false,
             drag_cursor_screen_x: 0,
             drag_cursor_screen_y: 0,
+            shift_anchor: -1,
+            marquee_active: false,
+            marquee_start_x: 0,
+            marquee_start_y: 0,
+            marquee_current_x: 0,
+            marquee_current_y: 0,
+            multi_drag_items: Vec::new(),
         };
 
         reset_overlay_interaction_state(&mut data);

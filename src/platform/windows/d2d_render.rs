@@ -1,4 +1,4 @@
-//! Direct2D/DirectWrite 渲染代码
+﻿//! Direct2D/DirectWrite 渲染代码
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -526,6 +526,20 @@ pub fn render_layered_window(hwnd: HWND) {
     let clip_rect = d2d_rect(0.0, title_h as f32, w as f32, h as f32);
     unsafe { target.PushAxisAlignedClip(&clip_rect, D2D1_ANTIALIAS_MODE_ALIASED) };
 
+    // 构建多选参数
+    let multi_select_ct = Some(super::multi_select::ContainerType::GridBox);
+    let multi_select_id = super::multi_select::container_id_from_uuid(data.config_id);
+    let marquee = if data.marquee_active {
+        Some((
+            data.marquee_start_x,
+            data.marquee_start_y,
+            data.marquee_current_x,
+            data.marquee_current_y,
+        ))
+    } else {
+        None
+    };
+
     render_icon_grid(
         target,
         dw_factory,
@@ -542,6 +556,9 @@ pub fn render_layered_window(hwnd: HWND) {
         data.drag_over_insert_col,
         data.drag_over_insert_row,
         data.renaming_item_index,
+        multi_select_ct,
+        multi_select_id,
+        marquee,
     );
 
     unsafe { target.PopAxisAlignedClip() };
@@ -647,6 +664,9 @@ pub fn render_icon_grid(
     drag_over_insert_col: i32,
     drag_over_insert_row: i32,
     renaming_item_index: i32,
+    multi_select_container_type: Option<super::multi_select::ContainerType>,
+    multi_select_container_id: u64,
+    marquee: Option<(i32, i32, i32, i32)>,
 ) {
     let icon_size = view_params.icon_size;
     let cell_w = layout.cell_w;
@@ -677,7 +697,14 @@ pub fn render_icon_grid(
         };
         // Apply scroll offset
         let cell_y = cell_y - scroll_offset;
-        let is_selected = i as i32 == selected_item;
+        let is_selected = i as i32 == selected_item
+            || multi_select_container_type.map_or(false, |ct| {
+                super::multi_select::is_selected(super::multi_select::SelectionKey {
+                    container_type: ct,
+                    container_id: multi_select_container_id,
+                    item_index: i,
+                })
+            });
         let is_hovered = i as i32 == hovered_item;
 
         // Hover 背景（比选中浅，仅非选中项显示）

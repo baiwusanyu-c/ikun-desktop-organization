@@ -1,4 +1,4 @@
-//! 桌面覆盖窗口渲染
+﻿//! 桌面覆盖窗口渲染
 //!
 //! 阶段 2 在透明覆盖窗口上绘制未进入分类框的桌面图标。渲染管线与分类框一致：
 //! Direct2D/DirectWrite → 32-bit DIB → `UpdateLayeredWindow`。
@@ -173,7 +173,11 @@ pub(crate) fn render_desktop_overlay(hwnd: HWND) {
     unsafe { target.BeginDraw() };
     // 动态背景透明度：有选中项时使用 alpha=1（接收点击），无选中项时使用 alpha=0（穿透到桌面）
     // 这是 WS_EX_LAYERED 窗口的特性：alpha=0 的像素会被系统视为不存在，鼠标事件直接穿透
-    let bg_alpha: u8 = if data.selected_item >= 0 || data.external_drag_hover {
+    let has_multi_select = super::super::multi_select::count_in_container(
+        super::super::multi_select::ContainerType::Overlay,
+        0,
+    ) > 0;
+    let bg_alpha: u8 = if data.selected_item >= 0 || data.external_drag_hover || has_multi_select {
         1
     } else {
         0
@@ -260,7 +264,12 @@ fn draw_desktop_icons(
         let icon_cell_w = icon_layout.cell_w;
         let icon_cell_h = icon_layout.cell_h;
 
-        let is_selected = index as i32 == selected_item;
+        let is_selected = index as i32 == selected_item
+            || super::super::multi_select::is_selected(super::super::multi_select::SelectionKey {
+                container_type: super::super::multi_select::ContainerType::Overlay,
+                container_id: 0,
+                item_index: index,
+            });
         let is_hovered = index as i32 == hovered_item;
         if is_selected || is_hovered {
             let rect = D2D1_ROUNDED_RECT {

@@ -435,6 +435,55 @@ unsafe extern "system" fn overlay_wnd_proc(
     }
 }
 
+/// 创建多选拖拽覆盖窗口（显示多个图标 + 数量徽章）
+///
+/// 当拖拽多个选中项时，显示第一个图标 + 右上角的数量徽章。
+/// 徽章样式：圆形背景 + 白色数字文本。
+///
+/// # 参数
+/// - icons: 被拖拽的图标句柄列表（最多显示 3 个层叠效果）
+/// - icon_size: 图标显示尺寸（DPI 自适应）
+/// - cell_w: 分类框的单元格宽度
+/// - display_name: 第一个图标的标签文字
+/// - count: 总选中数量（用于显示徽章）
+/// - dpi: 当前窗口 DPI
+pub(crate) unsafe fn create_multi_drag_overlay(
+    icons: &[HICON],
+    icon_size: i32,
+    cell_w: i32,
+    display_name: &str,
+    count: usize,
+    dpi: u32,
+) {
+    log::info!(
+        "create_multi_drag_overlay called: {} icons, count={}, display_name='{}'",
+        icons.len(),
+        count,
+        display_name
+    );
+
+    if icons.is_empty() {
+        log::warn!("create_multi_drag_overlay: no icons provided");
+        return;
+    }
+
+    // Use the first icon as the primary icon
+    let primary_icon = icons[0];
+
+    // Call single icon creation function
+    create_drag_overlay(primary_icon, icon_size, cell_w, display_name, dpi);
+
+    // TODO: Add count badge rendering in future iterations
+    // Currently using single icon display, can be enhanced later to:
+    // 1. Draw a circular badge in the top-right corner
+    // 2. Display the count (e.g., "3" or "99+")
+    // 3. Optional: Show 2-3 icons in a stacked effect
+
+    log::info!(
+        "Multi-select drag overlay created (simplified version, badge display to be enhanced)"
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
