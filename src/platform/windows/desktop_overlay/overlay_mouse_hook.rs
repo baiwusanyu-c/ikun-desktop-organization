@@ -17,7 +17,7 @@ use super::super::ffi_imports::{
     SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WindowFromPoint,
 };
 use super::super::ffi_types::{
-    HHOOK, HC_ACTION, MSG, MSLLHOOKSTRUCT, POINT, WH_MOUSE_LL, WM_QUIT, WM_RBUTTONUP,
+    HC_ACTION, HHOOK, MSG, MSLLHOOKSTRUCT, POINT, WH_MOUSE_LL, WM_QUIT, WM_RBUTTONUP,
 };
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
@@ -42,21 +42,19 @@ pub fn install_overlay_mouse_hook() {
     // 启动独立线程运行钩子和消息泵
     thread::spawn(|| {
         HOOK_THREAD_RUNNING.store(true, Ordering::SeqCst);
-        
+
         // 记录线程 ID 用于后续发送 WM_QUIT
         unsafe {
             HOOK_THREAD_ID.store(GetCurrentThreadId(), Ordering::SeqCst);
         }
-        log::info!("[MOUSE-HOOK] 钩子线程启动，线程ID: {}", HOOK_THREAD_ID.load(Ordering::SeqCst));
+        log::info!(
+            "[MOUSE-HOOK] 钩子线程启动，线程ID: {}",
+            HOOK_THREAD_ID.load(Ordering::SeqCst)
+        );
 
         unsafe {
             // 安装钩子
-            let hook = SetWindowsHookExW(
-                WH_MOUSE_LL,
-                mouse_hook_proc,
-                ptr::null_mut(),
-                0,
-            );
+            let hook = SetWindowsHookExW(WH_MOUSE_LL, mouse_hook_proc, ptr::null_mut(), 0);
 
             if hook.is_null() {
                 log::error!("[MOUSE-HOOK] 安装鼠标钩子失败");
@@ -110,11 +108,7 @@ pub fn take_pending_overlay_right_click() -> bool {
 /// 鼠标钩子回调函数
 ///
 /// 拦截全局鼠标事件，检查是否在覆盖区域右键点击。
-unsafe extern "system" fn mouse_hook_proc(
-    n_code: i32,
-    w_param: usize,
-    l_param: isize,
-) -> isize {
+unsafe extern "system" fn mouse_hook_proc(n_code: i32, w_param: usize, l_param: isize) -> isize {
     // 快速检查：只处理 WM_RBUTTONUP
     if n_code == HC_ACTION && w_param == WM_RBUTTONUP as usize {
         let ms = &*(l_param as *const MSLLHOOKSTRUCT);
@@ -122,10 +116,7 @@ unsafe extern "system" fn mouse_hook_proc(
 
         // 检查点击是否在覆盖窗口区域内
         if is_click_on_overlay(pt) {
-            log::info!(
-                "[MOUSE-HOOK] 检测到覆盖区域右键点击: ({}, {})",
-                pt.x, pt.y
-            );
+            log::info!("[MOUSE-HOOK] 检测到覆盖区域右键点击: ({}, {})", pt.x, pt.y);
             // 设置标志，主循环会处理
             PENDING_OVERLAY_RIGHT_CLICK.store(true, Ordering::SeqCst);
             // 阻止消息传递到桌面，避免桌面显示原生右键菜单
@@ -208,14 +199,14 @@ mod tests {
         // 初始状态应该是 false（如果之前的测试没有污染）
         // 注意：这个测试依赖于其他测试不修改全局状态
         let initial_state = HOOK_THREAD_RUNNING.load(Ordering::SeqCst);
-        
+
         // 测试状态设置
         HOOK_THREAD_RUNNING.store(true, Ordering::SeqCst);
         assert!(HOOK_THREAD_RUNNING.load(Ordering::SeqCst));
-        
+
         HOOK_THREAD_RUNNING.store(false, Ordering::SeqCst);
         assert!(!HOOK_THREAD_RUNNING.load(Ordering::SeqCst));
-        
+
         // 恢复初始状态
         HOOK_THREAD_RUNNING.store(initial_state, Ordering::SeqCst);
     }
@@ -224,13 +215,13 @@ mod tests {
     fn test_mouse_hook_atomic_state() {
         // 测试 MOUSE_HOOK 的原子状态管理
         let initial_hook = MOUSE_HOOK.load(Ordering::SeqCst);
-        
+
         MOUSE_HOOK.store(12345, Ordering::SeqCst);
         assert_eq!(MOUSE_HOOK.load(Ordering::SeqCst), 12345);
-        
+
         MOUSE_HOOK.store(0, Ordering::SeqCst);
         assert_eq!(MOUSE_HOOK.load(Ordering::SeqCst), 0);
-        
+
         // 恢复初始状态
         MOUSE_HOOK.store(initial_hook, Ordering::SeqCst);
     }

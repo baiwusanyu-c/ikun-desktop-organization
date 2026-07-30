@@ -39,10 +39,7 @@ fn log_menu_items(menu: HMENU, label: &str) {
             if text.is_empty() && cmd_id == 0 {
                 log::info!("[MENU-DEBUG]   [{}] SEPARATOR", i);
             } else {
-                log::info!(
-                    "[MENU-DEBUG]   [{}] id={} text=\"{}\"",
-                    i, cmd_id, text
-                );
+                log::info!("[MENU-DEBUG]   [{}] id={} text=\"{}\"", i, cmd_id, text);
             }
         }
         log::info!("[MENU-DEBUG] === {} === 枚举结束", label);
@@ -64,10 +61,11 @@ fn menu_has_ikun_items(menu: HMENU) -> bool {
             let end = buf.iter().position(|&c| c == 0).unwrap_or(0);
             let text = String::from_utf16_lossy(&buf[..end]);
             // 检查是否包含 Ikun 菜单项的特征文本
-            if text.contains("打开控制面板") ||
-               text.contains("创建分类框") ||
-               text.contains("一键AI分类") ||
-               text.contains("退出应用") {
+            if text.contains("打开控制面板")
+                || text.contains("创建分类框")
+                || text.contains("一键AI分类")
+                || text.contains("退出应用")
+            {
                 log::info!("[MENU-DEBUG] 菜单中已包含 Ikun 项: \"{}\"", text);
                 return true;
             }
@@ -75,8 +73,6 @@ fn menu_has_ikun_items(menu: HMENU) -> bool {
     }
     false
 }
-
-
 
 /// Result of shell context menu operation
 #[derive(Debug, Clone)]
@@ -144,7 +140,10 @@ fn should_skip_fallback(result: &ShellMenuResult) -> bool {
 }
 
 pub fn show_shell_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResult {
-    log::info!("[MENU-DEBUG] show_shell_context_menu 入口: file_path=\"{}\"", file_path);
+    log::info!(
+        "[MENU-DEBUG] show_shell_context_menu 入口: file_path=\"{}\"",
+        file_path
+    );
     let menu_path = resolve_shell_menu_path(file_path);
 
     if menu_path != file_path {
@@ -411,7 +410,10 @@ fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResul
 
 /// ShellExecuteW 回退菜单
 fn show_shell_fallback_menu(hwnd: HWND, file_path: &str) -> ShellMenuResult {
-    log::info!("[MENU-DEBUG] show_shell_fallback_menu 入口: file_path=\"{}\"", file_path);
+    log::info!(
+        "[MENU-DEBUG] show_shell_fallback_menu 入口: file_path=\"{}\"",
+        file_path
+    );
     unsafe {
         let path_wide: Vec<u16> = file_path.encode_utf16().chain(std::iter::once(0)).collect();
 
@@ -515,7 +517,10 @@ fn show_shell_fallback_menu(hwnd: HWND, file_path: &str) -> ShellMenuResult {
 /// 「创建分类框」选项通过注册表注入（`desktop_hook.rs`），Shell 会自动将其合并到此菜单中，
 /// 同时覆盖初始菜单和"显示更多选项"legacy 菜单。程序退出时清理注册表，确保无残留。
 pub fn show_desktop_context_menu(hwnd: HWND, include_ikun_items: bool) {
-    log::info!("[MENU-DEBUG] show_desktop_context_menu 入口: include_ikun_items={}", include_ikun_items);
+    log::info!(
+        "[MENU-DEBUG] show_desktop_context_menu 入口: include_ikun_items={}",
+        include_ikun_items
+    );
     use windows::Win32::UI::Shell::{
         IContextMenu, IShellFolder, IShellView, SHGetDesktopFolder, SVGIO_BACKGROUND,
     };
@@ -569,7 +574,10 @@ pub fn show_desktop_context_menu(hwnd: HWND, include_ikun_items: bool) {
                         const IKUN_CMD_QUIT: u32 = 13;
 
                         let pre_count = GetMenuItemCount(menu);
-                        log::info!("[MENU-DEBUG] 准备显式追加 Ikun 菜单项, 追加前项数: {}", pre_count);
+                        log::info!(
+                            "[MENU-DEBUG] 准备显式追加 Ikun 菜单项, 追加前项数: {}",
+                            pre_count
+                        );
                         let already_has_ikun = menu_has_ikun_items(menu);
                         log::info!("[MENU-DEBUG] 菜单是否已含 Ikun 项: {}", already_has_ikun);
                         if include_ikun_items && !already_has_ikun {
@@ -608,9 +616,9 @@ pub fn show_desktop_context_menu(hwnd: HWND, include_ikun_items: bool) {
                                     SetMenuItemBitmaps(menu, i as u32, MF_BYPOSITION, hbmp, hbmp);
                                 }
                             }
-                        let post_count = GetMenuItemCount(menu);
-                        log::info!("[MENU-DEBUG] 显式追加 Ikun 菜单项后, 总数: {}", post_count);
-                        log_menu_items(menu, "show_desktop_ctx:after-ikun-append");
+                            let post_count = GetMenuItemCount(menu);
+                            log::info!("[MENU-DEBUG] 显式追加 Ikun 菜单项后, 总数: {}", post_count);
+                            log_menu_items(menu, "show_desktop_ctx:after-ikun-append");
                         }
 
                         log::info!("[MENU-DEBUG] TrackPopupMenu 即将调用: pt=({}, {}), hwnd={:?}, 菜单项数={}", pt.x, pt.y, hwnd, GetMenuItemCount(menu));
@@ -787,10 +795,16 @@ pub fn setup_desktop_registry() {
                 &mut check_hkey,
             );
             if ret == 0 {
-                log::warn!("[MENU-DEBUG] 注册表项已存在(可能上次未清理): {}", check_item.key_name);
+                log::warn!(
+                    "[MENU-DEBUG] 注册表项已存在(可能上次未清理): {}",
+                    check_item.key_name
+                );
                 RegCloseKey(check_hkey);
             } else {
-                log::info!("[MENU-DEBUG] 注册表项不存在(正常首次注册): {}", check_item.key_name);
+                log::info!(
+                    "[MENU-DEBUG] 注册表项不存在(正常首次注册): {}",
+                    check_item.key_name
+                );
             }
         }
         for item in desktop_registry_menu_items() {
@@ -883,7 +897,12 @@ pub fn setup_desktop_registry() {
             );
             RegCloseKey(cmd_hkey);
 
-            log::info!("[MENU-DEBUG] 注册表: {} 已注册 (menu_text=\"{}\",  cmd_arg=\"{}\")", key_name, menu_text, cmd_arg);
+            log::info!(
+                "[MENU-DEBUG] 注册表: {} 已注册 (menu_text=\"{}\",  cmd_arg=\"{}\")",
+                key_name,
+                menu_text,
+                cmd_arg
+            );
         }
 
         log::info!(
@@ -926,7 +945,12 @@ pub fn cleanup_desktop_registry() {
             let ret2 = RegDeleteKeyW(HKEY_CURRENT_USER, key.as_ptr());
 
             if ret1 == 0 || ret2 == 0 {
-                log::info!("[MENU-DEBUG] 已清理注册表项: {} (ret_cmd={}, ret_key={})", key_name, ret1, ret2);
+                log::info!(
+                    "[MENU-DEBUG] 已清理注册表项: {} (ret_cmd={}, ret_key={})",
+                    key_name,
+                    ret1,
+                    ret2
+                );
             }
         }
         log::info!("[MENU-DEBUG] 注册表清理完成");

@@ -1016,6 +1016,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             0
         }
         WM_DESTROY => {
+            KillTimer(hwnd, TIMER_ID_LIQUID_GLASS);
             let data_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GridWindowData;
             if !data_ptr.is_null() {
                 let data = Box::from_raw(data_ptr);
@@ -1109,6 +1110,9 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         WM_TIMER => {
             if wparam == TIMER_ID_GRID_DRAG {
                 super::drag_handler::handle_grid_drag_timer(hwnd);
+            }
+            if wparam == TIMER_ID_LIQUID_GLASS {
+                render_layered_window(hwnd);
             }
             0
         }

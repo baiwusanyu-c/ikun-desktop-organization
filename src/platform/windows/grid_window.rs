@@ -13,12 +13,15 @@
 //! 边缘缩放 = WM_NCHITTEST 返回 HTLEFT/HTRIGHT/...，Windows 原生缩放。
 
 use anyhow::Result;
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 // ===== Windows crate D2D/DW/WIC imports =====
-use windows::Win32::Graphics::Direct2D::{ID2D1DCRenderTarget, ID2D1Factory};
+use windows::Win32::Foundation::HWND as WindowsHwnd;
+use windows::Win32::Graphics::Direct2D::{ID2D1Bitmap, ID2D1DCRenderTarget, ID2D1Factory};
 use windows::Win32::Graphics::DirectWrite::IDWriteFactory;
 use windows::Win32::Graphics::Imaging::IWICImagingFactory;
+use windows::Win32::UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE};
 
 // ===== 业务层导入 =====
 
@@ -207,6 +210,8 @@ pub(crate) struct GridWindowData {
     pub(crate) dw_factory: Option<IDWriteFactory>,
     pub(crate) wic_factory: Option<IWICImagingFactory>,
     pub(crate) d2d_target: Option<ID2D1DCRenderTarget>,
+    /// HICON + 目标尺寸对应的 D2D 位图缓存，避免实时玻璃刷新时重复读取 GDI 位图。
+    pub(crate) icon_bitmap_cache: HashMap<(usize, i32), ID2D1Bitmap>,
 }
 
 unsafe impl Send for GridWindowData {}
@@ -258,6 +263,7 @@ impl GridWindowData {
             dw_factory: None,
             wic_factory: None,
             d2d_target: None,
+            icon_bitmap_cache: HashMap::new(),
         }
     }
 }
@@ -375,6 +381,12 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         anyhow::bail!("CreateWindowExW 创建格子窗口失败");
     }
 
+    if let Err(error) =
+        unsafe { SetWindowDisplayAffinity(WindowsHwnd(hwnd), WDA_EXCLUDEFROMCAPTURE) }
+    {
+        log::warn!("分类框捕获排除设置失败，液态玻璃可能出现递归画面: {error}");
+    }
+
     // 查询实际 DPI 并重新计算尺寸
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     if dpi == 0 {
@@ -475,6 +487,7 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         dw_factory: None,
         wic_factory: None,
         d2d_target: None,
+        icon_bitmap_cache: HashMap::new(),
     });
     let data_ptr = Box::into_raw(data);
     unsafe {
@@ -537,6 +550,9 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
 
     // 3. 首次渲染（使用 Direct2D + UpdateLayeredWindow）
     render_layered_window(hwnd);
+    unsafe {
+        SetTimer(hwnd, TIMER_ID_LIQUID_GLASS, 33, std::ptr::null_mut());
+    }
 
     // 4. 注册到全局列表
     if let Ok(mut grids) = GRID_WINDOWS.lock() {
