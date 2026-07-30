@@ -8,6 +8,7 @@
 pub mod app_runtime;
 pub mod assets;
 pub mod control_panel;
+pub mod settings_view;
 pub mod create_box_dialog;
 pub mod edit_box_dialog;
 pub mod windows_main;

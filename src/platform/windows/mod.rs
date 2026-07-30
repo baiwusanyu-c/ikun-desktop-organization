@@ -33,7 +33,7 @@ pub mod grid_window;
 pub mod icon_extract;
 pub mod icon_hider;
 pub mod icon_manager;
-mod liquid_glass;
+pub mod liquid_glass;
 mod menu_window;
 mod monitor_utils;
 pub mod multi_select;

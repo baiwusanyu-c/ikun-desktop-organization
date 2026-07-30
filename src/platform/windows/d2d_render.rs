@@ -249,7 +249,7 @@ pub fn render_layered_window(hwnd: HWND) {
     let _dpi = if dpi > 0 { dpi } else { 96 }; // DPI 预留供后续 DPI 感知渲染使用
 
     // ===== 绘制液态玻璃背景；GPU 捕获不可用时回退原半透明背景 =====
-    let corner_radius = 16.0_f32;
+    let corner_radius = super::liquid_glass::get_liquid_glass_config().corner_radius;
     let glass_drawn = draw_liquid_glass_background(&target, wr.left, wr.top, w, h, corner_radius);
     if !glass_drawn {
         let bg_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(1, 1, 1, 38), None) };
@@ -631,8 +631,9 @@ fn draw_liquid_glass_background(
     height: i32,
     corner_radius: f32,
 ) -> bool {
+    let glass_config = super::liquid_glass::get_liquid_glass_config();
     let Some(pixels) =
-        super::liquid_glass::render_background(screen_x, screen_y, width, height, corner_radius)
+        super::liquid_glass::render_background(screen_x, screen_y, width, height, corner_radius, &glass_config)
     else {
         return false;
     };

@@ -27,6 +27,7 @@ use windows::Win32::Graphics::Dxgi::{
 };
 
 use super::ffi_types::Pixel32;
+use crate::config::LiquidGlassConfig;
 
 const RETRY_DELAY: Duration = Duration::from_secs(3);
 const MAX_SURFACE_CACHE_ENTRIES: usize = 8;
@@ -40,6 +41,8 @@ cbuffer GlassConstants : register(b0) {
     float4 targetInfo;
     float4 glassInfo;
     float4 colorInfo;
+    float4 shadowInfo;
+    float4 lightInfo;
 };
 
 Texture2D sourceTexture : register(t0);
@@ -106,9 +109,9 @@ float4 PSGlass(VertexOutput input) : SV_TARGET {
     color.b = gaussianVertical(refractedUv - radial * chroma / size).b;
     color = saturate((color - 0.5) * colorInfo.z + 0.5);
 
-    float topLight = edge * saturate(0.55 - input.uv.y) * 0.16;
-    float lowerShade = edge * saturate(input.uv.y - 0.35) * 0.10;
-    color = saturate(color + topLight - lowerShade + colorInfo.w);
+    float topLight = edge * saturate(lightInfo.x - input.uv.y) * lightInfo.y;
+    float lowerShade = edge * saturate(input.uv.y - lightInfo.z) * lightInfo.w;
+    color = saturate(color * colorInfo.w + topLight - lowerShade + shadowInfo.w);
 
     float alpha = mask * glassInfo.w;
     return float4(color * alpha, alpha);
@@ -122,6 +125,8 @@ struct GlassConstants {
     target_info: [f32; 4],
     glass_info: [f32; 4],
     color_info: [f32; 4],
+    shadow_info: [f32; 4],
+    light_info: [f32; 4],
 }
 
 struct CaptureOutput {
@@ -164,6 +169,25 @@ thread_local! {
     static GLASS_STATE: RefCell<GlassState> = const { RefCell::new(GlassState::Uninitialized) };
 }
 
+/// 全局液态玻璃配置（可从控制面板实时更新）
+static LIQUID_GLASS_CONFIG: std::sync::OnceLock<std::sync::RwLock<LiquidGlassConfig>> = std::sync::OnceLock::new();
+
+fn get_config_lock() -> &'static std::sync::RwLock<LiquidGlassConfig> {
+    LIQUID_GLASS_CONFIG.get_or_init(|| std::sync::RwLock::new(LiquidGlassConfig::default()))
+}
+
+/// 更新全局液态玻璃配置（控制面板调用）
+pub fn update_liquid_glass_config(config: &LiquidGlassConfig) {
+    if let Ok(mut guard) = get_config_lock().write() {
+        *guard = config.clone();
+    }
+}
+
+/// 获取当前液态玻璃配置
+pub fn get_liquid_glass_config() -> LiquidGlassConfig {
+    get_config_lock().read().map(|g| g.clone()).unwrap_or_default()
+}
+
 /// 生成指定分类框的实时液态玻璃背景。
 ///
 /// 返回预乘 alpha BGRA 像素；任何 GPU 或捕获错误都会返回 `None`，调用方应绘制
@@ -174,6 +198,7 @@ pub fn render_background(
     width: i32,
     height: i32,
     corner_radius: f32,
+    glass_config: &LiquidGlassConfig,
 ) -> Option<Vec<Pixel32>> {
     if width <= 0 || height <= 0 {
         return None;
@@ -211,6 +236,7 @@ pub fn render_background(
             width as u32,
             height as u32,
             corner_radius,
+            glass_config,
         ) {
             Ok(pixels) => Some(pixels),
             Err(error) => {
@@ -290,6 +316,7 @@ impl GlassRenderer {
         width: u32,
         height: u32,
         corner_radius: f32,
+        glass_config: &LiquidGlassConfig,
     ) -> Result<Vec<Pixel32>> {
         let center_x = screen_x + width as i32 / 2;
         let center_y = screen_y + height as i32 / 2;
@@ -321,6 +348,7 @@ impl GlassRenderer {
             width,
             height,
             corner_radius,
+            glass_config,
         )
     }
 
@@ -332,6 +360,7 @@ impl GlassRenderer {
         width: u32,
         height: u32,
         corner_radius: f32,
+        glass_config: &LiquidGlassConfig,
     ) -> Result<Vec<Pixel32>> {
         self.ensure_surfaces(width, height)?;
         let constants = GlassConstants {
@@ -342,8 +371,10 @@ impl GlassRenderer {
                 1.0 / source_size[0].max(1.0),
                 1.0 / height.max(1) as f32,
             ],
-            glass_info: [corner_radius, BLUR_SCALE, 26.0, GLASS_ALPHA],
-            color_info: [REFRACTION_STRENGTH, 1.2, 1.04, 0.015],
+            glass_info: [corner_radius, glass_config.blur_radius, glass_config.edge_effect_width, glass_config.glass_alpha],
+            color_info: [glass_config.refraction_strength, glass_config.chromatic_offset, glass_config.contrast, glass_config.color_gain],
+            shadow_info: [glass_config.shadow_offset_y, glass_config.shadow_softness, glass_config.shadow_opacity, glass_config.brightness],
+            light_info: [glass_config.top_light_position, glass_config.top_light_strength, glass_config.lower_shadow_position, glass_config.lower_shadow_strength],
         };
 
         unsafe {
@@ -736,12 +767,14 @@ mod tests {
             Ok(renderer) => renderer,
             Err(error) => panic!("液态玻璃渲染器初始化失败: {error:#}"),
         };
+        let glass_config = crate::config::LiquidGlassConfig::default();
         let pixels = match renderer.render(
             (screen_width - width) / 2,
             (screen_height - height) / 2,
             width as u32,
             height as u32,
             16.0,
+            &glass_config,
         ) {
             Ok(pixels) => pixels,
             Err(error) => panic!("液态玻璃测试帧生成失败: {error:#}"),
@@ -853,6 +886,7 @@ mod tests {
             width,
             height,
             16.0,
+            &LiquidGlassConfig::default(),
         ) {
             Ok(pixels) => pixels,
             Err(error) => panic!("四分区液态玻璃渲染失败: {error:#}"),

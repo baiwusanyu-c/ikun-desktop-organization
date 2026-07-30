@@ -988,6 +988,32 @@ impl AppRuntime {
     pub fn box_count(&self) -> usize {
         get_grid_count()
     }
+
+    // =================================================================
+    // Liquid Glass parameter accessors (UI layer)
+    // =================================================================
+
+    pub fn liquid_glass(&self) -> &crate::config::LiquidGlassConfig {
+        &self.ctx.config.box_style.liquid_glass
+    }
+
+    pub fn set_liquid_glass_param(&mut self, param: crate::config::LiquidGlassParam, value: f32) {
+        self.ctx.config.box_style.liquid_glass.set_param(param, value);
+        crate::platform::windows::liquid_glass::update_liquid_glass_config(&self.ctx.config.box_style.liquid_glass);
+        crate::platform::windows::grid_window::refresh_all_grid_windows();
+        let _ = self.ctx.save_config();
+    }
+
+    pub fn get_liquid_glass_param(&self, param: crate::config::LiquidGlassParam) -> f32 {
+        self.ctx.config.box_style.liquid_glass.get_param(param)
+    }
+
+    pub fn reset_liquid_glass_defaults(&mut self) {
+        self.ctx.config.box_style.liquid_glass = crate::config::LiquidGlassConfig::default();
+        crate::platform::windows::liquid_glass::update_liquid_glass_config(&self.ctx.config.box_style.liquid_glass);
+        crate::platform::windows::grid_window::refresh_all_grid_windows();
+        let _ = self.ctx.save_config();
+    }
 }
 
 impl Drop for AppRuntime {

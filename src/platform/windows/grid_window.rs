@@ -258,6 +258,13 @@ impl GridWindowData {
             drag_over_insert_row: -1,
             drop_target_ptr: std::ptr::null_mut(),
             scroll_offset: 0,
+            shift_anchor: -1,
+            marquee_active: false,
+            marquee_start_x: 0,
+            marquee_start_y: 0,
+            marquee_current_x: 0,
+            marquee_current_y: 0,
+            multi_drag_items: Vec::new(),
             renaming_item_index: -1,
             d2d_factory: None,
             dw_factory: None,
@@ -603,6 +610,17 @@ pub fn destroy_all_grid_windows() {
         }
     }
     log::info!("所有格子窗口已销毁");
+}
+
+/// 刷新所有格子窗口（液态玻璃参数变更时调用）
+///
+/// 仅触发重绘，不修改窗口位置或 Z-order。
+pub fn refresh_all_grid_windows() {
+    if let Ok(grids) = GRID_WINDOWS.lock() {
+        for grid in grids.iter() {
+            render_layered_window(grid.hwnd);
+        }
+    }
 }
 
 /// 刷新所有格子窗口（修复 DestroyWindow 导致的分层窗口异常）

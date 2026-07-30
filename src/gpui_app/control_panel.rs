@@ -5,6 +5,7 @@
 
 use crate::gpui_app::app_runtime::{AppRuntime, CONTROL_PANEL_TITLE};
 use crate::gpui_app::create_box_dialog::CreateBoxDialogView;
+use crate::gpui_app::settings_view::SettingsView;
 use crate::gpui_app::edit_box_dialog::EditBoxDialogView;
 use gpui::{
     div, px, rgb, size, App, AppContext, Bounds, Context, Entity, IntoElement, ParentElement,
@@ -233,6 +234,12 @@ impl Render for ControlPanelView {
                                 rt.open_create_box_dialog();
                                 cx.notify();
                             });
+                        }
+                    }))
+                    .child(Button::new("open_settings").label("💎 样式设置").on_click({
+                        let rt = runtime.clone();
+                        move |_, _window, cx| {
+                            let _ = SettingsView::open_window(rt.clone(), cx);
                         }
                     })),
             )

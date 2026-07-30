@@ -81,6 +81,10 @@ impl AppContext {
         log::info!("日志级别: {}", config.debug.log_level);
         log::info!("启动恢复布局: {}", config.general.restore_layout_on_start);
 
+        // 初始化全局液态玻璃配置
+        #[cfg(target_os = "windows")]
+        crate::platform::windows::liquid_glass::update_liquid_glass_config(&config.box_style.liquid_glass);
+
         // 2. 初始化分类器（使用配置中的兜底分类规则）
         let classifier = AppClassifier::from_config(&config.classification);
         log::info!(
