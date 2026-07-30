@@ -320,6 +320,37 @@ fn handle_hover_timer(hwnd: HWND) {
         None => return,
     };
 
+    // Check Escape key to clear selection
+    let esc_down = unsafe { GetAsyncKeyState(VK_ESCAPE as i32) } & 0x8000u16 as i16 != 0;
+    if esc_down && super::super::multi_select::has_selection() {
+        super::super::multi_select::clear();
+        data.selected_item = -1;
+        data.shift_anchor = -1;
+        render_desktop_overlay(hwnd);
+        unsafe { KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER) };
+        return;
+    }
+
+    // Check marquee: if active and mouse released, finalize
+    if data.marquee_active {
+        let lbutton_down = unsafe { GetAsyncKeyState(VK_LBUTTON) } & 0x8000u16 as i16 != 0;
+        if !lbutton_down {
+            handle_lbutton_up(hwnd);
+            unsafe { KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER) };
+            return;
+        }
+        // Update marquee position
+        let mut pt = POINT { x: 0, y: 0 };
+        unsafe { GetCursorPos(&mut pt) };
+        let (local_x, local_y) = screen_to_overlay_client(hwnd, pt.x, pt.y);
+        if data.marquee_current_x != local_x || data.marquee_current_y != local_y {
+            data.marquee_current_x = local_x;
+            data.marquee_current_y = local_y;
+            render_desktop_overlay(hwnd);
+        }
+        return;
+    }
+
     // Don't interfere with drag operations
     if data.drag_active {
         unsafe { KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER) };
@@ -355,12 +386,19 @@ fn handle_mouse_move(hwnd: HWND, x: i32, y: i32) {
     let mut should_render = false;
     let mut should_start_drag = false;
     if let Some(data) = get_overlay_data(hwnd) {
-        // 框选更新：如果框选正在进行，更新当前坐标并重绘
+        // 框选更新：如果框选正在进行，更新当前坐标并重绘（节流）
         if data.marquee_active {
             if data.marquee_current_x != x || data.marquee_current_y != y {
                 data.marquee_current_x = x;
                 data.marquee_current_y = y;
-                render_desktop_overlay(hwnd);
+                // Throttle rendering: only render every 3rd update to reduce lag
+                static mut MARQUEE_FRAME: u32 = 0;
+                unsafe {
+                    MARQUEE_FRAME += 1;
+                    if MARQUEE_FRAME % 3 == 0 {
+                        render_desktop_overlay(hwnd);
+                    }
+                }
             }
             return;
         }
@@ -428,6 +466,8 @@ fn handle_lbutton_down(hwnd: HWND, local_x: i32, local_y: i32, screen_x: i32, sc
         let hit = overlay_hit_test(data, local_x, local_y);
         let ctrl_down = unsafe { GetAsyncKeyState(VK_CONTROL) } & 0x8000u16 as i16 != 0;
         let shift_down = unsafe { GetAsyncKeyState(VK_SHIFT) } & 0x8000u16 as i16 != 0;
+        log::info!("[OVERLAY-CLICK] pos=({},{}), hit={}, ctrl={}, shift={}, selected={}, anchor={}", 
+            local_x, local_y, hit, ctrl_down, shift_down, data.selected_item, data.shift_anchor);
         let container_type = super::super::multi_select::ContainerType::Overlay;
         let container_id: u64 = 0;
 
@@ -452,21 +492,38 @@ fn handle_lbutton_down(hwnd: HWND, local_x: i32, local_y: i32, screen_x: i32, sc
 
             if shift_down && data.shift_anchor >= 0 {
                 let anchor = data.shift_anchor as usize;
-                if ctrl_down {
-                    super::super::multi_select::add_range(
-                        container_type,
-                        container_id,
-                        anchor,
-                        hit_idx,
-                    );
-                } else {
-                    super::super::multi_select::set_range(
-                        container_type,
-                        container_id,
-                        anchor,
-                        hit_idx,
-                    );
+                // Overlay uses column-major layout: items fill down first column, then next.
+                // Compute visual order (row, col) and select range in visual order.
+                let total = data.icons.len();
+                let layout = super::overlay_window::overlay_layout_params(data.width, data.dpi);
+                let max_rows = ((data.height - layout.padding * 2) / layout.cell_h).max(1);
+                let mut visual_order: Vec<(usize, i32, i32)> = Vec::with_capacity(total);
+                for i in 0..total {
+                    let col = (i as i32) / max_rows;
+                    let row = (i as i32) % max_rows;
+                    visual_order.push((i, row, col));
                 }
+                visual_order.sort_by(|x, y| x.1.cmp(&y.1).then(x.2.cmp(&y.2)));
+
+                let anchor_vo = visual_order.iter().position(|&(idx, _, _)| idx == anchor);
+                let target_vo = visual_order.iter().position(|&(idx, _, _)| idx == hit_idx);
+
+                if let (Some(av), Some(tv)) = (anchor_vo, target_vo) {
+                    let lo_vo = av.min(tv);
+                    let hi_vo = av.max(tv);
+                    if !ctrl_down {
+                        super::super::multi_select::clear();
+                    }
+                    for vo_idx in lo_vo..=hi_vo {
+                        let item_idx = visual_order[vo_idx].0;
+                        let k = super::super::multi_select::SelectionKey {
+                            container_type, container_id, item_index: item_idx,
+                        };
+                        super::super::multi_select::add(k);
+                    }
+                }
+                // Ensure clicked item is in selection
+                super::super::multi_select::add(key);
                 data.selected_item = hit;
             } else if ctrl_down {
                 super::super::multi_select::toggle(key);
@@ -493,21 +550,23 @@ fn handle_lbutton_down(hwnd: HWND, local_x: i32, local_y: i32, screen_x: i32, sc
             unsafe { SetTimer(hwnd, TIMER_ID_OVERLAY_HOVER, 50, std::ptr::null_mut()) };
             log::info!("图标选中: {}", data.icons[hit as usize].display_name);
         } else {
-            // 点击空白区域：清除选择 + 开始框选
-            super::super::multi_select::clear();
+            // Blank area: clear if no Ctrl, start marquee
+            if !ctrl_down {
+                super::super::multi_select::clear();
+                data.shift_anchor = -1;
+            }
             data.selected_item = -1;
-            data.shift_anchor = -1;
             data.drag_pending = false;
-
-            // 开始框选
+            data.drag_active = false;
+            data.drag_item_index = -1;
+            // Kill hover timer to prevent interference with marquee
+            unsafe { KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER); }
             data.marquee_active = true;
             data.marquee_start_x = local_x;
             data.marquee_start_y = local_y;
             data.marquee_current_x = local_x;
             data.marquee_current_y = local_y;
-
-            // 也转发给桌面（如果框选距离很小）
-            // forward_lbutton_to_desktop(screen_x, screen_y); // 暂时不转发，让框选优先生效
+            forward_lbutton_to_desktop(screen_x, screen_y);
         }
     }
     render_desktop_overlay(hwnd);
@@ -936,6 +995,8 @@ fn handle_double_click(hwnd: HWND, x: i32, y: i32) {
 }
 
 fn handle_right_click(hwnd: HWND, x: i32, y: i32) {
+    // Kill hover timer to prevent interference with context menu
+    unsafe { KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER); }
     let (path, hit_index) = match get_overlay_data(hwnd) {
         Some(data) => {
             let hit = overlay_hit_test(data, x, y);

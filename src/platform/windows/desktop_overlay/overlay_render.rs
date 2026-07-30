@@ -173,11 +173,7 @@ pub(crate) fn render_desktop_overlay(hwnd: HWND) {
     unsafe { target.BeginDraw() };
     // 动态背景透明度：有选中项时使用 alpha=1（接收点击），无选中项时使用 alpha=0（穿透到桌面）
     // 这是 WS_EX_LAYERED 窗口的特性：alpha=0 的像素会被系统视为不存在，鼠标事件直接穿透
-    let has_multi_select = super::super::multi_select::count_in_container(
-        super::super::multi_select::ContainerType::Overlay,
-        0,
-    ) > 0;
-    let bg_alpha: u8 = if data.selected_item >= 0 || data.external_drag_hover || has_multi_select {
+    let bg_alpha: u8 = if data.selected_item >= 0 || data.external_drag_hover {
         1
     } else {
         0
@@ -193,6 +189,32 @@ pub(crate) fn render_desktop_overlay(hwnd: HWND) {
         data.hovered_item,
         data,
     );
+
+    // ===== Marquee selection rectangle =====
+    if data.marquee_active {
+        let mx1 = data.marquee_start_x;
+        let my1 = data.marquee_start_y;
+        let mx2 = data.marquee_current_x;
+        let my2 = data.marquee_current_y;
+        let left = mx1.min(mx2) as f32;
+        let top = my1.min(my2) as f32;
+        let right = mx1.max(mx2) as f32;
+        let bottom = my1.max(my2) as f32;
+        let fill_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(0, 120, 215, 40), None) };
+        if let Ok(ref fb) = fill_brush {
+            unsafe { target.FillRectangle(&d2d_rect(left, top, right, bottom), fb) };
+        }
+        let border_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(0, 120, 215, 200), None) };
+        if let Ok(ref bb) = border_brush {
+            let bw = 1.0_f32;
+            unsafe {
+                target.FillRectangle(&d2d_rect(left, top, right, top + bw), bb);
+                target.FillRectangle(&d2d_rect(left, bottom - bw, right, bottom), bb);
+                target.FillRectangle(&d2d_rect(left, top, left + bw, bottom), bb);
+                target.FillRectangle(&d2d_rect(right - bw, top, right, bottom), bb);
+            }
+        }
+    }
 
     let mut tag1 = 0;
     let mut tag2 = 0;

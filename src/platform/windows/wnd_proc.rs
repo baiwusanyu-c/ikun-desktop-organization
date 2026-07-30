@@ -464,6 +464,27 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 return 0;
             }
 
+            // Marquee selection update
+            if let Some(data) = get_data(hwnd) {
+                if data.marquee_active {
+                    let mx = get_x_lparam(lparam);
+                    let my = get_y_lparam(lparam);
+                    if data.marquee_current_x != mx || data.marquee_current_y != my {
+                        data.marquee_current_x = mx;
+                        data.marquee_current_y = my;
+                        // Throttle rendering: only render every 3rd update to reduce lag
+                        static mut MARQUEE_FRAME: u32 = 0;
+                        unsafe {
+                            MARQUEE_FRAME += 1;
+                            if MARQUEE_FRAME % 3 == 0 {
+                                render_layered_window(hwnd);
+                            }
+                        }
+                    }
+                    return 0;
+                }
+            }
+
             let mut need_rerender = false;
             let mut show_tooltip = false;
             let mut tooltip_text = String::new();
@@ -675,17 +696,109 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 // 显示自定义分层窗口菜单（阻塞直到用户选择或取消）
                 show_menu_window(hwnd);
             } else if let Some(data) = get_data(hwnd) {
-                // 普通点击选中网格项
                 let hit = grid_hit_test(data, win_w, click_x, click_y, dpi);
-                if hit != data.selected_item {
-                    data.selected_item = hit;
+                let ctrl_down = unsafe { GetAsyncKeyState(VK_CONTROL) } & 0x8000u16 as i16 != 0;
+                let shift_down = unsafe { GetAsyncKeyState(VK_SHIFT) } & 0x8000u16 as i16 != 0;
+                log::info!("[CLICK] pos=({},{}), hit={}, ctrl={}, shift={}, selected={}, anchor={}", 
+                    click_x, click_y, hit, ctrl_down, shift_down, data.selected_item, data.shift_anchor);
+                let ct = super::multi_select::ContainerType::GridBox;
+                let cid = super::multi_select::container_id_from_uuid(data.config_id);
+                if hit >= 0 {
+                    let hi = hit as usize;
+                    let key = super::multi_select::SelectionKey { container_type: ct, container_id: cid, item_index: hi };
+                    if shift_down && data.shift_anchor >= 0 {
+                        let a = data.shift_anchor as usize;
+                        // CRITICAL: Compute visual order (row, col) for each item, then
+                        // select all items between anchor and target in VISUAL order.
+                        // This matches what the user sees on screen, not the scrambled
+                        // array index order caused by drag-and-drop reordering.
+                        let shift_vp = get_view_params(&data.view_mode, dpi);
+                        let shift_layout = calculate_grid(win_w, data.title_h, &shift_vp, dpi);
+                        let cols = shift_layout.cols;
+
+                        // Build (item_index, visual_row, visual_col) for every item
+                        let mut visual_order: Vec<(usize, i32, i32)> = Vec::with_capacity(data.items.len());
+                        for (i, item) in data.items.iter().enumerate() {
+                            if item.grid_col >= 0 && item.grid_row >= 0 {
+                                visual_order.push((i, item.grid_row, item.grid_col));
+                            } else {
+                                let idx = i as i32;
+                                visual_order.push((i, idx / cols, idx % cols));
+                            }
+                        }
+                        // Sort by (row, col) to get left-to-right, top-to-bottom visual order
+                        visual_order.sort_by(|x, y| x.1.cmp(&y.1).then(x.2.cmp(&y.2)));
+
+                        log::info!("[SHIFT-CLICK] anchor={}, target={}, cols={}, visual_order:", a, hi, cols);
+                        for (vo_idx, &(item_idx, r, c)) in visual_order.iter().enumerate() {
+                            log::info!("[SHIFT-CLICK]   visual[{}] = item[{}] at ({},{})", vo_idx, item_idx, r, c);
+                        }
+
+                        // Find anchor and target positions in the visual order
+                        let anchor_vo = visual_order.iter().position(|&(idx, _, _)| idx == a);
+                        let target_vo = visual_order.iter().position(|&(idx, _, _)| idx == hi);
+
+                        if let (Some(av), Some(tv)) = (anchor_vo, target_vo) {
+                            let lo_vo = av.min(tv);
+                            let hi_vo = av.max(tv);
+                            log::info!("[SHIFT-CLICK] visual range: visual[{}..={}]", lo_vo, hi_vo);
+
+                            if !ctrl_down {
+                                super::multi_select::clear();
+                            }
+                            for vo_idx in lo_vo..=hi_vo {
+                                let item_idx = visual_order[vo_idx].0;
+                                let k = super::multi_select::SelectionKey {
+                                    container_type: ct, container_id: cid, item_index: item_idx,
+                                };
+                                super::multi_select::add(k);
+                            }
+                        } else {
+                            log::warn!("[SHIFT-CLICK] anchor or target not found in visual_order!");
+                        }
+
+                        // Ensure clicked item is in selection
+                        super::multi_select::add(key);
+                        let selected_now = super::multi_select::selected_in_container(ct, cid);
+                        log::info!("[SHIFT-RESULT] Final selection: {} items = {:?}", selected_now.len(), selected_now);
+                        data.selected_item = hit;
+                    } else if ctrl_down {
+                        super::multi_select::toggle(key);
+                        if super::multi_select::is_selected(key) { data.shift_anchor = hit; data.selected_item = hit; }
+                        else if data.selected_item == hit { data.selected_item = -1; }
+                    } else {
+                        super::multi_select::clear();
+                        super::multi_select::add(key);
+                        super::multi_select::set_anchor(Some(key));
+                        data.shift_anchor = hit;
+                        data.selected_item = hit;
+                    }
                     need_rerender = true;
-                }
-                // 点击图标时开始拖拽检测（锁定状态下不启动）
-                if hit >= 0 && !data.locked {
-                    data.drag_pending = true;
-                    data.drag_start_x = click_x;
-                    data.drag_start_y = click_y;
+                    if !data.locked {
+                        data.drag_pending = true;
+                        data.drag_start_x = click_x;
+                        data.drag_start_y = click_y;
+                        // If clicking an already-selected item, prepare multi-drag
+                        if super::multi_select::is_selected(key) {
+                            data.multi_drag_items = super::multi_select::selected_in_container(ct, cid);
+                        } else {
+                            data.multi_drag_items.clear();
+                        }
+                    }
+                } else {
+                    // Blank area click: only clear if Ctrl not held
+                    if !ctrl_down {
+                        super::multi_select::clear();
+                        data.shift_anchor = -1;
+                    }
+                    if data.selected_item >= 0 { data.selected_item = -1; need_rerender = true; }
+                    // Kill any existing hover timer to prevent interference
+                    unsafe { KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER); }
+                    // Start marquee (SetTimer for tracking mouse release outside window)
+                    data.marquee_active = true;
+                    data.marquee_start_x = click_x; data.marquee_start_y = click_y;
+                    data.marquee_current_x = click_x; data.marquee_current_y = click_y;
+                    unsafe { SetTimer(hwnd, TIMER_ID_GRID_DRAG, 16, std::ptr::null_mut()); }
                 }
             }
 
@@ -1095,12 +1208,59 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
 
         // ===== 鼠标左键释放：完成自定义拖拽 / 取消拖拽检测 =====
         WM_LBUTTONUP => {
-            // Phase 3: 完成拖拽（检测目标 + 执行移动/移除）
             if super::drag_handler::end_drag(hwnd) {
                 return 0;
             }
-            // 非拖拽状态：取消拖拽检测
             if let Some(data) = get_data(hwnd) {
+                if data.marquee_active {
+                    let ctrl_down = unsafe { GetAsyncKeyState(VK_CONTROL) } & 0x8000u16 as i16 != 0;
+                    data.marquee_active = false;
+                    let rl = data.marquee_start_x.min(data.marquee_current_x);
+                    let rr = data.marquee_start_x.max(data.marquee_current_x);
+                    let rt = data.marquee_start_y.min(data.marquee_current_y);
+                    let rb = data.marquee_start_y.max(data.marquee_current_y);
+                    let dx = (data.marquee_current_x - data.marquee_start_x).abs();
+                    let dy = (data.marquee_current_y - data.marquee_start_y).abs();
+                    if dx > 3 || dy > 3 {
+                        let mut wr2 = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+                        unsafe { GetWindowRect(hwnd, &mut wr2) };
+                        let ww2 = wr2.right - wr2.left;
+                        let d2 = unsafe { GetDpiForWindow(hwnd) };
+                        let d2 = if d2 > 0 { d2 } else { 96 };
+                        let ct = super::multi_select::ContainerType::GridBox;
+                        let cid = super::multi_select::container_id_from_uuid(data.config_id);
+                        if !ctrl_down { super::multi_select::clear(); }
+                        let vp = get_view_params(&data.view_mode, d2);
+                        let lo = calculate_grid(ww2, data.title_h, &vp, d2);
+                        for (i, item) in data.items.iter().enumerate() {
+                            let (cx, cy) = if item.grid_col >= 0 && item.grid_row >= 0 {
+                                (lo.grid_left + item.grid_col * lo.cell_w, lo.grid_top + item.grid_row * lo.cell_h - data.scroll_offset)
+                            } else {
+                                let c = (i as i32) % lo.cols;
+                                let r = (i as i32) / lo.cols;
+                                (lo.grid_left + c * lo.cell_w, lo.grid_top + r * lo.cell_h - data.scroll_offset)
+                            };
+                            let ccx = cx + lo.cell_w / 2;
+                            let ccy = cy + lo.cell_h / 2;
+                            if ccx >= rl && ccx <= rr && ccy >= rt && ccy <= rb {
+                                super::multi_select::add(super::multi_select::SelectionKey {
+                                    container_type: ct, container_id: cid, item_index: i,
+                                });
+                            }
+                        }
+                        let sel = super::multi_select::selected_in_container(ct, cid);
+                        if let Some(&first) = sel.first() {
+                            data.shift_anchor = first as i32;
+                            data.selected_item = first as i32;
+                        } else {
+                            data.shift_anchor = -1;
+                            data.selected_item = -1;
+                        }
+                        log::info!("Grid marquee: {} items selected", sel.len());
+                    }
+                    render_layered_window(hwnd);
+                    return 0;
+                }
                 data.drag_pending = false;
             }
             0
@@ -1236,6 +1396,23 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             0
         }
 
+        WM_KEYDOWN => {
+            let vk = wparam as u32;
+            if vk == VK_ESCAPE {
+                super::multi_select::clear();
+                if let Some(data) = get_data(hwnd) {
+                    data.selected_item = -1;
+                    data.shift_anchor = -1;
+                    render_layered_window(hwnd);
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
+
+
+
+

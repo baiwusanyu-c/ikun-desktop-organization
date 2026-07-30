@@ -50,19 +50,20 @@ pub(crate) fn check_drag_threshold(hwnd: HWND, mx: i32, my: i32) -> bool {
     let selected_indices = super::multi_select::selected_in_container(container_type, container_id);
 
     // 如果选中的项包含当前拖动的项，则使用多选模式
+    log::info!("[DRAG-THRESHOLD] item_idx={}, selected_indices={:?}", item_idx, selected_indices);
     if selected_indices.len() > 1 && selected_indices.contains(&(item_idx as usize)) {
-        log::info!("多选拖拽激活: {} items", selected_indices.len());
+        log::info!("[DRAG-THRESHOLD] Multi-drag activated: {} items", selected_indices.len());
         data.multi_drag_items = selected_indices;
     } else {
         data.multi_drag_items.clear();
     }
 
-    // 使用第一个选中的项（或当前项）作为拖拽源
-    let drag_source_idx = if !data.multi_drag_items.is_empty() {
-        data.multi_drag_items[0]
-    } else {
-        item_idx as usize
-    };
+    // ʹõǰĲΪקԴ
+    let drag_source_idx = item_idx as usize;
+    // Ensure the clicked item is in multi_drag_items
+    if !data.multi_drag_items.is_empty() && !data.multi_drag_items.contains(&drag_source_idx) {
+        data.multi_drag_items.push(drag_source_idx);
+    }
 
     let icon_handle = data.items[drag_source_idx].icon_handle;
     data.drag_active = true;
@@ -173,18 +174,49 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
     if target_hwnd == hwnd {
         // 同框内拖拽
         if is_multi_drag {
-            // 多选同框内拖拽 → 批量 grid snap + swap
-            log::info!("多选同框拖拽释放: {} items", data.multi_drag_items.len());
-            for &drag_idx in &data.multi_drag_items {
-                super::drag_drop::handle_same_box_drop(
-                    hwnd,
-                    drag_idx,
-                    pt.x,
-                    pt.y,
-                    saved_insert_col,
-                    saved_insert_row,
-                );
+            // Multi-drag: compute offset and batch-move all items
+            let drag_indices = data.multi_drag_items.clone();
+            let primary_idx = item_idx as usize;
+            log::info!("Multi-drag same box: {} items, primary={}", drag_indices.len(), primary_idx);
+
+            // Record old positions
+            let old_positions: Vec<(i32, i32)> = drag_indices.iter()
+                .map(|&i| {
+                    if i < data.items.len() {
+                        let item = &data.items[i];
+                        if item.grid_col >= 0 { (item.grid_col, item.grid_row) }
+                        else { let c = (i as i32) % data.cols; (c, (i as i32) / data.cols) }
+                    } else { (0, 0) }
+                })
+                .collect();
+
+            // Move primary item first
+            super::drag_drop::handle_same_box_drop(hwnd, primary_idx, pt.x, pt.y, saved_insert_col, saved_insert_row);
+
+            // Get new position of primary
+            if primary_idx < data.items.len() {
+                let new_primary = &data.items[primary_idx];
+                let new_col = if new_primary.grid_col >= 0 { new_primary.grid_col } else { (primary_idx as i32) % data.cols };
+                let new_row = if new_primary.grid_row >= 0 { new_primary.grid_row } else { (primary_idx as i32) / data.cols };
+                let delta_col = new_col - old_positions[drag_indices.iter().position(|&x| x == primary_idx).unwrap_or(0)].0;
+                let delta_row = new_row - old_positions[drag_indices.iter().position(|&x| x == primary_idx).unwrap_or(0)].1;
+
+                // Move all other selected items by the same delta
+                let primary_pos = drag_indices.iter().position(|&x| x == primary_idx).unwrap_or(0);
+                for (k, &idx) in drag_indices.iter().enumerate() {
+                    if k == primary_pos { continue; }
+                    if idx < data.items.len() {
+                        let target_col = old_positions[k].0 + delta_col;
+                        let target_row = old_positions[k].1 + delta_row;
+                        if target_col >= 0 && target_row >= 0 {
+                            data.items[idx].grid_col = target_col;
+                            data.items[idx].grid_row = target_row;
+                        }
+                    }
+                }
             }
+            super::d2d_render::render_layered_window(hwnd);
+            super::drag_handler::save_config();
         } else {
             // 单选同框内拖拽 → grid snap + swap
             super::drag_drop::handle_same_box_drop(
@@ -203,8 +235,12 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
     if !target_hwnd.is_null() {
         // === 框→框移动 ===
         if is_multi_drag {
-            log::info!("多选跨框拖拽释放: {} items", data.multi_drag_items.len());
-            for &drag_idx in &data.multi_drag_items {
+            log::info!("Multi-drag cross box: {} items", data.multi_drag_items.len());
+            // Move items in reverse order to avoid index shifting
+            let mut sorted_indices = data.multi_drag_items.clone();
+            sorted_indices.sort();
+            sorted_indices.reverse();
+            for &drag_idx in &sorted_indices {
                 super::drag_drop::handle_box_to_box_move(hwnd, target_hwnd, drag_idx);
             }
         } else {
@@ -214,8 +250,11 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
         // === 框→桌面/覆盖窗口（从框中移除项）===
         // target_hwnd 为 null 表示拖到覆盖区域或桌面
         if is_multi_drag {
-            log::info!("多选拖拽到桌面: {} items", data.multi_drag_items.len());
-            for &drag_idx in &data.multi_drag_items {
+            log::info!("Multi-drag to desktop: {} items", data.multi_drag_items.len());
+            let mut sorted_indices = data.multi_drag_items.clone();
+            sorted_indices.sort();
+            sorted_indices.reverse();
+            for &drag_idx in &sorted_indices {
                 super::drag_drop::handle_box_to_desktop(hwnd, drag_idx, pt.x, pt.y, true);
             }
         } else {
@@ -243,8 +282,17 @@ pub(crate) fn handle_grid_drag_timer(hwnd: HWND) {
         Some(d) => d,
         None => return,
     };
+    // Check marquee: if active and mouse released, finalize
+    if data.marquee_active {
+        let lbutton_down = unsafe { GetAsyncKeyState(VK_LBUTTON) } & 0x8000u16 as i16 != 0;
+        if !lbutton_down {
+            unsafe { PostMessageW(hwnd, WM_LBUTTONUP, 0, 0); }
+        }
+        return;
+    }
+
     if !data.drag_active {
-        log::warn!("handle_grid_drag_timer: drag_active=false, 清理残影");
+        log::warn!("handle_grid_drag_timer: drag_active=false, clearing");
         unsafe {
             KillTimer(hwnd, TIMER_ID_GRID_DRAG);
             super::drag_image::destroy_drag_overlay();

@@ -936,6 +936,30 @@ pub fn render_icon_grid(
             unsafe { target.FillRoundedRectangle(&thumb_rect, hb) };
         }
     }
+
+    // ===== Marquee selection rectangle =====
+    if let Some((mx1, my1, mx2, my2)) = marquee {
+        let left = mx1.min(mx2) as f32;
+        let top = (my1.min(my2) - scroll_offset) as f32;
+        let right = mx1.max(mx2) as f32;
+        let bottom = (my1.max(my2) - scroll_offset) as f32;
+        // Semi-transparent blue fill
+        let fill_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(0, 120, 215, 40), None) };
+        if let Ok(ref fb) = fill_brush {
+            unsafe { target.FillRectangle(&d2d_rect(left, top, right, bottom), fb) };
+        }
+        // Blue border (1px)
+        let border_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(0, 120, 215, 200), None) };
+        if let Ok(ref bb) = border_brush {
+            let bw = 1.0_f32;
+            unsafe {
+                target.FillRectangle(&d2d_rect(left, top, right, top + bw), bb);
+                target.FillRectangle(&d2d_rect(left, bottom - bw, right, bottom), bb);
+                target.FillRectangle(&d2d_rect(left, top, left + bw, bottom), bb);
+                target.FillRectangle(&d2d_rect(right - bw, top, right, bottom), bb);
+            }
+        }
+    }
 }
 
 /// 使用 Direct2D 绘制图标（HICON → GetDIBits → premultiplied D2D Bitmap → DrawBitmap）
