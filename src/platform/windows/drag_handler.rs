@@ -282,8 +282,10 @@ pub(crate) fn handle_grid_drag_timer(hwnd: HWND) {
         Some(d) => d,
         None => return,
     };
-    // Check marquee: if active and mouse released, finalize
+    // Check marquee: if active, render and detect release
     if data.marquee_active {
+        // Render marquee at timer rate (16ms = ~60fps) for smooth visual update
+        super::d2d_render::render_layered_window(hwnd);
         let lbutton_down = unsafe { GetAsyncKeyState(VK_LBUTTON) } & 0x8000u16 as i16 != 0;
         if !lbutton_down {
             unsafe { PostMessageW(hwnd, WM_LBUTTONUP, 0, 0); }

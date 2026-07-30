@@ -464,23 +464,13 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 return 0;
             }
 
-            // Marquee selection update
+            // Marquee selection update: just update coordinates (render happens in timer)
             if let Some(data) = get_data(hwnd) {
                 if data.marquee_active {
                     let mx = get_x_lparam(lparam);
                     let my = get_y_lparam(lparam);
-                    if data.marquee_current_x != mx || data.marquee_current_y != my {
-                        data.marquee_current_x = mx;
-                        data.marquee_current_y = my;
-                        // Throttle rendering: only render every 3rd update to reduce lag
-                        static mut MARQUEE_FRAME: u32 = 0;
-                        unsafe {
-                            MARQUEE_FRAME += 1;
-                            if MARQUEE_FRAME % 3 == 0 {
-                                render_layered_window(hwnd);
-                            }
-                        }
-                    }
+                    data.marquee_current_x = mx;
+                    data.marquee_current_y = my;
                     return 0;
                 }
             }
