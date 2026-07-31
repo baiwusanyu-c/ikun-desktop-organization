@@ -1303,6 +1303,12 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             0
         }
 
+        // ===== 异步文件收入仓库（避免阻塞 OLE 回调导致鼠标释放慢）=====
+        WM_USER_DEFERRED_INGEST => {
+            super::drag_drop::process_deferred_ingests();
+            0
+        }
+
         // ===== 源框通知：项已被拖出（OLE Drop Target 触发，保留兼容）=====
         WM_USER_DRAG_ITEM_REMOVED => {
             // 自定义拖拽模式下，框→框移动在 end_drag 中直接处理

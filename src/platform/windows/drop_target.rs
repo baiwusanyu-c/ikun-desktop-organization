@@ -110,6 +110,15 @@ struct BoxDropTarget {
     custom_format_id: u32,
 }
 
+/// 当前是否有来自分类框的拖拽悬停（用于区分外部拖拽，控制可视化反馈）
+use std::sync::atomic::{AtomicBool, Ordering};
+static BOX_DRAG_HOVER: AtomicBool = AtomicBool::new(false);
+
+/// 检查当前悬停的拖拽是否来自分类框
+pub fn is_box_drag_hover() -> bool {
+    BOX_DRAG_HOVER.load(Ordering::Relaxed)
+}
+
 static DROP_TARGET_VTBL: IDropTargetVtbl = IDropTargetVtbl {
     query_interface: drop_target_query_interface,
     add_ref: drop_target_add_ref,
@@ -179,6 +188,7 @@ unsafe extern "system" fn drop_target_drag_enter(
     };
     if has_box || has_hdrop || has_shell_idlist {
         *effect = DROPEFFECT_MOVE;
+        BOX_DRAG_HOVER.store(has_box, Ordering::Relaxed);
         PostMessageW(target.target_hwnd, WM_USER_DRAG_ENTER, 0, 0);
         log::info!("[DRAG-ENTER] 拖拽进入: box={} hdrop={} shell_idlist={}", has_box, has_hdrop, has_shell_idlist);
     } else {
@@ -198,7 +208,13 @@ unsafe extern "system" fn drop_target_drag_over(
         *effect = DROPEFFECT_MOVE;
     }
 
-    // 显示拖拽覆盖可视化（分割线/高亮）—— 仅在无内部拖拽时更新
+    // 外部拖拽（桌面→框）：跳过所有视觉更新，保留 Windows 原生拖拽残影
+    let is_box_hover = BOX_DRAG_HOVER.load(Ordering::Relaxed);
+    if !is_box_hover {
+        return S_OK;
+    }
+
+    // 框间拖拽：显示插入指示器
     let target = &*(this as *const BoxDropTarget);
     let should_update = super::grid_window::get_data(target.target_hwnd)
         .map(|d| !d.drag_active)
@@ -217,6 +233,7 @@ unsafe extern "system" fn drop_target_drag_over(
 }
 
 unsafe extern "system" fn drop_target_drag_leave(this: *mut c_void) -> HRESULT {
+    BOX_DRAG_HOVER.store(false, Ordering::Relaxed);
     let target = &*(this as *const BoxDropTarget);
     PostMessageW(target.target_hwnd, WM_USER_DRAG_LEAVE, 0, 0);
     S_OK

@@ -363,6 +363,7 @@ fn ensure_public_vault_dir() -> Result<()> {
 
 const SHCNE_UPDATEITEM: u32 = 0x0000_2000;
 const SHCNE_CREATE: u32 = 0x0000_0002;
+const SHCNE_DELETE: u32 = 0x0000_4000;
 const SHCNF_PATHW: u32 = 0x0000_8000;
 const SHCNF_FLUSH: u32 = 0x0000_1000;
 
@@ -489,6 +490,24 @@ pub(crate) fn notify_shell_create(path: &str) {
     notify_shell_path(path);
 }
 
+/// 通知 Shell 文件已从指定路径删除（用于文件从桌面移入仓库时）
+pub(crate) fn notify_shell_delete(path: &str) {
+    use std::os::windows::ffi::OsStrExt;
+    let wide: Vec<u16> = Path::new(path)
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        super::ffi_imports::SHChangeNotify(
+            SHCNE_DELETE,
+            SHCNF_PATHW | SHCNF_FLUSH,
+            wide.as_ptr() as *const _,
+            std::ptr::null(),
+        );
+    }
+}
+
 pub(crate) fn notify_shell_path(path: &str) {
     use std::os::windows::ffi::OsStrExt;
     let wide: Vec<u16> = Path::new(path)
@@ -559,7 +578,7 @@ pub fn ingest_icon(logical_path: &str) -> Result<()> {
             if let Err(e) = std::fs::remove_file(src) {
                 log::warn!("清理桌面残留副本失败 {}: {}", logical_path, e);
             } else {
-                notify_shell_path(logical_path);
+                notify_shell_delete(logical_path);
                 log::info!("已清理桌面残留副本: {}", logical_path);
             }
         }
@@ -594,7 +613,7 @@ pub fn ingest_icon(logical_path: &str) -> Result<()> {
 
     std::fs::rename(src, &vault)
         .map_err(|e| anyhow::anyhow!("移动图标到仓库失败 {}: {}", logical_path, e))?;
-    notify_shell_path(logical_path);
+    notify_shell_delete(logical_path);
     log::info!("图标已收入仓库: {} → {}", logical_path, vault.display());
     Ok(())
 }
@@ -629,7 +648,7 @@ pub fn export_icon(logical_path: &str) -> Result<(bool, PathBuf)> {
             e
         )
     })?;
-    notify_shell_path(&export.to_string_lossy());
+    notify_shell_create(&export.to_string_lossy());
     log::info!(
         "图标已从仓库导出到桌面: {} → {}",
         logical_path,
@@ -1326,11 +1345,11 @@ mod tests {
     }
 
     #[test]
-    fn test_public_desktop_export_to_user() {
+    fn test_public_desktop_export_to_public() {
         let public = r"C:\Users\Public\Desktop\Chrome.lnk";
         assert!(is_public_desktop_path(public));
         let export = export_desktop_path(public);
-        assert!(is_user_desktop_path(&export.to_string_lossy()));
+        assert!(is_public_desktop_path(&export.to_string_lossy()));
         assert!(export.file_name().unwrap() == "Chrome.lnk");
     }
 

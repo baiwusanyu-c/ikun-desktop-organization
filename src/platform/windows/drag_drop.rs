@@ -6,6 +6,30 @@
 use super::d2d_render::render_layered_window;
 use super::ffi_imports::*;
 use super::ffi_types::*;
+
+use std::sync::Mutex;
+
+/// HWND 包装器（实现 Send）
+struct SendHwnd(*mut std::ffi::c_void);
+unsafe impl Send for SendHwnd {}
+
+/// 待异步收入仓库的文件路径队列 (path, target_hwnd)
+static PENDING_INGEST_QUEUE: Mutex<Vec<(String, SendHwnd)>> = Mutex::new(Vec::new());
+
+/// 处理所有待处理的异步文件收入操作（由 WM_USER_DEFERRED_INGEST 调用）
+pub(crate) fn process_deferred_ingests() {
+    let items: Vec<(String, SendHwnd)> = {
+        let mut queue = PENDING_INGEST_QUEUE.lock().unwrap();
+        std::mem::take(&mut *queue)
+    };
+    for (path, _hwnd) in items {
+        match super::icon_hider::ingest_icon(&path) {
+            Ok(()) => log::info!("[DEFERRED] '{}' 已异步收入仓库", path),
+            Err(e) => log::warn!("[DEFERRED] 异步收入仓库失败 '{}': {}", path, e),
+        }
+    }
+}
+
 use super::grid_window::get_data;
 
 /// Save grid layout configuration to disk after drag operations.
@@ -682,13 +706,11 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
             }
         }
 
-        // 外部→框：先收入仓库，成功后才添加到分类框
+        // 外部→框：同步收入仓库（handle_ole_drop 已在 DoDragDrop 返回后执行，不会阻塞拖拽）
         if !is_box_drag {
             match super::icon_hider::ingest_icon(&effective_path) {
                 Ok(()) => {
                     log::info!("OLE drop: '{}' 已收入仓库", display_name);
-                    
-                    // 成功移动后才添加到分类框
                     data.items.push(super::grid_window::GridFileItem {
                         file_path: effective_path.clone(),
                         display_name: display_name.clone(),
@@ -700,7 +722,6 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
                 }
                 Err(e) => {
                     log::warn!("OLE drop: 收入仓库失败 '{}': {}，不添加到分类框", display_name, e);
-                    // 释放图标资源
                     if !icon_handle.is_null() {
                         super::icon_extract::destroy_icon(icon_handle);
                     }
