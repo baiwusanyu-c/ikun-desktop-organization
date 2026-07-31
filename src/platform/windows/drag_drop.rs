@@ -1,4 +1,4 @@
-//! Drag-and-drop operations: same-box drop, box-to-box move, box-to-desktop.
+﻿//! Drag-and-drop operations: same-box drop, box-to-box move, box-to-desktop.
 //!
 //! Handles all drop scenarios when a drag gesture ends, including
 //! grid snap, swap, shift-insert, and OLE drop from external sources.
@@ -221,9 +221,9 @@ pub(crate) fn handle_box_to_desktop(
     item_index: usize,
     drop_x: i32,
     drop_y: i32,
-    target_is_overlay: bool,
+    _target_is_overlay: bool,
 ) {
-    log::info!("handle_box_to_desktop: 开始框→桌面/覆盖, item_index={}, drop=({}, {}), target_is_overlay={}", item_index, drop_x, drop_y, target_is_overlay);
+    log::info!("handle_box_to_desktop: 开始框→桌面/覆盖, item_index={}, drop=({}, {}), _target_is_overlay={}", item_index, drop_x, drop_y, _target_is_overlay);
     let data = match unsafe { get_data(hwnd) } {
         Some(d) => d,
         None => return,
@@ -237,7 +237,7 @@ pub(crate) fn handle_box_to_desktop(
     let display_name = removed.display_name.clone();
     let file_path = removed.file_path.clone();
 
-    if target_is_overlay {
+    if _target_is_overlay {
         log::info!(
             "框→覆盖窗口: 释放图标 '{}' (path={})",
             display_name,
@@ -270,38 +270,16 @@ pub(crate) fn handle_box_to_desktop(
         }
     }
 
-    // 始终尝试添加到覆盖窗口，使用 export_path 或原始 file_path 作为回退
-    // CLSID 虚拟对象（如回收站）的 export_path 不是真实文件，但 add_icon_to_overlay 能处理
-    let overlay_path = if export_path.exists() || file_path.starts_with("::{") {
-        export_path.to_string_lossy().to_string()
+    // 使用原生桌面：将图标定位到鼠标释放位置
+    let desktop_path = if export_path.exists() {
+        let path_str = export_path.to_string_lossy().to_string();
+        // 确保 Shell 已知晓文件出现在桌面（export_icon 内部已通知，这里补充一次）
+        super::icon_hider::notify_shell_create(&path_str);
+        path_str
     } else {
-        // 导出路径不存在，使用原始 file_path 作为回退
-        log::info!(
-            "框→覆盖窗口: 导出路径不存在，使用原始路径 '{}' 回退添加",
-            file_path
-        );
         file_path.clone()
     };
-    let shown_on_overlay = super::desktop_overlay::add_icon_to_overlay(
-        overlay_path.clone(),
-        display_name.clone(),
-        drop_x,
-        drop_y,
-    );
-    if shown_on_overlay {
-        log::info!("框→覆盖窗口: '{}' 已交给覆盖窗口渲染", display_name);
-    } else {
-        if target_is_overlay {
-            log::warn!(
-                "框→覆盖窗口: '{}' 未能刷新覆盖窗口，回退到桌面定位",
-                display_name
-            );
-        }
-        // 仅在非覆盖窗口目标时回退到桌面定位
-        if !target_is_overlay {
-            super::icon_manager::position_icon_at_screen(&overlay_path, drop_x, drop_y);
-        }
-    }
+    super::icon_manager::position_icon_at_screen(&desktop_path, drop_x, drop_y);
 
     // 从框中移除项
     let data = match unsafe { get_data(hwnd) } {
@@ -563,7 +541,7 @@ fn copy_file_to_user_desktop(source_path: &str) -> Option<String> {
 
     match std::fs::copy(source, &dest) {
         Ok(_) => {
-            super::icon_hider::notify_shell_path(&dest.to_string_lossy());
+            super::icon_hider::notify_shell_create(&dest.to_string_lossy());
             Some(dest.to_string_lossy().to_string())
         }
         Err(e) => {
@@ -579,7 +557,7 @@ fn copy_file_to_user_desktop(source_path: &str) -> Option<String> {
 }
 
 pub(crate) fn handle_ole_drop(hwnd: HWND) {
-    let drop = match super::drop_target::take_pending_drop() {
+        let drop = match super::drop_target::take_pending_drop() {
         Some(d) => d,
         None => {
             log::debug!("OLE drop: 无待处理数据");
@@ -589,11 +567,12 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
 
     let is_box_drag = drop.box_data.is_some();
     log::info!(
-        "OLE drop: {} 个文件, box_drag={}, drop=({}, {})",
+        "OLE drop: {} 个文件, box_drag={}, drop=({}, {}), paths={:?}",
         drop.file_paths.len(),
         is_box_drag,
         drop.drop_x,
-        drop.drop_y
+        drop.drop_y,
+        drop.file_paths
     );
 
     let data = match unsafe { get_data(hwnd) } {
@@ -609,29 +588,40 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
             continue;
         }
 
-        let is_desktop_file = !is_box_drag
-            && (super::icon_hider::is_user_desktop_path(file_path)
-                || super::icon_hider::is_public_desktop_path(file_path));
+        let is_clsid = file_path.starts_with("::{");
+        let is_user_desktop = super::icon_hider::is_user_desktop_path(file_path);
+        let is_public_desktop = super::icon_hider::is_public_desktop_path(file_path);
+        let is_desktop_file = !is_box_drag && (is_user_desktop || is_public_desktop || is_clsid);
+        log::info!(
+            "OLE drop: path='{}', is_clsid={}, is_user_desktop={}, is_public_desktop={}, is_box_drag={}, is_desktop_file={}",
+            file_path, is_clsid, is_user_desktop, is_public_desktop, is_box_drag, is_desktop_file
+        );
 
         // 对于非桌面、非框间拖拽的外部文件：先复制到用户桌面（模拟原生桌面拖拽行为）
-        let effective_path = if !is_box_drag && !is_desktop_file {
+        let effective_path = if is_clsid {
+            // 虚拟 Shell 对象（回收站、此电脑等）直接使用 CLSID 路径
+            log::info!("[OLE-DROP] 虚拟 Shell 对象: {}", file_path);
+            file_path.clone()
+        } else if !is_box_drag && !is_desktop_file {
             match copy_file_to_user_desktop(file_path) {
                 Some(desktop_path) => {
                     log::info!(
-                        "OLE drop: 非桌面文件已复制到桌面: {} -> {}",
+                        "[OLE-DROP] 非桌面文件已复制到桌面: {} -> {}",
                         file_path,
                         desktop_path
                     );
                     desktop_path
                 }
                 None => {
-                    log::warn!("OLE drop: 复制文件到桌面失败: {}", file_path);
+                    log::warn!("[OLE-DROP] 复制文件到桌面失败: {}", file_path);
                     file_path.clone()
                 }
             }
         } else {
             file_path.clone()
         };
+
+        log::info!("[OLE-DROP] effective_path='{}', display_name待提取", effective_path);
 
         // 提取图标（使用有效路径）
         let icon_info = super::icon_extract::extract_file_icon(&effective_path);
@@ -692,22 +682,40 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
             }
         }
 
-        data.items.push(super::grid_window::GridFileItem {
-            file_path: effective_path.clone(),
-            display_name: display_name.clone(),
-            icon_handle,
-            grid_col: final_col,
-            grid_row: final_row,
-        });
-        added += 1;
-
+        // 外部→框：先收入仓库，成功后才添加到分类框
         if !is_box_drag {
-            // 外部→框：收入仓库（桌面文件直接收入，非桌面文件的桌面副本收入）
-            if let Err(e) = super::icon_hider::ingest_icon(&effective_path) {
-                log::warn!("OLE drop: 收入仓库失败 '{}': {}", display_name, e);
-            } else {
-                log::info!("OLE drop: '{}' 已收入仓库", display_name);
+            match super::icon_hider::ingest_icon(&effective_path) {
+                Ok(()) => {
+                    log::info!("OLE drop: '{}' 已收入仓库", display_name);
+                    
+                    // 成功移动后才添加到分类框
+                    data.items.push(super::grid_window::GridFileItem {
+                        file_path: effective_path.clone(),
+                        display_name: display_name.clone(),
+                        icon_handle,
+                        grid_col: final_col,
+                        grid_row: final_row,
+                    });
+                    added += 1;
+                }
+                Err(e) => {
+                    log::warn!("OLE drop: 收入仓库失败 '{}': {}，不添加到分类框", display_name, e);
+                    // 释放图标资源
+                    if !icon_handle.is_null() {
+                        super::icon_extract::destroy_icon(icon_handle);
+                    }
+                }
             }
+        } else {
+            // 框间拖拽：直接添加
+            data.items.push(super::grid_window::GridFileItem {
+                file_path: effective_path.clone(),
+                display_name: display_name.clone(),
+                icon_handle,
+                grid_col: final_col,
+                grid_row: final_row,
+            });
+            added += 1;
         }
     }
 

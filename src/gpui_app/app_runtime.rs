@@ -1,4 +1,4 @@
-//! GPUI 应用运行时 — 与 UI 框架无关的业务逻辑层
+﻿//! GPUI 应用运行时 — 与 UI 框架无关的业务逻辑层
 
 #![allow(dead_code)] // GPUI 应用运行时，部分方法/类型预留
 //!
@@ -37,15 +37,14 @@ pub fn trigger_edit_box_callback(config_id: uuid::Uuid, current_name: &str) {
     );
 }
 use crate::platform::{
-    cleanup_desktop_registry, cleanup_system_tray, collect_grid_layout, create_desktop_overlay,
-    create_grid_window, destroy_all_grid_windows, destroy_desktop_overlay, extract_file_icon,
+    cleanup_desktop_registry, cleanup_system_tray, collect_grid_layout, create_grid_window, destroy_all_grid_windows, extract_file_icon,
     get_grid_count, get_primary_monitor_dpi, get_screen_resolution, hide_control_panel_window,
-    hide_native_icons, icon_exists_for_box, install_overlay_mouse_hook, native_icons_hidden,
-    resolve_icon_read_path, restore_all_hidden_icons, restore_native_icons,
+    icon_exists_for_box,
+    resolve_icon_read_path, restore_all_hidden_icons,
     set_tray_auto_start_state, setup_desktop_registry, setup_global_hotkey, setup_system_tray,
-    show_control_panel_window, show_desktop_context_menu, take_hotkey_toggle,
-    take_pending_create_box, take_pending_overlay_right_click, take_pending_tray_action,
-    uninstall_overlay_mouse_hook, update_grid_window_title, DesktopIcon, DesktopManagerTrait,
+    show_control_panel_window, take_hotkey_toggle,
+    take_pending_create_box, take_pending_tray_action,
+    update_grid_window_title, DesktopIcon, DesktopManagerTrait,
     GridCreateParams, GridFileItem, SystemTrayAction,
 };
 use std::sync::{Arc, Mutex};
@@ -155,9 +154,7 @@ pub fn validate_box_name(name: &str) -> BoxNameValidation {
 }
 
 /// 判断是否需要重新隐藏原生桌面图标
-pub fn should_retry_native_icon_hide(state_icons_hidden: bool, native_hidden: bool) -> bool {
-    state_icons_hidden && !native_hidden
-}
+
 
 // =====================================================================
 // AppRuntime
@@ -243,10 +240,7 @@ impl AppRuntime {
 
         cleanup_desktop_registry();
         setup_desktop_registry();
-
-        self.ensure_desktop_overlay_running();
-
-        // 注册全局热键
+// 注册全局热键
         let hotkey_str = self.ctx.config.hotkeys.toggle_panel.clone();
         if let Err(e) = setup_global_hotkey(&hotkey_str) {
             log::warn!("注册全局热键失败: {} (热键: {})", e, hotkey_str);
@@ -275,12 +269,7 @@ impl AppRuntime {
             changed = true;
         }
 
-        // 2. 检查是否需要重新隐藏原生图标
-        if should_retry_native_icon_hide(self.ctx.state.icons_hidden, native_icons_hidden()) {
-            log::warn!("检测到 Explorer 桌面图标窗口恢复，重新隐藏");
-            self.ensure_desktop_overlay_running();
-            changed = true;
-        }
+        
 
         // 3. 信号文件轮询
         if signal_file_path().exists() {
@@ -315,14 +304,7 @@ impl AppRuntime {
             changed = true;
         }
 
-        // 5. Shell 右键菜单待创建分类框
-        // 覆盖区域右键菜单（通过鼠标钩子拦截）
-        if take_pending_overlay_right_click() {
-            // 使用桌面窗口作为父窗口显示桌面右键菜单
-            use crate::platform::windows::ffi_imports::GetDesktopWindow;
-            let desktop_hwnd = unsafe { GetDesktopWindow() };
-            show_desktop_context_menu(desktop_hwnd, true);
-        }
+        
 
         if take_pending_create_box() {
             self.open_create_box_dialog();
@@ -486,9 +468,7 @@ impl AppRuntime {
     // =================================================================
 
     pub fn perform_auto_classify(&mut self) {
-        self.ensure_desktop_overlay_running();
-
-        let icons = self.ctx.desktop_manager.get_desktop_icons();
+let icons = self.ctx.desktop_manager.get_desktop_icons();
         if icons.is_empty() {
             self.ctx.set_status("未找到桌面图标");
             return;
@@ -583,12 +563,8 @@ impl AppRuntime {
         let _ = self.ctx.save_config();
 
         destroy_all_grid_windows();
-        uninstall_overlay_mouse_hook();
-        destroy_desktop_overlay();
-
-        if self.ctx.state.icons_hidden {
-            let _ = restore_native_icons();
-            self.ctx.state.icons_hidden = false;
+if self.ctx.state.icons_hidden {
+self.ctx.state.icons_hidden = false;
         }
 
         self.ctx.set_status("已清除，桌面图标已恢复");
@@ -610,9 +586,7 @@ impl AppRuntime {
 
     fn create_empty_box(&mut self, name: String) {
         log::info!("创建分类框: '{}'", name);
-        self.ensure_desktop_overlay_running();
-
-        let (screen_w_phys, screen_h_phys) = get_screen_resolution();
+let (screen_w_phys, screen_h_phys) = get_screen_resolution();
         let box_w = 400;
         let box_h = 400;
         let existing = get_grid_count();
@@ -688,13 +662,7 @@ impl AppRuntime {
         // 必须在 restore_all_hidden_icons 之后，确保仓库图标已还原到桌面
         self.snapshot_desktop_positions();
 
-        self.ensure_native_icons_hidden();
-        if let Err(e) = create_desktop_overlay() {
-            log::warn!("创建桌面覆盖窗口失败: {}", e);
-        }
-
-        // 在主线程安装鼠标钩子（WH_MOUSE_LL 需要在有消息循环的线程上安装）
-        install_overlay_mouse_hook();
+        // 不再创建覆盖区域窗口 — 使用原生桌面渲染未分类图标
 
         let boxes = self.ctx.config.layout.boxes.clone();
         if boxes.is_empty() {
@@ -783,35 +751,12 @@ impl AppRuntime {
     }
 
     fn ensure_native_icons_hidden(&mut self) -> bool {
-        if self.ctx.state.icons_hidden && native_icons_hidden() {
-            return true;
-        }
-        if self.ctx.state.icons_hidden {
-            log::warn!("原生桌面图标窗口已恢复，尝试重新隐藏");
-        }
-        match hide_native_icons() {
-            Ok(()) => {
-                self.ctx.state.icons_hidden = true;
-                true
-            }
-            Err(e) => {
-                self.ctx.state.icons_hidden = false;
-                self.ctx.set_status(format!("隐藏图标失败: {}", e));
-                false
-            }
-        }
+        // 不再隐藏原生桌面图标 — 使用原生桌面渲染未分类图标
+        true
     }
 
     fn ensure_desktop_overlay_running(&mut self) {
-        if !self.ensure_native_icons_hidden() {
-            return;
-        }
-        if let Err(e) = create_desktop_overlay() {
-            log::warn!("创建桌面覆盖窗口失败: {}", e);
-        }
-
-        // 在主线程安装鼠标钩子
-        install_overlay_mouse_hook();
+        // 不再创建覆盖区域窗口 — 使用原生桌面渲染未分类图标
     }
 
     fn merge_latest_overlay_config(&mut self) {
@@ -953,17 +898,10 @@ impl AppRuntime {
         }
 
         destroy_all_grid_windows();
-        uninstall_overlay_mouse_hook();
-        destroy_desktop_overlay();
-        cleanup_system_tray();
+cleanup_system_tray();
         cleanup_desktop_registry();
 
-        if self.ctx.state.icons_hidden {
-            if let Err(e) = restore_native_icons() {
-                log::warn!("退出时恢复原生桌面图标失败: {}", e);
-            }
-            self.ctx.state.icons_hidden = false;
-        }
+        
         restore_all_hidden_icons();
 
         // 等待 Windows 处理图标还原
@@ -982,7 +920,7 @@ impl AppRuntime {
     }
 
     pub fn icons_hidden(&self) -> bool {
-        self.ctx.state.icons_hidden
+        false
     }
 
     pub fn box_count(&self) -> usize {
@@ -1103,15 +1041,7 @@ mod tests {
         assert!(is_box_name_valid("1234567890123456"));
         assert!(!is_box_name_valid("12345678901234567"));
     }
-
-    #[test]
-    fn test_should_retry_native_icon_hide() {
-        assert!(should_retry_native_icon_hide(true, false));
-        assert!(!should_retry_native_icon_hide(true, true));
-        assert!(!should_retry_native_icon_hide(false, false));
-    }
-
-    #[test]
+#[test]
     fn test_signal_file_paths() {
         assert!(signal_file_path()
             .to_string_lossy()

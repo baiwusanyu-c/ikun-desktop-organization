@@ -263,6 +263,104 @@ const PREFIX_USER: &str = "user__";
 #[allow(dead_code)]
 const PREFIX_PUBLIC: &str = "public__";
 
+/// 公共桌面仓库根目录
+fn public_app_data_root() -> PathBuf {
+    get_public_desktop().join(".ikun_organizer")
+}
+
+/// 公共桌面仓库路径
+fn get_public_vault_dir() -> PathBuf {
+    public_app_data_root().join(MANAGED_DIR_NAME)
+}
+
+/// 确保公共桌面仓库目录存在
+fn ensure_public_vault_dir() -> Result<()> {
+    let dir = get_public_vault_dir();
+    if dir.exists() {
+        return Ok(());
+    }
+    // 先尝试直接创建（可能不需要管理员权限）
+    if std::fs::create_dir_all(&dir).is_ok() {
+        log::info!("创建公共仓库目录: {}", dir.display());
+        return Ok(());
+    }
+    // 权限不足，使用 ShellExecuteExW + runas 提升权限（无终端闪烁）
+    log::info!("[ELEVATE] 创建公共仓库目录需要管理员权限: {}", dir.display());
+    
+    use std::ffi::c_void;
+    
+    #[repr(C)]
+    struct SHELLEXECUTEINFOW {
+        cb_size: u32,
+        f_mask: u32,
+        hwnd: *mut c_void,
+        lp_verb: *const u16,
+        lp_file: *const u16,
+        lp_parameters: *const u16,
+        lp_directory: *const u16,
+        n_show: i32,
+        h_inst_app: *mut c_void,
+        lp_id_list: *mut c_void,
+        lp_class: *const u16,
+        hkey_class: *mut c_void,
+        dw_hot_key: u32,
+        h_icon_or_monitor: *mut c_void,
+        h_process: *mut c_void,
+    }
+    
+    extern "system" {
+        fn ShellExecuteExW(p_exec_info: *mut SHELLEXECUTEINFOW) -> i32;
+        fn WaitForSingleObject(h_handle: *mut c_void, dw_milliseconds: u32) -> u32;
+        fn CloseHandle(h_object: *mut c_void) -> i32;
+    }
+    
+    const SEE_MASK_NOCLOSEPROCESS: u32 = 0x00000040;
+    const SEE_MASK_NO_CONSOLE: u32 = 0x00008000;
+    const SW_HIDE: i32 = 0;
+    const INFINITE: u32 = 0xFFFFFFFF;
+    
+    let verb: Vec<u16> = "runas\0".encode_utf16().collect();
+    let file: Vec<u16> = "cmd.exe\0".encode_utf16().collect();
+    let params_str = format!("/c mkdir \"{}\"", dir.to_string_lossy());
+    let params: Vec<u16> = params_str.encode_utf16().chain(std::iter::once(0)).collect();
+    
+    let mut sei = SHELLEXECUTEINFOW {
+        cb_size: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        f_mask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NO_CONSOLE,
+        hwnd: std::ptr::null_mut(),
+        lp_verb: verb.as_ptr(),
+        lp_file: file.as_ptr(),
+        lp_parameters: params.as_ptr(),
+        lp_directory: std::ptr::null(),
+        n_show: SW_HIDE,
+        h_inst_app: std::ptr::null_mut(),
+        lp_id_list: std::ptr::null_mut(),
+        lp_class: std::ptr::null(),
+        hkey_class: std::ptr::null_mut(),
+        dw_hot_key: 0,
+        h_icon_or_monitor: std::ptr::null_mut(),
+        h_process: std::ptr::null_mut(),
+    };
+    
+    let ok = unsafe { ShellExecuteExW(&mut sei) };
+    if ok == 0 || sei.h_process.is_null() {
+        return Err(anyhow::anyhow!("用户取消了管理员授权"));
+    }
+    
+    // 等待 cmd 进程结束
+    unsafe {
+        WaitForSingleObject(sei.h_process, INFINITE);
+        CloseHandle(sei.h_process);
+    }
+    
+    if dir.exists() {
+        log::info!("[ELEVATE] 公共仓库目录已创建: {}", dir.display());
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("目录创建失败"))
+    }
+}
+
 const SHCNE_UPDATEITEM: u32 = 0x0000_2000;
 const SHCNE_CREATE: u32 = 0x0000_0002;
 const SHCNF_PATHW: u32 = 0x0000_8000;
@@ -369,6 +467,9 @@ pub fn export_desktop_path(logical_path: &str) -> PathBuf {
         .file_name()
         .map(|n| n.to_owned())
         .unwrap_or_else(|| std::ffi::OsStr::new("shortcut.lnk").to_owned());
+    if is_public_desktop_path(logical_path) {
+        return get_public_desktop().join(file_name);
+    }
     get_user_desktop()
         .map(|d| d.join(file_name))
         .unwrap_or_else(|| PathBuf::from(logical_path))
@@ -382,6 +483,10 @@ fn logical_path_from_vault_name(vault_name: &str) -> Option<PathBuf> {
     } else {
         get_user_desktop().map(|d| d.join(vault_name))
     }
+}
+
+pub(crate) fn notify_shell_create(path: &str) {
+    notify_shell_path(path);
 }
 
 pub(crate) fn notify_shell_path(path: &str) {
@@ -466,15 +571,25 @@ pub fn ingest_icon(logical_path: &str) -> Result<()> {
         return Ok(());
     }
 
+    // 公共桌面图标：使用 IFileOperation COM 接口移动
+    // Windows 会自动弹出原生权限对话框（"你需要权限来执行此操作" → 继续 → UAC 授权）
     if is_public_desktop_path(logical_path) {
-        std::fs::copy(src, &vault)
-            .map_err(|e| anyhow::anyhow!("复制公共桌面图标到仓库失败 {}: {}", logical_path, e))?;
-        log::info!(
-            "公共桌面图标已复制到仓库: {} → {}",
-            logical_path,
-            vault.display()
-        );
-        return Ok(());
+        log::info!("[INGEST] 公共桌面图标，使用 IFileOperation: {}", logical_path);
+        ensure_public_vault_dir()?;
+        let file_name = Path::new(logical_path)
+            .file_name()
+            .ok_or_else(|| anyhow::anyhow!("无法获取文件名: {}", logical_path))?;
+        let public_vault = get_public_vault_dir().join(file_name);
+        match move_with_ifile_operation(logical_path, &public_vault) {
+            Ok(()) => {
+                log::info!("[INGEST] 公共桌面图标已移动: {} → {}", logical_path, public_vault.display());
+                return Ok(());
+            }
+            Err(e) => {
+                log::warn!("[INGEST] IFileOperation 失败: {} - {}", logical_path, e);
+                return Err(e);
+            }
+        }
     }
 
     std::fs::rename(src, &vault)
@@ -1063,6 +1178,138 @@ pub fn list_vault_icons() -> Vec<crate::platform::types::DesktopIcon> {
 
     icons
 }
+
+/// 使用 IFileOperation COM 接口移动文件
+///
+/// Windows 原生文件操作接口，权限不足时自动弹出标准对话框：
+/// "你需要权限来执行此操作" → 用户点"继续" → UAC 授权 → 文件移动
+fn move_with_ifile_operation(src_path: &str, dst_path: &Path) -> anyhow::Result<()> {
+    use std::ffi::c_void;
+
+    extern "system" {
+        fn CoCreateInstance(
+            clsid: *const u8, p_unk: *mut c_void, cls_ctx: u32,
+            iid: *const u8, ppv: *mut *mut c_void,
+        ) -> i32;
+        fn SHCreateItemFromParsingName(
+            psz_path: *const u16, pbc: *mut c_void,
+            riid: *const u8, ppv: *mut *mut c_void,
+        ) -> i32;
+    }
+
+    // IFileOperation vtable - 按 Windows SDK shobjidl_core.h 正确顺序
+    // 0: QueryInterface, 1: AddRef, 2: Release (IUnknown)
+    // 3: Advise, 4: Unadvise, 5: SetOperationFlags
+    // 6: SetProgressMessage, 7: SetProgressDialogTitle
+    // 8: SetProgressDialogMessage, 9: SetProgressDialogAnimation
+    // 10: SetOwnerWindow, 11: ApplyPropertiesToItem
+    // 12: ApplyPropertiesToItems, 13: SetProperties
+    // 14: MoveItem, 15: MoveItems
+    // 16: CopyItem, 17: CopyItems
+    // 18: DeleteItem, 19: DeleteItems
+    // 20: RenameItem, 21: RenameItems
+    // 22: NewItem, 23: NewItems
+    // 24: PerformOperations, 25: GetAnyOperationsAborted
+    const IDX_MOVE_ITEM: usize = 14;
+    const IDX_PERFORM_OPS: usize = 24;
+    const IDX_GET_ABORTED: usize = 25;
+
+    type MoveItemFn = unsafe extern "system" fn(*mut c_void, *mut c_void, *mut c_void, *const u16, u32) -> i32;
+    type PerformOpsFn = unsafe extern "system" fn(*mut c_void) -> i32;
+    type GetAbortedFn = unsafe extern "system" fn(*mut c_void, *mut i32) -> i32;
+    type ReleaseFn = unsafe extern "system" fn(*mut c_void) -> u32;
+
+    // CLSID_FileOperation = {3ad05575-8857-4850-98f2-148fa4e14053}
+    const CLSID: [u8; 16] = [
+        0x75, 0x55, 0xd0, 0x3a, 0x57, 0x88, 0x50, 0x48,
+        0x98, 0xf2, 0x14, 0x8f, 0xa4, 0xe1, 0x40, 0x53,
+    ];
+    // IID_IFileOperation = {947aab5f-0a5c-4c13-b4d6-4bf7836fc9f8}
+    const IID_IOP: [u8; 16] = [
+        0x5f, 0xab, 0x7a, 0x94, 0x5c, 0x0a, 0x13, 0x4c,
+        0xb4, 0xd6, 0x4b, 0xf7, 0x83, 0x6f, 0xc9, 0xf8,
+    ];
+    // IID_IShellItem = {43826d1e-e718-42ee-bc55-a1e261c37bfe}
+    const IID_SI: [u8; 16] = [
+        0x1e, 0x6d, 0x82, 0x43, 0x18, 0xe7, 0xee, 0x42,
+        0xbc, 0x55, 0xa1, 0xe2, 0x61, 0xc3, 0x7b, 0xfe,
+    ];
+
+    const CLSCTX: u32 = 1;
+    const S_OK: i32 = 0;
+
+    unsafe {
+        let mut file_op: *mut c_void = std::ptr::null_mut();
+        let hr = CoCreateInstance(CLSID.as_ptr(), std::ptr::null_mut(), CLSCTX, IID_IOP.as_ptr(), &mut file_op);
+        if hr != S_OK || file_op.is_null() {
+            return Err(anyhow::anyhow!("CoCreateInstance(IFileOperation) failed: {:#x}", hr));
+        }
+
+        let vtbl = *(file_op as *const *const *const c_void);
+        let release_fn: ReleaseFn = std::mem::transmute(*vtbl.add(2));
+        let move_item_fn: MoveItemFn = std::mem::transmute(*vtbl.add(IDX_MOVE_ITEM));
+        let perform_fn: PerformOpsFn = std::mem::transmute(*vtbl.add(IDX_PERFORM_OPS));
+        let get_aborted_fn: GetAbortedFn = std::mem::transmute(*vtbl.add(IDX_GET_ABORTED));
+
+        // 创建源 IShellItem
+        let src_w: Vec<u16> = src_path.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut src_item: *mut c_void = std::ptr::null_mut();
+        let hr = SHCreateItemFromParsingName(src_w.as_ptr(), std::ptr::null_mut(), IID_SI.as_ptr(), &mut src_item);
+        if hr != S_OK {
+            release_fn(file_op);
+            return Err(anyhow::anyhow!("创建源 IShellItem 失败: {:#x}", hr));
+        }
+
+        // 创建目标目录 IShellItem（ensure_public_vault_dir 已确保目录存在）
+        let dst_dir = dst_path.parent().unwrap_or(Path::new("."));
+        let dst_w: Vec<u16> = dst_dir.to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect();
+        let mut dst_item: *mut c_void = std::ptr::null_mut();
+        let hr = SHCreateItemFromParsingName(dst_w.as_ptr(), std::ptr::null_mut(), IID_SI.as_ptr(), &mut dst_item);
+        if hr != S_OK {
+            release_fn(src_item);
+            release_fn(file_op);
+            return Err(anyhow::anyhow!("创建目标目录 IShellItem 失败: {:#x} ({})", hr, dst_dir.display()));
+        }
+
+        // 目标文件名
+        let new_name: Vec<u16> = dst_path.file_name()
+            .map(|n| n.to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect())
+            .unwrap_or_default();
+
+        // MoveItem: 将移动操作加入队列
+        let hr = move_item_fn(file_op, src_item, dst_item,
+            if new_name.is_empty() { std::ptr::null() } else { new_name.as_ptr() }, 0);
+        if hr != S_OK {
+            release_fn(dst_item);
+            release_fn(src_item);
+            release_fn(file_op);
+            return Err(anyhow::anyhow!("MoveItem 入队失败: {:#x}", hr));
+        }
+
+        // PerformOperations: 执行所有排队的操作
+        // Windows 会在这里弹出原生权限对话框（无终端窗口）
+        log::info!("[IFileOp] PerformOperations 开始");
+        let hr = perform_fn(file_op);
+        log::info!("[IFileOp] PerformOperations 返回: {:#x}", hr);
+
+        let mut aborted: i32 = 0;
+        get_aborted_fn(file_op, &mut aborted);
+
+        release_fn(dst_item);
+        release_fn(src_item);
+        release_fn(file_op);
+
+        if hr != S_OK {
+            return Err(anyhow::anyhow!("PerformOperations 失败: {:#x}", hr));
+        }
+        if aborted != 0 {
+            return Err(anyhow::anyhow!("用户取消了操作"));
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

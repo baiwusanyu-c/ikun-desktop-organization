@@ -1,4 +1,4 @@
-//! Custom drag tracking coordinator.
+﻿//! Custom drag tracking coordinator.
 //!
 //! Manages the drag lifecycle: threshold detection, drag tracking via timer,
 //! and dispatching drop operations. Delegates to sub-modules:
@@ -407,14 +407,7 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
         }],
     };
 
-    // 隐藏覆盖窗口和分类框，让 OLE hit-testing 能到达 Explorer
-    // （覆盖窗口是全屏分层窗口，会拦截 hit-test；分类框也需隐藏以确保 OLE 正确检测）
-    let overlay_hwnd = super::desktop_overlay::get_overlay_window_hwnd();
-    if let Some(ohwnd) = overlay_hwnd {
-        unsafe {
-            ShowWindow(ohwnd, SW_HIDE);
-        }
-    }
+    // 隐藏分类框，让 OLE hit-testing 能到达 Explorer
     unsafe {
         ShowWindow(hwnd, SW_HIDE);
     }
@@ -425,11 +418,6 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
     // 恢复窗口可见性
     unsafe {
         ShowWindow(hwnd, SW_SHOWNA);
-    }
-    if let Some(ohwnd) = overlay_hwnd {
-        unsafe {
-            ShowWindow(ohwnd, SW_SHOWNA);
-        }
     }
 
     if drop_succeeded {

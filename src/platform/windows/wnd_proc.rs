@@ -16,6 +16,11 @@
 
 use super::d2d_render::render_layered_window;
 use super::ffi_imports::*;
+
+extern "system" {
+    fn GetKeyState(nVirtKey: i32) -> i16;
+}
+const VK_LBUTTON: i32 = 0x01;
 use super::ffi_types::*;
 use super::grid_layout::{
     grid_hit_test, lock_btn_rect, more_btn_rect, recalculate_layout, reflow_items,
@@ -1187,10 +1192,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             // 需要重新收集并显示在覆盖窗口上（纵向优先布局）
             // 还原仓库中不再被任何剩余分类框管理的图标到桌面
             super::icon_hider::restore_unmanaged_vault_icons();
-
-            super::desktop_overlay::request_desktop_overlay_refresh();
-
-            // 修复同模板分层窗口 Z-order 异常（DestroyWindow 副作用）
+// 修复同模板分层窗口 Z-order 异常（DestroyWindow 副作用）
             super::grid_window::rerender_all_grid_windows();
 
             0

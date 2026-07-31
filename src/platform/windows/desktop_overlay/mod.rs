@@ -23,3 +23,4 @@ pub use overlay_window::{create_desktop_overlay, destroy_desktop_overlay};
 pub use overlay_mouse_hook::{install_overlay_mouse_hook, uninstall_overlay_mouse_hook};
 
 pub use overlay_mouse_hook::take_pending_overlay_right_click;
+pub use overlay_mouse_hook::{get_marquee_cursor_pos, clear_marquee_started};

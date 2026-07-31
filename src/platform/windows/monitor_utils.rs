@@ -273,3 +273,45 @@ mod tests {
         assert!(h > 0, "虚拟桌面高度应为正数");
     }
 }
+
+/// 获取指定屏幕坐标处的 DPI 值（用于多显示器不同 DPI 场景）
+pub fn dpi_at_screen_point(screen_x: i32, screen_y: i32) -> u32 {
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    struct POINT {
+        x: i32,
+        y: i32,
+    }
+
+    type HMONITOR = *mut c_void;
+
+    const MONITOR_DEFAULTTONEAREST: u32 = 2;
+    const MDT_EFFECTIVE_DPI: u32 = 0;
+
+    extern "system" {
+        fn MonitorFromPoint(pt: POINT, dwFlags: u32) -> HMONITOR;
+        fn GetDpiForMonitor(
+            hmonitor: HMONITOR,
+            dpiType: u32,
+            dpiX: *mut u32,
+            dpiY: *mut u32,
+        ) -> i32;
+    }
+
+    let pt = POINT {
+        x: screen_x,
+        y: screen_y,
+    };
+    let monitor = unsafe { MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST) };
+    if monitor.is_null() {
+        return 96;
+    }
+    let mut dpi_x = 96u32;
+    let mut dpi_y = 96u32;
+    if unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) } == 0 {
+        dpi_x
+    } else {
+        96
+    }
+}

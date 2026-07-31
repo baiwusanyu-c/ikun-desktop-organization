@@ -19,7 +19,7 @@ pub mod app_icon;
 mod control_panel_window;
 mod d2d_render;
 pub mod desktop_manager;
-pub mod desktop_overlay;
+pub mod desktop_utils;
 pub mod drag_drop;
 pub mod drag_handler;
 mod drag_image;
@@ -47,10 +47,7 @@ pub mod zorder;
 // Re-export key items
 pub use control_panel_window::{hide_control_panel_window, show_control_panel_window};
 pub use desktop_manager::{clsid_display_name, DesktopManager};
-pub use desktop_overlay::{
-    create_desktop_overlay, destroy_desktop_overlay, install_overlay_mouse_hook,
-    take_pending_overlay_right_click, uninstall_overlay_mouse_hook,
-};
+pub use desktop_utils::{is_desktop_auto_arrange_enabled, position_icon_at_screen as position_icon_on_desktop};
 #[allow(unused_imports)] // 公共 API 预留
 pub use drop_target::{
     register_box_drop_target, take_pending_drop, take_pending_source_removal,
@@ -68,8 +65,8 @@ pub use icon_extract::extract_file_icon;
 #[allow(unused_imports)] // 公共 API 预留
 #[allow(unused_imports)] // 公共 API 预留
 pub use icon_hider::{
-    hide_native_icons, icon_exists_for_box, list_vault_icons, native_icons_hidden,
-    resolve_icon_read_path, restore_all_hidden_icons, restore_native_icons,
+    icon_exists_for_box, list_vault_icons,
+    resolve_icon_read_path, restore_all_hidden_icons,
 };
 #[allow(unused_imports)] // 公共 API 预留
 pub use icon_manager::DesktopIconManager;

@@ -189,6 +189,7 @@ pub const TIMER_ID_ALIGNMENT: usize = 0x4F56_0003;
 pub const TIMER_ID_OVERLAY_HOVER: usize = 0x4F56_0004;
 /// 分类框液态玻璃刷新定时器（约 30 FPS）
 pub const TIMER_ID_LIQUID_GLASS: usize = 0x4F56_0005;
+pub const TIMER_ID_OVERLAY_MARQUEE: usize = 0x4F56_0006;
 
 // ===== Hit Test Constants =====
 pub const HTCLIENT: i32 = 1;
@@ -644,6 +645,8 @@ pub const WM_USER_DRAG_OVER_UPDATE: u32 = WM_APP + 16;
 pub const WM_USER_CUT_FILE_MOVED: u32 = WM_APP + 17;
 /// 通知覆盖窗口：外部文件拖拽放置完成（由 overlay IDropTarget PostMessage 触发）
 pub const WM_USER_OVERLAY_DROP: u32 = WM_APP + 18;
+pub const WM_USER_OVERLAY_LBUTTONDOWN: u32 = WM_APP + 19; // 鼠标钩子转发的覆盖区域左键按下
+pub const WM_USER_OVERLAY_LBUTTONUP: u32 = WM_APP + 20; // 鼠标钩子转发的覆盖区域左键释放
 
 /// 拖拽项信息（用于框间拖拽数据传递）
 #[derive(Debug, Clone)]

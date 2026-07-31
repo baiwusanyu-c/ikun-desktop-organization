@@ -13,11 +13,12 @@
 //! 6. 主循环通过 `take_pending_overlay_right_click()` 消费事件
 
 use super::super::ffi_imports::{
-    CallNextHookEx, DispatchMessageW, GetCurrentThreadId, GetMessageW, PostThreadMessageW,
-    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WindowFromPoint,
+    CallNextHookEx, DispatchMessageW, GetCurrentThreadId, GetMessageW, GetWindowRect, PostMessageW,
+    PostThreadMessageW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WindowFromPoint,
 };
 use super::super::ffi_types::{
-    HC_ACTION, HHOOK, MSG, MSLLHOOKSTRUCT, POINT, WH_MOUSE_LL, WM_QUIT, WM_RBUTTONUP,
+    HC_ACTION, HHOOK, MSG, MSLLHOOKSTRUCT, POINT, WH_MOUSE_LL, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_QUIT, WM_RBUTTONUP, WM_USER_OVERLAY_LBUTTONDOWN, WM_USER_OVERLAY_LBUTTONUP,
 };
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
@@ -27,6 +28,26 @@ static MOUSE_HOOK: AtomicIsize = AtomicIsize::new(0);
 static PENDING_OVERLAY_RIGHT_CLICK: AtomicBool = AtomicBool::new(false);
 static HOOK_THREAD_RUNNING: AtomicBool = AtomicBool::new(false);
 static HOOK_THREAD_ID: AtomicU32 = AtomicU32::new(0);
+
+// Atomic cursor position for marquee tracking (read by overlay timer)
+static MARQUEE_CURSOR_X: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+static MARQUEE_CURSOR_Y: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+static MARQUEE_STARTED: AtomicBool = AtomicBool::new(false);
+
+/// Get the current marquee cursor position (called by overlay timer)
+pub fn get_marquee_cursor_pos() -> Option<(i32, i32)> {
+    if !MARQUEE_STARTED.load(Ordering::SeqCst) {
+        return None;
+    }
+    let x = MARQUEE_CURSOR_X.load(Ordering::SeqCst);
+    let y = MARQUEE_CURSOR_Y.load(Ordering::SeqCst);
+    Some((x, y))
+}
+
+/// Clear marquee started flag (called when marquee ends)
+pub fn clear_marquee_started() {
+    MARQUEE_STARTED.store(false, Ordering::SeqCst);
+}
 
 /// 安装覆盖区域鼠标钩子
 ///
@@ -109,68 +130,104 @@ pub fn take_pending_overlay_right_click() -> bool {
 ///
 /// 拦截全局鼠标事件，检查是否在覆盖区域右键点击。
 unsafe extern "system" fn mouse_hook_proc(n_code: i32, w_param: usize, l_param: isize) -> isize {
-    // 快速检查：只处理 WM_RBUTTONUP
-    if n_code == HC_ACTION && w_param == WM_RBUTTONUP as usize {
+    if n_code == HC_ACTION {
+        let msg_id = w_param as u32;
         let ms = &*(l_param as *const MSLLHOOKSTRUCT);
         let pt = ms.pt;
 
-        // 检查点击是否在覆盖窗口区域内
-        if is_click_on_overlay(pt) {
-            log::info!("[MOUSE-HOOK] 检测到覆盖区域右键点击: ({}, {})", pt.x, pt.y);
-            // 设置标志，主循环会处理
-            PENDING_OVERLAY_RIGHT_CLICK.store(true, Ordering::SeqCst);
-            // 阻止消息传递到桌面，避免桌面显示原生右键菜单
-            return 1;
+        if msg_id == WM_RBUTTONUP {
+            // Right-click: intercept on overlay for custom menu
+            if is_click_on_overlay(pt) {
+                PENDING_OVERLAY_RIGHT_CLICK.store(true, Ordering::SeqCst);
+                return 1;
+            }
+        } else if msg_id == WM_LBUTTONDOWN {
+            // Left-button down: check if on overlay, start marquee if so
+            if is_click_on_overlay(pt) {
+                MARQUEE_STARTED.store(true, Ordering::SeqCst);
+                MARQUEE_CURSOR_X.store(pt.x, Ordering::SeqCst);
+                MARQUEE_CURSOR_Y.store(pt.y, Ordering::SeqCst);
+                if let Some(hwnd) = super::get_overlay_window_hwnd() {
+                    let mut rect = std::mem::zeroed();
+                    if GetWindowRect(hwnd, &mut rect) != 0 {
+                        let lp = (((pt.y - rect.top) as isize) << 16) | ((pt.x - rect.left) as isize & 0xFFFF);
+                        PostMessageW(hwnd, WM_USER_OVERLAY_LBUTTONDOWN, 0, lp as isize);
+                    }
+                }
+            }
+        } else if msg_id == WM_LBUTTONUP {
+            // Left-button up: end marquee
+            if MARQUEE_STARTED.load(Ordering::SeqCst) {
+                MARQUEE_STARTED.store(false, Ordering::SeqCst);
+                if let Some(hwnd) = super::get_overlay_window_hwnd() {
+                    PostMessageW(hwnd, WM_USER_OVERLAY_LBUTTONUP, 0, 0);
+                }
+            }
+        } else if msg_id == WM_MOUSEMOVE {
+            // Mouse move: update cursor position only when marquee is active
+            if MARQUEE_STARTED.load(Ordering::SeqCst) {
+                MARQUEE_CURSOR_X.store(pt.x, Ordering::SeqCst);
+                MARQUEE_CURSOR_Y.store(pt.y, Ordering::SeqCst);
+            }
         }
     }
-
-    // 传递消息到下一个钩子
-    CallNextHookEx(
-        MOUSE_HOOK.load(Ordering::SeqCst) as HHOOK,
-        n_code,
-        w_param,
-        l_param,
-    )
+    CallNextHookEx(MOUSE_HOOK.load(Ordering::SeqCst) as HHOOK, n_code, w_param, l_param)
 }
-
-/// 检查点击是否在覆盖窗口区域内（且不在分类框窗口上）
+/// Check if a button click is on the overlay region (desktop area managed by overlay).
+/// Returns true only when the click is on the overlay window itself or the desktop behind it.
+/// Returns false for real application windows, taskbar, system tray, etc.
 unsafe fn is_click_on_overlay(pt: POINT) -> bool {
-    // 获取该位置的窗口
-    let hwnd_at_point = WindowFromPoint(pt);
+    let overlay_hwnd = match super::get_overlay_window_hwnd() {
+        Some(hwnd) => hwnd,
+        None => return false,
+    };
 
+    // Check if point is within overlay window rect
+    let mut rect = std::mem::zeroed();
+    if GetWindowRect(overlay_hwnd, &mut rect) == 0 {
+        return false;
+    }
+    if pt.x < rect.left || pt.x >= rect.right || pt.y < rect.top || pt.y >= rect.bottom {
+        return false;
+    }
+
+    // Check if NOT on a grid box (classification box)
+    let grid_at_point = super::super::zorder::find_grid_window_at_point(pt.x, pt.y);
+    if !grid_at_point.is_null() {
+        return false;
+    }
+
+    // Use WindowFromPoint to check what window is at this position.
+    // With bg_alpha=0, the overlay is transparent to hit-testing, so WindowFromPoint
+    // may return the desktop window (Progman/WorkerW/SysListView32) instead of overlay.
+    // This is EXPECTED and CORRECT - we still consider it "on overlay".
+    let hwnd_at_point = WindowFromPoint(pt);
     if hwnd_at_point.is_null() {
         return false;
     }
 
-    // 检查是否是覆盖窗口
-    if super::is_desktop_overlay_window(hwnd_at_point) {
+    // If the window at this point IS the overlay window, it's on the overlay
+    if hwnd_at_point == overlay_hwnd {
         return true;
     }
 
-    // 检查是否是桌面窗口（Progman 或 WorkerW）
-    // 如果是桌面窗口，也认为是覆盖区域（因为覆盖窗口在桌面下方）
-    if is_desktop_window(hwnd_at_point) {
-        return true;
+    // Check the window class - desktop windows are considered "on overlay"
+    use super::super::ffi_imports::GetClassNameW;
+    let mut class_name = [0u16; 64];
+    let len = GetClassNameW(hwnd_at_point, class_name.as_mut_ptr(), class_name.len() as i32);
+    if len > 0 {
+        let class_str = String::from_utf16_lossy(&class_name[..len as usize]);
+        match class_str.as_str() {
+            "Progman" | "WorkerW" | "SysListView32" | "SHELLDLL_DefView" => return true,
+            _ => return false, // Taskbar, application windows, etc.
+        }
     }
 
     false
 }
 
-/// 检查是否是桌面窗口
-unsafe fn is_desktop_window(hwnd: super::super::ffi_types::HWND) -> bool {
-    use super::super::ffi_imports::GetClassNameW;
 
-    let mut class_name = [0u16; 64];
-    let len = GetClassNameW(hwnd, class_name.as_mut_ptr(), class_name.len() as i32);
 
-    if len > 0 {
-        let class_str = String::from_utf16_lossy(&class_name[..len as usize]);
-        // Progman 是主桌面窗口，WorkerW 是辅助桌面窗口
-        class_str == "Progman" || class_str == "WorkerW"
-    } else {
-        false
-    }
-}
 
 #[cfg(test)]
 mod tests {

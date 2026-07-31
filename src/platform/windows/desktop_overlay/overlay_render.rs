@@ -192,6 +192,7 @@ pub(crate) fn render_desktop_overlay(hwnd: HWND) {
 
     // ===== Marquee selection rectangle =====
     if data.marquee_active {
+        log::debug!("[MARQUEE-RENDER] rect=({},{})->({},{}", data.marquee_start_x, data.marquee_start_y, data.marquee_current_x, data.marquee_current_y);
         let mx1 = data.marquee_start_x;
         let my1 = data.marquee_start_y;
         let mx2 = data.marquee_current_x;
@@ -249,7 +250,7 @@ pub(crate) fn render_desktop_overlay(hwnd: HWND) {
         ReleaseDC(std::ptr::null_mut(), screen_dc);
     }
 
-    log::info!("覆盖窗口已渲染桌面图标: {} 个", data.icons.len());
+    log::trace!("覆盖窗口已渲染桌面图标: {} 个", data.icons.len());
 }
 
 fn draw_desktop_icons(

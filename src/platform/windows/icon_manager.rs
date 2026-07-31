@@ -1,4 +1,4 @@
-//! 桌面图标逐图标管理器
+﻿//! 桌面图标逐图标管理器
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -1345,6 +1345,103 @@ fn icon_name_candidates(file_path: &str) -> Vec<String> {
     names
 }
 
+pub fn hide_icon_on_desktop(file_path: &str) {
+    let result = (|| -> Result<()> {
+        let listview = super::icon_hider::find_desktop_listview()?;
+        let mut mgr = DesktopIconManager::with_listview(listview)?;
+
+        let names = icon_name_candidates(file_path);
+        if names.is_empty() {
+            anyhow::bail!("无法从路径提取图标名称: {}", file_path);
+        }
+
+        // 重试查找（Explorer 刷新可能有延迟）
+        let mut index = None;
+        for attempt in 0..10 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            mgr.rebuild_index()?;
+            for name in &names {
+                if let Some(idx) = mgr.find_icon_by_name(name) {
+                    index = Some(idx);
+                    break;
+                }
+            }
+            if index.is_some() {
+                break;
+            }
+        }
+
+        let index = index.ok_or_else(|| {
+            anyhow::anyhow!("SysListView32 中未找到图标（已尝试名称: {:?}）", names)
+        })?;
+
+        mgr.hide_icon(index)?;
+        log::info!("[HIDE] 桌面图标已隐藏: {} (index={})", file_path, index);
+        Ok(())
+    })();
+
+    if let Err(e) = result {
+        log::warn!("[HIDE] 桌面图标隐藏失败: {} - {}", file_path, e);
+    }
+}
+
+pub fn show_icon_on_desktop(file_path: &str, screen_x: i32, screen_y: i32) {
+    let auto_arrange_was_on = disable_desktop_auto_arrange();
+
+    let result = (|| -> Result<()> {
+        let listview = super::icon_hider::find_desktop_listview()?;
+        let mut mgr = DesktopIconManager::with_listview(listview)?;
+
+        let names = icon_name_candidates(file_path);
+        if names.is_empty() {
+            anyhow::bail!("无法从路径提取图标名称: {}", file_path);
+        }
+
+        // 重试查找
+        let mut index = None;
+        for attempt in 0..20 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            mgr.rebuild_index()?;
+            for name in &names {
+                if let Some(idx) = mgr.find_icon_by_name(name) {
+                    index = Some(idx);
+                    break;
+                }
+            }
+            if index.is_some() {
+                break;
+            }
+        }
+
+        let index = index.ok_or_else(|| {
+            anyhow::anyhow!("SysListView32 中未找到图标（已尝试名称: {:?}）", names)
+        })?;
+
+        // 屏幕坐标 → 客户区坐标
+        let mut client_pt = POINT { x: screen_x, y: screen_y };
+        unsafe {
+            if ScreenToClient(mgr.listview_hwnd(), &mut client_pt) == 0 {
+                client_pt = POINT { x: screen_x, y: screen_y };
+            }
+        }
+
+        mgr.show_icon_at(index, client_pt.x, client_pt.y)?;
+        log::info!("[SHOW] 桌面图标已显示: {} -> ({}, {})", file_path, screen_x, screen_y);
+        Ok(())
+    })();
+
+    if auto_arrange_was_on == Some(true) {
+        restore_desktop_auto_arrange();
+    }
+
+    if let Err(e) = result {
+        log::warn!("[SHOW] 桌面图标显示失败: {} - {}", file_path, e);
+    }
+}
 /// 将桌面图标定位到屏幕坐标（拖放释放后调用）
 ///
 /// 配合 `icon_hider::restore_single_icon` 使用：

@@ -1,4 +1,4 @@
-//! OLE 拖拽目标实现（IDropTarget）
+﻿//! OLE 拖拽目标实现（IDropTarget）
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -169,12 +169,21 @@ unsafe extern "system" fn drop_target_drag_enter(
     let target = &*(this as *const BoxDropTarget);
     let has_box = query_format(data_obj, target.custom_format_id);
     let has_hdrop = query_format(data_obj, CF_HDROP);
-    if has_box || has_hdrop {
+    // 检查是否有虚拟 Shell 对象（回收站、此电脑等）
+    let has_shell_idlist = if !has_hdrop && !has_box {
+        let fmt_name: Vec<u16> = "Shell IDList Array\0".encode_utf16().collect();
+        let cf = super::ffi_imports::RegisterClipboardFormatW(fmt_name.as_ptr());
+        cf != 0 && query_format(data_obj, cf)
+    } else {
+        false
+    };
+    if has_box || has_hdrop || has_shell_idlist {
         *effect = DROPEFFECT_MOVE;
         PostMessageW(target.target_hwnd, WM_USER_DRAG_ENTER, 0, 0);
-        log::debug!("拖拽进入: box={} hdrop={}", has_box, has_hdrop);
+        log::info!("[DRAG-ENTER] 拖拽进入: box={} hdrop={} shell_idlist={}", has_box, has_hdrop, has_shell_idlist);
     } else {
         *effect = DROPEFFECT_NONE;
+        log::debug!("[DRAG-ENTER] 拒绝拖拽: 无支持的格式");
     }
     S_OK
 }
@@ -232,12 +241,18 @@ unsafe extern "system" fn drop_target_drop(
         None
     };
 
-    let file_paths = read_drop_files(data_obj);
+    let mut file_paths = read_drop_files(data_obj);
+    if file_paths.is_empty() {
+        // CF_HDROP 为空，尝试从 CFSTR_SHELLIDLIST 读取虚拟 Shell 对象
+        log::info!("[DROP] CF_HDROP 为空，尝试读取 PIDL...");
+        file_paths = read_shell_idlist_paths(data_obj);
+    }
     if file_paths.is_empty() {
         *effect = DROPEFFECT_NONE;
-        log::warn!("拖拽放置: 未读取到文件路径");
+        log::warn!("[DROP] 未读取到文件路径（CF_HDROP 和 PIDL 均为空）");
         return S_OK;
     }
+    log::info!("[DROP] 最终 file_paths={:?}", file_paths);
 
     if let Ok(mut g) = PENDING_DROP.lock() {
         *g = Some(PendingDrop {
@@ -345,6 +360,138 @@ unsafe fn read_drop_files(data_obj: *mut c_void) -> Vec<String> {
     paths
 }
 
+
+/// 从 IDataObject 读取 Shell IDList 格式的 PIDL，提取虚拟 Shell 对象的 CLSID 路径。
+///
+/// 当从桌面拖拽回收站、此电脑等虚拟对象时，CF_HDROP 为空，
+/// 需要从 CFSTR_SHELLIDLIST 格式读取 PIDL，然后通过 SHGetFileInfoW + SHGFI_PIDL
+/// 获取显示名称，再映射到已知的 CLSID 路径。
+unsafe fn read_shell_idlist_paths(data_obj: *mut c_void) -> Vec<String> {
+    if data_obj.is_null() {
+        return Vec::new();
+    }
+
+    // 注册 CFSTR_SHELLIDLIST 格式
+    let fmt_name: Vec<u16> = "Shell IDList Array\0".encode_utf16().collect();
+    let cf_shellidlist = super::ffi_imports::RegisterClipboardFormatW(fmt_name.as_ptr());
+    if cf_shellidlist == 0 {
+        log::warn!("[PIDL] RegisterClipboardFormat 失败");
+        return Vec::new();
+    }
+
+    let vtbl = *(data_obj as *const *const IDataObjectVtbl);
+    let fe = FORMATETC {
+        cf_format: cf_shellidlist,
+        ptd: std::ptr::null_mut(),
+        dw_aspect: DVASPECT_CONTENT,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL,
+    };
+    let mut medium = STGMEDIUM {
+        tymed: 0,
+        h_global: std::ptr::null_mut(),
+        unk_for_release: std::ptr::null_mut(),
+    };
+    if ((*vtbl).get_data)(data_obj, &fe, &mut medium) != S_OK || medium.h_global.is_null() {
+        log::debug!("[PIDL] 无 CFSTR_SHELLIDLIST 数据");
+        return Vec::new();
+    }
+
+    let mut paths = Vec::new();
+    let ptr = GlobalLock(medium.h_global);
+    if !ptr.is_null() {
+        // CIDA 结构: cidl(u32) + (cidl+1) 个 u32 偏移量
+        let cidl = *(ptr as *const u32);
+        let offsets = std::slice::from_raw_parts(
+            (ptr as *const u8).add(4) as *const u32,
+            (cidl + 1) as usize,
+        );
+
+        log::info!("[PIDL] CIDA cidl={}, offsets={:?}", cidl, &offsets[..std::cmp::min(offsets.len(), 5)]);
+
+        // SHGetFileInfoW + SHGFI_PIDL 声明
+        #[repr(C)]
+        struct ShellFileInfo {
+            h_icon: *mut std::ffi::c_void,
+            i_icon: i32,
+            dw_attributes: u32,
+            sz_display_name: [u16; 260],
+            sz_type_name: [u16; 80],
+        }
+        const SHGFI_PIDL: u32 = 0x00000008;
+        const SHGFI_DISPLAYNAME: u32 = 0x00000200;
+
+        extern "system" {
+            fn SHGetFileInfoW(
+                pszPath: *const u8,
+                dwFileAttributes: u32,
+                psfi: *mut ShellFileInfo,
+                cbFileInfo: u32,
+                uFlags: u32,
+            ) -> usize;
+        }
+
+        // 已知的虚拟 Shell 对象显示名称 → CLSID 映射
+        let known_objects: &[(&str, &str)] = &[
+            ("回收站", "::{645FF040-5081-101B-9F08-00AA002F954E}"),
+            ("此电脑", "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"),
+            ("网络", "::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}"),
+            ("控制面板", "::{5399E694-6CE5-4D6C-8FCE-1D8870FDCBA0}"),
+        ];
+
+        // 遍历每个 PIDL（跳过第一个，它是父文件夹 PIDL）
+        for i in 1..=cidl as usize {
+            if i >= offsets.len() {
+                break;
+            }
+            let pidl = (ptr as *const u8).add(offsets[i] as usize);
+
+            // 用 SHGetFileInfoW + SHGFI_PIDL 获取显示名称
+            let mut info = ShellFileInfo {
+                h_icon: std::ptr::null_mut(),
+                i_icon: 0,
+                dw_attributes: 0,
+                sz_display_name: [0u16; 260],
+                sz_type_name: [0u16; 80],
+            };
+            let result = SHGetFileInfoW(
+                pidl,
+                0,
+                &mut info,
+                std::mem::size_of::<ShellFileInfo>() as u32,
+                SHGFI_PIDL | SHGFI_DISPLAYNAME,
+            );
+
+            if result != 0 {
+                let name_len = info.sz_display_name.iter().position(|&c| c == 0).unwrap_or(0);
+                let display_name = String::from_utf16_lossy(&info.sz_display_name[..name_len]);
+                log::info!("[PIDL] 解析到显示名称: '{}'", display_name);
+
+                // 查找已知虚拟对象
+                let mut found = false;
+                for (known_name, clsid) in known_objects {
+                    if display_name == *known_name {
+                        paths.push(clsid.to_string());
+                        log::info!("[PIDL] 映射到 CLSID: {} → {}", display_name, clsid);
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    log::warn!("[PIDL] 未找到 '{}' 对应的 CLSID 映射", display_name);
+                }
+            } else {
+                log::warn!("[PIDL] SHGetFileInfoW 失败, offset={}", offsets[i]);
+            }
+        }
+        GlobalUnlock(medium.h_global);
+    }
+    if medium.unk_for_release.is_null() && !medium.h_global.is_null() {
+        GlobalFree(medium.h_global);
+    }
+    log::info!("[PIDL] 最终解析到 {} 个虚拟 Shell 对象: {:?}", paths.len(), paths);
+    paths
+}
 unsafe fn read_box_drag_data(data_obj: *mut c_void, fmt_id: u32) -> Option<IkunBoxDragData> {
     if data_obj.is_null() || fmt_id == 0 {
         return None;

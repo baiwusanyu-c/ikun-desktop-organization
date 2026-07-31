@@ -1,4 +1,4 @@
-//! 自定义分层窗口菜单
+﻿//! 自定义分层窗口菜单
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -165,11 +165,7 @@ pub fn show_menu_window(parent_hwnd: HWND) {
             }
             // 还原仓库中不再被任何剩余分类框管理的图标到桌面
             super::icon_hider::restore_unmanaged_vault_icons();
-
-            // 刷新桌面覆盖窗口：删除分类框后，其包含的图标变为"非管理"状态，
-            // 需要重新收集并显示在覆盖窗口上（纵向优先布局）
-            super::desktop_overlay::request_desktop_overlay_refresh();
-        } else {
+} else {
             render_layered_window(parent_hwnd);
         }
     } else {

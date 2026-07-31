@@ -1,4 +1,4 @@
-//! Win32 FFI 函数声明和 Shell COM 类型
+﻿//! Win32 FFI 函数声明和 Shell COM 类型
 //!
 //! 本模块包含所有非 D2D 的 Win32 API FFI 声明，以及 Shell 上下文菜单相关的 COM 类型。
 //! 被 grid_window、shell_menu、d2d_render 等模块使用。
@@ -16,6 +16,7 @@ extern "system" {
     // Window management
     pub fn GetModuleHandleW(lpModuleName: *const u16) -> HINSTANCE;
     pub fn GetLastError() -> u32;
+    pub fn MoveFileW(lpExistingFileName: *const u16, lpNewFileName: *const u16) -> i32;
     pub fn RegisterClassExW(lpwcx: *const WNDCLASSEXW) -> u16;
     pub fn CreateWindowExW(
         dwExStyle: u32,
@@ -180,6 +181,7 @@ extern "system" {
 
     // Window management (additional)
     pub fn SetForegroundWindow(hWnd: HWND) -> i32;
+    pub fn MessageBoxW(hWnd: HWND, lpText: *const u16, lpCaption: *const u16, uType: u32) -> i32;
     pub fn EnableWindow(hWnd: HWND, bEnable: i32) -> i32;
     pub fn GetParent(hWnd: HWND) -> HWND;
     pub fn GetClassNameW(hWnd: HWND, lpClassName: *mut u16, nMaxCount: i32) -> i32;

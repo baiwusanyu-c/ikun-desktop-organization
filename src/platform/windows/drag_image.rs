@@ -1,4 +1,4 @@
-//! 自定义拖拽覆盖窗口（替代 OLE IDragSourceHelper）
+﻿//! 自定义拖拽覆盖窗口（替代 OLE IDragSourceHelper）
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -84,7 +84,7 @@ pub(crate) unsafe fn create_drag_overlay(
     let mut cursor_pt = POINT { x: 0, y: 0 };
     GetCursorPos(&mut cursor_pt);
     let cursor_dpi =
-        crate::platform::windows::desktop_overlay::dpi_at_screen_point(cursor_pt.x, cursor_pt.y);
+        crate::platform::windows::monitor_utils::dpi_at_screen_point(cursor_pt.x, cursor_pt.y);
     let dpi = if cursor_dpi > 0 { cursor_dpi } else { dpi };
 
     // 将 icon_size / cell_w 从源窗口 DPI 缩放到光标 DPI
@@ -231,7 +231,7 @@ pub(crate) unsafe fn create_drag_overlay(
     let mut cursor_pt2 = POINT { x: 0, y: 0 };
     GetCursorPos(&mut cursor_pt2);
     let cursor_dpi2 =
-        crate::platform::windows::desktop_overlay::dpi_at_screen_point(cursor_pt2.x, cursor_pt2.y);
+        crate::platform::windows::monitor_utils::dpi_at_screen_point(cursor_pt2.x, cursor_pt2.y);
     let effective_dpi = if cursor_dpi2 > 0 { cursor_dpi2 } else { dpi };
     DRAG_LAST_DPI = effective_dpi;
     DRAG_ORIGINAL_DPI = effective_dpi;
@@ -257,7 +257,7 @@ pub(crate) unsafe fn update_drag_overlay() {
 
     if DPI_CHECK_COUNTER == 0 {
         let current_dpi =
-            crate::platform::windows::desktop_overlay::dpi_at_screen_point(pt.x, pt.y);
+            crate::platform::windows::monitor_utils::dpi_at_screen_point(pt.x, pt.y);
         if current_dpi != DRAG_LAST_DPI && !DRAG_ICON_HANDLE.is_null() {
             rebuild_drag_overlay_at_dpi(current_dpi);
         }

@@ -63,6 +63,20 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             handle_lbutton_up(hwnd);
             0
         }
+        WM_USER_OVERLAY_LBUTTONDOWN => {
+            let local_x = get_x_lparam(lparam);
+            let local_y = get_y_lparam(lparam);
+            log::info!("[OVERLAY-HOOK] WM_USER_OVERLAY_LBUTTONDOWN: local=({}, {})", local_x, local_y);
+            let mut wr = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+            unsafe { GetWindowRect(hwnd, &mut wr) };
+            handle_lbutton_down(hwnd, local_x, local_y, wr.left + local_x, wr.top + local_y);
+            0
+        }
+        WM_USER_OVERLAY_LBUTTONUP => {
+            log::info!("[OVERLAY-HOOK] WM_USER_OVERLAY_LBUTTONUP received");
+            handle_lbutton_up(hwnd);
+            0
+        }
         // ===== 拖拽轮询定时器（替代 SetCapture）=====
         // 处理重命名结果消息
         msg if msg == crate::platform::windows::rename_editor::get_rename_result_message() => {
@@ -127,11 +141,12 @@ pub(super) unsafe extern "system" fn overlay_wnd_proc(
             0
         }
         WM_TIMER => {
-            log::debug!("overlay WM_TIMER received: wparam={:#X}", wparam);
             if wparam == TIMER_ID_OVERLAY_DRAG {
                 handle_overlay_drag_timer(hwnd);
             } else if wparam == TIMER_ID_OVERLAY_HOVER {
                 handle_hover_timer(hwnd);
+            } else if wparam == TIMER_ID_OVERLAY_MARQUEE {
+                handle_marquee_timer(hwnd);
             }
             0
         }
@@ -308,6 +323,31 @@ fn overlay_nchittest_result(_hit: i32) -> LRESULT {
     HTCLIENT as LRESULT
 }
 
+/// Marquee tracking timer: polls cursor position every 8ms and renders marquee rectangle.
+/// bg_alpha stays 0 so overlay remains transparent (no mouse event blocking).
+fn handle_marquee_timer(hwnd: HWND) {
+    let data = match get_overlay_data(hwnd) {
+        Some(d) => d,
+        None => return,
+    };
+    if !data.marquee_active {
+        unsafe { KillTimer(hwnd, TIMER_ID_OVERLAY_MARQUEE) };
+        super::clear_marquee_started();
+        return;
+    }
+    // Read cursor position from atomic variables (set by mouse hook on WM_MOUSEMOVE)
+    if let Some((cursor_x, cursor_y)) = super::get_marquee_cursor_pos() {
+        let (local_x, local_y) = screen_to_overlay_client(hwnd, cursor_x, cursor_y);
+        // Only render if position changed (performance optimization)
+        if data.marquee_current_x != local_x || data.marquee_current_y != local_y {
+            data.marquee_current_x = local_x;
+            data.marquee_current_y = local_y;
+            render_desktop_overlay(hwnd);
+        }
+    }
+}
+
+
 /// Timer-based hover state management for layered window.
 ///
 /// WS_EX_LAYERED windows with alpha=0 pixels don't receive WM_MOUSEMOVE
@@ -331,23 +371,30 @@ fn handle_hover_timer(hwnd: HWND) {
         return;
     }
 
-    // Check marquee: if active and mouse released, finalize
+    // Check marquee: if active, render and detect release
     if data.marquee_active {
         let lbutton_down = unsafe { GetAsyncKeyState(VK_LBUTTON) } & 0x8000u16 as i16 != 0;
+        let mut pt = POINT { x: 0, y: 0 };
+        unsafe { GetCursorPos(&mut pt) };
+        let (local_x, local_y) = screen_to_overlay_client(hwnd, pt.x, pt.y);
+        log::trace!("[MARQUEE-TIMER] lbutton={}, cursor=({},{}), local=({},{}), current=({},{}), start=({},{}",
+            lbutton_down, pt.x, pt.y, local_x, local_y, 
+            data.marquee_current_x, data.marquee_current_y,
+            data.marquee_start_x, data.marquee_start_y);
+        
         if !lbutton_down {
+            log::info!("[MARQUEE-TIMER] mouse released, finalizing");
             handle_lbutton_up(hwnd);
             unsafe { KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER) };
             return;
         }
-        // Update marquee position
-        let mut pt = POINT { x: 0, y: 0 };
-        unsafe { GetCursorPos(&mut pt) };
-        let (local_x, local_y) = screen_to_overlay_client(hwnd, pt.x, pt.y);
+        
         if data.marquee_current_x != local_x || data.marquee_current_y != local_y {
             data.marquee_current_x = local_x;
             data.marquee_current_y = local_y;
-            render_desktop_overlay(hwnd);
         }
+        // Always render marquee at timer rate for smooth visual update
+        render_desktop_overlay(hwnd);
         return;
     }
 
@@ -386,20 +433,10 @@ fn handle_mouse_move(hwnd: HWND, x: i32, y: i32) {
     let mut should_render = false;
     let mut should_start_drag = false;
     if let Some(data) = get_overlay_data(hwnd) {
-        // 框选更新：如果框选正在进行，更新当前坐标并重绘（节流）
+        // Marquee coordinate update: rendering happens in hover timer (16ms)
         if data.marquee_active {
-            if data.marquee_current_x != x || data.marquee_current_y != y {
-                data.marquee_current_x = x;
-                data.marquee_current_y = y;
-                // Throttle rendering: only render every 3rd update to reduce lag
-                static mut MARQUEE_FRAME: u32 = 0;
-                unsafe {
-                    MARQUEE_FRAME += 1;
-                    if MARQUEE_FRAME % 3 == 0 {
-                        render_desktop_overlay(hwnd);
-                    }
-                }
-            }
+            data.marquee_current_x = x;
+            data.marquee_current_y = y;
             return;
         }
 
@@ -550,6 +587,7 @@ fn handle_lbutton_down(hwnd: HWND, local_x: i32, local_y: i32, screen_x: i32, sc
             unsafe { SetTimer(hwnd, TIMER_ID_OVERLAY_HOVER, 50, std::ptr::null_mut()) };
             log::info!("图标选中: {}", data.icons[hit as usize].display_name);
         } else {
+            log::info!("[OVERLAY-BLANK-CLICK] local=({},{}), starting marquee", local_x, local_y);
             // Blank area: clear if no Ctrl, start marquee
             if !ctrl_down {
                 super::super::multi_select::clear();
@@ -559,14 +597,17 @@ fn handle_lbutton_down(hwnd: HWND, local_x: i32, local_y: i32, screen_x: i32, sc
             data.drag_pending = false;
             data.drag_active = false;
             data.drag_item_index = -1;
-            // Kill hover timer to prevent interference with marquee
-            unsafe { KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER); }
             data.marquee_active = true;
+            // Start hover timer at 16ms for marquee polling (WS_EX_LAYERED windows
+            // don't receive WM_MOUSEMOVE on transparent pixels, so we need timer-based
+            // cursor tracking + rendering for smooth marquee)
+            unsafe { SetTimer(hwnd, TIMER_ID_OVERLAY_MARQUEE, 8, std::ptr::null_mut()); }
+            log::info!("[MARQUEE-START] active=true, start=({},{}), timer started", local_x, local_y);
             data.marquee_start_x = local_x;
             data.marquee_start_y = local_y;
             data.marquee_current_x = local_x;
             data.marquee_current_y = local_y;
-            forward_lbutton_to_desktop(screen_x, screen_y);
+            // 不转发到桌面 —— 转发会让 SysListView32 接管鼠标，导致框选立即结束
         }
     }
     render_desktop_overlay(hwnd);
@@ -893,6 +934,8 @@ fn handle_lbutton_up(hwnd: HWND) {
         if data.marquee_active {
             let ctrl_down = unsafe { GetAsyncKeyState(VK_CONTROL) } & 0x8000u16 as i16 != 0;
             data.marquee_active = false;
+            unsafe { KillTimer(hwnd, TIMER_ID_OVERLAY_MARQUEE) };
+            super::clear_marquee_started();
 
             let rect_left = data.marquee_start_x.min(data.marquee_current_x);
             let rect_right = data.marquee_start_x.max(data.marquee_current_x);
@@ -1486,7 +1529,7 @@ fn copy_file_to_desktop(source_path: &str) -> Option<String> {
 
     match std::fs::copy(source, &dest) {
         Ok(_) => {
-            crate::platform::windows::icon_hider::notify_shell_path(&dest.to_string_lossy());
+            crate::platform::windows::icon_hider::notify_shell_create(&dest.to_string_lossy());
             Some(dest.to_string_lossy().to_string())
         }
         Err(e) => {

@@ -1,4 +1,4 @@
-//! 平台抽象层
+﻿//! 平台抽象层
 
 #![allow(dead_code)] // 平台抽象层，部分在当前构建路径未使用
 //!
@@ -48,16 +48,16 @@ pub use windows::DesktopManager;
 #[allow(unused_imports)] // 部分仅在 eframe-ui feature 路径使用
 pub use windows::{
     cleanup_desktop_registry, cleanup_system_tray, clsid_display_name, collect_grid_layout,
-    create_desktop_overlay, create_grid_window, destroy_all_grid_windows, destroy_desktop_overlay,
+    create_grid_window, destroy_all_grid_windows,
     extract_file_icon, get_cursor_monitor_work_area_phys, get_grid_count, get_primary_monitor_dpi,
     get_primary_monitor_work_area_phys, get_screen_resolution, hide_control_panel_window,
-    hide_native_icons, icon_exists_for_box, install_overlay_mouse_hook, native_icons_hidden,
+    icon_exists_for_box,
     register_tray_action_waker, reposition_and_resize_window, reposition_window_by_title,
-    resolve_icon_read_path, restore_all_hidden_icons, restore_native_icons,
+    resolve_icon_read_path, restore_all_hidden_icons,
     set_tray_auto_start_state, setup_desktop_registry, setup_global_hotkey, setup_system_tray,
     show_control_panel_window, show_desktop_context_menu, take_hotkey_toggle,
-    take_pending_create_box, take_pending_overlay_right_click, take_pending_tray_action,
-    uninstall_overlay_mouse_hook, unregister_global_hotkey, update_grid_window_title,
+    take_pending_create_box, take_pending_tray_action,
+    unregister_global_hotkey, update_grid_window_title,
     GridCreateParams, GridFileItem,
 };
 
@@ -67,8 +67,7 @@ pub use windows::{
 
 #[cfg(target_os = "macos")]
 pub use macos::{
-    create_desktop_overlay, destroy_desktop_overlay, get_screen_resolution, hide_native_icons,
-    restore_native_icons,
+    get_screen_resolution,
 };
 
 /// macOS 平台 stub 模块（阶段 1 占位实现）
@@ -327,7 +326,7 @@ pub use macos_stubs::{
     cleanup_desktop_registry, cleanup_system_tray, collect_grid_layout, create_grid_window,
     destroy_all_grid_windows, extract_file_icon, get_cursor_monitor_work_area_phys, get_grid_count,
     get_primary_monitor_dpi, get_primary_monitor_work_area_phys, hide_control_panel_window,
-    icon_exists_for_box, native_icons_hidden, reposition_and_resize_window,
+    icon_exists_for_box, reposition_and_resize_window,
     reposition_window_by_title, resolve_icon_read_path, restore_all_hidden_icons,
     set_tray_auto_start_state, setup_desktop_registry, setup_global_hotkey, setup_system_tray,
     show_control_panel_window, take_hotkey_toggle, take_pending_create_box,
