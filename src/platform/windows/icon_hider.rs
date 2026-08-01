@@ -560,7 +560,8 @@ pub fn resolve_icon_read_path(logical_path: &str) -> Option<PathBuf> {
 
 /// 收入仓库：用户桌面移动，公共桌面只读复制
 pub fn ingest_icon(logical_path: &str) -> Result<()> {
-    log::info!("收入仓库: logical_path={}", logical_path);
+    let t0 = std::time::Instant::now();
+    log::info!("[TIMING] ingest_icon 开始: logical_path={}", logical_path);
     // 虚拟 Shell 对象（回收站、此电脑等）无需收入仓库，它们始终存在
     if logical_path.starts_with("::{") {
         return Ok(());
@@ -611,15 +612,21 @@ pub fn ingest_icon(logical_path: &str) -> Result<()> {
         }
     }
 
+    let t_rename = std::time::Instant::now();
     std::fs::rename(src, &vault)
         .map_err(|e| anyhow::anyhow!("移动图标到仓库失败 {}: {}", logical_path, e))?;
+    log::info!("[TIMING] rename 完成 [{:?}]", t_rename.elapsed());
+    let t_notify = std::time::Instant::now();
     notify_shell_delete(logical_path);
-    log::info!("图标已收入仓库: {} → {}", logical_path, vault.display());
+    log::info!("[TIMING] notify_shell_delete 完成 [{:?}]", t_notify.elapsed());
+    log::info!("[TIMING] ingest_icon 总计 [{:?}]: {} → {}", t0.elapsed(), logical_path, vault.display());
     Ok(())
 }
 
 /// 从仓库导出到用户桌面
 pub fn export_icon(logical_path: &str) -> Result<(bool, PathBuf)> {
+    let t0 = std::time::Instant::now();
+    log::info!("[TIMING] export_icon 开始: {}", logical_path);
     // 虚拟 Shell 对象无法导出到桌面，返回原始路径
     if logical_path.starts_with("::{") {
         return Ok((false, PathBuf::from(logical_path)));
@@ -640,6 +647,7 @@ pub fn export_icon(logical_path: &str) -> Result<(bool, PathBuf)> {
         return Ok((true, export));
     }
 
+    let t_rename = std::time::Instant::now();
     std::fs::rename(&vault, &export).map_err(|e| {
         anyhow::anyhow!(
             "从仓库导出失败 {} → {}: {}",
@@ -648,12 +656,11 @@ pub fn export_icon(logical_path: &str) -> Result<(bool, PathBuf)> {
             e
         )
     })?;
+    log::info!("[TIMING] export rename 完成 [{:?}]", t_rename.elapsed());
+    let t_notify = std::time::Instant::now();
     notify_shell_create(&export.to_string_lossy());
-    log::info!(
-        "图标已从仓库导出到桌面: {} → {}",
-        logical_path,
-        export.display()
-    );
+    log::info!("[TIMING] export notify_shell_create 完成 [{:?}]", t_notify.elapsed());
+    log::info!("[TIMING] export_icon 总计 [{:?}]: {} → {}", t0.elapsed(), logical_path, export.display());
     Ok((true, export))
 }
 

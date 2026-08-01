@@ -626,6 +626,15 @@ pub const WM_USER_DRAG_ENTER: u32 = WM_APP + 12;
 pub const WM_USER_DRAG_LEAVE: u32 = WM_APP + 13;
 /// 通知框：拖拽放置完成（处理 pending drop）
 pub const WM_USER_DRAG_DROP: u32 = WM_APP + 14;
+pub const WM_USER_DEFERRED_POSITION_ICON: u32 = WM_APP + 16; // 异步定位图标到桌面指定位置
+
+/// 异步定位图标到桌面指定位置的信息
+pub struct DeferredPositionInfo {
+    pub file_path: String,
+    pub screen_x: i32,
+    pub screen_y: i32,
+    pub hwnd: HWND,
+}
 /// 窗口位置变化信息（WM_WINDOWPOSCHANGING/WM_WINDOWPOSCHANGED 的 lParam）
 #[repr(C)]
 pub struct WINDOWPOS {

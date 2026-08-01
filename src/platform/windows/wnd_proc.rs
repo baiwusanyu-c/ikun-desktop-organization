@@ -1303,6 +1303,21 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             0
         }
 
+        // ===== 异步定位图标到桌面指定位置（避免在 OLE 上下文中调用 Shell 通知）=====
+        WM_USER_DEFERRED_POSITION_ICON => {
+            let info_ptr = lparam as *mut super::ffi_types::DeferredPositionInfo;
+            if !info_ptr.is_null() {
+                unsafe {
+                    let info = Box::from_raw(info_ptr);
+                    log::info!("[DEFERRED] 处理异步定位: file={}, pos=({}, {})", info.file_path, info.screen_x, info.screen_y);
+                    
+                    // 调用 position_icon_at_screen 定位图标
+                    super::icon_manager::position_icon_at_screen(&info.file_path, info.screen_x, info.screen_y);
+                }
+            }
+            0
+        }
+
         // ===== 异步文件收入仓库（避免阻塞 OLE 回调导致鼠标释放慢）=====
         WM_USER_DEFERRED_INGEST => {
             super::drag_drop::process_deferred_ingests();

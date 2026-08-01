@@ -247,7 +247,9 @@ pub(crate) fn handle_box_to_desktop(
     drop_y: i32,
     _target_is_overlay: bool,
 ) {
-    log::info!("handle_box_to_desktop: 开始框→桌面/覆盖, item_index={}, drop=({}, {}), _target_is_overlay={}", item_index, drop_x, drop_y, _target_is_overlay);
+    let t0 = std::time::Instant::now();
+    log::info!("[TIMING] handle_box_to_desktop: 开始框→桌面, item_index={}, drop=({}, {})", item_index, drop_x, drop_y);
+    
     let data = match unsafe { get_data(hwnd) } {
         Some(d) => d,
         None => return,
@@ -261,16 +263,9 @@ pub(crate) fn handle_box_to_desktop(
     let display_name = removed.display_name.clone();
     let file_path = removed.file_path.clone();
 
-    if _target_is_overlay {
-        log::info!(
-            "框→覆盖窗口: 释放图标 '{}' (path={})",
-            display_name,
-            file_path
-        );
-    } else {
-        log::info!("框→桌面: 导出图标 '{}' (path={})", display_name, file_path);
-    }
+    log::info!("框→桌面: 导出图标 '{}' (path={})", display_name, file_path);
 
+    let t_export = std::time::Instant::now();
     let mut export_path = super::icon_hider::export_desktop_path(&file_path);
     match super::icon_hider::export_icon(&file_path) {
         Ok((true, path)) => {
@@ -294,16 +289,34 @@ pub(crate) fn handle_box_to_desktop(
         }
     }
 
-    // 使用原生桌面：将图标定位到鼠标释放位置
-    let desktop_path = if export_path.exists() {
-        let path_str = export_path.to_string_lossy().to_string();
-        // 确保 Shell 已知晓文件出现在桌面（export_icon 内部已通知，这里补充一次）
-        super::icon_hider::notify_shell_create(&path_str);
-        path_str
-    } else {
-        file_path.clone()
-    };
-    super::icon_manager::position_icon_at_screen(&desktop_path, drop_x, drop_y);
+    log::info!("[TIMING] export_icon 完成 [{:?}]", t_export.elapsed());
+
+    // 如果导出成功，在后台线程中延迟定位图标（避免阻塞 OLE 回调）
+    if export_path.exists() {
+        let file_path_str = export_path.to_string_lossy().to_string();
+        let target_x = drop_x;
+        let target_y = drop_y;
+        std::thread::spawn(move || {
+            // 等待 Shell 创建 ListView 项（减少等待时间）
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            log::info!("[THREAD] 后台线程开始定位: file={}, pos=({}, {})", file_path_str, target_x, target_y);
+
+            // 在后台线程中再次禁用自动排列（确保定位时不会被自动排列）
+            let was_on_in_thread = super::icon_manager::disable_desktop_auto_arrange();
+            log::info!("[THREAD] disable_auto_arrange in thread: {:?}", was_on_in_thread);
+
+            // 定位图标
+            super::icon_manager::position_icon_at_screen(&file_path_str, target_x, target_y);
+
+            // 恢复自动排列（如果在主线程或后台线程中禁用了）
+            if was_on_in_thread == Some(true) {
+                super::icon_manager::restore_desktop_auto_arrange();
+                log::info!("[THREAD] 已恢复自动排列");
+            }
+        });
+    }
+
+    log::info!("[TIMING] handle_box_to_desktop 总计 [{:?}]", t0.elapsed());
 
     // 从框中移除项
     let data = match unsafe { get_data(hwnd) } {
@@ -323,11 +336,6 @@ pub(crate) fn handle_box_to_desktop(
     }
 }
 
-// =============================================================================
-// 高亮和拖入处理（从 WM_USER_DRAG_* 消息调用）
-// =============================================================================
-
-/// 处理 WM_USER_DRAG_ENTER（拖拽悬停进入，显示高亮）
 pub(crate) fn handle_drag_enter(hwnd: HWND) {
     if let Some(data) = unsafe { get_data(hwnd) } {
         if !data.locked && !data.drop_highlight {
@@ -581,7 +589,8 @@ fn copy_file_to_user_desktop(source_path: &str) -> Option<String> {
 }
 
 pub(crate) fn handle_ole_drop(hwnd: HWND) {
-        let drop = match super::drop_target::take_pending_drop() {
+    let t0 = std::time::Instant::now();
+    let drop = match super::drop_target::take_pending_drop() {
         Some(d) => d,
         None => {
             log::debug!("OLE drop: 无待处理数据");
@@ -708,9 +717,10 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
 
         // 外部→框：同步收入仓库（handle_ole_drop 已在 DoDragDrop 返回后执行，不会阻塞拖拽）
         if !is_box_drag {
+            let t_ingest = std::time::Instant::now();
             match super::icon_hider::ingest_icon(&effective_path) {
                 Ok(()) => {
-                    log::info!("OLE drop: '{}' 已收入仓库", display_name);
+                    log::info!("OLE drop: '{}' 已收入仓库 [{:?}]", display_name, t_ingest.elapsed());
                     data.items.push(super::grid_window::GridFileItem {
                         file_path: effective_path.clone(),
                         display_name: display_name.clone(),
@@ -741,7 +751,7 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
     }
 
     if added > 0 {
-        log::info!("OLE drop: 添加 {} 个项到分类框", added);
+        log::info!("OLE drop: 添加 {} 个项到分类框 [total {:?}]", added, t0.elapsed());
         super::d2d_render::render_layered_window(hwnd);
         save_config();
     }
