@@ -303,7 +303,7 @@ pub(crate) fn handle_box_to_desktop(
             log::info!("[TIMING] ??????, ??=({}, {})", target_x, target_y);
 
             // ?????? 30ms ?????????????
-            const POLL_INTERVAL_MS: u64 = 30;
+            const POLL_INTERVAL_MS: u64 = 15;
             const MAX_POLL_MS: u64 = 2000;
 
             for poll in 0..(MAX_POLL_MS / POLL_INTERVAL_MS) {

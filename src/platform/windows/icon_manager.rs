@@ -1487,20 +1487,12 @@ pub fn position_icon_at_screen(file_path: &str, screen_x: i32, screen_y: i32) {
             anyhow::bail!("无法从路径提取图标名称: {}", file_path);
         }
 
-        // 注意：减少重试次数到 3 次（外部轮询已负责重试）
+        // 外部轮询已负责重试，内部只做一次查找，快速失败
         let mut index = None;
-        for attempt in 0..3 {
-            if attempt > 0 {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            mgr.rebuild_index()?;
-            for name in &names {
-                if let Some(idx) = mgr.find_icon_by_name(name) {
-                    index = Some(idx);
-                    break;
-                }
-            }
-            if index.is_some() {
+        mgr.rebuild_index()?;
+        for name in &names {
+            if let Some(idx) = mgr.find_icon_by_name(name) {
+                index = Some(idx);
                 break;
             }
         }
