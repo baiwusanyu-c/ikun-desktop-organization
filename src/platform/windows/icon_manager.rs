@@ -1450,15 +1450,23 @@ pub fn show_icon_on_desktop(file_path: &str, screen_x: i32, screen_y: i32) {
 ///
 /// 失败时仅记录警告，不影响图标已在桌面显示。
 pub fn position_icon_at_screen(file_path: &str, screen_x: i32, screen_y: i32) {
+    let t_fn = std::time::Instant::now();
+
+    let t_aa = std::time::Instant::now();
     let auto_arrange_was_on = disable_desktop_auto_arrange();
+    log::debug!("[TIMING] disable_auto_arrange: {:?}", t_aa.elapsed());
 
     let result = (|| -> Result<()> {
+        let t_lv = std::time::Instant::now();
         let listview = find_listview_at_screen_point(POINT {
             x: screen_x,
             y: screen_y,
         })?;
+        log::debug!("[TIMING] find_listview: {:?}", t_lv.elapsed());
 
+        let t_mgr = std::time::Instant::now();
         let mut mgr = DesktopIconManager::with_listview(listview)?;
+        log::debug!("[TIMING] DesktopIconManager::with_listview: {:?}", t_mgr.elapsed());
 
         let mut client_pt = POINT {
             x: screen_x,
@@ -1479,9 +1487,9 @@ pub fn position_icon_at_screen(file_path: &str, screen_x: i32, screen_y: i32) {
             anyhow::bail!("无法从路径提取图标名称: {}", file_path);
         }
 
-        // Explorer 刷新 ListView 可能有延迟，重试查找
+        // 注意：减少重试次数到 3 次（外部轮询已负责重试）
         let mut index = None;
-        for attempt in 0..20 {
+        for attempt in 0..3 {
             if attempt > 0 {
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
@@ -1501,23 +1509,26 @@ pub fn position_icon_at_screen(file_path: &str, screen_x: i32, screen_y: i32) {
             anyhow::anyhow!("SysListView32 中未找到图标（已尝试名称: {:?}）", names)
         })?;
 
+        let t_show = std::time::Instant::now();
         mgr.show_icon_at(index, client_pt.x, client_pt.y)?;
         log::info!(
-            "桌面图标已定位到 ({}, {}) [客户区 ({}, {})]",
+            "[TIMING] 图标已定位到 ({}, {}), show_icon_at: {:?}, 函数总耗时: {:?}",
             screen_x,
             screen_y,
-            client_pt.x,
-            client_pt.y
+            t_show.elapsed(),
+            t_fn.elapsed()
         );
         Ok(())
     })();
 
     if auto_arrange_was_on == Some(true) {
+        let t_restore = std::time::Instant::now();
         restore_desktop_auto_arrange();
+        log::debug!("[TIMING] restore_auto_arrange: {:?}", t_restore.elapsed());
     }
 
     if let Err(e) = result {
-        log::warn!("桌面图标定位失败（图标应已显示在默认网格位置）: {}", e);
+        log::warn!("[TIMING] 定位失败: {}, 耗时: {:?}", e, t_fn.elapsed());
     }
 }
 

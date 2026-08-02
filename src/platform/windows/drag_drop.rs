@@ -300,91 +300,82 @@ pub(crate) fn handle_box_to_desktop(
         std::thread::spawn(move || {
             let t_start = std::time::Instant::now();
 
-            // 1. ????????? SysListView32?? 50ms ???????? 800ms?
-            const POLL_INTERVAL_MS: u64 = 50;
-            const MAX_POLL_MS: u64 = 800;
-            let mut icon_found = false;
+            log::info!("[TIMING] ??????, ??=({}, {})", target_x, target_y);
 
-            loop {
+            // ?????? 30ms ?????????????
+            const POLL_INTERVAL_MS: u64 = 30;
+            const MAX_POLL_MS: u64 = 2000;
+
+            for poll in 0..(MAX_POLL_MS / POLL_INTERVAL_MS) {
+                let t_iter = std::time::Instant::now();
                 let elapsed = t_start.elapsed().as_millis() as u64;
+
                 if elapsed >= MAX_POLL_MS {
-                    log::warn!("[THREAD] ???????? ({MAX_POLL_MS}ms)???????");
+                    log::warn!("[TIMING] ???? ({}ms)", MAX_POLL_MS);
                     break;
                 }
 
-                // ?????position_icon_at_screen ???????
-                // ??????????????????
+                // ????
+                log::debug!("[TIMING] ? {} ??? (??? {}ms)", poll + 1, elapsed);
                 super::icon_manager::position_icon_at_screen(&file_path_str, target_x, target_y);
+                log::debug!("[TIMING] position_icon ?? {}ms", t_iter.elapsed().as_millis());
 
                 // ????
-                std::thread::sleep(std::time::Duration::from_millis(50));
+                let t_verify = std::time::Instant::now();
                 match super::icon_manager::verify_icon_screen_position(&file_path_str) {
                     Some((actual_x, actual_y)) => {
                         let dx = (actual_x - target_x).abs();
                         let dy = (actual_y - target_y).abs();
+                        log::info!(
+                            "[TIMING] ??: ??=({}, {}), ??=({}, {}), ??=({}, {}), ??? {:?}",
+                            target_x, target_y, actual_x, actual_y, dx, dy, t_start.elapsed()
+                        );
                         if dx <= 30 && dy <= 30 {
                             log::info!(
-                                "[THREAD] ??????: ??=({}, {}), ??=({}, {}), ?? {:?}",
-                                target_x, target_y, actual_x, actual_y, t_start.elapsed()
+                                "[TIMING] ????! ? {} ???, ??? {:?}",
+                                poll + 1, t_start.elapsed()
                             );
-                            icon_found = true;
-                            break;
+                            return;
                         }
-                        // ??????????Shell ???????
                     }
                     None => {
-                        // ???????????
+                        log::debug!("[TIMING] ????? (verify ?? {}ms)", t_verify.elapsed().as_millis());
                     }
                 }
 
                 std::thread::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS));
             }
 
-            // 2. ?????????????????+??
-            if !icon_found {
-                const MAX_RETRIES: usize = 3;
-                for attempt in 0..MAX_RETRIES {
-                    if attempt > 0 {
-                        std::thread::sleep(std::time::Duration::from_millis(300));
-                    }
-
-                    super::icon_manager::position_icon_at_screen(&file_path_str, target_x, target_y);
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-
-                    match super::icon_manager::verify_icon_screen_position(&file_path_str) {
-                        Some((actual_x, actual_y)) => {
-                            let dx = (actual_x - target_x).abs();
-                            let dy = (actual_y - target_y).abs();
-                            if dx <= 30 && dy <= 30 {
-                                log::info!(
-                                    "[THREAD] ?????? (?? {}): ??=({}, {}), ??=({}, {})",
-                                    attempt + 1, target_x, target_y, actual_x, actual_y
-                                );
-                                icon_found = true;
-                                break;
-                            } else {
-                                log::warn!(
-                                    "[THREAD] ?????? (?? {}): ??=({}, {}), ??=({}, {}), ??=({}, {})",
-                                    attempt + 1, target_x, target_y, actual_x, actual_y, dx, dy
-                                );
-                            }
-                        }
-                        None => {
-                            log::warn!("[THREAD] ????????? (?? {})", attempt + 1);
-                        }
-                    }
+            // ??????????????
+            log::warn!("[TIMING] ??????????????, ??? {:?}", t_start.elapsed());
+            for attempt in 0..3 {
+                if attempt > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(300));
                 }
+                super::icon_manager::position_icon_at_screen(&file_path_str, target_x, target_y);
+                std::thread::sleep(std::time::Duration::from_millis(100));
 
-                if !icon_found {
-                    log::warn!("[THREAD] ?????????????????????????");
-                    super::icon_manager::position_icon_at_screen(&file_path_str, target_x, target_y);
+                match super::icon_manager::verify_icon_screen_position(&file_path_str) {
+                    Some((actual_x, actual_y)) => {
+                        let dx = (actual_x - target_x).abs();
+                        let dy = (actual_y - target_y).abs();
+                        log::info!(
+                            "[TIMING] ?? {}: ??=({}, {}), ??=({}, {}), ??=({}, {}), ??? {:?}",
+                            attempt + 1, target_x, target_y, actual_x, actual_y, dx, dy, t_start.elapsed()
+                        );
+                        if dx <= 30 && dy <= 30 {
+                            log::info!("[TIMING] ??????! ??? {:?}", t_start.elapsed());
+                            return;
+                        }
+                    }
+                    None => {
+                        log::warn!("[TIMING] ?? {} ????", attempt + 1);
+                    }
                 }
             }
 
-            log::info!(
-                "[THREAD] ????????, ???: {:?}",
-                t_start.elapsed()
-            );
+            log::warn!("[TIMING] ?????????????, ??? {:?}", t_start.elapsed());
+            super::icon_manager::position_icon_at_screen(&file_path_str, target_x, target_y);
         });
     }
 
