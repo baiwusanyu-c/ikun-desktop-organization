@@ -1520,6 +1520,64 @@ pub fn position_icon_at_screen(file_path: &str, screen_x: i32, screen_y: i32) {
         log::warn!("桌面图标定位失败（图标应已显示在默认网格位置）: {}", e);
     }
 }
+
+/// ???????????????
+///
+/// ?? `handle_box_to_desktop` ?????????????? Shell ???????
+/// ?????? `(screen_x, screen_y)`??????? `None`?
+pub fn verify_icon_screen_position(file_path: &str) -> Option<(i32, i32)> {
+    let result: Result<(i32, i32)> = (|| -> Result<(i32, i32)> {
+        let listview = super::icon_hider::find_desktop_listview()?;
+        let mut mgr = DesktopIconManager::with_listview(listview)?;
+
+        let names = icon_name_candidates(file_path);
+        if names.is_empty() {
+            anyhow::bail!("???????????: {}", file_path);
+        }
+
+        mgr.rebuild_index()?;
+        let mut index = None;
+        for name in &names {
+            if let Some(idx) = mgr.find_icon_by_name(name) {
+                index = Some(idx);
+                break;
+            }
+        }
+        let index = index.ok_or_else(|| {
+            anyhow::anyhow!("??: SysListView32 ?????? (names={:?})", names)
+        })?;
+
+        let (client_x, client_y) = mgr.get_icon_position(index)?;
+
+        // ????? ? ????
+        let mut pt = POINT {
+            x: client_x,
+            y: client_y,
+        };
+        unsafe {
+            ClientToScreen(mgr.listview_hwnd(), &mut pt);
+        }
+
+        Ok((pt.x, pt.y))
+    })();
+
+    match result {
+        Ok(pos) => {
+            log::info!(
+                "[VERIFY] ?? '{}' ??????: ({}, {})",
+                file_path,
+                pos.0,
+                pos.1
+            );
+            Some(pos)
+        }
+        Err(e) => {
+            log::warn!("[VERIFY] ???????? '{}': {}", file_path, e);
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

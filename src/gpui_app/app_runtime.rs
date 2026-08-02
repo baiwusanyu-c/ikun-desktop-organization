@@ -746,6 +746,35 @@ let (screen_w_phys, screen_h_phys) = get_screen_resolution();
             }
         }
 
+        // 将已分类图标从桌面隐藏（移入仓库），避免同时出现在桌面和分类框
+        {
+            let mut classified_paths: Vec<String> = Vec::new();
+            for box_data in &boxes {
+                for path in &box_data.icon_names {
+                    classified_paths.push(path.clone());
+                }
+            }
+            if !classified_paths.is_empty() {
+                log::info!("启动: 隐藏 {} 个已分类图标", classified_paths.len());
+                for path in &classified_paths {
+                    match crate::platform::windows::icon_hider::hide_single_icon(path) {
+                        Ok(()) => log::debug!("启动隐藏: '{}'", path),
+                        Err(e) => log::warn!("启动隐藏失败: '{}': {}", path, e),
+                    }
+                }
+                // 从快照中移除已分类图标（退出时不需要恢复它们的位置）
+                let classified_set: std::collections::HashSet<String> = classified_paths
+                    .iter()
+                    .map(|p| p.replace('/', "\\").to_lowercase())
+                    .collect();
+                self.desktop_positions_snapshot.retain(|name, _| {
+                    let lower = name.to_lowercase();
+                    !classified_set.iter().any(|c| lower == *c || lower.ends_with(&format!("\\{}", c.split('\\').last().unwrap_or(""))))
+                });
+                log::info!("启动隐藏完成，快照剩余 {} 个未分类图标", self.desktop_positions_snapshot.len());
+            }
+        }
+
         self.ctx
             .set_status(format!("恢复了 {} 个分类框", created_count));
     }

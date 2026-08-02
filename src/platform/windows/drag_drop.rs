@@ -291,28 +291,100 @@ pub(crate) fn handle_box_to_desktop(
 
     log::info!("[TIMING] export_icon 完成 [{:?}]", t_export.elapsed());
 
-    // 如果导出成功，在后台线程中延迟定位图标（避免阻塞 OLE 回调）
+    // ???????????????????????? OLE ???
+    // ??????????? ? ???? ? ?? ? ??????
     if export_path.exists() {
         let file_path_str = export_path.to_string_lossy().to_string();
         let target_x = drop_x;
         let target_y = drop_y;
         std::thread::spawn(move || {
-            // 等待 Shell 创建 ListView 项（减少等待时间）
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            log::info!("[THREAD] 后台线程开始定位: file={}, pos=({}, {})", file_path_str, target_x, target_y);
+            let t_start = std::time::Instant::now();
 
-            // 在后台线程中再次禁用自动排列（确保定位时不会被自动排列）
-            let was_on_in_thread = super::icon_manager::disable_desktop_auto_arrange();
-            log::info!("[THREAD] disable_auto_arrange in thread: {:?}", was_on_in_thread);
+            // 1. ????????? SysListView32?? 50ms ???????? 800ms?
+            const POLL_INTERVAL_MS: u64 = 50;
+            const MAX_POLL_MS: u64 = 800;
+            let mut icon_found = false;
 
-            // 定位图标
-            super::icon_manager::position_icon_at_screen(&file_path_str, target_x, target_y);
+            loop {
+                let elapsed = t_start.elapsed().as_millis() as u64;
+                if elapsed >= MAX_POLL_MS {
+                    log::warn!("[THREAD] ???????? ({MAX_POLL_MS}ms)???????");
+                    break;
+                }
 
-            // 恢复自动排列（如果在主线程或后台线程中禁用了）
-            if was_on_in_thread == Some(true) {
-                super::icon_manager::restore_desktop_auto_arrange();
-                log::info!("[THREAD] 已恢复自动排列");
+                // ?????position_icon_at_screen ???????
+                // ??????????????????
+                super::icon_manager::position_icon_at_screen(&file_path_str, target_x, target_y);
+
+                // ????
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                match super::icon_manager::verify_icon_screen_position(&file_path_str) {
+                    Some((actual_x, actual_y)) => {
+                        let dx = (actual_x - target_x).abs();
+                        let dy = (actual_y - target_y).abs();
+                        if dx <= 30 && dy <= 30 {
+                            log::info!(
+                                "[THREAD] ??????: ??=({}, {}), ??=({}, {}), ?? {:?}",
+                                target_x, target_y, actual_x, actual_y, t_start.elapsed()
+                            );
+                            icon_found = true;
+                            break;
+                        }
+                        // ??????????Shell ???????
+                    }
+                    None => {
+                        // ???????????
+                    }
+                }
+
+                std::thread::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS));
             }
+
+            // 2. ?????????????????+??
+            if !icon_found {
+                const MAX_RETRIES: usize = 3;
+                for attempt in 0..MAX_RETRIES {
+                    if attempt > 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(300));
+                    }
+
+                    super::icon_manager::position_icon_at_screen(&file_path_str, target_x, target_y);
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+
+                    match super::icon_manager::verify_icon_screen_position(&file_path_str) {
+                        Some((actual_x, actual_y)) => {
+                            let dx = (actual_x - target_x).abs();
+                            let dy = (actual_y - target_y).abs();
+                            if dx <= 30 && dy <= 30 {
+                                log::info!(
+                                    "[THREAD] ?????? (?? {}): ??=({}, {}), ??=({}, {})",
+                                    attempt + 1, target_x, target_y, actual_x, actual_y
+                                );
+                                icon_found = true;
+                                break;
+                            } else {
+                                log::warn!(
+                                    "[THREAD] ?????? (?? {}): ??=({}, {}), ??=({}, {}), ??=({}, {})",
+                                    attempt + 1, target_x, target_y, actual_x, actual_y, dx, dy
+                                );
+                            }
+                        }
+                        None => {
+                            log::warn!("[THREAD] ????????? (?? {})", attempt + 1);
+                        }
+                    }
+                }
+
+                if !icon_found {
+                    log::warn!("[THREAD] ?????????????????????????");
+                    super::icon_manager::position_icon_at_screen(&file_path_str, target_x, target_y);
+                }
+            }
+
+            log::info!(
+                "[THREAD] ????????, ???: {:?}",
+                t_start.elapsed()
+            );
         });
     }
 
