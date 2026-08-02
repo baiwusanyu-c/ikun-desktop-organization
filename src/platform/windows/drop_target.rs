@@ -35,6 +35,36 @@ pub struct PendingDrop {
 
 static PENDING_DROP: Mutex<Option<PendingDrop>> = Mutex::new(None);
 
+/// ?? IDropTargetHelper ???????????
+// Safety: IDropTargetHelper ?????? COM ??????????
+struct SendHelperPtr(*mut c_void);
+unsafe impl Send for SendHelperPtr {}
+static DROP_TARGET_HELPER: Mutex<Option<SendHelperPtr>> = Mutex::new(None);
+
+/// ????? IDropTargetHelper ??
+fn get_or_create_drop_target_helper() -> Option<*mut c_void> {
+    let mut helper = DROP_TARGET_HELPER.lock().ok()?;
+    if let Some(ref ptr) = *helper {
+        return Some(ptr.0);
+    }
+    unsafe {
+        let mut ptr: *mut c_void = std::ptr::null_mut();
+        let hr = CoCreateInstance(
+            CLSID_DRAGDROPMANAGER.as_ptr(),
+            std::ptr::null_mut(),
+            CLSCTX_INPROC_SERVER,
+            IID_IDROPTARGETHELPER.as_ptr(),
+            &mut ptr as *mut *mut c_void as *mut *mut c_void,
+        );
+        if hr == S_OK && !ptr.is_null() {
+            *helper = Some(SendHelperPtr(ptr));
+            log::info!("[DropTargetHelper] ????");
+            return Some(ptr);
+        }
+    }
+    None
+}
+
 /// 取出待处理的拖拽放置结果（由 WndProc 调用）
 pub fn take_pending_drop() -> Option<PendingDrop> {
     PENDING_DROP.lock().ok().and_then(|mut g| g.take())
@@ -191,6 +221,16 @@ unsafe extern "system" fn drop_target_drag_enter(
         BOX_DRAG_HOVER.store(has_box, Ordering::Relaxed);
         PostMessageW(target.target_hwnd, WM_USER_DRAG_ENTER, 0, 0);
         log::info!("[DRAG-ENTER] 拖拽进入: box={} hdrop={} shell_idlist={}", has_box, has_hdrop, has_shell_idlist);
+
+        // ?? IDropTargetHelper::DragEnter ????
+        if let Some(helper) = get_or_create_drop_target_helper() {
+            let vtbl = &*(helper as *const IDropTargetHelperVtbl);
+            let mut pt = POINT {
+                x: (_pt & 0xFFFFFFFF) as i32,
+                y: (_pt >> 32) as i32,
+            };
+            let _ = (vtbl.drag_enter)(helper, target.target_hwnd, data_obj, &mut pt, DROPEFFECT_MOVE);
+        }
     } else {
         *effect = DROPEFFECT_NONE;
         log::debug!("[DRAG-ENTER] 拒绝拖拽: 无支持的格式");
@@ -211,6 +251,15 @@ unsafe extern "system" fn drop_target_drag_over(
     // 外部拖拽（桌面→框）：跳过所有视觉更新，保留 Windows 原生拖拽残影
     let is_box_hover = BOX_DRAG_HOVER.load(Ordering::Relaxed);
     if !is_box_hover {
+        // ?? IDropTargetHelper::DragOver ????
+        if let Some(helper) = get_or_create_drop_target_helper() {
+            let vtbl = &*(helper as *const IDropTargetHelperVtbl);
+            let mut pt = POINT {
+                x: (_pt & 0xFFFFFFFF) as i32,
+                y: (_pt >> 32) as i32,
+            };
+            let _ = (vtbl.drag_over)(helper, &mut pt, DROPEFFECT_MOVE);
+        }
         return S_OK;
     }
 
@@ -236,6 +285,11 @@ unsafe extern "system" fn drop_target_drag_leave(this: *mut c_void) -> HRESULT {
     BOX_DRAG_HOVER.store(false, Ordering::Relaxed);
     let target = &*(this as *const BoxDropTarget);
     PostMessageW(target.target_hwnd, WM_USER_DRAG_LEAVE, 0, 0);
+    // ?? IDropTargetHelper::DragLeave
+    if let Some(helper) = get_or_create_drop_target_helper() {
+        let vtbl = &*(helper as *const IDropTargetHelperVtbl);
+        let _ = (vtbl.drag_leave)(helper);
+    }
     S_OK
 }
 
