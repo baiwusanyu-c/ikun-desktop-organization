@@ -101,6 +101,23 @@ struct IDropTargetVtbl {
     drag_leave: unsafe extern "system" fn(*mut c_void) -> HRESULT,
     drop: unsafe extern "system" fn(*mut c_void, *mut c_void, u32, i64, *mut u32) -> HRESULT,
 }
+/// IDropTargetHelper vtable（Shell 拖拽残影管理）
+///
+/// 用于在外部拖拽（桌面→分类框）时保持系统残影图标的显示。
+/// 当拖拽来自分类框内部时不使用（框间拖拽使用自定义覆盖窗口）。
+#[repr(C)]
+#[allow(non_snake_case)]
+struct IDropTargetHelperVtbl {
+    query_interface: unsafe extern "system" fn(*mut c_void, *const u8, *mut *mut c_void) -> HRESULT,
+    add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
+    release: unsafe extern "system" fn(*mut c_void) -> u32,
+    drag_enter: unsafe extern "system" fn(*mut c_void, HWND, *mut c_void, *mut POINT, u32) -> HRESULT,
+    drag_leave: unsafe extern "system" fn(*mut c_void) -> HRESULT,
+    drag_over: unsafe extern "system" fn(*mut c_void, *mut POINT, u32) -> HRESULT,
+    drop: unsafe extern "system" fn(*mut c_void, *mut c_void, *mut POINT, u32) -> HRESULT,
+    show: unsafe extern "system" fn(*mut c_void, i32) -> HRESULT,
+}
+
 
 #[repr(C)]
 struct BoxDropTarget {
@@ -108,6 +125,8 @@ struct BoxDropTarget {
     ref_count: u32,
     target_hwnd: HWND,
     custom_format_id: u32,
+    /// IDropTargetHelper 实例（仅在外部拖拽时创建，用于保持系统残影图标）
+    drop_target_helper: *mut c_void,
 }
 
 /// 当前是否有来自分类框的拖拽悬停（用于区分外部拖拽，控制可视化反馈）
@@ -168,15 +187,26 @@ unsafe extern "system" fn drop_target_release(this: *mut c_void) -> u32 {
 
 // ----- IDropTarget 方法 -----
 
+
+/// 释放 IDropTargetHelper 实例
+unsafe fn release_drop_target_helper(target: *mut BoxDropTarget) {
+    let helper = (*target).drop_target_helper;
+    if !helper.is_null() {
+        let vtbl = *(helper as *const *const IDropTargetHelperVtbl);
+        ((*vtbl).release)(helper);
+        (*target).drop_target_helper = std::ptr::null_mut();
+    }
+}
+
 unsafe extern "system" fn drop_target_drag_enter(
     this: *mut c_void,
     data_obj: *mut c_void,
     _ks: u32,
-    _pt: i64,
+    ptl: i64,
     effect: *mut u32,
 ) -> HRESULT {
-    let target = &*(this as *const BoxDropTarget);
-    let has_box = query_format(data_obj, target.custom_format_id);
+    let target = this as *mut BoxDropTarget;
+    let has_box = query_format(data_obj, (*target).custom_format_id);
     let has_hdrop = query_format(data_obj, CF_HDROP);
     // 检查是否有虚拟 Shell 对象（回收站、此电脑等）
     let has_shell_idlist = if !has_hdrop && !has_box {
@@ -189,28 +219,57 @@ unsafe extern "system" fn drop_target_drag_enter(
     if has_box || has_hdrop || has_shell_idlist {
         *effect = DROPEFFECT_MOVE;
         BOX_DRAG_HOVER.store(has_box, Ordering::Relaxed);
-        PostMessageW(target.target_hwnd, WM_USER_DRAG_ENTER, 0, 0);
+        PostMessageW((*target).target_hwnd, WM_USER_DRAG_ENTER, 0, 0);
         log::info!("[DRAG-ENTER] 拖拽进入: box={} hdrop={} shell_idlist={}", has_box, has_hdrop, has_shell_idlist);
     } else {
         *effect = DROPEFFECT_NONE;
         log::debug!("[DRAG-ENTER] 拒绝拖拽: 无支持的格式");
     }
+
+    // 外部拖拽（桌面→分类框）：使用 IDropTargetHelper 保持残影图标显示
+    if !has_box {
+        let mut helper: *mut c_void = std::ptr::null_mut();
+        let hr = CoCreateInstance(
+            CLSID_DRAGDROPHELPER.as_ptr(),
+            std::ptr::null_mut(),
+            CLSCTX_INPROC_SERVER,
+            IID_IDROPTARGETHELPER.as_ptr(),
+            &mut helper,
+        );
+        if hr == S_OK && !helper.is_null() {
+            let vtbl = *(helper as *const *const IDropTargetHelperVtbl);
+            let mut pt = POINT { x: (ptl & 0xFFFFFFFF) as i32, y: (ptl >> 32) as i32 };
+            let _ = ((*vtbl).drag_enter)(helper, (*target).target_hwnd, data_obj, &mut pt, *effect);
+            (*target).drop_target_helper = helper;
+            log::info!("[DropTarget] IDropTargetHelper 已创建，残影图标保持显示");
+        } else {
+            log::warn!("[DropTarget] IDropTargetHelper 创建失败: hr={:#010X}", hr as u32);
+        }
+    }
+
     S_OK
 }
 
 unsafe extern "system" fn drop_target_drag_over(
     this: *mut c_void,
     _ks: u32,
-    _pt: i64,
+    ptl: i64,
     effect: *mut u32,
 ) -> HRESULT {
     if *effect & DROPEFFECT_MOVE != 0 {
         *effect = DROPEFFECT_MOVE;
     }
 
-    // 外部拖拽（桌面→框）：跳过所有视觉更新，保留 Windows 原生拖拽残影
+    // 外部拖拽（桌面→框）：跳过所有视觉更新，更新 IDropTargetHelper 保持残影跟随光标
     let is_box_hover = BOX_DRAG_HOVER.load(Ordering::Relaxed);
     if !is_box_hover {
+        let target = this as *mut BoxDropTarget;
+        let helper = (*target).drop_target_helper;
+        if !helper.is_null() {
+            let vtbl = *(helper as *const *const IDropTargetHelperVtbl);
+            let mut pt = POINT { x: (ptl & 0xFFFFFFFF) as i32, y: (ptl >> 32) as i32 };
+            let _ = ((*vtbl).drag_over)(helper, &mut pt, *effect);
+        }
         return S_OK;
     }
 
@@ -233,9 +292,16 @@ unsafe extern "system" fn drop_target_drag_over(
 }
 
 unsafe extern "system" fn drop_target_drag_leave(this: *mut c_void) -> HRESULT {
+    let target = this as *mut BoxDropTarget;
+
+    // 外部拖拽：释放 IDropTargetHelper
+    if !(*target).drop_target_helper.is_null() {
+        release_drop_target_helper(target);
+        log::info!("[DropTarget] IDropTargetHelper 已释放（DragLeave）");
+    }
+
     BOX_DRAG_HOVER.store(false, Ordering::Relaxed);
-    let target = &*(this as *const BoxDropTarget);
-    PostMessageW(target.target_hwnd, WM_USER_DRAG_LEAVE, 0, 0);
+    PostMessageW((*target).target_hwnd, WM_USER_DRAG_LEAVE, 0, 0);
     S_OK
 }
 
@@ -246,14 +312,25 @@ unsafe extern "system" fn drop_target_drop(
     pt: i64,
     effect: *mut u32,
 ) -> HRESULT {
-    let target = &*(this as *const BoxDropTarget);
-    PostMessageW(target.target_hwnd, WM_USER_DRAG_LEAVE, 0, 0);
+    let target = this as *mut BoxDropTarget;
+
+    // 外部拖拽：通知 IDropTargetHelper Drop 完成并释放
+    if !(*target).drop_target_helper.is_null() {
+        let helper = (*target).drop_target_helper;
+        let vtbl = *(helper as *const *const IDropTargetHelperVtbl);
+        let mut drop_pt = POINT { x: (pt & 0xFFFFFFFF) as i32, y: (pt >> 32) as i32 };
+        let _ = ((*vtbl).drop)(helper, data_obj, &mut drop_pt, *effect);
+        release_drop_target_helper(target);
+        log::info!("[DropTarget] IDropTargetHelper 已释放（Drop）");
+    }
+
+    PostMessageW((*target).target_hwnd, WM_USER_DRAG_LEAVE, 0, 0);
 
     let drop_x = (pt & 0xFFFFFFFF) as i32;
     let drop_y = (pt >> 32) as i32;
 
-    let box_data = if target.custom_format_id != 0 {
-        read_box_drag_data(data_obj, target.custom_format_id)
+    let box_data = if (*target).custom_format_id != 0 {
+        read_box_drag_data(data_obj, (*target).custom_format_id)
     } else {
         None
     };
@@ -277,10 +354,10 @@ unsafe extern "system" fn drop_target_drop(
             box_data: box_data.clone(),
             drop_x,
             drop_y,
-            insert_col: super::grid_window::get_data(target.target_hwnd)
+            insert_col: super::grid_window::get_data((*target).target_hwnd)
                 .map(|d| d.drag_over_insert_col)
                 .unwrap_or(-1),
-            insert_row: super::grid_window::get_data(target.target_hwnd)
+            insert_row: super::grid_window::get_data((*target).target_hwnd)
                 .map(|d| d.drag_over_insert_row)
                 .unwrap_or(-1),
         });
@@ -301,7 +378,7 @@ unsafe extern "system" fn drop_target_drop(
         }
     }
 
-    PostMessageW(target.target_hwnd, WM_USER_DRAG_DROP, 0, 0);
+    PostMessageW((*target).target_hwnd, WM_USER_DRAG_DROP, 0, 0);
     *effect = DROPEFFECT_MOVE;
     log::info!("拖拽放置完成（数据已暂存）");
     S_OK
@@ -564,6 +641,7 @@ pub fn register_box_drop_target(hwnd: HWND) -> *mut c_void {
         ref_count: 1,
         target_hwnd: hwnd,
         custom_format_id,
+        drop_target_helper: std::ptr::null_mut(),
     });
     let ptr = Box::into_raw(target) as *mut c_void;
     let hr = unsafe { RegisterDragDrop(hwnd, ptr) };
