@@ -18,10 +18,6 @@ use windows::Win32::Graphics::DirectWrite::{
 // ===== Raw Win32 Types =====
 pub type HWND = *mut c_void;
 
-/// GUID ????? COM ???
-pub type GUID = [u8; 16];
-
-
 /// HWND_TOPMOST: Places the window above all non-topmost windows.
 /// Value is (HWND)(-1) in Windows API.
 pub const HWND_TOPMOST: HWND = -1isize as *mut c_void;
@@ -767,51 +763,6 @@ pub struct SHDRAGIMAGE {
     pub pt_offset: POINT,
     pub hbmp_drag_image: HBITMAP,
     pub cr_color_key: u32,
-}
-
-
-/// IDropTargetHelper ?? GUID
-/// {4657278B-411B-11d2-839A-00C04FD918D0}
-pub const IID_IDROPTARGETHELPER: [u8; 16] = [
-    0x8B, 0x27, 0x57, 0x46, 0x1B, 0x41, 0xD2, 0x11,
-    0x83, 0x9A, 0x00, 0xC0, 0x4F, 0xD9, 0x18, 0xD0,
-];
-
-/// DragDropHelper CLSID
-/// {4657278A-411B-11d2-839A-00C04FD918D0}
-pub const CLSID_DRAGDROPMANAGER: [u8; 16] = [
-    0x8A, 0x27, 0x57, 0x46, 0x1B, 0x41, 0xD2, 0x11,
-    0x83, 0x9A, 0x00, 0xC0, 0x4F, 0xD9, 0x18, 0xD0,
-];
-
-/// IDropTargetHelper vtable
-#[repr(C)]
-pub struct IDropTargetHelperVtbl {
-    // IUnknown
-    pub query_interface: unsafe extern "system" fn(*mut c_void, *const u8, *mut *mut c_void) -> HRESULT,
-    pub add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
-    pub release: unsafe extern "system" fn(*mut c_void) -> u32,
-    // IDropTargetHelper
-    pub drag_enter: unsafe extern "system" fn(
-        *mut c_void,
-        HWND,           // hwnd
-        *mut c_void,    // IDataObject
-        *mut POINT,     // ppt
-        u32,            // dwEffect
-    ) -> HRESULT,
-    pub drag_leave: unsafe extern "system" fn(*mut c_void) -> HRESULT,
-    pub drag_over: unsafe extern "system" fn(
-        *mut c_void,
-        *mut POINT,     // ppt
-        u32,            // dwEffect
-    ) -> HRESULT,
-    pub drop: unsafe extern "system" fn(
-        *mut c_void,
-        *mut c_void,    // IDataObject
-        *mut POINT,     // ppt
-        u32,            // dwEffect
-    ) -> HRESULT,
-    pub show: unsafe extern "system" fn(*mut c_void, i32) -> HRESULT, // BOOL fShow
 }
 
 /// FORMATETC 结构体（OLE 数据格式描述）
