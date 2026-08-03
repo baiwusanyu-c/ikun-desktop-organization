@@ -571,6 +571,7 @@ impl GlassRenderer {
                     FillMode: D3D11_FILL_SOLID,
                     CullMode: D3D11_CULL_NONE,
                     ScissorEnable: true.into(),
+                    DepthClipEnable: true.into(),
                     ..Default::default()
                 },
                 Some(&mut rasterizer),
@@ -1085,6 +1086,14 @@ impl GlassRenderer {
             mapped.pData.cast::<Constants>().write(constants);
             self.context.Unmap(&self.constants, 0);
 
+            // 与 frosted_liquid 示例一致：启用 scissor 后必须在 Draw 前设置范围。
+            // 分类框的液态玻璃表面就是完整窗口，因此裁剪范围为整张输出纹理。
+            self.context.RSSetScissorRects(Some(&[WinRect {
+                left: 0,
+                top: 0,
+                right: width as i32,
+                bottom: height as i32,
+            }]));
             self.context.PSSetShaderResources(
                 0,
                 Some(&[Some(blurred_view.clone()), Some(map_view.clone())]),
@@ -1125,6 +1134,10 @@ impl GlassRenderer {
             }
 
             self.context.Unmap(&surfaces.staging_texture, 0);
+            let center_index = ((height / 2) * width + width / 2) as usize;
+            if pixels.get(center_index).is_none_or(|pixel| pixel.a == 0) {
+                return Err(anyhow!("液态玻璃 GPU 输出中心像素完全透明"));
+            }
             Ok(pixels)
         }
     }

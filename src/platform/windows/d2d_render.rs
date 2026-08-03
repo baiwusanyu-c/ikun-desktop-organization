@@ -128,6 +128,7 @@ pub fn render_layered_window(hwnd: HWND) {
     // 递归保护：防止 UpdateLayeredWindow 触发 WM_SIZE → 再次进入本函数
     use std::sync::atomic::{AtomicBool, Ordering};
     static RENDERING: AtomicBool = AtomicBool::new(false);
+    static LAYERED_SUBMIT_FAILED: AtomicBool = AtomicBool::new(false);
     if RENDERING.swap(true, Ordering::SeqCst) {
         return; // 已在渲染中，跳过
     }
@@ -613,7 +614,7 @@ pub fn render_layered_window(hwnd: HWND) {
         alpha_format: AC_SRC_ALPHA,
     };
 
-    unsafe {
+    let submit_result = unsafe {
         UpdateLayeredWindow(
             hwnd,
             screen_dc,
@@ -624,7 +625,21 @@ pub fn render_layered_window(hwnd: HWND) {
             0,
             &blend,
             LWA_ALPHA,
-        );
+        )
+    };
+    if submit_result == 0 {
+        let error_code = unsafe { GetLastError() };
+        if !LAYERED_SUBMIT_FAILED.swap(true, Ordering::Relaxed) {
+            log::error!(
+                "UpdateLayeredWindow 提交分类框画面失败: hwnd={:?}, size={}x{}, error={}",
+                hwnd,
+                w,
+                h,
+                error_code
+            );
+        }
+    } else if LAYERED_SUBMIT_FAILED.swap(false, Ordering::Relaxed) {
+        log::info!("UpdateLayeredWindow 提交分类框画面已恢复: hwnd={:?}", hwnd);
     }
 
     // 清理 GDI 资源（D2D target 保留复用）
