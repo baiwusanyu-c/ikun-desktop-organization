@@ -3,7 +3,7 @@
   "name": "fix-public-desktop-vault",
   "title": "修复 Public 桌面图标收纳路径与分类框显示",
   "description": "统一 Public 桌面图标的公共仓库路径，并修复收纳后的读取、显示与隐藏链路。",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": "backend",
   "scope": "windows-platform",
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "codex-agent",
   "assignee": "codex-agent",
   "createdAt": "2026-08-03",
-  "completedAt": null,
+  "completedAt": "2026-08-03",
   "branch": null,
   "base_branch": "master",
   "worktree_path": null,
@@ -34,7 +34,7 @@
       "action": "record-session"
     }
   ],
-  "commit": null,
+  "commit": "79ff965",
   "pr_url": null,
   "subtasks": [],
   "children": [],
