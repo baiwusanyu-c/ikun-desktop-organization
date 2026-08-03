@@ -1487,6 +1487,13 @@ fn end_overlay_drag(hwnd: HWND) {
                 crate::platform::windows::drag_drop::hide_single_desktop_icon(&info.file_path, &info.display_name);
             }
 
+            // 验证日志：打印所有项的网格坐标
+            log::info!("[VERIFY] 目标框总项数: {}", target_data.items.len());
+            for (vi, vitem) in target_data.items.iter().enumerate() {
+                log::info!("[VERIFY] item[{}]: '{}' grid=({}, {})",
+                    vi, vitem.display_name, vitem.grid_col, vitem.grid_row);
+            }
+
             // Render and save once
             crate::platform::windows::d2d_render::render_layered_window(target_hwnd);
             crate::platform::windows::drag_handler::save_config();
