@@ -677,6 +677,10 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
     };
 
     let mut added = 0;
+    // 计算基础 grid 位置（第一个文件的位置）
+    let (base_col, base_row) = compute_drop_grid_position(hwnd, drop.drop_x, drop.drop_y, data);
+    let cols = data.cols;
+    
     for file_path in &drop.file_paths {
         // 去重：已存在则跳过
         if data.items.iter().any(|i| i.file_path == *file_path) {
@@ -732,24 +736,28 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
             }
         };
 
-        // 计算释放位置对应的网格坐标（遵循分类框的栅格布局规则）
-        let (target_col, target_row) =
-            compute_drop_grid_position(hwnd, drop.drop_x, drop.drop_y, data);
-
         // 检查是否有插入模式（来自拖拽悬停可视化反馈）
         let is_insert = drop.insert_col >= 0 && drop.insert_row >= 0;
         let (final_col, final_row) = if is_insert {
-            (drop.insert_col, drop.insert_row)
+            // 插入模式：使用插入位置 + 偏移
+            let offset_lin = (drop.insert_row * cols + drop.insert_col) + added as i32;
+            (offset_lin % cols, offset_lin / cols)
         } else {
-            (target_col, target_row)
+            // 正常模式：基础位置 + 偏移（每个文件占据不同的 grid cell）
+            let offset_lin = (base_row * cols + base_col) + added as i32;
+            let col = offset_lin % cols;
+            let row = offset_lin / cols;
+            log::info!("[OLE-DROP-OFFSET] file #{}, base=({}, {}), offset_lin={}, final=({}, {})",
+                added, base_col, base_row, offset_lin, col, row);
+            (col, row)
         };
 
         log::info!(
             "OLE drop grid: drop=({}, {}) -> grid=({}, {}), insert=({}, {})",
             drop.drop_x,
             drop.drop_y,
-            target_col,
-            target_row,
+            final_col,
+            final_row,
             drop.insert_col,
             drop.insert_row
         );
