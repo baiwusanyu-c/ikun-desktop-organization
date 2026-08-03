@@ -83,7 +83,9 @@ impl AppContext {
 
         // 初始化全局液态玻璃配置
         #[cfg(target_os = "windows")]
-        crate::platform::windows::liquid_glass::update_liquid_glass_config(&config.box_style.liquid_glass);
+        crate::platform::windows::liquid_glass::update_liquid_glass_config(
+            &config.box_style.liquid_glass,
+        );
 
         // 2. 初始化分类器（使用配置中的兜底分类规则）
         let classifier = AppClassifier::from_config(&config.classification);

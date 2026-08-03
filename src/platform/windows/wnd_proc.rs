@@ -1,4 +1,4 @@
-﻿//! 格子窗口消息处理（wnd_proc）
+//! 格子窗口消息处理（wnd_proc）
 //!
 //! 包含 `grid_wnd_proc` 窗口过程，处理所有 Win32 消息：
 //! - WM_NCHITTEST：标题栏拖拽 + 边缘缩放 + 锁定按钮 + hover_edge 同步 + 编辑模式锁定
@@ -694,13 +694,25 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 let hit = grid_hit_test(data, win_w, click_x, click_y, dpi);
                 let ctrl_down = unsafe { GetAsyncKeyState(VK_CONTROL) } & 0x8000u16 as i16 != 0;
                 let shift_down = unsafe { GetAsyncKeyState(VK_SHIFT) } & 0x8000u16 as i16 != 0;
-                log::info!("[CLICK] pos=({},{}), hit={}, ctrl={}, shift={}, selected={}, anchor={}", 
-                    click_x, click_y, hit, ctrl_down, shift_down, data.selected_item, data.shift_anchor);
+                log::info!(
+                    "[CLICK] pos=({},{}), hit={}, ctrl={}, shift={}, selected={}, anchor={}",
+                    click_x,
+                    click_y,
+                    hit,
+                    ctrl_down,
+                    shift_down,
+                    data.selected_item,
+                    data.shift_anchor
+                );
                 let ct = super::multi_select::ContainerType::GridBox;
                 let cid = super::multi_select::container_id_from_uuid(data.config_id);
                 if hit >= 0 {
                     let hi = hit as usize;
-                    let key = super::multi_select::SelectionKey { container_type: ct, container_id: cid, item_index: hi };
+                    let key = super::multi_select::SelectionKey {
+                        container_type: ct,
+                        container_id: cid,
+                        item_index: hi,
+                    };
                     if shift_down && data.shift_anchor >= 0 {
                         let a = data.shift_anchor as usize;
                         // CRITICAL: Compute visual order (row, col) for each item, then
@@ -712,7 +724,8 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                         let cols = shift_layout.cols;
 
                         // Build (item_index, visual_row, visual_col) for every item
-                        let mut visual_order: Vec<(usize, i32, i32)> = Vec::with_capacity(data.items.len());
+                        let mut visual_order: Vec<(usize, i32, i32)> =
+                            Vec::with_capacity(data.items.len());
                         for (i, item) in data.items.iter().enumerate() {
                             if item.grid_col >= 0 && item.grid_row >= 0 {
                                 visual_order.push((i, item.grid_row, item.grid_col));
@@ -724,9 +737,20 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                         // Sort by (row, col) to get left-to-right, top-to-bottom visual order
                         visual_order.sort_by(|x, y| x.1.cmp(&y.1).then(x.2.cmp(&y.2)));
 
-                        log::info!("[SHIFT-CLICK] anchor={}, target={}, cols={}, visual_order:", a, hi, cols);
+                        log::info!(
+                            "[SHIFT-CLICK] anchor={}, target={}, cols={}, visual_order:",
+                            a,
+                            hi,
+                            cols
+                        );
                         for (vo_idx, &(item_idx, r, c)) in visual_order.iter().enumerate() {
-                            log::info!("[SHIFT-CLICK]   visual[{}] = item[{}] at ({},{})", vo_idx, item_idx, r, c);
+                            log::info!(
+                                "[SHIFT-CLICK]   visual[{}] = item[{}] at ({},{})",
+                                vo_idx,
+                                item_idx,
+                                r,
+                                c
+                            );
                         }
 
                         // Find anchor and target positions in the visual order
@@ -744,7 +768,9 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                             for vo_idx in lo_vo..=hi_vo {
                                 let item_idx = visual_order[vo_idx].0;
                                 let k = super::multi_select::SelectionKey {
-                                    container_type: ct, container_id: cid, item_index: item_idx,
+                                    container_type: ct,
+                                    container_id: cid,
+                                    item_index: item_idx,
                                 };
                                 super::multi_select::add(k);
                             }
@@ -755,12 +781,20 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                         // Ensure clicked item is in selection
                         super::multi_select::add(key);
                         let selected_now = super::multi_select::selected_in_container(ct, cid);
-                        log::info!("[SHIFT-RESULT] Final selection: {} items = {:?}", selected_now.len(), selected_now);
+                        log::info!(
+                            "[SHIFT-RESULT] Final selection: {} items = {:?}",
+                            selected_now.len(),
+                            selected_now
+                        );
                         data.selected_item = hit;
                     } else if ctrl_down {
                         super::multi_select::toggle(key);
-                        if super::multi_select::is_selected(key) { data.shift_anchor = hit; data.selected_item = hit; }
-                        else if data.selected_item == hit { data.selected_item = -1; }
+                        if super::multi_select::is_selected(key) {
+                            data.shift_anchor = hit;
+                            data.selected_item = hit;
+                        } else if data.selected_item == hit {
+                            data.selected_item = -1;
+                        }
                     } else {
                         // ★ 标准 Windows 行为：点击已选中的项时保持多选（等释放后再清除）
                         // 只有点击未选中的项时才清除多选
@@ -779,9 +813,13 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                         data.drag_start_y = click_y;
                         // If clicking an already-selected item, prepare multi-drag
                         if super::multi_select::is_selected(key) {
-                            data.multi_drag_items = super::multi_select::selected_in_container(ct, cid);
-                            log::info!("[GRID-CLICK] multi_drag_items={:?} ({} items)",
-                                data.multi_drag_items, data.multi_drag_items.len());
+                            data.multi_drag_items =
+                                super::multi_select::selected_in_container(ct, cid);
+                            log::info!(
+                                "[GRID-CLICK] multi_drag_items={:?} ({} items)",
+                                data.multi_drag_items,
+                                data.multi_drag_items.len()
+                            );
                         } else {
                             data.multi_drag_items.clear();
                         }
@@ -792,14 +830,23 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                         super::multi_select::clear();
                         data.shift_anchor = -1;
                     }
-                    if data.selected_item >= 0 { data.selected_item = -1; need_rerender = true; }
+                    if data.selected_item >= 0 {
+                        data.selected_item = -1;
+                        need_rerender = true;
+                    }
                     // Kill any existing hover timer to prevent interference
-                    unsafe { KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER); }
+                    unsafe {
+                        KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER);
+                    }
                     // Start marquee (SetTimer for tracking mouse release outside window)
                     data.marquee_active = true;
-                    data.marquee_start_x = click_x; data.marquee_start_y = click_y;
-                    data.marquee_current_x = click_x; data.marquee_current_y = click_y;
-                    unsafe { SetTimer(hwnd, TIMER_ID_GRID_DRAG, 16, std::ptr::null_mut()); }
+                    data.marquee_start_x = click_x;
+                    data.marquee_start_y = click_y;
+                    data.marquee_current_x = click_x;
+                    data.marquee_current_y = click_y;
+                    unsafe {
+                        SetTimer(hwnd, TIMER_ID_GRID_DRAG, 16, std::ptr::null_mut());
+                    }
                 }
             }
 
@@ -1198,7 +1245,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             // 需要重新收集并显示在覆盖窗口上（纵向优先布局）
             // 还原仓库中不再被任何剩余分类框管理的图标到桌面
             super::icon_hider::restore_unmanaged_vault_icons();
-// 修复同模板分层窗口 Z-order 异常（DestroyWindow 副作用）
+            // 修复同模板分层窗口 Z-order 异常（DestroyWindow 副作用）
             super::grid_window::rerender_all_grid_windows();
 
             0
@@ -1220,29 +1267,44 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                     let dx = (data.marquee_current_x - data.marquee_start_x).abs();
                     let dy = (data.marquee_current_y - data.marquee_start_y).abs();
                     if dx > 3 || dy > 3 {
-                        let mut wr2 = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+                        let mut wr2 = RECT {
+                            left: 0,
+                            top: 0,
+                            right: 0,
+                            bottom: 0,
+                        };
                         unsafe { GetWindowRect(hwnd, &mut wr2) };
                         let ww2 = wr2.right - wr2.left;
                         let d2 = unsafe { GetDpiForWindow(hwnd) };
                         let d2 = if d2 > 0 { d2 } else { 96 };
                         let ct = super::multi_select::ContainerType::GridBox;
                         let cid = super::multi_select::container_id_from_uuid(data.config_id);
-                        if !ctrl_down { super::multi_select::clear(); }
+                        if !ctrl_down {
+                            super::multi_select::clear();
+                        }
                         let vp = get_view_params(&data.view_mode, d2);
                         let lo = calculate_grid(ww2, data.title_h, &vp, d2);
                         for (i, item) in data.items.iter().enumerate() {
                             let (cx, cy) = if item.grid_col >= 0 && item.grid_row >= 0 {
-                                (lo.grid_left + item.grid_col * lo.cell_w, lo.grid_top + item.grid_row * lo.cell_h - data.scroll_offset)
+                                (
+                                    lo.grid_left + item.grid_col * lo.cell_w,
+                                    lo.grid_top + item.grid_row * lo.cell_h - data.scroll_offset,
+                                )
                             } else {
                                 let c = (i as i32) % lo.cols;
                                 let r = (i as i32) / lo.cols;
-                                (lo.grid_left + c * lo.cell_w, lo.grid_top + r * lo.cell_h - data.scroll_offset)
+                                (
+                                    lo.grid_left + c * lo.cell_w,
+                                    lo.grid_top + r * lo.cell_h - data.scroll_offset,
+                                )
                             };
                             let ccx = cx + lo.cell_w / 2;
                             let ccy = cy + lo.cell_h / 2;
                             if ccx >= rl && ccx <= rr && ccy >= rt && ccy <= rb {
                                 super::multi_select::add(super::multi_select::SelectionKey {
-                                    container_type: ct, container_id: cid, item_index: i,
+                                    container_type: ct,
+                                    container_id: cid,
+                                    item_index: i,
                                 });
                             }
                         }
@@ -1315,10 +1377,19 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             if !info_ptr.is_null() {
                 unsafe {
                     let info = Box::from_raw(info_ptr);
-                    log::info!("[DEFERRED] 处理异步定位: file={}, pos=({}, {})", info.file_path, info.screen_x, info.screen_y);
-                    
+                    log::info!(
+                        "[DEFERRED] 处理异步定位: file={}, pos=({}, {})",
+                        info.file_path,
+                        info.screen_x,
+                        info.screen_y
+                    );
+
                     // 调用 position_icon_at_screen 定位图标
-                    super::icon_manager::position_icon_at_screen(&info.file_path, info.screen_x, info.screen_y);
+                    super::icon_manager::position_icon_at_screen(
+                        &info.file_path,
+                        info.screen_x,
+                        info.screen_y,
+                    );
                 }
             }
             0
@@ -1431,7 +1502,3 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
-
-
-
-

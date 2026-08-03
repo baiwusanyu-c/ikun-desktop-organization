@@ -1,4 +1,4 @@
-﻿//! 控制面板 - egui 主窗口
+//! 控制面板 - egui 主窗口
 //!
 //! 通过 `AppContext` 统一管理配置、平台服务和分类器。
 //! 创建分类框使用独立的 egui viewport（独立窗口，非控制面板内弹窗）。
@@ -10,14 +10,14 @@
 use crate::config::app_config::AppConfig;
 use crate::context::AppContext;
 use crate::platform::{
-    cleanup_desktop_registry, cleanup_system_tray, collect_grid_layout, create_grid_window, destroy_all_grid_windows, extract_file_icon,
-    get_cursor_monitor_work_area_phys, get_grid_count, get_primary_monitor_dpi,
-    get_screen_resolution, hide_control_panel_window, icon_exists_for_box,
+    cleanup_desktop_registry, cleanup_system_tray, collect_grid_layout, create_grid_window,
+    destroy_all_grid_windows, extract_file_icon, get_cursor_monitor_work_area_phys, get_grid_count,
+    get_primary_monitor_dpi, get_screen_resolution, hide_control_panel_window, icon_exists_for_box,
     install_overlay_mouse_hook, native_icons_hidden, register_tray_action_waker,
     reposition_window_by_title, resolve_icon_read_path, restore_all_hidden_icons,
     setup_desktop_registry, setup_system_tray, show_control_panel_window,
-    show_desktop_context_menu, take_pending_create_box, take_pending_tray_action, DesktopIcon, DesktopManagerTrait,
-    GridCreateParams, GridFileItem, SystemTrayAction,
+    show_desktop_context_menu, take_pending_create_box, take_pending_tray_action, DesktopIcon,
+    DesktopManagerTrait, GridCreateParams, GridFileItem, SystemTrayAction,
 };
 use eframe::egui;
 use std::sync::{Arc, Mutex};
@@ -439,7 +439,7 @@ impl MyApp {
     }
 
     fn perform_auto_classify(&mut self) {
-let icons = self.ctx.desktop_manager.get_desktop_icons();
+        let icons = self.ctx.desktop_manager.get_desktop_icons();
         if icons.is_empty() {
             self.ctx.set_status("未找到桌面图标");
             return;
@@ -520,15 +520,15 @@ let icons = self.ctx.desktop_manager.get_desktop_icons();
         self.merge_latest_overlay_config();
         let _ = self.ctx.save_config();
         destroy_all_grid_windows();
-if self.ctx.state.icons_hidden {
-self.ctx.state.icons_hidden = false;
+        if self.ctx.state.icons_hidden {
+            self.ctx.state.icons_hidden = false;
         }
         self.ctx.set_status("已清除，桌面图标已恢复");
     }
 
     fn create_empty_box(&mut self, name: String) {
         log::info!("创建分类框: '{}'", name);
-let (screen_w, screen_h) = get_screen_resolution();
+        let (screen_w, screen_h) = get_screen_resolution();
         let box_w = self.ctx.config.box_defaults.default_width;
         let box_h = self.ctx.config.box_defaults.default_height;
         let existing = get_grid_count();
@@ -581,7 +581,7 @@ impl eframe::App for MyApp {
             // 先清理旧版残留，再注册新版（退出时清理，保证无残留）
             cleanup_desktop_registry();
             setup_desktop_registry();
-}
+        }
 
         if ctx.input(|i| i.viewport().close_requested()) && !self.quit_requested {
             log::info!("控制面板窗口关闭请求已拦截，改为隐藏窗口");
@@ -595,7 +595,7 @@ impl eframe::App for MyApp {
 
         if should_retry_native_icon_hide(self.ctx.state.icons_hidden, native_icons_hidden()) {
             log::warn!("检测到 Explorer 桌面图标窗口恢复，重新隐藏并保持覆盖窗口接管");
-}
+        }
 
         // 信号文件（桌面右键菜单注册表项触发新实例写入）→ 执行对应操作
         let signal_path = signal_file_path();
@@ -633,7 +633,6 @@ impl eframe::App for MyApp {
         }
 
         // 覆盖区域右键菜单（通过鼠标钩子拦截）
-        
 
         // 每帧渲染对话框 viewport（egui 要求每帧调用 show_viewport_deferred 才能保持打开）
         self.render_create_box_dialog(ctx);
@@ -711,8 +710,8 @@ impl Drop for MyApp {
             let _ = self.ctx.save_config();
         }
         destroy_all_grid_windows();
-if self.ctx.state.icons_hidden {
-self.ctx.state.icons_hidden = false;
+        if self.ctx.state.icons_hidden {
+            self.ctx.state.icons_hidden = false;
         }
         // 程序退出时清理注册表，确保不运行时桌面菜单完全原生
         cleanup_desktop_registry();
@@ -869,7 +868,7 @@ mod tests {
     }
 
     // ===== 阶段 6 生命周期判定 =====
-#[test]
+    #[test]
     fn test_should_not_retry_native_icon_hide_when_both_hidden() {
         assert!(!should_retry_native_icon_hide(true, true));
     }
@@ -946,9 +945,3 @@ fn is_box_name_valid(name: &str) -> bool {
     let trimmed = name.trim();
     !trimmed.is_empty() && trimmed.chars().count() <= BOX_NAME_MAX_LEN
 }
-
-/// 判断是否需要重新隐藏原生桌面图标。
-///
-/// Explorer 重启或桌面列表窗口重新可见时，应用运行态仍认为已接管桌面，
-/// 此时需要重新执行隐藏并保持覆盖窗口生命周期。
-

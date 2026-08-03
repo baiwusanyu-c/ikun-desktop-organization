@@ -1,4 +1,4 @@
-﻿//! 桌面工具模块
+//! 桌面工具模块
 //!
 //! 提供与原生桌面 SysListView32 交互的工具函数：
 //! - 自动排列检测
@@ -58,9 +58,19 @@ fn find_desktop_listview() -> Option<HWND> {
         // 尝试 Progman
         let progman = FindWindowW(progman_class.as_ptr(), std::ptr::null());
         if !progman.is_null() {
-            let defview = FindWindowExW(progman, std::ptr::null_mut(), defview_class.as_ptr(), std::ptr::null());
+            let defview = FindWindowExW(
+                progman,
+                std::ptr::null_mut(),
+                defview_class.as_ptr(),
+                std::ptr::null(),
+            );
             if !defview.is_null() {
-                let lv = FindWindowExW(defview, std::ptr::null_mut(), listview_class.as_ptr(), std::ptr::null());
+                let lv = FindWindowExW(
+                    defview,
+                    std::ptr::null_mut(),
+                    listview_class.as_ptr(),
+                    std::ptr::null(),
+                );
                 if !lv.is_null() {
                     return Some(lv);
                 }
@@ -70,22 +80,44 @@ fn find_desktop_listview() -> Option<HWND> {
         // 尝试 WorkerW
         let mut worker = FindWindowW(workerw_class.as_ptr(), std::ptr::null());
         while !worker.is_null() {
-            let defview = FindWindowExW(worker, std::ptr::null_mut(), defview_class.as_ptr(), std::ptr::null());
+            let defview = FindWindowExW(
+                worker,
+                std::ptr::null_mut(),
+                defview_class.as_ptr(),
+                std::ptr::null(),
+            );
             if !defview.is_null() {
-                let lv = FindWindowExW(defview, std::ptr::null_mut(), listview_class.as_ptr(), std::ptr::null());
+                let lv = FindWindowExW(
+                    defview,
+                    std::ptr::null_mut(),
+                    listview_class.as_ptr(),
+                    std::ptr::null(),
+                );
                 if !lv.is_null() {
                     return Some(lv);
                 }
             }
             // 找下一个 WorkerW
             extern "system" {
-                fn FindWindowExW(parent: HWND, after: HWND, class: *const u16, title: *const u16) -> HWND;
+                fn FindWindowExW(
+                    parent: HWND,
+                    after: HWND,
+                    class: *const u16,
+                    title: *const u16,
+                ) -> HWND;
             }
             let desktop_hwnd = {
-                extern "system" { fn GetDesktopWindow() -> HWND; }
+                extern "system" {
+                    fn GetDesktopWindow() -> HWND;
+                }
                 GetDesktopWindow()
             };
-            worker = FindWindowExW(desktop_hwnd, worker, workerw_class.as_ptr(), std::ptr::null());
+            worker = FindWindowExW(
+                desktop_hwnd,
+                worker,
+                workerw_class.as_ptr(),
+                std::ptr::null(),
+            );
         }
     }
 

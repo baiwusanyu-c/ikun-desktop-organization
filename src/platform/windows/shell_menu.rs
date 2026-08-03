@@ -271,7 +271,10 @@ fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResul
                     CMF_NORMAL | CMF_EXPLORE | CMF_CANRENAME | CMF_EXTENDED_VERBS | CMF_ITEMMENU;
 
                 let hmenu = windows::Win32::UI::WindowsAndMessaging::HMENU(menu);
-                match cm.QueryContextMenu(hmenu, 0, FCIDM_SHVIEWFIRST, MENU_CMD_ID_LAST, flags) {
+                match cm
+                    .QueryContextMenu(hmenu, 0, FCIDM_SHVIEWFIRST, MENU_CMD_ID_LAST, flags)
+                    .ok()
+                {
                     Ok(()) => {
                         log::debug!("windows crate: QueryContextMenu 成功");
                         log_menu_items(menu, "try_windows_crate:after-QCM");
@@ -561,7 +564,10 @@ pub fn show_desktop_context_menu(hwnd: HWND, include_ikun_items: bool) {
                 let flags = CMF_NORMAL | CMF_EXPLORE | CMF_CANRENAME | CMF_EXTENDED_VERBS;
                 let hmenu = windows::Win32::UI::WindowsAndMessaging::HMENU(menu);
 
-                match cm.QueryContextMenu(hmenu, 0, FCIDM_SHVIEWFIRST, MENU_CMD_ID_LAST, flags) {
+                match cm
+                    .QueryContextMenu(hmenu, 0, FCIDM_SHVIEWFIRST, MENU_CMD_ID_LAST, flags)
+                    .ok()
+                {
                     Ok(()) => {
                         log::debug!("桌面菜单: QueryContextMenu 成功");
                         log_menu_items(menu, "show_desktop_ctx:after-QCM");

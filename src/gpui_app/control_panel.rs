@@ -5,8 +5,8 @@
 
 use crate::gpui_app::app_runtime::{AppRuntime, CONTROL_PANEL_TITLE};
 use crate::gpui_app::create_box_dialog::CreateBoxDialogView;
-use crate::gpui_app::settings_view::SettingsView;
 use crate::gpui_app::edit_box_dialog::EditBoxDialogView;
+use crate::gpui_app::settings_view::SettingsView;
 use gpui::{
     div, px, rgb, size, App, AppContext, Bounds, Context, Entity, IntoElement, ParentElement,
     Render, SharedString, Styled, Window, WindowBounds, WindowOptions,

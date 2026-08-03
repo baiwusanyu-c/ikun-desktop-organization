@@ -1,4 +1,4 @@
-﻿//! 隐藏/恢复原生桌面图标 + 图标仓库（Vault）
+//! 隐藏/恢复原生桌面图标 + 图标仓库（Vault）
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -285,10 +285,13 @@ fn ensure_public_vault_dir() -> Result<()> {
         return Ok(());
     }
     // 权限不足，使用 ShellExecuteExW + runas 提升权限（无终端闪烁）
-    log::info!("[ELEVATE] 创建公共仓库目录需要管理员权限: {}", dir.display());
-    
+    log::info!(
+        "[ELEVATE] 创建公共仓库目录需要管理员权限: {}",
+        dir.display()
+    );
+
     use std::ffi::c_void;
-    
+
     #[repr(C)]
     struct SHELLEXECUTEINFOW {
         cb_size: u32,
@@ -307,23 +310,26 @@ fn ensure_public_vault_dir() -> Result<()> {
         h_icon_or_monitor: *mut c_void,
         h_process: *mut c_void,
     }
-    
+
     extern "system" {
         fn ShellExecuteExW(p_exec_info: *mut SHELLEXECUTEINFOW) -> i32;
         fn WaitForSingleObject(h_handle: *mut c_void, dw_milliseconds: u32) -> u32;
         fn CloseHandle(h_object: *mut c_void) -> i32;
     }
-    
+
     const SEE_MASK_NOCLOSEPROCESS: u32 = 0x00000040;
     const SEE_MASK_NO_CONSOLE: u32 = 0x00008000;
     const SW_HIDE: i32 = 0;
     const INFINITE: u32 = 0xFFFFFFFF;
-    
+
     let verb: Vec<u16> = "runas\0".encode_utf16().collect();
     let file: Vec<u16> = "cmd.exe\0".encode_utf16().collect();
     let params_str = format!("/c mkdir \"{}\"", dir.to_string_lossy());
-    let params: Vec<u16> = params_str.encode_utf16().chain(std::iter::once(0)).collect();
-    
+    let params: Vec<u16> = params_str
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
     let mut sei = SHELLEXECUTEINFOW {
         cb_size: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
         f_mask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NO_CONSOLE,
@@ -341,18 +347,18 @@ fn ensure_public_vault_dir() -> Result<()> {
         h_icon_or_monitor: std::ptr::null_mut(),
         h_process: std::ptr::null_mut(),
     };
-    
+
     let ok = unsafe { ShellExecuteExW(&mut sei) };
     if ok == 0 || sei.h_process.is_null() {
         return Err(anyhow::anyhow!("用户取消了管理员授权"));
     }
-    
+
     // 等待 cmd 进程结束
     unsafe {
         WaitForSingleObject(sei.h_process, INFINITE);
         CloseHandle(sei.h_process);
     }
-    
+
     if dir.exists() {
         log::info!("[ELEVATE] 公共仓库目录已创建: {}", dir.display());
         Ok(())
@@ -594,7 +600,10 @@ pub fn ingest_icon(logical_path: &str) -> Result<()> {
     // 公共桌面图标：使用 IFileOperation COM 接口移动
     // Windows 会自动弹出原生权限对话框（"你需要权限来执行此操作" → 继续 → UAC 授权）
     if is_public_desktop_path(logical_path) {
-        log::info!("[INGEST] 公共桌面图标，使用 IFileOperation: {}", logical_path);
+        log::info!(
+            "[INGEST] 公共桌面图标，使用 IFileOperation: {}",
+            logical_path
+        );
         ensure_public_vault_dir()?;
         let file_name = Path::new(logical_path)
             .file_name()
@@ -602,7 +611,11 @@ pub fn ingest_icon(logical_path: &str) -> Result<()> {
         let public_vault = get_public_vault_dir().join(file_name);
         match move_with_ifile_operation(logical_path, &public_vault) {
             Ok(()) => {
-                log::info!("[INGEST] 公共桌面图标已移动: {} → {}", logical_path, public_vault.display());
+                log::info!(
+                    "[INGEST] 公共桌面图标已移动: {} → {}",
+                    logical_path,
+                    public_vault.display()
+                );
                 return Ok(());
             }
             Err(e) => {
@@ -618,8 +631,16 @@ pub fn ingest_icon(logical_path: &str) -> Result<()> {
     log::info!("[TIMING] rename 完成 [{:?}]", t_rename.elapsed());
     let t_notify = std::time::Instant::now();
     notify_shell_delete(logical_path);
-    log::info!("[TIMING] notify_shell_delete 完成 [{:?}]", t_notify.elapsed());
-    log::info!("[TIMING] ingest_icon 总计 [{:?}]: {} → {}", t0.elapsed(), logical_path, vault.display());
+    log::info!(
+        "[TIMING] notify_shell_delete 完成 [{:?}]",
+        t_notify.elapsed()
+    );
+    log::info!(
+        "[TIMING] ingest_icon 总计 [{:?}]: {} → {}",
+        t0.elapsed(),
+        logical_path,
+        vault.display()
+    );
     Ok(())
 }
 
@@ -659,8 +680,16 @@ pub fn export_icon(logical_path: &str) -> Result<(bool, PathBuf)> {
     log::info!("[TIMING] export rename 完成 [{:?}]", t_rename.elapsed());
     let t_notify = std::time::Instant::now();
     notify_shell_create(&export.to_string_lossy());
-    log::info!("[TIMING] export notify_shell_create 完成 [{:?}]", t_notify.elapsed());
-    log::info!("[TIMING] export_icon 总计 [{:?}]: {} → {}", t0.elapsed(), logical_path, export.display());
+    log::info!(
+        "[TIMING] export notify_shell_create 完成 [{:?}]",
+        t_notify.elapsed()
+    );
+    log::info!(
+        "[TIMING] export_icon 总计 [{:?}]: {} → {}",
+        t0.elapsed(),
+        logical_path,
+        export.display()
+    );
     Ok((true, export))
 }
 
@@ -1214,12 +1243,17 @@ fn move_with_ifile_operation(src_path: &str, dst_path: &Path) -> anyhow::Result<
 
     extern "system" {
         fn CoCreateInstance(
-            clsid: *const u8, p_unk: *mut c_void, cls_ctx: u32,
-            iid: *const u8, ppv: *mut *mut c_void,
+            clsid: *const u8,
+            p_unk: *mut c_void,
+            cls_ctx: u32,
+            iid: *const u8,
+            ppv: *mut *mut c_void,
         ) -> i32;
         fn SHCreateItemFromParsingName(
-            psz_path: *const u16, pbc: *mut c_void,
-            riid: *const u8, ppv: *mut *mut c_void,
+            psz_path: *const u16,
+            pbc: *mut c_void,
+            riid: *const u8,
+            ppv: *mut *mut c_void,
         ) -> i32;
     }
 
@@ -1240,25 +1274,26 @@ fn move_with_ifile_operation(src_path: &str, dst_path: &Path) -> anyhow::Result<
     const IDX_PERFORM_OPS: usize = 24;
     const IDX_GET_ABORTED: usize = 25;
 
-    type MoveItemFn = unsafe extern "system" fn(*mut c_void, *mut c_void, *mut c_void, *const u16, u32) -> i32;
+    type MoveItemFn =
+        unsafe extern "system" fn(*mut c_void, *mut c_void, *mut c_void, *const u16, u32) -> i32;
     type PerformOpsFn = unsafe extern "system" fn(*mut c_void) -> i32;
     type GetAbortedFn = unsafe extern "system" fn(*mut c_void, *mut i32) -> i32;
     type ReleaseFn = unsafe extern "system" fn(*mut c_void) -> u32;
 
     // CLSID_FileOperation = {3ad05575-8857-4850-98f2-148fa4e14053}
     const CLSID: [u8; 16] = [
-        0x75, 0x55, 0xd0, 0x3a, 0x57, 0x88, 0x50, 0x48,
-        0x98, 0xf2, 0x14, 0x8f, 0xa4, 0xe1, 0x40, 0x53,
+        0x75, 0x55, 0xd0, 0x3a, 0x57, 0x88, 0x50, 0x48, 0x98, 0xf2, 0x14, 0x8f, 0xa4, 0xe1, 0x40,
+        0x53,
     ];
     // IID_IFileOperation = {947aab5f-0a5c-4c13-b4d6-4bf7836fc9f8}
     const IID_IOP: [u8; 16] = [
-        0x5f, 0xab, 0x7a, 0x94, 0x5c, 0x0a, 0x13, 0x4c,
-        0xb4, 0xd6, 0x4b, 0xf7, 0x83, 0x6f, 0xc9, 0xf8,
+        0x5f, 0xab, 0x7a, 0x94, 0x5c, 0x0a, 0x13, 0x4c, 0xb4, 0xd6, 0x4b, 0xf7, 0x83, 0x6f, 0xc9,
+        0xf8,
     ];
     // IID_IShellItem = {43826d1e-e718-42ee-bc55-a1e261c37bfe}
     const IID_SI: [u8; 16] = [
-        0x1e, 0x6d, 0x82, 0x43, 0x18, 0xe7, 0xee, 0x42,
-        0xbc, 0x55, 0xa1, 0xe2, 0x61, 0xc3, 0x7b, 0xfe,
+        0x1e, 0x6d, 0x82, 0x43, 0x18, 0xe7, 0xee, 0x42, 0xbc, 0x55, 0xa1, 0xe2, 0x61, 0xc3, 0x7b,
+        0xfe,
     ];
 
     const CLSCTX: u32 = 1;
@@ -1266,9 +1301,18 @@ fn move_with_ifile_operation(src_path: &str, dst_path: &Path) -> anyhow::Result<
 
     unsafe {
         let mut file_op: *mut c_void = std::ptr::null_mut();
-        let hr = CoCreateInstance(CLSID.as_ptr(), std::ptr::null_mut(), CLSCTX, IID_IOP.as_ptr(), &mut file_op);
+        let hr = CoCreateInstance(
+            CLSID.as_ptr(),
+            std::ptr::null_mut(),
+            CLSCTX,
+            IID_IOP.as_ptr(),
+            &mut file_op,
+        );
         if hr != S_OK || file_op.is_null() {
-            return Err(anyhow::anyhow!("CoCreateInstance(IFileOperation) failed: {:#x}", hr));
+            return Err(anyhow::anyhow!(
+                "CoCreateInstance(IFileOperation) failed: {:#x}",
+                hr
+            ));
         }
 
         let vtbl = *(file_op as *const *const *const c_void);
@@ -1280,7 +1324,12 @@ fn move_with_ifile_operation(src_path: &str, dst_path: &Path) -> anyhow::Result<
         // 创建源 IShellItem
         let src_w: Vec<u16> = src_path.encode_utf16().chain(std::iter::once(0)).collect();
         let mut src_item: *mut c_void = std::ptr::null_mut();
-        let hr = SHCreateItemFromParsingName(src_w.as_ptr(), std::ptr::null_mut(), IID_SI.as_ptr(), &mut src_item);
+        let hr = SHCreateItemFromParsingName(
+            src_w.as_ptr(),
+            std::ptr::null_mut(),
+            IID_SI.as_ptr(),
+            &mut src_item,
+        );
         if hr != S_OK {
             release_fn(file_op);
             return Err(anyhow::anyhow!("创建源 IShellItem 失败: {:#x}", hr));
@@ -1288,23 +1337,51 @@ fn move_with_ifile_operation(src_path: &str, dst_path: &Path) -> anyhow::Result<
 
         // 创建目标目录 IShellItem（ensure_public_vault_dir 已确保目录存在）
         let dst_dir = dst_path.parent().unwrap_or(Path::new("."));
-        let dst_w: Vec<u16> = dst_dir.to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect();
+        let dst_w: Vec<u16> = dst_dir
+            .to_string_lossy()
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
         let mut dst_item: *mut c_void = std::ptr::null_mut();
-        let hr = SHCreateItemFromParsingName(dst_w.as_ptr(), std::ptr::null_mut(), IID_SI.as_ptr(), &mut dst_item);
+        let hr = SHCreateItemFromParsingName(
+            dst_w.as_ptr(),
+            std::ptr::null_mut(),
+            IID_SI.as_ptr(),
+            &mut dst_item,
+        );
         if hr != S_OK {
             release_fn(src_item);
             release_fn(file_op);
-            return Err(anyhow::anyhow!("创建目标目录 IShellItem 失败: {:#x} ({})", hr, dst_dir.display()));
+            return Err(anyhow::anyhow!(
+                "创建目标目录 IShellItem 失败: {:#x} ({})",
+                hr,
+                dst_dir.display()
+            ));
         }
 
         // 目标文件名
-        let new_name: Vec<u16> = dst_path.file_name()
-            .map(|n| n.to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect())
+        let new_name: Vec<u16> = dst_path
+            .file_name()
+            .map(|n| {
+                n.to_string_lossy()
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect()
+            })
             .unwrap_or_default();
 
         // MoveItem: 将移动操作加入队列
-        let hr = move_item_fn(file_op, src_item, dst_item,
-            if new_name.is_empty() { std::ptr::null() } else { new_name.as_ptr() }, 0);
+        let hr = move_item_fn(
+            file_op,
+            src_item,
+            dst_item,
+            if new_name.is_empty() {
+                std::ptr::null()
+            } else {
+                new_name.as_ptr()
+            },
+            0,
+        );
         if hr != S_OK {
             release_fn(dst_item);
             release_fn(src_item);

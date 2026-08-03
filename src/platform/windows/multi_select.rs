@@ -1,4 +1,4 @@
-﻿#![allow(dead_code)]
+#![allow(dead_code)]
 //! Global multi-selection registry for managing selected icons
 //! across multiple containers (classification boxes and desktop overlay).
 //!
@@ -152,7 +152,11 @@ pub fn set_range(
     start: usize,
     end: usize,
 ) -> Vec<SelectionKey> {
-    let (lo, hi) = if start <= end { (start, end) } else { (end, start) };
+    let (lo, hi) = if start <= end {
+        (start, end)
+    } else {
+        (end, start)
+    };
     let mut s = STATE.lock().unwrap();
     s.selected.clear();
     let added: Vec<SelectionKey> = (lo..=hi)
@@ -178,7 +182,11 @@ pub fn add_range(
     start: usize,
     end: usize,
 ) -> Vec<SelectionKey> {
-    let (lo, hi) = if start <= end { (start, end) } else { (end, start) };
+    let (lo, hi) = if start <= end {
+        (start, end)
+    } else {
+        (end, start)
+    };
     let mut s = STATE.lock().unwrap();
     let mut added = Vec::new();
     for idx in lo..=hi {
@@ -307,7 +315,6 @@ pub fn set_marquee_container(container: Option<(ContainerType, u64)>) {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-
 
 /// Select items in the visual rectangle between anchor and target indices.
 /// For GridBox: uses grid_col/grid_row for positioned items, index-based for auto-layout.
@@ -573,4 +580,3 @@ mod tests {
         assert_eq!(sel, vec![0, 1, 3, 5]);
     }
 }
-

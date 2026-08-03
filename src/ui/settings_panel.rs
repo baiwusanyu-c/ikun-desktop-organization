@@ -41,53 +41,49 @@ pub fn render_settings_panel(ctx: &mut AppContext, ui: &mut egui::Ui) {
     });
 
     // ===== 液态玻璃效果 =====
+    #[cfg(windows)]
     ui.collapsing("💎 液态玻璃效果", |ui| {
         let glass = &mut ctx.config.box_style.liquid_glass;
         let mut changed = false;
-
-        ui.label("🔵 核心参数");
-        changed |= ui.add(egui::Slider::new(&mut glass.blur_radius, 0.5..=8.0)
-            .text("模糊半径")).changed();
-        changed |= ui.add(egui::Slider::new(&mut glass.refraction_strength, 0.0..=20.0)
-            .text("折射强度")).changed();
-        changed |= ui.add(egui::Slider::new(&mut glass.glass_alpha, 0.0..=1.0)
-            .text("玻璃透明度")).changed();
-        changed |= ui.add(egui::Slider::new(&mut glass.edge_effect_width, 4.0..=60.0)
-            .text("边缘过渡宽度")).changed();
-
-        ui.separator();
-        ui.label("🌈 光学效果");
-        changed |= ui.add(egui::Slider::new(&mut glass.chromatic_offset, 0.0..=5.0)
-            .text("色差偏移")).changed();
-        changed |= ui.add(egui::Slider::new(&mut glass.contrast, 0.5..=2.0)
-            .text("对比度")).changed();
-        changed |= ui.add(egui::Slider::new(&mut glass.brightness, 0.0..=0.2)
-            .text("亮度提升")).changed();
-
-        ui.separator();
-        ui.label("💡 光影效果");
-        changed |= ui.add(egui::Slider::new(&mut glass.shadow_offset_y, 0.0..=20.0)
-            .text("阴影偏移 Y")).changed();
-        changed |= ui.add(egui::Slider::new(&mut glass.shadow_softness, 1.0..=30.0)
-            .text("阴影柔和度")).changed();
-        changed |= ui.add(egui::Slider::new(&mut glass.shadow_opacity, 0.0..=1.0)
-            .text("阴影不透明度")).changed();
-        changed |= ui.add(egui::Slider::new(&mut glass.top_light_position, 0.0..=1.0)
-            .text("顶部高光位置")).changed();
-        changed |= ui.add(egui::Slider::new(&mut glass.top_light_strength, 0.0..=0.5)
-            .text("顶部高光强度")).changed();
-        changed |= ui.add(egui::Slider::new(&mut glass.lower_shadow_position, 0.0..=1.0)
-            .text("底部阴影位置")).changed();
-        changed |= ui.add(egui::Slider::new(&mut glass.lower_shadow_strength, 0.0..=0.5)
-            .text("底部阴影强度")).changed();
-
-        ui.separator();
-        ui.horizontal(|ui| {
-            if ui.button("🔄 重置默认").clicked() {
-                *glass = crate::config::LiquidGlassConfig::default();
-                changed = true;
-            }
+        changed |= ui.checkbox(&mut glass.enabled, "启用液态玻璃").changed();
+        ui.add_enabled_ui(glass.enabled, |ui| {
+            changed |= ui
+                .add(egui::Slider::new(&mut glass.displacement_scale, 0.0..=200.0).text("位移强度"))
+                .changed();
+            changed |= ui
+                .add(egui::Slider::new(&mut glass.blur_amount, 0.0..=1.0).text("模糊程度"))
+                .changed();
+            changed |= ui
+                .add(egui::Slider::new(&mut glass.saturation, 1.0..=3.0).text("饱和度"))
+                .changed();
+            changed |= ui
+                .add(egui::Slider::new(&mut glass.chromatic_offset, 0.0..=20.0).text("色差偏移"))
+                .changed();
+            changed |= ui
+                .add(egui::Slider::new(&mut glass.elasticity, 0.0..=1.0).text("弹性形变"))
+                .changed();
+            changed |= ui
+                .add(egui::Slider::new(&mut glass.corner_radius, 0.0..=100.0).text("圆角半径"))
+                .changed();
+            ui.horizontal(|ui| {
+                ui.label("折射贴图:");
+                for (mode, label) in [(0, "标准"), (1, "极坐标"), (2, "凸起"), (3, "程序化")]
+                {
+                    if ui
+                        .selectable_label(glass.refraction_mode == mode, label)
+                        .clicked()
+                    {
+                        glass.refraction_mode = mode;
+                        changed = true;
+                    }
+                }
+            });
+            changed |= ui.checkbox(&mut glass.over_light, "亮区减弱折射").changed();
         });
+        if ui.button("🔄 重置默认").clicked() {
+            *glass = crate::config::LiquidGlassConfig::default();
+            changed = true;
+        }
 
         // 实时更新：同步到全局配置、触发重绘并自动保存
         if changed {

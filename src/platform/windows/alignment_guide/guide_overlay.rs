@@ -7,13 +7,14 @@ use std::ffi::c_void;
 use std::sync::Mutex;
 
 use windows::Win32::Graphics::Direct2D::{
-    Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT, D2D_POINT_2F},
+    Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT},
     D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, D2D1_FACTORY_TYPE_SINGLE_THREADED,
     D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
     D2D1_RENDER_TARGET_USAGE_NONE,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::HDC as GdiHDC;
+use windows_numerics::Vector2;
 
 use super::alignment_detect::AlignmentResult;
 use crate::platform::windows::ffi_imports::*;
@@ -531,8 +532,8 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
         let y = (m.position - work_area_offset.1) as f32;
         let x0 = (m.line_start.0 - work_area_offset.0) as f32;
         let x1 = (m.line_end.0 - work_area_offset.0) as f32;
-        let p0 = D2D_POINT_2F { x: x0, y };
-        let p1 = D2D_POINT_2F { x: x1, y };
+        let p0 = Vector2 { X: x0, Y: y };
+        let p1 = Vector2 { X: x1, Y: y };
 
         if let Ok(ref dynamic_brush) =
             unsafe { target.CreateSolidColorBrush(&get_guide_color(), None) }
@@ -554,8 +555,8 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
         let x = (m.position - work_area_offset.0) as f32;
         let y0 = (m.line_start.1 - work_area_offset.1) as f32;
         let y1 = (m.line_end.1 - work_area_offset.1) as f32;
-        let p0 = D2D_POINT_2F { x, y: y0 };
-        let p1 = D2D_POINT_2F { x, y: y1 };
+        let p0 = Vector2 { X: x, Y: y0 };
+        let p1 = Vector2 { X: x, Y: y1 };
 
         if let Ok(ref dynamic_brush) =
             unsafe { target.CreateSolidColorBrush(&get_guide_color(), None) }

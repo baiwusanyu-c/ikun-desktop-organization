@@ -1,4 +1,4 @@
-﻿//! 自定义分层窗口菜单
+//! 自定义分层窗口菜单
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -165,7 +165,7 @@ pub fn show_menu_window(parent_hwnd: HWND) {
             }
             // 还原仓库中不再被任何剩余分类框管理的图标到桌面
             super::icon_hider::restore_unmanaged_vault_icons();
-} else {
+        } else {
             render_layered_window(parent_hwnd);
         }
     } else {
@@ -1218,9 +1218,9 @@ fn render_menu(hwnd: HWND) {
                         target.CreateSolidColorBrush(&d2d_color(100, 210, 255, 255), None)
                     };
                     if let Ok(ref cb) = check_brush {
-                        let origin = windows::Win32::Graphics::Direct2D::Common::D2D_POINT_2F {
-                            x: 0.0,
-                            y: item_top,
+                        let origin = windows_numerics::Vector2 {
+                            X: 0.0,
+                            Y: item_top,
                         };
                         unsafe {
                             target.DrawTextLayout(origin, cl, cb, D2D1_DRAW_TEXT_OPTIONS_NONE)
@@ -1267,9 +1267,9 @@ fn render_menu(hwnd: HWND) {
                 };
                 let text_brush = unsafe { target.CreateSolidColorBrush(&text_color, None) };
                 if let Ok(ref tb) = text_brush {
-                    let origin = windows::Win32::Graphics::Direct2D::Common::D2D_POINT_2F {
-                        x: check_w as f32 + padding_x,
-                        y: item_top,
+                    let origin = windows_numerics::Vector2 {
+                        X: check_w as f32 + padding_x,
+                        Y: item_top,
                     };
                     unsafe { target.DrawTextLayout(origin, ll, tb, D2D1_DRAW_TEXT_OPTIONS_NONE) };
                 }
@@ -1314,9 +1314,9 @@ fn render_menu(hwnd: HWND) {
                     };
                     let arrow_brush = unsafe { target.CreateSolidColorBrush(&arrow_color, None) };
                     if let Ok(ref ab) = arrow_brush {
-                        let origin = windows::Win32::Graphics::Direct2D::Common::D2D_POINT_2F {
-                            x: ww - arrow_w as f32 - 4.0,
-                            y: item_top,
+                        let origin = windows_numerics::Vector2 {
+                            X: ww - arrow_w as f32 - 4.0,
+                            Y: item_top,
                         };
                         unsafe {
                             target.DrawTextLayout(origin, al, ab, D2D1_DRAW_TEXT_OPTIONS_NONE)

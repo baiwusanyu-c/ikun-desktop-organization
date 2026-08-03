@@ -1,4 +1,4 @@
-﻿//! 统一应用配置
+//! 统一应用配置
 
 #![allow(dead_code)] // 配置类型，部分方法在当前构建路径未使用
 //!
@@ -276,139 +276,92 @@ impl Default for BoxStyleConfig {
 }
 
 // =============================================================================
-// LiquidGlassConfig - 液态玻璃效果参数
+// LiquidGlassConfig - 液态玻璃渲染参数（对齐 liquid-glass-rs EffectStyle）
 // =============================================================================
 
-/// 液态玻璃 GPU 渲染参数（基于高斯模糊 + 折射 + 色差着色器）
+/// 液态玻璃渲染参数，对齐 liquid-glass-rs FrostedLiquid 示例的 EffectStyle。
+///
+/// - 滑块参数通过 LiquidGlassParam 枚举访问
+/// - enabled 和 over_light 为 bool，通过独立方法访问
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LiquidGlassConfig {
-    /// 高斯模糊半径倍率，范围 0.5~8.0，默认 2.8
-    pub blur_radius: f32,
-    /// 边缘折射强度，范围 0.0~30.0，默认 7.0
-    pub refraction_strength: f32,
-    /// 玻璃整体不透明度，范围 0.0~1.0，默认 0.88
-    pub glass_alpha: f32,
-    /// 边缘效果过渡宽度(像素)，范围 4.0~60.0，默认 26.0
-    pub edge_effect_width: f32,
-    /// RGB 色差分离偏移，范围 0.0~5.0，默认 1.2
+    /// 液态玻璃效果开关
+    pub enabled: bool,
+    /// 位移强度（示例滑块 0~200），默认 100.0
+    pub displacement_scale: f32,
+    /// 模糊程度（示例滑块 0~1），默认 0.5
+    pub blur_amount: f32,
+    /// 饱和度（示例滑块 1~3），默认 1.40
+    pub saturation: f32,
+    /// 色差偏移（示例滑块 0~20），默认 2.0
     pub chromatic_offset: f32,
-    /// 对比度增益，范围 0.5~2.0，默认 1.04
-    pub contrast: f32,
-    /// 亮度提升值，范围 0.0~0.2，默认 0.015
-    pub brightness: f32,
-    /// 阴影垂直偏移(像素)，范围 0.0~20.0，默认 7.0
-    pub shadow_offset_y: f32,
-    /// 阴影柔和度(像素)，范围 1.0~30.0，默认 9.0
-    pub shadow_softness: f32,
-    /// 阴影不透明度，范围 0.0~1.0，默认 0.28
-    pub shadow_opacity: f32,
-    /// 顶部高光位置(UV Y)，范围 0.0~1.0，默认 0.55
-    pub top_light_position: f32,
-    /// 顶部高光强度，范围 0.0~0.5，默认 0.16
-    pub top_light_strength: f32,
-    /// 底部阴影位置(UV Y)，范围 0.0~1.0，默认 0.35
-    pub lower_shadow_position: f32,
-    /// 底部阴影强度，范围 0.0~0.5，默认 0.10
-    pub lower_shadow_strength: f32,
-    /// 颜色增益，范围 0.8~1.5，默认 1.025
-    pub color_gain: f32,
-    /// 颜色提升，范围 0.0~0.1，默认 0.018
-    pub color_lift: f32,
-    /// 圆角半径(像素)，范围 0.0~50.0，默认 16.0
+    /// 圆角半径（示例滑块 0~100），默认 32.0
     pub corner_radius: f32,
+    /// 弹性形变系数（示例滑块 0~1），默认 0.0
+    pub elasticity: f32,
+    /// 法线贴图模式：0=标准, 1=极坐标, 2=凸起, 3=程序化
+    pub refraction_mode: u32,
+    /// 亮区减弱折射（在明亮区域降低位移强度）
+    pub over_light: bool,
 }
 
 impl Default for LiquidGlassConfig {
     fn default() -> Self {
         Self {
-            blur_radius: 2.8,
-            refraction_strength: 7.0,
-            glass_alpha: 0.88,
-            edge_effect_width: 26.0,
-            chromatic_offset: 1.2,
-            contrast: 1.04,
-            brightness: 0.015,
-            shadow_offset_y: 7.0,
-            shadow_softness: 9.0,
-            shadow_opacity: 0.28,
-            top_light_position: 0.55,
-            top_light_strength: 0.16,
-            lower_shadow_position: 0.35,
-            lower_shadow_strength: 0.10,
-            color_gain: 1.025,
-            color_lift: 0.018,
-            corner_radius: 16.0,
+            enabled: true,
+            displacement_scale: 100.0,
+            blur_amount: 0.5,
+            saturation: 1.40,
+            chromatic_offset: 2.0,
+            corner_radius: 32.0,
+            elasticity: 0.0,
+            refraction_mode: 0,
+            over_light: false,
         }
     }
 }
 
-/// 液态玻璃参数标识（用于类型安全的参数设置）
+/// 液态玻璃参数标识（bool 字段 enabled/over_light 通过独立方法访问）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LiquidGlassParam {
-    BlurRadius,
-    RefractionStrength,
-    GlassAlpha,
-    EdgeEffectWidth,
+    DisplacementScale,
+    BlurAmount,
+    Saturation,
     ChromaticOffset,
-    Contrast,
-    Brightness,
-    ShadowOffsetY,
-    ShadowSoftness,
-    ShadowOpacity,
-    TopLightPosition,
-    TopLightStrength,
-    LowerShadowPosition,
-    LowerShadowStrength,
-    ColorGain,
-    ColorLift,
     CornerRadius,
+    Elasticity,
+    RefractionMode,
 }
 
 impl LiquidGlassConfig {
-    /// 类型安全的参数设置方法
+    /// 设置液态玻璃参数
     pub fn set_param(&mut self, param: LiquidGlassParam, value: f32) {
         match param {
-            LiquidGlassParam::BlurRadius => self.blur_radius = value,
-            LiquidGlassParam::RefractionStrength => self.refraction_strength = value,
-            LiquidGlassParam::GlassAlpha => self.glass_alpha = value,
-            LiquidGlassParam::EdgeEffectWidth => self.edge_effect_width = value,
-            LiquidGlassParam::ChromaticOffset => self.chromatic_offset = value,
-            LiquidGlassParam::Contrast => self.contrast = value,
-            LiquidGlassParam::Brightness => self.brightness = value,
-            LiquidGlassParam::ShadowOffsetY => self.shadow_offset_y = value,
-            LiquidGlassParam::ShadowSoftness => self.shadow_softness = value,
-            LiquidGlassParam::ShadowOpacity => self.shadow_opacity = value,
-            LiquidGlassParam::TopLightPosition => self.top_light_position = value,
-            LiquidGlassParam::TopLightStrength => self.top_light_strength = value,
-            LiquidGlassParam::LowerShadowPosition => self.lower_shadow_position = value,
-            LiquidGlassParam::LowerShadowStrength => self.lower_shadow_strength = value,
-            LiquidGlassParam::ColorGain => self.color_gain = value,
-            LiquidGlassParam::ColorLift => self.color_lift = value,
-            LiquidGlassParam::CornerRadius => self.corner_radius = value,
+            LiquidGlassParam::DisplacementScale => {
+                self.displacement_scale = value.clamp(0.0, 200.0)
+            }
+            LiquidGlassParam::BlurAmount => self.blur_amount = value.clamp(0.0, 1.0),
+            LiquidGlassParam::Saturation => self.saturation = value.clamp(1.0, 3.0),
+            LiquidGlassParam::ChromaticOffset => self.chromatic_offset = value.clamp(0.0, 20.0),
+            LiquidGlassParam::CornerRadius => self.corner_radius = value.clamp(0.0, 100.0),
+            LiquidGlassParam::Elasticity => self.elasticity = value.clamp(0.0, 1.0),
+            LiquidGlassParam::RefractionMode => {
+                self.refraction_mode = value.round().clamp(0.0, 3.0) as u32
+            }
         }
     }
 
-    /// 获取参数当前值
+    /// 获取液态玻璃参数
     pub fn get_param(&self, param: LiquidGlassParam) -> f32 {
         match param {
-            LiquidGlassParam::BlurRadius => self.blur_radius,
-            LiquidGlassParam::RefractionStrength => self.refraction_strength,
-            LiquidGlassParam::GlassAlpha => self.glass_alpha,
-            LiquidGlassParam::EdgeEffectWidth => self.edge_effect_width,
+            LiquidGlassParam::DisplacementScale => self.displacement_scale,
+            LiquidGlassParam::BlurAmount => self.blur_amount,
+            LiquidGlassParam::Saturation => self.saturation,
             LiquidGlassParam::ChromaticOffset => self.chromatic_offset,
-            LiquidGlassParam::Contrast => self.contrast,
-            LiquidGlassParam::Brightness => self.brightness,
-            LiquidGlassParam::ShadowOffsetY => self.shadow_offset_y,
-            LiquidGlassParam::ShadowSoftness => self.shadow_softness,
-            LiquidGlassParam::ShadowOpacity => self.shadow_opacity,
-            LiquidGlassParam::TopLightPosition => self.top_light_position,
-            LiquidGlassParam::TopLightStrength => self.top_light_strength,
-            LiquidGlassParam::LowerShadowPosition => self.lower_shadow_position,
-            LiquidGlassParam::LowerShadowStrength => self.lower_shadow_strength,
-            LiquidGlassParam::ColorGain => self.color_gain,
-            LiquidGlassParam::ColorLift => self.color_lift,
             LiquidGlassParam::CornerRadius => self.corner_radius,
+            LiquidGlassParam::Elasticity => self.elasticity,
+            LiquidGlassParam::RefractionMode => self.refraction_mode as f32,
         }
     }
 }
@@ -1285,7 +1238,7 @@ mod tests {
 }
 
 // =============================================================================
-// LiquidGlassConfig ????
+// LiquidGlassConfig ??
 // =============================================================================
 
 #[cfg(test)]
@@ -1295,70 +1248,103 @@ mod liquid_glass_tests {
     #[test]
     fn test_liquid_glass_config_default_values() {
         let config = LiquidGlassConfig::default();
-        assert!((config.blur_radius - 2.8).abs() < f32::EPSILON);
-        assert!((config.refraction_strength - 7.0).abs() < f32::EPSILON);
-        assert!((config.glass_alpha - 0.88).abs() < f32::EPSILON);
-        assert!((config.edge_effect_width - 26.0).abs() < f32::EPSILON);
-        assert!((config.chromatic_offset - 1.2).abs() < f32::EPSILON);
-        assert!((config.contrast - 1.04).abs() < f32::EPSILON);
-        assert!((config.brightness - 0.015).abs() < f32::EPSILON);
-        assert!((config.shadow_offset_y - 7.0).abs() < f32::EPSILON);
-        assert!((config.shadow_softness - 9.0).abs() < f32::EPSILON);
-        assert!((config.shadow_opacity - 0.28).abs() < f32::EPSILON);
-        assert!((config.top_light_position - 0.55).abs() < f32::EPSILON);
-        assert!((config.top_light_strength - 0.16).abs() < f32::EPSILON);
-        assert!((config.lower_shadow_position - 0.35).abs() < f32::EPSILON);
-        assert!((config.lower_shadow_strength - 0.10).abs() < f32::EPSILON);
-        assert!((config.color_gain - 1.025).abs() < f32::EPSILON);
-        assert!((config.color_lift - 0.018).abs() < f32::EPSILON);
+        assert!(config.enabled);
+        assert!((config.displacement_scale - 100.0).abs() < f32::EPSILON);
+        assert!((config.blur_amount - 0.5).abs() < f32::EPSILON);
+        assert!((config.saturation - 1.40).abs() < f32::EPSILON);
+        assert!((config.chromatic_offset - 2.0).abs() < f32::EPSILON);
+        assert!((config.corner_radius - 32.0).abs() < f32::EPSILON);
+        assert!((config.elasticity - 0.0).abs() < f32::EPSILON);
+        assert_eq!(config.refraction_mode, 0);
+        assert!(!config.over_light);
     }
 
     #[test]
     fn test_liquid_glass_config_set_and_get_param() {
         let mut config = LiquidGlassConfig::default();
-        
-        // Test setting and getting each parameter
-        config.set_param(LiquidGlassParam::BlurRadius, 5.0);
-        assert!((config.get_param(LiquidGlassParam::BlurRadius) - 5.0).abs() < f32::EPSILON);
-        
-        config.set_param(LiquidGlassParam::RefractionStrength, 10.0);
-        assert!((config.get_param(LiquidGlassParam::RefractionStrength) - 10.0).abs() < f32::EPSILON);
-        
-        config.set_param(LiquidGlassParam::GlassAlpha, 0.5);
-        assert!((config.get_param(LiquidGlassParam::GlassAlpha) - 0.5).abs() < f32::EPSILON);
-        
-        config.set_param(LiquidGlassParam::ColorGain, 1.1);
-        assert!((config.get_param(LiquidGlassParam::ColorGain) - 1.1).abs() < f32::EPSILON);
-        
-        config.set_param(LiquidGlassParam::ColorLift, 0.05);
-        assert!((config.get_param(LiquidGlassParam::ColorLift) - 0.05).abs() < f32::EPSILON);
+
+        config.set_param(LiquidGlassParam::DisplacementScale, 150.0);
+        assert!(
+            (config.get_param(LiquidGlassParam::DisplacementScale) - 150.0).abs() < f32::EPSILON
+        );
+
+        config.set_param(LiquidGlassParam::BlurAmount, 0.75);
+        assert!((config.get_param(LiquidGlassParam::BlurAmount) - 0.75).abs() < f32::EPSILON);
+
+        config.set_param(LiquidGlassParam::Saturation, 2.5);
+        assert!((config.get_param(LiquidGlassParam::Saturation) - 2.5).abs() < f32::EPSILON);
+
+        config.set_param(LiquidGlassParam::ChromaticOffset, 5.0);
+        assert!((config.get_param(LiquidGlassParam::ChromaticOffset) - 5.0).abs() < f32::EPSILON);
+
+        config.set_param(LiquidGlassParam::CornerRadius, 24.0);
+        assert!((config.get_param(LiquidGlassParam::CornerRadius) - 24.0).abs() < f32::EPSILON);
+
+        config.set_param(LiquidGlassParam::Elasticity, 0.5);
+        assert!((config.get_param(LiquidGlassParam::Elasticity) - 0.5).abs() < f32::EPSILON);
+
+        config.set_param(LiquidGlassParam::RefractionMode, 2.0);
+        assert!((config.get_param(LiquidGlassParam::RefractionMode) - 2.0).abs() < f32::EPSILON);
+        assert_eq!(config.refraction_mode, 2);
+    }
+
+    #[test]
+    fn test_liquid_glass_config_bool_accessors() {
+        let mut config = LiquidGlassConfig::default();
+
+        // enabled defaults to true
+        assert!(config.enabled);
+        config.enabled = false;
+        assert!(!config.enabled);
+
+        // over_light defaults to false
+        assert!(!config.over_light);
+        config.over_light = true;
+        assert!(config.over_light);
+    }
+
+    #[test]
+    fn test_liquid_glass_param_ranges_match_example_controls() {
+        let mut config = LiquidGlassConfig::default();
+        config.set_param(LiquidGlassParam::BlurAmount, 9.0);
+        assert_eq!(config.blur_amount, 1.0);
+        config.set_param(LiquidGlassParam::Saturation, -1.0);
+        assert_eq!(config.saturation, 1.0);
+        config.set_param(LiquidGlassParam::ChromaticOffset, 99.0);
+        assert_eq!(config.chromatic_offset, 20.0);
+        config.set_param(LiquidGlassParam::RefractionMode, 99.0);
+        assert_eq!(config.refraction_mode, 3);
     }
 
     #[test]
     fn test_liquid_glass_config_serialization() {
         let config = LiquidGlassConfig::default();
         let json = serde_json::to_string(&config).expect("Failed to serialize");
-        
-        // Verify key fields are present in JSON
-        assert!(json.contains("blur_radius"));
-        assert!(json.contains("refraction_strength"));
-        assert!(json.contains("glass_alpha"));
-        assert!(json.contains("color_gain"));
-        assert!(json.contains("color_lift"));
-        
-        // Verify round-trip deserialization
-        let deserialized: LiquidGlassConfig = serde_json::from_str(&json)
-            .expect("Failed to deserialize");
-        
-        assert!((deserialized.blur_radius - config.blur_radius).abs() < f32::EPSILON);
-        assert!((deserialized.refraction_strength - config.refraction_strength).abs() < f32::EPSILON);
-        assert!((deserialized.color_gain - config.color_gain).abs() < f32::EPSILON);
-        assert!((deserialized.color_lift - config.color_lift).abs() < f32::EPSILON);
+
+        assert!(json.contains("enabled"));
+        assert!(json.contains("displacement_scale"));
+        assert!(json.contains("blur_amount"));
+        assert!(json.contains("saturation"));
+        assert!(json.contains("chromatic_offset"));
+        assert!(json.contains("corner_radius"));
+        assert!(json.contains("elasticity"));
+        assert!(json.contains("refraction_mode"));
+        assert!(json.contains("over_light"));
+
+        let deserialized: LiquidGlassConfig =
+            serde_json::from_str(&json).expect("Failed to deserialize");
+
+        assert_eq!(deserialized.enabled, config.enabled);
+        assert!((deserialized.displacement_scale - config.displacement_scale).abs() < f32::EPSILON);
+        assert!((deserialized.blur_amount - config.blur_amount).abs() < f32::EPSILON);
+        assert!((deserialized.saturation - config.saturation).abs() < f32::EPSILON);
+        assert_eq!(deserialized.refraction_mode, config.refraction_mode);
+        assert_eq!(deserialized.over_light, config.over_light);
     }
 
     #[test]
     fn test_liquid_glass_config_backward_compatibility() {
-        // Test that old config files (without color_lift) can still be loaded
+        // Old config files with legacy fields should deserialize with new defaults
         let old_json = r#"{
             "blur_radius": 2.8,
             "refraction_strength": 7.0,
@@ -1376,44 +1362,42 @@ mod liquid_glass_tests {
             "lower_shadow_strength": 0.10,
             "color_gain": 1.025
         }"#;
-        
-        let config: LiquidGlassConfig = serde_json::from_str(old_json)
-            .expect("Failed to deserialize old config");
-        
-        // color_lift should have default value due to #[serde(default)]
-        assert!((config.color_lift - 0.018).abs() < f32::EPSILON);
-        assert!((config.blur_radius - 2.8).abs() < f32::EPSILON);
+
+        let config: LiquidGlassConfig =
+            serde_json::from_str(old_json).expect("Failed to deserialize old config");
+
+        // All new fields should have default values since old JSON doesn't contain them
+        assert!(config.enabled);
+        assert!((config.displacement_scale - 100.0).abs() < f32::EPSILON);
+        assert!((config.blur_amount - 0.5).abs() < f32::EPSILON);
+        assert!((config.saturation - 1.40).abs() < f32::EPSILON);
+        assert_eq!(config.refraction_mode, 0);
+        assert!(!config.over_light);
     }
 
     #[test]
     fn test_liquid_glass_param_enum_coverage() {
         let mut config = LiquidGlassConfig::default();
-        
-        // Test all enum variants can be set and retrieved
+
         let params = [
-            (LiquidGlassParam::BlurRadius, 3.0),
-            (LiquidGlassParam::RefractionStrength, 8.0),
-            (LiquidGlassParam::GlassAlpha, 0.9),
-            (LiquidGlassParam::EdgeEffectWidth, 30.0),
-            (LiquidGlassParam::ChromaticOffset, 1.5),
-            (LiquidGlassParam::Contrast, 1.1),
-            (LiquidGlassParam::Brightness, 0.02),
-            (LiquidGlassParam::ShadowOffsetY, 8.0),
-            (LiquidGlassParam::ShadowSoftness, 10.0),
-            (LiquidGlassParam::ShadowOpacity, 0.3),
-            (LiquidGlassParam::TopLightPosition, 0.6),
-            (LiquidGlassParam::TopLightStrength, 0.2),
-            (LiquidGlassParam::LowerShadowPosition, 0.4),
-            (LiquidGlassParam::LowerShadowStrength, 0.15),
-            (LiquidGlassParam::ColorGain, 1.05),
-            (LiquidGlassParam::ColorLift, 0.02),
+            (LiquidGlassParam::DisplacementScale, 120.0),
+            (LiquidGlassParam::BlurAmount, 0.75),
+            (LiquidGlassParam::Saturation, 2.0),
+            (LiquidGlassParam::ChromaticOffset, 3.0),
+            (LiquidGlassParam::CornerRadius, 40.0),
+            (LiquidGlassParam::Elasticity, 0.3),
+            (LiquidGlassParam::RefractionMode, 1.0),
         ];
-        
+
         for (param, value) in params.iter() {
             config.set_param(*param, *value);
-            assert!((config.get_param(*param) - *value).abs() < f32::EPSILON,
-                "Failed for param {:?}, expected {}, got {}", 
-                param, value, config.get_param(*param));
+            assert!(
+                (config.get_param(*param) - *value).abs() < f32::EPSILON,
+                "Failed for param {:?}, expected {}, got {}",
+                param,
+                value,
+                config.get_param(*param)
+            );
         }
     }
 }

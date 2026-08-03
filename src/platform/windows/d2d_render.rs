@@ -1,4 +1,4 @@
-﻿//! Direct2D/DirectWrite 渲染代码
+//! Direct2D/DirectWrite 渲染代码
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -23,7 +23,7 @@ use std::ffi::c_void;
 
 use windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED;
 use windows::Win32::Graphics::Direct2D::{
-    Common::{D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_POINT_2F, D2D_SIZE_U},
+    Common::{D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_SIZE_U},
     D2D1CreateFactory, ID2D1Bitmap, ID2D1DCRenderTarget, ID2D1Factory, D2D1_ANTIALIAS_MODE_ALIASED,
     D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_BITMAP_PROPERTIES, D2D1_DRAW_TEXT_OPTIONS_NONE,
     D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES,
@@ -40,6 +40,7 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::HDC as GdiHDC;
 use windows::Win32::Graphics::Imaging::{CLSID_WICImagingFactory, IWICImagingFactory};
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+use windows_numerics::Vector2;
 
 use super::ffi_imports::*;
 use super::ffi_types::*;
@@ -249,15 +250,29 @@ pub fn render_layered_window(hwnd: HWND) {
     let _dpi = if dpi > 0 { dpi } else { 96 }; // DPI 预留供后续 DPI 感知渲染使用
 
     // ===== 绘制液态玻璃背景；GPU 捕获不可用时回退原半透明背景 =====
-    let corner_radius = super::liquid_glass::get_liquid_glass_config().corner_radius;
-    let glass_drawn = draw_liquid_glass_background(&target, wr.left, wr.top, w, h, corner_radius);
+    let glass_config = super::liquid_glass::get_liquid_glass_config();
+    let corner_radius = glass_config.corner_radius;
+    let glass_drawn = if glass_config.enabled {
+        draw_liquid_glass_background(
+            &target,
+            wr.left,
+            wr.top,
+            w,
+            h,
+            corner_radius,
+            dpi as f32 / 96.0,
+        )
+    } else {
+        false
+    };
     if !glass_drawn {
+        let fallback_radius = 16.0_f32;
         let bg_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(1, 1, 1, 38), None) };
         if let Ok(ref brush) = bg_brush {
             let rounded_rect = D2D1_ROUNDED_RECT {
                 rect: d2d_rect(0.0, 0.0, ww, hh),
-                radiusX: corner_radius,
-                radiusY: corner_radius,
+                radiusX: fallback_radius,
+                radiusY: fallback_radius,
             };
             unsafe { target.FillRoundedRectangle(&rounded_rect, brush) };
         }
@@ -328,9 +343,9 @@ pub fn render_layered_window(hwnd: HWND) {
                     (0.0, shadow_offset),
                     (0.0, -shadow_offset),
                 ] {
-                    let origin = D2D_POINT_2F {
-                        x: 10.0 + dx,
-                        y: dy,
+                    let origin = Vector2 {
+                        X: 10.0 + dx,
+                        Y: dy,
                     };
                     unsafe {
                         target.DrawTextLayout(origin, layout, sb, D2D1_DRAW_TEXT_OPTIONS_NONE);
@@ -339,7 +354,7 @@ pub fn render_layered_window(hwnd: HWND) {
             }
             // 主文字（白色）
             if let Ok(ref wb) = white_brush {
-                let origin = D2D_POINT_2F { x: 10.0, y: 0.0 };
+                let origin = Vector2 { X: 10.0, Y: 0.0 };
                 unsafe {
                     target.DrawTextLayout(origin, layout, wb, D2D1_DRAW_TEXT_OPTIONS_NONE);
                 }
@@ -411,9 +426,9 @@ pub fn render_layered_window(hwnd: HWND) {
                         (0.0, shadow_offset),
                         (0.0, -shadow_offset),
                     ] {
-                        let origin = D2D_POINT_2F {
-                            x: btn_x as f32 + sdx,
-                            y: btn_y as f32 + sdy,
+                        let origin = Vector2 {
+                            X: btn_x as f32 + sdx,
+                            Y: btn_y as f32 + sdy,
                         };
                         unsafe {
                             target.DrawTextLayout(origin, ll, sb, D2D1_DRAW_TEXT_OPTIONS_NONE);
@@ -422,9 +437,9 @@ pub fn render_layered_window(hwnd: HWND) {
                 }
                 // 锁定按钮主文字
                 if let Ok(ref wb) = white_brush {
-                    let origin = D2D_POINT_2F {
-                        x: btn_x as f32,
-                        y: btn_y as f32,
+                    let origin = Vector2 {
+                        X: btn_x as f32,
+                        Y: btn_y as f32,
                     };
                     unsafe {
                         target.DrawTextLayout(origin, ll, wb, D2D1_DRAW_TEXT_OPTIONS_NONE);
@@ -499,9 +514,9 @@ pub fn render_layered_window(hwnd: HWND) {
                     (0.0, shadow_offset),
                     (0.0, -shadow_offset),
                 ] {
-                    let origin = D2D_POINT_2F {
-                        x: mbtn_x as f32 + sdx,
-                        y: mbtn_y as f32 + sdy,
+                    let origin = Vector2 {
+                        X: mbtn_x as f32 + sdx,
+                        Y: mbtn_y as f32 + sdy,
                     };
                     unsafe {
                         target.DrawTextLayout(origin, ml, sb, D2D1_DRAW_TEXT_OPTIONS_NONE);
@@ -510,9 +525,9 @@ pub fn render_layered_window(hwnd: HWND) {
             }
             // 主文字
             if let Ok(ref wb) = white_brush {
-                let origin = D2D_POINT_2F {
-                    x: mbtn_x as f32,
-                    y: mbtn_y as f32,
+                let origin = Vector2 {
+                    X: mbtn_x as f32,
+                    Y: mbtn_y as f32,
                 };
                 unsafe {
                     target.DrawTextLayout(origin, ml, wb, D2D1_DRAW_TEXT_OPTIONS_NONE);
@@ -630,11 +645,18 @@ fn draw_liquid_glass_background(
     width: i32,
     height: i32,
     corner_radius: f32,
+    dpi_scale: f32,
 ) -> bool {
     let glass_config = super::liquid_glass::get_liquid_glass_config();
-    let Some(pixels) =
-        super::liquid_glass::render_background(screen_x, screen_y, width, height, corner_radius, &glass_config)
-    else {
+    let Some(pixels) = super::liquid_glass::render_background(
+        screen_x,
+        screen_y,
+        width,
+        height,
+        corner_radius,
+        dpi_scale,
+        &glass_config,
+    ) else {
         return false;
     };
 
@@ -949,7 +971,8 @@ pub fn render_icon_grid(
             unsafe { target.FillRectangle(&d2d_rect(left, top, right, bottom), fb) };
         }
         // Blue border (1px)
-        let border_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(0, 120, 215, 200), None) };
+        let border_brush =
+            unsafe { target.CreateSolidColorBrush(&d2d_color(0, 120, 215, 200), None) };
         if let Ok(ref bb) = border_brush {
             let bw = 1.0_f32;
             unsafe {
@@ -1322,9 +1345,9 @@ fn draw_icon_with_label_cached(
                     (0.0, -shadow_offset),
                 ] {
                     target.DrawTextLayout(
-                        D2D_POINT_2F {
-                            x: label_x + dx,
-                            y: label_y + dy,
+                        Vector2 {
+                            X: label_x + dx,
+                            Y: label_y + dy,
                         },
                         layout,
                         &shadow,
@@ -1336,9 +1359,9 @@ fn draw_icon_with_label_cached(
             // 主文字（浅灰白色）
             if let Ok(brush) = target.CreateSolidColorBrush(&d2d_color(250, 250, 255, 255), None) {
                 target.DrawTextLayout(
-                    D2D_POINT_2F {
-                        x: label_x,
-                        y: label_y,
+                    Vector2 {
+                        X: label_x,
+                        Y: label_y,
                     },
                     layout,
                     &brush,

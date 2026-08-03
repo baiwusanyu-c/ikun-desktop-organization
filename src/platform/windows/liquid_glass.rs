@@ -1,8 +1,8 @@
-//! 分类框液态玻璃 GPU 渲染器。
+//! 分类框液态玻璃 GPU 渲染器（对齐 liquid-glass-rs/examples 实现）
 //!
-//! 使用 DXGI Desktop Duplication 共享捕获显示器画面，通过 D3D11 两遍可分离
-//! 高斯模糊和液态玻璃像素着色器生成预乘 alpha BGRA 位图。输出继续交给现有
-//! Direct2D + UpdateLayeredWindow 管线合成图标和文字。
+//! 使用 DXGI Desktop Duplication 捕获显示器画面，通过 D2D Effect Graph
+//! (Crop -> Border -> GaussianBlur -> ColorMatrix) 处理纹理，再通过自定义
+//! PSMain shader 采样处理后的纹理和法线贴图生成预乘 alpha BGRA 位图。
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -13,135 +13,218 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use windows::core::{Interface, PCSTR};
-use windows::Win32::Foundation::{HMODULE, RECT as WinRect};
+use windows::Win32::Foundation::{HMODULE, POINT, RECT as WinRect};
+use windows::Win32::Graphics::Direct2D::Common::{
+    D2D1_ALPHA_MODE_IGNORE, D2D1_COMPOSITE_MODE_SOURCE_COPY, D2D1_PIXEL_FORMAT, D2D_MATRIX_5X4_F,
+    D2D_RECT_F,
+};
+use windows::Win32::Graphics::Direct2D::{
+    CLSID_D2D1Border, CLSID_D2D1ColorMatrix, CLSID_D2D1Crop, CLSID_D2D1GaussianBlur,
+    D2D1CreateDevice, ID2D1DeviceContext, ID2D1Image, D2D1_BITMAP_OPTIONS_NONE,
+    D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1, D2D1_BORDER_EDGE_MODE_MIRROR,
+    D2D1_BORDER_PROP_EDGE_MODE_X, D2D1_BORDER_PROP_EDGE_MODE_Y, D2D1_COLORMATRIX_PROP_COLOR_MATRIX,
+    D2D1_CROP_PROP_RECT, D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
+    D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION, D2D1_INTERPOLATION_MODE_LINEAR,
+    D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT, D2D1_PROPERTY_TYPE_MATRIX_5X4,
+    D2D1_PROPERTY_TYPE_VECTOR4,
+};
 use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
 use windows::Win32::Graphics::Direct3D::{
-    ID3DBlob, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL,
-    D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_11_0, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+    ID3DBlob, D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_10_0,
+    D3D_FEATURE_LEVEL_11_0, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
 };
 use windows::Win32::Graphics::Direct3D11::*;
-use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
-use windows::Win32::Graphics::Dxgi::{
-    IDXGIDevice, IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource, DXGI_ERROR_ACCESS_LOST,
-    DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R16G16B16A16_FLOAT,
+    DXGI_SAMPLE_DESC,
 };
+use windows::Win32::Graphics::Dxgi::{
+    IDXGIDevice, IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource, IDXGISurface,
+    DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
+};
+use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
 use super::ffi_types::Pixel32;
 use crate::config::LiquidGlassConfig;
 
 const RETRY_DELAY: Duration = Duration::from_secs(3);
 const MAX_SURFACE_CACHE_ENTRIES: usize = 8;
-const BLUR_SCALE: f32 = 2.8;
-const REFRACTION_STRENGTH: f32 = 7.0;
-const GLASS_ALPHA: f32 = 0.88;
+
+const STANDARD_MAP: &[u8] = include_bytes!("embedded/standard.jpg");
+const POLAR_MAP: &[u8] = include_bytes!("embedded/polar.jpg");
+const PROMINENT_MAP: &[u8] = include_bytes!("embedded/prominent.png");
 
 const SHADER: &str = r#"
-cbuffer GlassConstants : register(b0) {
-    float4 sourceRect;
-    float4 targetInfo;
-    float4 glassInfo;
-    float4 colorInfo;
-    float4 shadowInfo;
-    float4 lightInfo;
+cbuffer C : register(b0) {
+ float2 outputOrigin, outputSize, windowOrigin, windowSize, lensSize, padding;
+ float4 shadowSettings, refractionSettings, effectsSettings, colorSettings, detailSettings, controlSettings;
+ float2 mouseOffset, interactionPadding;
 };
-
-Texture2D sourceTexture : register(t0);
-SamplerState linearSampler : register(s0);
-
-struct VertexOutput {
-    float4 position : SV_POSITION;
-    float2 uv : TEXCOORD0;
-};
-
-VertexOutput VSMain(uint vertexId : SV_VertexID) {
-    VertexOutput output;
-    float2 position = float2((vertexId << 1) & 2, vertexId & 2);
-    output.uv = position;
-    output.position = float4(position * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
-    return output;
+Texture2D desktop : register(t0);
+Texture2D displacementMap : register(t1);
+SamplerState samp : register(s0);
+struct V { float4 pos:SV_POSITION; float2 uv:TEXCOORD0; };
+V VSMain(uint id:SV_VertexID) { V o; float2 p=float2((id<<1)&2,id&2); o.uv=p; o.pos=float4(p*float2(2,-2)+float2(-1,1),0,1); return o; }
+float sdf(float2 p,float2 halfSize,float radius) { float2 q=abs(p)-halfSize+radius; return min(max(q.x,q.y),0)+length(max(q,0))-radius; }
+float gaussianTail(float distance,float sigma) {
+ float x=max(distance,0)/(max(sigma,.001)*1.41421356);
+ float t=1/(1+.3275911*x);
+ float erfValue=1-(((((1.061405429*t-1.453152027)*t+1.421413741)*t-.284496736)*t+.254829592)*t)*exp(-x*x);
+ return .5*(1-erfValue);
 }
-
-float4 gaussianHorizontal(float2 desktopUv) {
-    float2 offset = float2(targetInfo.z * glassInfo.y, 0.0);
-    float4 color = sourceTexture.Sample(linearSampler, desktopUv) * 0.2270270270;
-    color += sourceTexture.Sample(linearSampler, desktopUv + offset * 1.3846153846) * 0.3162162162;
-    color += sourceTexture.Sample(linearSampler, desktopUv - offset * 1.3846153846) * 0.3162162162;
-    color += sourceTexture.Sample(linearSampler, desktopUv + offset * 3.2307692308) * 0.0702702703;
-    color += sourceTexture.Sample(linearSampler, desktopUv - offset * 3.2307692308) * 0.0702702703;
-    return color;
+float2 proceduralMapTexel(float2 pixel,float2 size,float maxScale) {
+ pixel=clamp(pixel,float2(0,0),size-1);
+ float2 uv=pixel/size,center=uv-.5;
+ float mapDistance=sdf(center,float2(.3,.2),.6);
+ float displacement=smoothstep(.8,0,mapDistance-.15);
+ float scaled=smoothstep(0,1,displacement);
+ float2 rawOffset=(center*scaled+.5-uv)*size;
+ float edgeDistance=min(min(pixel.x,pixel.y),min(size.x-pixel.x-1,size.y-pixel.y-1));
+ float edgeFactor=saturate(edgeDistance/2);
+ float2 encoded=clamp(rawOffset/max(maxScale,1),-.5,.5)*edgeFactor;
+ return round(saturate(encoded+.5)*255)/255-.5;
 }
-
-float4 PSBlurHorizontal(VertexOutput input) : SV_TARGET {
-    float2 desktopUv = sourceRect.xy + input.uv * sourceRect.zw;
-    return gaussianHorizontal(desktopUv);
+float2 sampleProceduralMap(float2 local,float2 physicalSize,float dpiScale,float maxScale) {
+ float2 size=physicalSize/dpiScale;
+ float2 source=local/dpiScale-.5;
+ float2 base=floor(source),fraction=frac(source);
+ float2 top=lerp(proceduralMapTexel(base,size,maxScale),proceduralMapTexel(base+float2(1,0),size,maxScale),fraction.x);
+ float2 bottom=lerp(proceduralMapTexel(base+float2(0,1),size,maxScale),proceduralMapTexel(base+float2(1,1),size,maxScale),fraction.x);
+ return lerp(top,bottom,fraction.y);
 }
-
-float roundedRectSdf(float2 position, float2 halfSize, float radius) {
-    float2 distance = abs(position) - halfSize + radius;
-    return min(max(distance.x, distance.y), 0.0) + length(max(distance, 0.0)) - radius;
+float gradientAlpha(float position,float stopA,float stopB,float alphaA,float alphaB) {
+ if(position<=stopA) return lerp(0,alphaA,saturate(position/max(stopA,.0001)));
+ if(position<=stopB) return lerp(alphaA,alphaB,saturate((position-stopA)/max(stopB-stopA,.0001)));
+ return lerp(alphaB,0,saturate((position-stopB)/max(1-stopB,.0001)));
 }
-
-float4 gaussianVertical(float2 uv) {
-    float2 offset = float2(0.0, targetInfo.w * glassInfo.y);
-    float4 color = sourceTexture.Sample(linearSampler, uv) * 0.2270270270;
-    color += sourceTexture.Sample(linearSampler, uv + offset * 1.3846153846) * 0.3162162162;
-    color += sourceTexture.Sample(linearSampler, uv - offset * 1.3846153846) * 0.3162162162;
-    color += sourceTexture.Sample(linearSampler, uv + offset * 3.2307692308) * 0.0702702703;
-    color += sourceTexture.Sample(linearSampler, uv - offset * 3.2307692308) * 0.0702702703;
-    return color;
+float3 overlayWhite(float3 backdrop) {
+ return float3(backdrop.r<=.5 ? backdrop.r*2 : 1,backdrop.g<=.5 ? backdrop.g*2 : 1,backdrop.b<=.5 ? backdrop.b*2 : 1);
 }
-
-float4 PSGlass(VertexOutput input) : SV_TARGET {
-    float2 size = targetInfo.xy;
-    float2 localPosition = input.uv * size - size * 0.5;
-    float radius = min(glassInfo.x, min(size.x, size.y) * 0.5);
-    float distance = roundedRectSdf(localPosition, size * 0.5, radius);
-    float aa = max(fwidth(distance), 0.75);
-    float mask = smoothstep(aa, -aa, distance);
-
-    float edge = saturate(1.0 - smoothstep(0.0, glassInfo.z, -distance));
-    float2 radial = normalize(localPosition + float2(0.001, 0.001));
-    float2 refractedUv = input.uv - radial * edge * edge * colorInfo.x / size;
-
-    float3 color = gaussianVertical(refractedUv).rgb;
-    float chroma = edge * edge * colorInfo.y;
-    color.r = gaussianVertical(refractedUv + radial * chroma / size).r;
-    color.b = gaussianVertical(refractedUv - radial * chroma / size).b;
-    color = saturate((color - 0.5) * colorInfo.z + 0.5);
-
-    float topLight = edge * saturate(lightInfo.x - input.uv.y) * lightInfo.y;
-    float lowerShade = edge * saturate(input.uv.y - lightInfo.z) * lightInfo.w;
-    color = saturate(color * colorInfo.w + topLight - lowerShade + shadowInfo.w);
-
-    float alpha = mask * glassInfo.w;
-    return float4(color * alpha, alpha);
+float3 linearToSrgb(float3 value) {
+ value=saturate(value);
+ float3 low=value*12.92;
+ float3 high=1.055*pow(value,1/2.4)-.055;
+ return lerp(low,high,step(.0031308,value));
 }
-"#;
+float3 cssSaturate(float3 value,float amount) {
+ return float3(dot(value,float3(.213+.787*amount,.715-.715*amount,.072-.072*amount)),dot(value,float3(.213-.213*amount,.715+.285*amount,.072-.072*amount)),dot(value,float3(.213-.213*amount,.715-.715*amount,.072+.928*amount)));
+}
+float2 mirrorSource(float2 uv,float2 minimum,float2 maximum,float2 texel) {
+ if(uv.x<minimum.x) uv.x=2*minimum.x-uv.x;
+ if(uv.y<minimum.y) uv.y=2*minimum.y-uv.y;
+ if(uv.x>maximum.x) uv.x=2*maximum.x-uv.x;
+ if(uv.y>maximum.y) uv.y=2*maximum.y-uv.y;
+ return clamp(uv,minimum+texel*.5,maximum-texel*.5);
+}
+float3 sampleChromatic(float2 baseUv,float2 offsetPx,float2 texel,float aberration,float baseScale,float2 sourceMinimum,float2 sourceMaximum) {
+ float2 redUv=mirrorSource(baseUv+offsetPx*baseScale*texel,sourceMinimum,sourceMaximum,texel);
+ float2 greenUv=mirrorSource(baseUv+offsetPx*(baseScale-aberration*.05)*texel,sourceMinimum,sourceMaximum,texel);
+ float2 blueUv=mirrorSource(baseUv+offsetPx*(baseScale-aberration*.10)*texel,sourceMinimum,sourceMaximum,texel);
+ return float3(desktop.Sample(samp,redUv).r,desktop.Sample(samp,greenUv).g,desktop.Sample(samp,blueUv).b);
+}
+float4 PSMain(V i):SV_TARGET {
+ float2 px=i.uv*windowSize, local=px-padding, p=local-lensSize*.5;
+ float mouseLength=length(mouseOffset);
+ float2 mouseDirection=mouseOffset/max(mouseLength,.001);
+ float2 mouseOutside=max(abs(mouseOffset)-lensSize*.5,0);
+ float mouseFade=saturate(1-length(mouseOutside)/max(200*controlSettings.y,.001));
+ float stretch=min(mouseLength/max(300*controlSettings.y,.001),1)*controlSettings.z*mouseFade;
+ float2 shapeScale=float2(1+abs(mouseDirection.x)*stretch*.3-abs(mouseDirection.y)*stretch*.15,1+abs(mouseDirection.y)*stretch*.3-abs(mouseDirection.x)*stretch*.15);
+ float2 shapeP=p/shapeScale;
+ float radius=min(lensSize.y*.5,controlSettings.w);
+ float d=sdf(shapeP,lensSize*.5,radius); float sd=sdf(shapeP-float2(0,shadowSettings.x),lensSize*.5,radius);
+ float shadow=gaussianTail(sd,shadowSettings.y*.5)*shadowSettings.z;
+ float2 uv=local/lensSize;
+ float2 encodedOffset=sampleProceduralMap(local,lensSize,controlSettings.y,colorSettings.z/controlSettings.y);
+ bool proceduralMode=interactionPadding.y>=2.5;
+ float mapAspect=lensSize.x/max(lensSize.y,.001);
+ float2 mapUv=uv;
+ if(mapAspect>=1) mapUv.y=(uv.y-.5)/mapAspect+.5; else mapUv.x=(uv.x-.5)*mapAspect+.5;
+ float4 mapSample=displacementMap.Sample(samp,mapUv);
+ float2 staticOffset=float2(mapSample.r,mapSample.b)-.5;
+ float2 offsetPx=(proceduralMode ? encodedOffset : staticOffset)*effectsSettings.y;
+ float2 baseScreenUv=(windowOrigin+padding+local-outputOrigin)/outputSize, texel=1/outputSize;
+ float2 sourceMinimum=(windowOrigin+padding-outputOrigin)/outputSize;
+ float2 sourceMaximum=(windowOrigin+padding+lensSize-outputOrigin)/outputSize;
+ float postSigma=effectsSettings.w;
+ float neighborWeight=exp(-.5/max(postSigma*postSigma,.0001));
+ float diagonalWeight=neighborWeight*neighborWeight;
+ float weightSum=1+neighborWeight*4+diagonalWeight*4;
+ float baseScale=proceduralMode ? 1 : -1;
+ float3 col=sampleChromatic(baseScreenUv,offsetPx,texel,effectsSettings.z,baseScale,sourceMinimum,sourceMaximum);
+ col+=sampleChromatic(baseScreenUv+float2(texel.x,0),offsetPx,texel,effectsSettings.z,baseScale,sourceMinimum,sourceMaximum)*neighborWeight;
+ col+=sampleChromatic(baseScreenUv-float2(texel.x,0),offsetPx,texel,effectsSettings.z,baseScale,sourceMinimum,sourceMaximum)*neighborWeight;
+ col+=sampleChromatic(baseScreenUv+float2(0,texel.y),offsetPx,texel,effectsSettings.z,baseScale,sourceMinimum,sourceMaximum)*neighborWeight;
+ col+=sampleChromatic(baseScreenUv-float2(0,texel.y),offsetPx,texel,effectsSettings.z,baseScale,sourceMinimum,sourceMaximum)*neighborWeight;
+ col+=sampleChromatic(baseScreenUv+texel,offsetPx,texel,effectsSettings.z,baseScale,sourceMinimum,sourceMaximum)*diagonalWeight;
+ col+=sampleChromatic(baseScreenUv-texel,offsetPx,texel,effectsSettings.z,baseScale,sourceMinimum,sourceMaximum)*diagonalWeight;
+ col+=sampleChromatic(baseScreenUv+float2(texel.x,-texel.y),offsetPx,texel,effectsSettings.z,baseScale,sourceMinimum,sourceMaximum)*diagonalWeight;
+ col+=sampleChromatic(baseScreenUv+float2(-texel.x,texel.y),offsetPx,texel,effectsSettings.z,baseScale,sourceMinimum,sourceMaximum)*diagonalWeight;
+ col/=weightSum;
+ if(interactionPadding.x>.5) col=saturate(cssSaturate(linearToSrgb(col),colorSettings.x));
+ float2 normal=float2(sdf(shapeP+float2(1,0),lensSize*.5,radius)-sdf(shapeP-float2(1,0),lensSize*.5,radius),sdf(shapeP+float2(0,1),lensSize*.5,radius)-sdf(shapeP-float2(0,1),lensSize*.5,radius));
+ normal=normalize(normal+float2(.0001,.0001));
+ float2 normalizedMouse=float2(mouseOffset.x/max(lensSize.x,1),mouseOffset.y/max(lensSize.y,1))*100;
+ float angle=radians(135+normalizedMouse.x*1.2);
+ float2 gradientDirection=float2(sin(angle),-cos(angle));
+ float gradientExtent=max(dot(abs(gradientDirection),lensSize*.5),.0001);
+ float gradientPosition=dot(local-lensSize*.5,gradientDirection)/(gradientExtent*2)+.5;
+ float stopA=clamp((33+normalizedMouse.y*.3)/100,.1,.9);
+ float stopB=clamp((66+normalizedMouse.y*.4)/100,.1,.9);
+ float insideDistance=max(-d,0);
+ float borderWidth=1.5*controlSettings.y;
+ float borderMask=saturate(1-smoothstep(0,borderWidth,insideDistance));
+ float insetDirection=saturate(.5-normal.y*.5);
+ float insetGlow=exp(-.5*pow(insideDistance/max(borderWidth,.001),2))*insetDirection*.25;
+ float insetAlpha=saturate((1-smoothstep(.25*controlSettings.y,.75*controlSettings.y,insideDistance))*.5+insetGlow)*borderMask;
+ float screenAlpha=saturate(gradientAlpha(gradientPosition,stopA,stopB,.12+abs(normalizedMouse.x)*.008,.4+abs(normalizedMouse.x)*.012))*borderMask*.2;
+ screenAlpha=1-(1-screenAlpha)*(1-insetAlpha*.2);
+ col=1-(1-col)*(1-screenAlpha);
+ float overlayAlpha=saturate(gradientAlpha(gradientPosition,stopA,stopB,.32+abs(normalizedMouse.x)*.008,.6+abs(normalizedMouse.x)*.012))*borderMask;
+ overlayAlpha=1-(1-overlayAlpha)*(1-insetAlpha);
+ col=lerp(col,overlayWhite(col),overlayAlpha);
+ float aa=max(fwidth(d)*detailSettings.z,detailSettings.w);
+ float glassAlpha=smoothstep(aa,-aa,d);
+ float alpha=glassAlpha+shadow*(1-glassAlpha);
+ return float4(col*glassAlpha,alpha);
+}"#;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
-struct GlassConstants {
-    source_rect: [f32; 4],
-    target_info: [f32; 4],
-    glass_info: [f32; 4],
-    color_info: [f32; 4],
-    shadow_info: [f32; 4],
-    light_info: [f32; 4],
+struct Constants {
+    output_origin: [f32; 2],
+    output_size: [f32; 2],
+    window_origin: [f32; 2],
+    window_size: [f32; 2],
+    lens_size: [f32; 2],
+    padding: [f32; 2],
+    shadow_settings: [f32; 4],
+    refraction_settings: [f32; 4],
+    effects_settings: [f32; 4],
+    color_settings: [f32; 4],
+    detail_settings: [f32; 4],
+    control_settings: [f32; 4],
+    mouse_offset: [f32; 2],
+    interaction_padding: [f32; 2],
 }
 
 struct CaptureOutput {
     rect: WinRect,
     duplication: IDXGIOutputDuplication,
+    hdr_active: bool,
     desktop_texture: Option<ID3D11Texture2D>,
     desktop_view: Option<ID3D11ShaderResourceView>,
+    blurred_texture: Option<ID3D11Texture2D>,
+    blurred_view: Option<ID3D11ShaderResourceView>,
+}
+
+struct EmbeddedMap {
+    view: ID3D11ShaderResourceView,
 }
 
 struct RenderSurfaces {
     width: u32,
     height: u32,
-    blur_texture: ID3D11Texture2D,
-    blur_view: ID3D11ShaderResourceView,
-    blur_target: ID3D11RenderTargetView,
     output_texture: ID3D11Texture2D,
     output_target: ID3D11RenderTargetView,
     staging_texture: ID3D11Texture2D,
@@ -150,13 +233,16 @@ struct RenderSurfaces {
 struct GlassRenderer {
     device: ID3D11Device,
     context: ID3D11DeviceContext,
+    d2d_context: ID2D1DeviceContext,
     vertex_shader: ID3D11VertexShader,
-    horizontal_shader: ID3D11PixelShader,
-    glass_shader: ID3D11PixelShader,
+    pixel_shader: ID3D11PixelShader,
     constants: ID3D11Buffer,
     sampler: ID3D11SamplerState,
+    rasterizer: ID3D11RasterizerState,
     outputs: Vec<CaptureOutput>,
     surfaces: HashMap<(u32, u32), RenderSurfaces>,
+    displacement_maps: [EmbeddedMap; 3],
+    light_direction: [f32; 2],
 }
 
 enum GlassState {
@@ -169,35 +255,33 @@ thread_local! {
     static GLASS_STATE: RefCell<GlassState> = const { RefCell::new(GlassState::Uninitialized) };
 }
 
-/// 全局液态玻璃配置（可从控制面板实时更新）
-static LIQUID_GLASS_CONFIG: std::sync::OnceLock<std::sync::RwLock<LiquidGlassConfig>> = std::sync::OnceLock::new();
+static LIQUID_GLASS_CONFIG: std::sync::OnceLock<std::sync::RwLock<LiquidGlassConfig>> =
+    std::sync::OnceLock::new();
 
 fn get_config_lock() -> &'static std::sync::RwLock<LiquidGlassConfig> {
     LIQUID_GLASS_CONFIG.get_or_init(|| std::sync::RwLock::new(LiquidGlassConfig::default()))
 }
 
-/// 更新全局液态玻璃配置（控制面板调用）
 pub fn update_liquid_glass_config(config: &LiquidGlassConfig) {
     if let Ok(mut guard) = get_config_lock().write() {
         *guard = config.clone();
     }
 }
 
-/// 获取当前液态玻璃配置
 pub fn get_liquid_glass_config() -> LiquidGlassConfig {
-    get_config_lock().read().map(|g| g.clone()).unwrap_or_default()
+    get_config_lock()
+        .read()
+        .map(|g| g.clone())
+        .unwrap_or_default()
 }
 
-/// 生成指定分类框的实时液态玻璃背景。
-///
-/// 返回预乘 alpha BGRA 像素；任何 GPU 或捕获错误都会返回 `None`，调用方应绘制
-/// 原有半透明背景完成优雅降级。
 pub fn render_background(
     screen_x: i32,
     screen_y: i32,
     width: i32,
     height: i32,
     corner_radius: f32,
+    dpi_scale: f32,
     glass_config: &LiquidGlassConfig,
 ) -> Option<Vec<Pixel32>> {
     if width <= 0 || height <= 0 {
@@ -205,7 +289,13 @@ pub fn render_background(
     }
 
     GLASS_STATE.with(|state| {
-        let mut state = state.borrow_mut();
+        let mut state = match state.try_borrow_mut() {
+            Ok(s) => s,
+            Err(_) => {
+                log::debug!("液态玻璃渲染器当前忙碌，跳过本帧");
+                return None;
+            }
+        };
         if matches!(&*state, GlassState::Failed { retry_at } if Instant::now() < *retry_at) {
             return None;
         }
@@ -236,11 +326,12 @@ pub fn render_background(
             width as u32,
             height as u32,
             corner_radius,
+            dpi_scale,
             glass_config,
         ) {
             Ok(pixels) => Some(pixels),
             Err(error) => {
-                log::warn!("液态玻璃渲染失败，暂时使用半透明背景: {error:#}");
+                log::warn!("液态玻璃帧渲染失败，回退半透明背景: {error:#}");
                 *state = GlassState::Failed {
                     retry_at: Instant::now() + RETRY_DELAY,
                 };
@@ -250,27 +341,211 @@ pub fn render_background(
     })
 }
 
+fn compile_shader(entry: &[u8], target: &[u8]) -> Result<ID3DBlob> {
+    unsafe {
+        let mut code = None;
+        let mut errors: Option<ID3DBlob> = None;
+        D3DCompile(
+            SHADER.as_ptr() as *const c_void,
+            SHADER.len(),
+            None,
+            None,
+            None::<&windows::Win32::Graphics::Direct3D::ID3DInclude>,
+            PCSTR(entry.as_ptr()),
+            PCSTR(target.as_ptr()),
+            0,
+            0,
+            &mut code,
+            Some(&mut errors),
+        )
+        .map_err(|e| {
+            if let Some(errors) = errors {
+                let msg = CStr::from_ptr(errors.GetBufferPointer() as *const i8).to_string_lossy();
+                anyhow!("Shader compilation failed: {}\n{}", e, msg)
+            } else {
+                anyhow!("Shader compilation failed: {}", e)
+            }
+        })?;
+        code.context("Shader compilation returned no code")
+    }
+}
+
+fn blob_bytes(blob: &ID3DBlob) -> &[u8] {
+    unsafe { slice::from_raw_parts(blob.GetBufferPointer() as *const u8, blob.GetBufferSize()) }
+}
+
+fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
+    unsafe {
+        let levels = [D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0];
+        let mut device = None;
+        let mut context = None;
+        let mut chosen = D3D_FEATURE_LEVEL::default();
+        windows::Win32::Graphics::Direct3D11::D3D11CreateDevice(
+            None,
+            D3D_DRIVER_TYPE_HARDWARE,
+            HMODULE::default(),
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            Some(&levels),
+            D3D11_SDK_VERSION,
+            Some(&mut device),
+            Some(&mut chosen),
+            Some(&mut context),
+        )?;
+        Ok((
+            device.context("创建 D3D11 设备未返回对象")?,
+            context.context("创建 D3D11 设备上下文未返回对象")?,
+        ))
+    }
+}
+
+fn create_outputs(device: &ID3D11Device) -> Result<Vec<CaptureOutput>> {
+    unsafe {
+        let dxgi: IDXGIDevice = device.cast()?;
+        let adapter = dxgi.GetAdapter()?;
+
+        let mut outputs = Vec::new();
+        let mut i = 0;
+        loop {
+            let output = match adapter.EnumOutputs(i) {
+                Ok(o) => o,
+                Err(_) => break,
+            };
+            i += 1;
+            let output1 = output.cast::<IDXGIOutput1>()?;
+            let duplication = output1.DuplicateOutput(device)?;
+            let desc = output.GetDesc()?;
+            outputs.push(CaptureOutput {
+                rect: desc.DesktopCoordinates,
+                duplication,
+                hdr_active: false,
+                desktop_texture: None,
+                desktop_view: None,
+                blurred_texture: None,
+                blurred_view: None,
+            });
+        }
+        Ok(outputs)
+    }
+}
+
+fn decode_embedded_map(
+    wic: &windows::Win32::Graphics::Imaging::IWICImagingFactory,
+    data: &[u8],
+) -> Result<(Vec<u8>, u32, u32)> {
+    use windows::Win32::Graphics::Imaging::{
+        GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, WICBitmapPaletteTypeCustom,
+    };
+
+    unsafe {
+        let stream = wic.CreateStream()?;
+        stream.InitializeFromMemory(data)?;
+
+        let decoder = wic.CreateDecoderFromStream(
+            &stream,
+            std::ptr::null(),
+            windows::Win32::Graphics::Imaging::WICDecodeMetadataCacheOnLoad,
+        )?;
+        let frame = decoder.GetFrame(0)?;
+
+        let mut width = 0u32;
+        let mut height = 0u32;
+        frame.GetSize(&mut width, &mut height)?;
+
+        let converter = wic.CreateFormatConverter()?;
+        converter.Initialize(
+            &frame,
+            &GUID_WICPixelFormat32bppBGRA,
+            WICBitmapDitherTypeNone,
+            None,
+            0.0,
+            WICBitmapPaletteTypeCustom,
+        )?;
+
+        let stride = width * 4;
+        let mut pixels = vec![0u8; (height * stride) as usize];
+        converter.CopyPixels(std::ptr::null(), stride, &mut pixels)?;
+
+        Ok((pixels, width, height))
+    }
+}
+
+fn upload_embedded_map(
+    device: &ID3D11Device,
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+) -> Result<EmbeddedMap> {
+    unsafe {
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: width,
+            Height: height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+            ..Default::default()
+        };
+
+        let initial = D3D11_SUBRESOURCE_DATA {
+            pSysMem: pixels.as_ptr() as *const c_void,
+            SysMemPitch: width * 4,
+            SysMemSlicePitch: 0,
+        };
+
+        let mut texture = None;
+        device.CreateTexture2D(&desc, Some(&initial), Some(&mut texture))?;
+        let texture = texture.context("创建法线贴图纹理未返回对象")?;
+
+        let mut view = None;
+        device.CreateShaderResourceView(&texture, None, Some(&mut view))?;
+        let view = view.context("创建法线贴图视图未返回对象")?;
+
+        Ok(EmbeddedMap { view })
+    }
+}
+
+fn point_in_rect(x: i32, y: i32, rect: &WinRect) -> bool {
+    x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom
+}
+
 impl GlassRenderer {
     fn new() -> Result<Self> {
         unsafe {
             let (device, context) = create_device()?;
+
+            let dxgi_device: IDXGIDevice = device.cast()?;
+            let d2d_device = D2D1CreateDevice(&dxgi_device, None)?;
+            let d2d_context = d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
+
+            let wic = windows::Win32::System::Com::CoCreateInstance(
+                &windows::Win32::Graphics::Imaging::CLSID_WICImagingFactory,
+                None,
+                windows::Win32::System::Com::CLSCTX_INPROC_SERVER,
+            )?;
+
+            let (std_pixels, std_w, std_h) = decode_embedded_map(&wic, STANDARD_MAP)?;
+            let (pol_pixels, pol_w, pol_h) = decode_embedded_map(&wic, POLAR_MAP)?;
+            let (pro_pixels, pro_w, pro_h) = decode_embedded_map(&wic, PROMINENT_MAP)?;
+
+            let std_map = upload_embedded_map(&device, &std_pixels, std_w, std_h)?;
+            let pol_map = upload_embedded_map(&device, &pol_pixels, pol_w, pol_h)?;
+            let pro_map = upload_embedded_map(&device, &pro_pixels, pro_w, pro_h)?;
+
             let vertex_blob = compile_shader(b"VSMain\0", b"vs_5_0\0")?;
-            let horizontal_blob = compile_shader(b"PSBlurHorizontal\0", b"ps_5_0\0")?;
-            let glass_blob = compile_shader(b"PSGlass\0", b"ps_5_0\0")?;
+            let pixel_blob = compile_shader(b"PSMain\0", b"ps_5_0\0")?;
 
             let mut vertex_shader = None;
             device.CreateVertexShader(blob_bytes(&vertex_blob), None, Some(&mut vertex_shader))?;
-            let mut horizontal_shader = None;
-            device.CreatePixelShader(
-                blob_bytes(&horizontal_blob),
-                None,
-                Some(&mut horizontal_shader),
-            )?;
-            let mut glass_shader = None;
-            device.CreatePixelShader(blob_bytes(&glass_blob), None, Some(&mut glass_shader))?;
+            let mut pixel_shader = None;
+            device.CreatePixelShader(blob_bytes(&pixel_blob), None, Some(&mut pixel_shader))?;
 
             let buffer_desc = D3D11_BUFFER_DESC {
-                ByteWidth: size_of::<GlassConstants>() as u32,
+                ByteWidth: size_of::<Constants>() as u32,
                 Usage: D3D11_USAGE_DYNAMIC,
                 BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
                 CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
@@ -290,6 +565,17 @@ impl GlassRenderer {
             let mut sampler = None;
             device.CreateSamplerState(&sampler_desc, Some(&mut sampler))?;
 
+            let mut rasterizer = None;
+            device.CreateRasterizerState(
+                &D3D11_RASTERIZER_DESC {
+                    FillMode: D3D11_FILL_SOLID,
+                    CullMode: D3D11_CULL_NONE,
+                    ScissorEnable: true.into(),
+                    ..Default::default()
+                },
+                Some(&mut rasterizer),
+            )?;
+
             let outputs = create_outputs(&device)?;
             if outputs.is_empty() {
                 return Err(anyhow!("未找到可用的 DXGI 显示输出"));
@@ -298,14 +584,319 @@ impl GlassRenderer {
             Ok(Self {
                 device,
                 context,
+                d2d_context,
                 vertex_shader: vertex_shader.context("创建顶点着色器未返回对象")?,
-                horizontal_shader: horizontal_shader.context("创建水平模糊着色器未返回对象")?,
-                glass_shader: glass_shader.context("创建玻璃着色器未返回对象")?,
+                pixel_shader: pixel_shader.context("创建像素着色器未返回对象")?,
                 constants: constants.context("创建常量缓冲区未返回对象")?,
                 sampler: sampler.context("创建采样器未返回对象")?,
+                rasterizer: rasterizer.context("创建光栅化器未返回对象")?,
                 outputs,
                 surfaces: HashMap::new(),
+                displacement_maps: [std_map, pol_map, pro_map],
+                light_direction: [0.0, 0.0],
             })
+        }
+    }
+
+    fn capture_output(&mut self, index: usize) -> Result<()> {
+        unsafe {
+            let output = &mut self.outputs[index];
+            let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
+            let mut resource: Option<IDXGIResource> = None;
+            let acquire = output
+                .duplication
+                .AcquireNextFrame(0, &mut frame_info, &mut resource);
+
+            if let Err(e) = acquire {
+                if e.code() == DXGI_ERROR_WAIT_TIMEOUT {
+                    return Ok(());
+                }
+                if e.code() == DXGI_ERROR_ACCESS_LOST {
+                    return Err(anyhow!("桌面捕获访问丢失"));
+                }
+                return Err(e.into());
+            }
+
+            let Some(resource) = resource else {
+                let _ = output.duplication.ReleaseFrame();
+                return Ok(());
+            };
+            let texture = resource.cast::<ID3D11Texture2D>()?;
+
+            let mut frame_desc = D3D11_TEXTURE2D_DESC::default();
+            texture.GetDesc(&mut frame_desc);
+            output.hdr_active = matches!(
+                frame_desc.Format,
+                DXGI_FORMAT_R10G10B10A2_UNORM | DXGI_FORMAT_R16G16B16A16_FLOAT
+            );
+
+            if output.desktop_texture.is_none() {
+                let mut desc = D3D11_TEXTURE2D_DESC::default();
+                texture.GetDesc(&mut desc);
+                let new_desc = D3D11_TEXTURE2D_DESC {
+                    Usage: D3D11_USAGE_DEFAULT,
+                    BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+                    CPUAccessFlags: 0,
+                    MiscFlags: 0,
+                    ..desc
+                };
+                let mut new_texture = None;
+                self.device
+                    .CreateTexture2D(&new_desc, None, Some(&mut new_texture))?;
+                let new_texture = new_texture.context("创建桌面纹理未返回对象")?;
+                let mut view = None;
+                self.device
+                    .CreateShaderResourceView(&new_texture, None, Some(&mut view))?;
+                let view = view.context("创建桌面纹理视图未返回对象")?;
+                output.desktop_texture = Some(new_texture);
+                output.desktop_view = Some(view);
+            }
+
+            if let Some(ref dest) = output.desktop_texture {
+                self.context.CopyResource(dest, &texture);
+            }
+            let _ = output.duplication.ReleaseFrame();
+            Ok(())
+        }
+    }
+
+    fn blur_output_impl(
+        device: &ID3D11Device,
+        d2d_context: &ID2D1DeviceContext,
+        output: &mut CaptureOutput,
+        sigma: f32,
+        saturation: f32,
+        lens_x: i32,
+        lens_y: i32,
+        lens_w: i32,
+        lens_h: i32,
+    ) -> Result<()> {
+        unsafe {
+            let Some(ref source_texture) = output.desktop_texture else {
+                return Ok(());
+            };
+
+            let mut texture_desc = D3D11_TEXTURE2D_DESC::default();
+            source_texture.GetDesc(&mut texture_desc);
+
+            if output.blurred_texture.is_none() {
+                let new_desc = D3D11_TEXTURE2D_DESC {
+                    Usage: D3D11_USAGE_DEFAULT,
+                    BindFlags: (D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0) as u32,
+                    CPUAccessFlags: 0,
+                    MiscFlags: 0,
+                    ..texture_desc
+                };
+                let mut new_texture = None;
+                device.CreateTexture2D(&new_desc, None, Some(&mut new_texture))?;
+                let new_texture = new_texture.context("创建模糊纹理未返回对象")?;
+                let mut view = None;
+                device.CreateShaderResourceView(&new_texture, None, Some(&mut view))?;
+                let view = view.context("创建模糊纹理视图未返回对象")?;
+                output.blurred_texture = Some(new_texture);
+                output.blurred_view = Some(view);
+            }
+
+            let Some(ref target_texture) = output.blurred_texture else {
+                return Ok(());
+            };
+
+            let saturation = if output.hdr_active { 1.0 } else { saturation };
+            let pixel_format = D2D1_PIXEL_FORMAT {
+                format: texture_desc.Format,
+                alphaMode: D2D1_ALPHA_MODE_IGNORE,
+            };
+
+            let source_properties = D2D1_BITMAP_PROPERTIES1 {
+                pixelFormat: pixel_format,
+                dpiX: 96.0,
+                dpiY: 96.0,
+                bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
+                ..Default::default()
+            };
+
+            let target_properties = D2D1_BITMAP_PROPERTIES1 {
+                pixelFormat: pixel_format,
+                dpiX: 96.0,
+                dpiY: 96.0,
+                bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET,
+                ..Default::default()
+            };
+
+            let source_surface = source_texture.cast::<IDXGISurface>()?;
+            let target_surface = target_texture.cast::<IDXGISurface>()?;
+
+            let source_bitmap = d2d_context
+                .CreateBitmapFromDxgiSurface(&source_surface, Some(&source_properties))?;
+            let target_bitmap = d2d_context
+                .CreateBitmapFromDxgiSurface(&target_surface, Some(&target_properties))?;
+
+            let crop_rect = D2D_RECT_F {
+                left: (lens_x - output.rect.left).max(0) as f32,
+                top: (lens_y - output.rect.top).max(0) as f32,
+                right: (lens_x + lens_w - output.rect.left).min(texture_desc.Width as i32) as f32,
+                bottom: (lens_y + lens_h - output.rect.top).min(texture_desc.Height as i32) as f32,
+            };
+            if crop_rect.right <= crop_rect.left || crop_rect.bottom <= crop_rect.top {
+                return Ok(());
+            }
+
+            let crop = d2d_context.CreateEffect(&CLSID_D2D1Crop)?;
+            crop.SetInput(0, &source_bitmap, true);
+            let crop_bytes = slice::from_raw_parts(
+                (&crop_rect as *const D2D_RECT_F).cast::<u8>(),
+                size_of::<D2D_RECT_F>(),
+            );
+            crop.SetValue(
+                D2D1_CROP_PROP_RECT.0 as u32,
+                D2D1_PROPERTY_TYPE_VECTOR4,
+                crop_bytes,
+            )?;
+            let cropped = crop.GetOutput()?;
+
+            let border = d2d_context.CreateEffect(&CLSID_D2D1Border)?;
+            border.SetInput(0, &cropped, true);
+            let edge_mode = D2D1_BORDER_EDGE_MODE_MIRROR.0;
+            let edge_bytes =
+                slice::from_raw_parts((&edge_mode as *const i32).cast::<u8>(), size_of::<i32>());
+            border.SetValue(
+                D2D1_BORDER_PROP_EDGE_MODE_X.0 as u32,
+                D2D1_PROPERTY_TYPE_ENUM,
+                edge_bytes,
+            )?;
+            border.SetValue(
+                D2D1_BORDER_PROP_EDGE_MODE_Y.0 as u32,
+                D2D1_PROPERTY_TYPE_ENUM,
+                edge_bytes,
+            )?;
+            let bordered = border.GetOutput()?;
+
+            let blur = d2d_context.CreateEffect(&CLSID_D2D1GaussianBlur)?;
+            blur.SetInput(0, &bordered, true);
+            let sigma_bytes = slice::from_raw_parts((&sigma as *const f32).cast::<u8>(), 4);
+            blur.SetValue(
+                D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION.0 as u32,
+                D2D1_PROPERTY_TYPE_FLOAT,
+                sigma_bytes,
+            )?;
+            let blurred_image = blur.GetOutput()?;
+
+            let saturate_effect = d2d_context.CreateEffect(&CLSID_D2D1ColorMatrix)?;
+            saturate_effect.SetInput(0, &blurred_image, true);
+            let matrix = D2D_MATRIX_5X4_F {
+                Anonymous: windows::Win32::Graphics::Direct2D::Common::D2D_MATRIX_5X4_F_0 {
+                    m: [
+                        0.213 + 0.787 * saturation,
+                        0.213 - 0.213 * saturation,
+                        0.213 - 0.213 * saturation,
+                        0.0,
+                        0.715 - 0.715 * saturation,
+                        0.715 + 0.285 * saturation,
+                        0.715 - 0.715 * saturation,
+                        0.0,
+                        0.072 - 0.072 * saturation,
+                        0.072 - 0.072 * saturation,
+                        0.072 + 0.928 * saturation,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        1.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                    ],
+                },
+            };
+            let saturation_bytes = slice::from_raw_parts(
+                (&matrix as *const D2D_MATRIX_5X4_F).cast::<u8>(),
+                size_of::<D2D_MATRIX_5X4_F>(),
+            );
+            saturate_effect.SetValue(
+                D2D1_COLORMATRIX_PROP_COLOR_MATRIX.0 as u32,
+                D2D1_PROPERTY_TYPE_MATRIX_5X4,
+                saturation_bytes,
+            )?;
+            let saturated_image = saturate_effect.GetOutput()?;
+
+            d2d_context.SetTarget(&target_bitmap);
+            d2d_context.BeginDraw();
+            d2d_context.DrawImage(
+                &saturated_image,
+                None,
+                None,
+                D2D1_INTERPOLATION_MODE_LINEAR,
+                D2D1_COMPOSITE_MODE_SOURCE_COPY,
+            );
+            let _ = d2d_context.EndDraw(None, None);
+            d2d_context.SetTarget(None::<&ID2D1Image>);
+            Ok(())
+        }
+    }
+
+    fn ensure_surfaces(&mut self, width: u32, height: u32) -> Result<()> {
+        if self.surfaces.contains_key(&(width, height)) {
+            if self.surfaces.len() > MAX_SURFACE_CACHE_ENTRIES {
+                let keys: Vec<_> = self.surfaces.keys().copied().collect();
+                for key in keys
+                    .iter()
+                    .take(self.surfaces.len() - MAX_SURFACE_CACHE_ENTRIES)
+                {
+                    self.surfaces.remove(key);
+                }
+            }
+            return Ok(());
+        }
+
+        unsafe {
+            let output_desc = D3D11_TEXTURE2D_DESC {
+                Width: width,
+                Height: height,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
+                ..Default::default()
+            };
+
+            let mut output_texture = None;
+            self.device
+                .CreateTexture2D(&output_desc, None, Some(&mut output_texture))?;
+            let output_texture = output_texture.context("创建输出纹理未返回对象")?;
+
+            let mut output_target = None;
+            self.device
+                .CreateRenderTargetView(&output_texture, None, Some(&mut output_target))?;
+            let output_target = output_target.context("创建输出渲染目标视图未返回对象")?;
+
+            let staging_desc = D3D11_TEXTURE2D_DESC {
+                Usage: D3D11_USAGE_STAGING,
+                BindFlags: 0,
+                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                ..output_desc
+            };
+            let mut staging_texture = None;
+            self.device
+                .CreateTexture2D(&staging_desc, None, Some(&mut staging_texture))?;
+            let staging_texture = staging_texture.context("创建暂存纹理未返回对象")?;
+
+            self.surfaces.insert(
+                (width, height),
+                RenderSurfaces {
+                    width,
+                    height,
+                    output_texture,
+                    output_target,
+                    staging_texture,
+                },
+            );
+            Ok(())
         }
     }
 
@@ -316,10 +907,12 @@ impl GlassRenderer {
         width: u32,
         height: u32,
         corner_radius: f32,
+        dpi_scale: f32,
         glass_config: &LiquidGlassConfig,
     ) -> Result<Vec<Pixel32>> {
         let center_x = screen_x + width as i32 / 2;
         let center_y = screen_y + height as i32 / 2;
+
         let output_index = self
             .outputs
             .iter()
@@ -327,670 +920,230 @@ impl GlassRenderer {
             .ok_or_else(|| anyhow!("分类框中心不在当前 D3D11 适配器的任何输出中"))?;
 
         self.capture_output(output_index)?;
+        let blur_sigma = ((if glass_config.over_light { 12.0 } else { 4.0 })
+            + glass_config.blur_amount * 32.0)
+            * dpi_scale;
+        let saturation = glass_config.saturation;
+
+        // Capture and blur in separate scope to avoid borrow conflicts
+        {
+            let output = &mut self.outputs[output_index];
+            Self::blur_output_impl(
+                &self.device,
+                &self.d2d_context,
+                output,
+                blur_sigma,
+                saturation,
+                screen_x,
+                screen_y,
+                width as i32,
+                height as i32,
+            )?;
+        }
 
         let output = &self.outputs[output_index];
-        let desktop_view = output
-            .desktop_view
+        let blurred_view = output
+            .blurred_view
             .as_ref()
-            .context("尚未取得桌面捕获帧")?
+            .context("尚未取得模糊帧")?
             .clone();
-        let output_width = (output.rect.right - output.rect.left).max(1) as f32;
-        let output_height = (output.rect.bottom - output.rect.top).max(1) as f32;
+        let output_rect = output.rect;
+        let hdr_active = output.hdr_active;
+
+        let mut cursor = POINT::default();
+        let target_light = unsafe {
+            if GetCursorPos(&mut cursor).is_ok() {
+                [
+                    cursor.x as f32 - (screen_x as f32 + width as f32 * 0.5),
+                    cursor.y as f32 - (screen_y as f32 + height as f32 * 0.5),
+                ]
+            } else {
+                [0.0, 0.0]
+            }
+        };
+        const LIGHT_BLEND: f32 = 0.14;
+        self.light_direction[0] += (target_light[0] - self.light_direction[0]) * LIGHT_BLEND;
+        self.light_direction[1] += (target_light[1] - self.light_direction[1]) * LIGHT_BLEND;
+
         self.render_view(
-            &desktop_view,
-            [
-                (screen_x - output.rect.left) as f32 / output_width,
-                (screen_y - output.rect.top) as f32 / output_height,
-                width as f32 / output_width,
-                height as f32 / output_height,
-            ],
-            [output_width, output_height],
+            &blurred_view,
+            output_rect,
+            screen_x,
+            screen_y,
             width,
             height,
             corner_radius,
+            dpi_scale,
+            hdr_active,
             glass_config,
         )
     }
 
     fn render_view(
         &mut self,
-        source_view: &ID3D11ShaderResourceView,
-        source_rect: [f32; 4],
-        source_size: [f32; 2],
+        blurred_view: &ID3D11ShaderResourceView,
+        output_rect: WinRect,
+        screen_x: i32,
+        screen_y: i32,
         width: u32,
         height: u32,
         corner_radius: f32,
+        dpi_scale: f32,
+        hdr_active: bool,
         glass_config: &LiquidGlassConfig,
     ) -> Result<Vec<Pixel32>> {
         self.ensure_surfaces(width, height)?;
-        let constants = GlassConstants {
-            source_rect,
-            target_info: [
-                width as f32,
-                height as f32,
-                1.0 / source_size[0].max(1.0),
-                1.0 / height.max(1) as f32,
+
+        let output_width = (output_rect.right - output_rect.left).max(1) as f32;
+        let output_height = (output_rect.bottom - output_rect.top).max(1) as f32;
+
+        // 示例的第 4 个模式是 shader 内生成的程序化贴图。
+        let mode = glass_config.refraction_mode.min(2) as usize;
+        let map_view = &self.displacement_maps[mode].view;
+
+        let constants = Constants {
+            output_origin: [output_rect.left as f32, output_rect.top as f32],
+            output_size: [output_width, output_height],
+            window_origin: [screen_x as f32, screen_y as f32],
+            window_size: [width as f32, height as f32],
+            lens_size: [width as f32, height as f32],
+            padding: [0.0, 0.0],
+            shadow_settings: [
+                (if glass_config.over_light { 16.0 } else { 12.0 }) * dpi_scale,
+                (if glass_config.over_light { 70.0 } else { 40.0 }) * dpi_scale,
+                if glass_config.over_light { 0.75 } else { 0.25 },
+                0.0,
             ],
-            glass_info: [corner_radius, glass_config.blur_radius, glass_config.edge_effect_width, glass_config.glass_alpha],
-            color_info: [glass_config.refraction_strength, glass_config.chromatic_offset, glass_config.contrast, glass_config.color_gain],
-            shadow_info: [glass_config.shadow_offset_y, glass_config.shadow_softness, glass_config.shadow_opacity, glass_config.brightness],
-            light_info: [glass_config.top_light_position, glass_config.top_light_strength, glass_config.lower_shadow_position, glass_config.lower_shadow_strength],
+            refraction_settings: [0.30, 0.20, 0.60, 0.80],
+            effects_settings: [
+                0.15,
+                glass_config.displacement_scale
+                    * if glass_config.over_light { 0.5 } else { 1.0 }
+                    * dpi_scale,
+                glass_config.chromatic_offset,
+                (0.5 - glass_config.chromatic_offset * 0.1).max(0.1) * dpi_scale,
+            ],
+            color_settings: [
+                if hdr_active {
+                    1.0
+                } else {
+                    glass_config.saturation
+                },
+                if glass_config.over_light { 0.0 } else { 0.018 },
+                width as f32 * 0.324_668_2,
+                0.07,
+            ],
+            detail_settings: [0.34, 0.08, 0.75, 0.75],
+            control_settings: [
+                if glass_config.over_light { 1.0 } else { 0.0 },
+                dpi_scale,
+                glass_config.elasticity,
+                corner_radius.min(height as f32 * 0.5) * dpi_scale,
+            ],
+            mouse_offset: self.light_direction,
+            interaction_padding: [
+                if hdr_active { 1.0 } else { 0.0 },
+                glass_config.refraction_mode as f32,
+            ],
         };
 
         unsafe {
-            self.update_constants(constants)?;
             let surfaces = self
                 .surfaces
                 .get(&(width, height))
-                .context("玻璃渲染表面未创建")?;
-            self.draw_pass(
-                source_view,
-                &surfaces.blur_target,
-                &self.horizontal_shader,
-                width,
-                height,
+                .context("渲染表面未创建")?;
+
+            self.context
+                .OMSetRenderTargets(Some(&[Some(surfaces.output_target.clone())]), None);
+            self.context
+                .ClearRenderTargetView(&surfaces.output_target, &[0.0; 4]);
+            self.context.RSSetViewports(Some(&[D3D11_VIEWPORT {
+                Width: width as f32,
+                Height: height as f32,
+                MaxDepth: 1.0,
+                ..Default::default()
+            }]));
+            self.context.RSSetState(&self.rasterizer);
+            self.context.IASetInputLayout(None);
+            self.context
+                .IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            self.context.VSSetShader(&self.vertex_shader, None);
+            self.context.PSSetShader(&self.pixel_shader, None);
+            self.context
+                .PSSetConstantBuffers(0, Some(&[Some(self.constants.clone())]));
+            self.context
+                .PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
+
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            self.context.Map(
+                &self.constants,
+                0,
+                D3D11_MAP_WRITE_DISCARD,
+                0,
+                Some(&mut mapped),
+            )?;
+            mapped.pData.cast::<Constants>().write(constants);
+            self.context.Unmap(&self.constants, 0);
+
+            self.context.PSSetShaderResources(
+                0,
+                Some(&[Some(blurred_view.clone()), Some(map_view.clone())]),
             );
-            self.draw_pass(
-                &surfaces.blur_view,
-                &surfaces.output_target,
-                &self.glass_shader,
-                width,
-                height,
-            );
-            self.context.PSSetShaderResources(0, Some(&[None]));
+            self.context.Draw(3, 0);
+            self.context.PSSetShaderResources(0, Some(&[None, None]));
+
             self.context
                 .CopyResource(&surfaces.staging_texture, &surfaces.output_texture);
-            self.read_pixels(&surfaces.staging_texture, width, height)
-        }
-    }
 
-    fn capture_output(&mut self, index: usize) -> Result<()> {
-        let output = self.outputs.get_mut(index).context("DXGI 输出索引越界")?;
-        let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
-        let mut resource: Option<IDXGIResource> = None;
-        let timeout_ms = if output.desktop_view.is_some() {
-            0
-        } else {
-            100
-        };
-        let acquire = unsafe {
-            output
-                .duplication
-                .AcquireNextFrame(timeout_ms, &mut frame_info, &mut resource)
-        };
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            self.context.Map(
+                &surfaces.staging_texture,
+                0,
+                D3D11_MAP_READ,
+                0,
+                Some(&mut mapped),
+            )?;
 
-        if let Err(error) = acquire {
-            if error.code() == DXGI_ERROR_WAIT_TIMEOUT && output.desktop_view.is_some() {
-                return Ok(());
-            }
-            if error.code() == DXGI_ERROR_ACCESS_LOST {
-                return Err(anyhow!("桌面捕获访问已丢失，需要重建设备"));
-            }
-            return Err(error).context("获取首个桌面捕获帧失败");
-        }
+            let mut pixels = vec![
+                Pixel32 {
+                    b: 0,
+                    g: 0,
+                    r: 0,
+                    a: 0
+                };
+                (width * height) as usize
+            ];
+            let row_bytes = width as usize * size_of::<Pixel32>();
 
-        let result = (|| -> Result<()> {
-            let frame = resource
-                .context("Desktop Duplication 未返回帧资源")?
-                .cast::<ID3D11Texture2D>()?;
-            let mut frame_desc = D3D11_TEXTURE2D_DESC::default();
-            unsafe { frame.GetDesc(&mut frame_desc) };
-
-            let recreate = output.desktop_texture.as_ref().is_none_or(|texture| {
-                let mut current_desc = D3D11_TEXTURE2D_DESC::default();
-                unsafe { texture.GetDesc(&mut current_desc) };
-                current_desc.Width != frame_desc.Width
-                    || current_desc.Height != frame_desc.Height
-                    || current_desc.Format != frame_desc.Format
-            });
-
-            if recreate {
-                frame_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE.0 as u32;
-                frame_desc.CPUAccessFlags = 0;
-                frame_desc.Usage = D3D11_USAGE_DEFAULT;
-                frame_desc.MiscFlags = 0;
-                let mut texture = None;
-                unsafe {
-                    self.device
-                        .CreateTexture2D(&frame_desc, None, Some(&mut texture))?;
-                }
-                let texture = texture.context("创建桌面纹理未返回对象")?;
-                let mut view = None;
-                unsafe {
-                    self.device
-                        .CreateShaderResourceView(&texture, None, Some(&mut view))?;
-                }
-                output.desktop_texture = Some(texture);
-                output.desktop_view = view;
+            for row in 0..height as usize {
+                let source = mapped
+                    .pData
+                    .cast::<u8>()
+                    .add(row * mapped.RowPitch as usize);
+                let destination = pixels.as_mut_ptr().cast::<u8>().add(row * row_bytes);
+                std::ptr::copy_nonoverlapping(source, destination, row_bytes);
             }
 
-            if let Some(texture) = &output.desktop_texture {
-                unsafe { self.context.CopyResource(texture, &frame) };
-            }
-            Ok(())
-        })();
-
-        let _ = unsafe { output.duplication.ReleaseFrame() };
-        result
-    }
-
-    fn ensure_surfaces(&mut self, width: u32, height: u32) -> Result<()> {
-        let key = (width, height);
-        if self.surfaces.contains_key(&key) {
-            return Ok(());
-        }
-
-        if self.surfaces.len() >= MAX_SURFACE_CACHE_ENTRIES {
-            if let Some(oldest_key) = self.surfaces.keys().next().copied() {
-                self.surfaces.remove(&oldest_key);
-            }
-        }
-
-        self.surfaces.insert(key, unsafe {
-            create_surfaces(&self.device, width, height)?
-        });
-        Ok(())
-    }
-
-    unsafe fn update_constants(&self, constants: GlassConstants) -> Result<()> {
-        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-        self.context.Map(
-            &self.constants,
-            0,
-            D3D11_MAP_WRITE_DISCARD,
-            0,
-            Some(&mut mapped),
-        )?;
-        mapped.pData.cast::<GlassConstants>().write(constants);
-        self.context.Unmap(&self.constants, 0);
-        Ok(())
-    }
-
-    unsafe fn draw_pass(
-        &self,
-        source: &ID3D11ShaderResourceView,
-        target: &ID3D11RenderTargetView,
-        shader: &ID3D11PixelShader,
-        width: u32,
-        height: u32,
-    ) {
-        self.context
-            .OMSetRenderTargets(Some(&[Some(target.clone())]), None);
-        self.context.ClearRenderTargetView(target, &[0.0; 4]);
-        self.context.RSSetViewports(Some(&[D3D11_VIEWPORT {
-            Width: width as f32,
-            Height: height as f32,
-            MaxDepth: 1.0,
-            ..Default::default()
-        }]));
-        self.context.IASetInputLayout(None);
-        self.context
-            .IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        self.context.VSSetShader(&self.vertex_shader, None);
-        self.context.PSSetShader(shader, None);
-        self.context
-            .PSSetConstantBuffers(0, Some(&[Some(self.constants.clone())]));
-        self.context
-            .PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
-        self.context
-            .PSSetShaderResources(0, Some(&[Some(source.clone())]));
-        self.context.Draw(3, 0);
-        self.context.PSSetShaderResources(0, Some(&[None]));
-    }
-
-    unsafe fn read_pixels(
-        &self,
-        staging: &ID3D11Texture2D,
-        width: u32,
-        height: u32,
-    ) -> Result<Vec<Pixel32>> {
-        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-        self.context
-            .Map(staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
-
-        let mut pixels = vec![
-            Pixel32 {
-                b: 0,
-                g: 0,
-                r: 0,
-                a: 0,
-            };
-            width as usize * height as usize
-        ];
-        let row_bytes = width as usize * size_of::<Pixel32>();
-        for row in 0..height as usize {
-            let source = mapped
-                .pData
-                .cast::<u8>()
-                .add(row * mapped.RowPitch as usize);
-            let destination = pixels.as_mut_ptr().cast::<u8>().add(row * row_bytes);
-            std::ptr::copy_nonoverlapping(source, destination, row_bytes);
-        }
-
-        self.context.Unmap(staging, 0);
-        Ok(pixels)
-    }
-}
-
-unsafe fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
-    let levels = [D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0];
-    for driver in [D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP] {
-        let mut device = None;
-        let mut context = None;
-        let mut selected_level = D3D_FEATURE_LEVEL::default();
-        let result = D3D11CreateDevice(
-            None,
-            driver,
-            HMODULE::default(),
-            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-            Some(&levels),
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            Some(&mut selected_level),
-            Some(&mut context),
-        );
-        if result.is_ok() {
-            return Ok((
-                device.context("D3D11 创建设备未返回对象")?,
-                context.context("D3D11 创建设备上下文未返回对象")?,
-            ));
+            self.context.Unmap(&surfaces.staging_texture, 0);
+            Ok(pixels)
         }
     }
-    Err(anyhow!("硬件和 WARP D3D11 设备均创建失败"))
-}
-
-unsafe fn create_outputs(device: &ID3D11Device) -> Result<Vec<CaptureOutput>> {
-    let dxgi_device: IDXGIDevice = device.cast()?;
-    let adapter = dxgi_device.GetAdapter()?;
-    let mut outputs = Vec::new();
-    let mut index = 0;
-    while let Ok(output) = adapter.EnumOutputs(index) {
-        let desc = output.GetDesc()?;
-        let output1: IDXGIOutput1 = output.cast()?;
-        match output1.DuplicateOutput(device) {
-            Ok(duplication) => outputs.push(CaptureOutput {
-                rect: desc.DesktopCoordinates,
-                duplication,
-                desktop_texture: None,
-                desktop_view: None,
-            }),
-            Err(error) => log::warn!(
-                "创建显示输出 {} 的 Desktop Duplication 失败: {error}",
-                index
-            ),
-        }
-        index += 1;
-    }
-    Ok(outputs)
-}
-
-unsafe fn create_surfaces(
-    device: &ID3D11Device,
-    width: u32,
-    height: u32,
-) -> Result<RenderSurfaces> {
-    let render_desc = D3D11_TEXTURE2D_DESC {
-        Width: width,
-        Height: height,
-        MipLevels: 1,
-        ArraySize: 1,
-        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Usage: D3D11_USAGE_DEFAULT,
-        BindFlags: (D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE).0 as u32,
-        ..Default::default()
-    };
-
-    let blur_texture = create_texture(device, &render_desc)?;
-    let blur_view = create_shader_view(device, &blur_texture)?;
-    let blur_target = create_render_target(device, &blur_texture)?;
-    let output_texture = create_texture(device, &render_desc)?;
-    let output_target = create_render_target(device, &output_texture)?;
-
-    let staging_desc = D3D11_TEXTURE2D_DESC {
-        Usage: D3D11_USAGE_STAGING,
-        BindFlags: 0,
-        CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
-        ..render_desc
-    };
-    let staging_texture = create_texture(device, &staging_desc)?;
-
-    Ok(RenderSurfaces {
-        width,
-        height,
-        blur_texture,
-        blur_view,
-        blur_target,
-        output_texture,
-        output_target,
-        staging_texture,
-    })
-}
-
-unsafe fn create_texture(
-    device: &ID3D11Device,
-    desc: &D3D11_TEXTURE2D_DESC,
-) -> Result<ID3D11Texture2D> {
-    let mut texture = None;
-    device.CreateTexture2D(desc, None, Some(&mut texture))?;
-    texture.context("创建 D3D11 纹理未返回对象")
-}
-
-unsafe fn create_shader_view(
-    device: &ID3D11Device,
-    texture: &ID3D11Texture2D,
-) -> Result<ID3D11ShaderResourceView> {
-    let mut view = None;
-    device.CreateShaderResourceView(texture, None, Some(&mut view))?;
-    view.context("创建 Shader Resource View 未返回对象")
-}
-
-unsafe fn create_render_target(
-    device: &ID3D11Device,
-    texture: &ID3D11Texture2D,
-) -> Result<ID3D11RenderTargetView> {
-    let mut target = None;
-    device.CreateRenderTargetView(texture, None, Some(&mut target))?;
-    target.context("创建 Render Target View 未返回对象")
-}
-
-unsafe fn compile_shader(entry: &[u8], target: &[u8]) -> Result<ID3DBlob> {
-    let entry = CStr::from_bytes_with_nul(entry).context("Shader 入口点不是 C 字符串")?;
-    let target = CStr::from_bytes_with_nul(target).context("Shader Profile 不是 C 字符串")?;
-    let mut code = None;
-    let mut errors = None;
-    let result = D3DCompile(
-        SHADER.as_ptr().cast::<c_void>(),
-        SHADER.len(),
-        PCSTR::null(),
-        None,
-        None,
-        PCSTR(entry.as_ptr().cast()),
-        PCSTR(target.as_ptr().cast()),
-        1 << 15,
-        0,
-        &mut code,
-        Some(&mut errors),
-    );
-    if let Err(error) = result {
-        let details = errors
-            .as_ref()
-            .map(|blob| String::from_utf8_lossy(blob_bytes(blob)).into_owned())
-            .unwrap_or_default();
-        return Err(anyhow!("编译 Shader 失败: {error}; {details}"));
-    }
-    code.context("Shader 编译成功但未返回字节码")
-}
-
-unsafe fn blob_bytes(blob: &ID3DBlob) -> &[u8] {
-    slice::from_raw_parts(blob.GetBufferPointer().cast(), blob.GetBufferSize())
-}
-
-fn point_in_rect(x: i32, y: i32, rect: &WinRect) -> bool {
-    x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
 
     #[test]
-    fn point_in_rect_supports_negative_monitor_coordinates() {
-        let rect = WinRect {
-            left: -1920,
-            top: 0,
-            right: 0,
-            bottom: 1080,
-        };
-        assert!(point_in_rect(-960, 540, &rect));
-        assert!(!point_in_rect(0, 540, &rect));
+    fn constants_layout_matches_frosted_liquid_example() {
+        // 40 个 f32；必须与 liquid-glass-rs 的 cbuffer C 字段顺序一致。
+        assert_eq!(size_of::<Constants>(), 160);
     }
 
     #[test]
-    fn constants_are_sixteen_byte_aligned_in_size() {
-        assert_eq!(size_of::<GlassConstants>() % 16, 0);
-    }
-
-    #[test]
-    #[ignore = "依赖当前 Windows 图形会话和可用的 Desktop Duplication"]
-    fn desktop_capture_and_shader_smoke_test() {
-        let screen_width = unsafe { GetSystemMetrics(SM_CXSCREEN) };
-        let screen_height = unsafe { GetSystemMetrics(SM_CYSCREEN) };
-        let width = 320;
-        let height = 240;
-        let mut renderer = match GlassRenderer::new() {
-            Ok(renderer) => renderer,
-            Err(error) => panic!("液态玻璃渲染器初始化失败: {error:#}"),
-        };
-        let glass_config = crate::config::LiquidGlassConfig::default();
-        let pixels = match renderer.render(
-            (screen_width - width) / 2,
-            (screen_height - height) / 2,
-            width as u32,
-            height as u32,
-            16.0,
-            &glass_config,
-        ) {
-            Ok(pixels) => pixels,
-            Err(error) => panic!("液态玻璃测试帧生成失败: {error:#}"),
-        };
-
-        assert_eq!(pixels.len(), width as usize * height as usize);
-        assert!(pixels.iter().any(|pixel| pixel.a > 0));
-        assert!(pixels.iter().any(|pixel| pixel.a == 0));
-
-        if let Ok(path) = std::env::var("IKUN_GLASS_SMOKE_OUTPUT") {
-            write_preview_bmp(&path, &pixels, width as u32, height as u32);
-        }
-    }
-
-    #[test]
-    #[ignore = "依赖当前 Windows D3D11 图形会话"]
-    fn quadrant_background_moves_and_blends_continuously() {
-        let mut renderer = match GlassRenderer::new() {
-            Ok(renderer) => renderer,
-            Err(error) => panic!("液态玻璃渲染器初始化失败: {error:#}"),
-        };
-        let source_width = 800_u32;
-        let source_height = 600_u32;
-        let source_pixels = quadrant_pixels(source_width, source_height);
-        let source_view = unsafe {
-            create_test_source_view(
-                &renderer.device,
-                &source_pixels,
-                source_width,
-                source_height,
-            )
-        };
-        let source_view = match source_view {
-            Ok(view) => view,
-            Err(error) => panic!("创建四分区测试纹理失败: {error:#}"),
-        };
-
-        let width = 240_u32;
-        let height = 180_u32;
-        let positions = [(40, 40), (520, 40), (40, 380), (520, 380)];
-        let mut samples = Vec::new();
-        for (x, y) in positions {
-            let pixels = render_test_region(
-                &mut renderer,
-                &source_view,
-                x,
-                y,
-                width,
-                height,
-                source_width,
-                source_height,
-            );
-            samples.push(pixels[(height / 2 * width + width / 2) as usize]);
-        }
-        assert!(samples[0].r > samples[0].g && samples[0].r > samples[0].b);
-        assert!(samples[1].r > 180 && samples[1].g > 180 && samples[1].b < 80);
-        assert!(samples[2].b > samples[2].r && samples[2].b > samples[2].g);
-        assert!(samples[3].g > samples[3].r && samples[3].g > samples[3].b);
-
-        let movement_positions = [250, 280, 310];
-        let mut green_averages = Vec::new();
-        let mut preview_frames = Vec::new();
-        for x in movement_positions {
-            let pixels = render_test_region(
-                &mut renderer,
-                &source_view,
-                x,
-                40,
-                width,
-                height,
-                source_width,
-                source_height,
-            );
-            green_averages.push(channel_average(&pixels, |pixel| pixel.g));
-            preview_frames.push(pixels);
-        }
-        assert!(green_averages[0] < green_averages[1]);
-        assert!(green_averages[1] < green_averages[2]);
-
-        let boundary = &preview_frames[1];
-        let center = boundary[(height / 2 * width + width / 2) as usize];
-        assert!(center.r > 100 && center.g > 20);
-
-        if let Ok(path) = std::env::var("IKUN_GLASS_QUADRANT_OUTPUT") {
-            let combined = combine_horizontal(&preview_frames, width, height);
-            write_preview_bmp(&path, &combined, width * 3, height);
-        }
-    }
-
-    fn render_test_region(
-        renderer: &mut GlassRenderer,
-        source_view: &ID3D11ShaderResourceView,
-        x: u32,
-        y: u32,
-        width: u32,
-        height: u32,
-        source_width: u32,
-        source_height: u32,
-    ) -> Vec<Pixel32> {
-        match renderer.render_view(
-            source_view,
-            [
-                x as f32 / source_width as f32,
-                y as f32 / source_height as f32,
-                width as f32 / source_width as f32,
-                height as f32 / source_height as f32,
-            ],
-            [source_width as f32, source_height as f32],
-            width,
-            height,
-            16.0,
-            &LiquidGlassConfig::default(),
-        ) {
-            Ok(pixels) => pixels,
-            Err(error) => panic!("四分区液态玻璃渲染失败: {error:#}"),
-        }
-    }
-
-    unsafe fn create_test_source_view(
-        device: &ID3D11Device,
-        pixels: &[Pixel32],
-        width: u32,
-        height: u32,
-    ) -> Result<ID3D11ShaderResourceView> {
-        let desc = D3D11_TEXTURE2D_DESC {
-            Width: width,
-            Height: height,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Usage: D3D11_USAGE_DEFAULT,
-            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-            ..Default::default()
-        };
-        let initial = D3D11_SUBRESOURCE_DATA {
-            pSysMem: pixels.as_ptr().cast(),
-            SysMemPitch: width * size_of::<Pixel32>() as u32,
-            ..Default::default()
-        };
-        let mut texture = None;
-        device.CreateTexture2D(&desc, Some(&initial), Some(&mut texture))?;
-        let texture = texture.context("创建四分区纹理未返回对象")?;
-        create_shader_view(device, &texture)
-    }
-
-    fn quadrant_pixels(width: u32, height: u32) -> Vec<Pixel32> {
-        let mut pixels = Vec::with_capacity(width as usize * height as usize);
-        for y in 0..height {
-            for x in 0..width {
-                let (r, g, b) = match (x < width / 2, y < height / 2) {
-                    (true, true) => (255, 0, 0),
-                    (false, true) => (255, 255, 0),
-                    (true, false) => (0, 0, 255),
-                    (false, false) => (0, 255, 0),
-                };
-                pixels.push(Pixel32 { b, g, r, a: 255 });
-            }
-        }
-        pixels
-    }
-
-    fn channel_average(pixels: &[Pixel32], channel: impl Fn(&Pixel32) -> u8) -> f32 {
-        pixels
-            .iter()
-            .map(|pixel| channel(pixel) as u64)
-            .sum::<u64>() as f32
-            / pixels.len() as f32
-    }
-
-    fn combine_horizontal(frames: &[Vec<Pixel32>], width: u32, height: u32) -> Vec<Pixel32> {
-        let mut combined = Vec::with_capacity(width as usize * height as usize * frames.len());
-        for row in 0..height as usize {
-            for frame in frames {
-                combined
-                    .extend_from_slice(&frame[row * width as usize..(row + 1) * width as usize]);
-            }
-        }
-        combined
-    }
-
-    fn write_preview_bmp(path: &str, pixels: &[Pixel32], width: u32, height: u32) {
-        let row_stride = (width * 3).div_ceil(4) * 4;
-        let pixel_bytes = row_stride * height;
-        let file_size = 54 + pixel_bytes;
-        let mut file = std::fs::File::create(path)
-            .unwrap_or_else(|error| panic!("创建液态玻璃预览失败: {error}"));
-        let mut header = [0_u8; 54];
-        header[0..2].copy_from_slice(b"BM");
-        header[2..6].copy_from_slice(&file_size.to_le_bytes());
-        header[10..14].copy_from_slice(&54_u32.to_le_bytes());
-        header[14..18].copy_from_slice(&40_u32.to_le_bytes());
-        header[18..22].copy_from_slice(&(width as i32).to_le_bytes());
-        header[22..26].copy_from_slice(&(height as i32).to_le_bytes());
-        header[26..28].copy_from_slice(&1_u16.to_le_bytes());
-        header[28..30].copy_from_slice(&24_u16.to_le_bytes());
-        header[34..38].copy_from_slice(&pixel_bytes.to_le_bytes());
-        file.write_all(&header)
-            .unwrap_or_else(|error| panic!("写入液态玻璃预览头失败: {error}"));
-
-        let padding = vec![0_u8; (row_stride - width * 3) as usize];
-        for row in (0..height as usize).rev() {
-            for pixel in &pixels[row * width as usize..(row + 1) * width as usize] {
-                let inverse_alpha = 255_u16 - pixel.a as u16;
-                let checker = 48_u16;
-                let b = pixel.b as u16 + checker * inverse_alpha / 255;
-                let g = pixel.g as u16 + checker * inverse_alpha / 255;
-                let r = pixel.r as u16 + checker * inverse_alpha / 255;
-                file.write_all(&[b.min(255) as u8, g.min(255) as u8, r.min(255) as u8])
-                    .unwrap_or_else(|error| panic!("写入液态玻璃预览像素失败: {error}"));
-            }
-            file.write_all(&padding)
-                .unwrap_or_else(|error| panic!("写入液态玻璃预览行失败: {error}"));
-        }
+    fn shader_includes_all_example_refraction_modes() {
+        assert!(SHADER.contains("proceduralMode=interactionPadding.y>=2.5"));
+        assert!(SHADER.contains("sampleChromatic"));
+        assert!(SHADER.contains("controlSettings.z"));
     }
 }

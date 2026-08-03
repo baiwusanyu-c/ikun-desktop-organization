@@ -1,4 +1,4 @@
-﻿//! GPUI 应用运行时 — 与 UI 框架无关的业务逻辑层
+//! GPUI 应用运行时 — 与 UI 框架无关的业务逻辑层
 
 #![allow(dead_code)] // GPUI 应用运行时，部分方法/类型预留
 //!
@@ -37,15 +37,13 @@ pub fn trigger_edit_box_callback(config_id: uuid::Uuid, current_name: &str) {
     );
 }
 use crate::platform::{
-    cleanup_desktop_registry, cleanup_system_tray, collect_grid_layout, create_grid_window, destroy_all_grid_windows, extract_file_icon,
-    get_grid_count, get_primary_monitor_dpi, get_screen_resolution, hide_control_panel_window,
-    icon_exists_for_box,
-    resolve_icon_read_path, restore_all_hidden_icons,
-    set_tray_auto_start_state, setup_desktop_registry, setup_global_hotkey, setup_system_tray,
-    show_control_panel_window, take_hotkey_toggle,
-    take_pending_create_box, take_pending_tray_action,
-    update_grid_window_title, DesktopIcon, DesktopManagerTrait,
-    GridCreateParams, GridFileItem, SystemTrayAction,
+    cleanup_desktop_registry, cleanup_system_tray, collect_grid_layout, create_grid_window,
+    destroy_all_grid_windows, extract_file_icon, get_grid_count, get_primary_monitor_dpi,
+    get_screen_resolution, hide_control_panel_window, icon_exists_for_box, resolve_icon_read_path,
+    restore_all_hidden_icons, set_tray_auto_start_state, setup_desktop_registry,
+    setup_global_hotkey, setup_system_tray, show_control_panel_window, take_hotkey_toggle,
+    take_pending_create_box, take_pending_tray_action, update_grid_window_title, DesktopIcon,
+    DesktopManagerTrait, GridCreateParams, GridFileItem, SystemTrayAction,
 };
 use std::sync::{Arc, Mutex};
 
@@ -155,7 +153,6 @@ pub fn validate_box_name(name: &str) -> BoxNameValidation {
 
 /// 判断是否需要重新隐藏原生桌面图标
 
-
 // =====================================================================
 // AppRuntime
 // =====================================================================
@@ -240,7 +237,7 @@ impl AppRuntime {
 
         cleanup_desktop_registry();
         setup_desktop_registry();
-// 注册全局热键
+        // 注册全局热键
         let hotkey_str = self.ctx.config.hotkeys.toggle_panel.clone();
         if let Err(e) = setup_global_hotkey(&hotkey_str) {
             log::warn!("注册全局热键失败: {} (热键: {})", e, hotkey_str);
@@ -268,8 +265,6 @@ impl AppRuntime {
             self.handle_tray_action(action);
             changed = true;
         }
-
-        
 
         // 3. 信号文件轮询
         if signal_file_path().exists() {
@@ -303,8 +298,6 @@ impl AppRuntime {
             }
             changed = true;
         }
-
-        
 
         if take_pending_create_box() {
             self.open_create_box_dialog();
@@ -468,7 +461,7 @@ impl AppRuntime {
     // =================================================================
 
     pub fn perform_auto_classify(&mut self) {
-let icons = self.ctx.desktop_manager.get_desktop_icons();
+        let icons = self.ctx.desktop_manager.get_desktop_icons();
         if icons.is_empty() {
             self.ctx.set_status("未找到桌面图标");
             return;
@@ -563,8 +556,8 @@ let icons = self.ctx.desktop_manager.get_desktop_icons();
         let _ = self.ctx.save_config();
 
         destroy_all_grid_windows();
-if self.ctx.state.icons_hidden {
-self.ctx.state.icons_hidden = false;
+        if self.ctx.state.icons_hidden {
+            self.ctx.state.icons_hidden = false;
         }
 
         self.ctx.set_status("已清除，桌面图标已恢复");
@@ -586,7 +579,7 @@ self.ctx.state.icons_hidden = false;
 
     fn create_empty_box(&mut self, name: String) {
         log::info!("创建分类框: '{}'", name);
-let (screen_w_phys, screen_h_phys) = get_screen_resolution();
+        let (screen_w_phys, screen_h_phys) = get_screen_resolution();
         let box_w = 400;
         let box_h = 400;
         let existing = get_grid_count();
@@ -769,9 +762,15 @@ let (screen_w_phys, screen_h_phys) = get_screen_resolution();
                     .collect();
                 self.desktop_positions_snapshot.retain(|name, _| {
                     let lower = name.to_lowercase();
-                    !classified_set.iter().any(|c| lower == *c || lower.ends_with(&format!("\\{}", c.split('\\').last().unwrap_or(""))))
+                    !classified_set.iter().any(|c| {
+                        lower == *c
+                            || lower.ends_with(&format!("\\{}", c.split('\\').last().unwrap_or("")))
+                    })
                 });
-                log::info!("启动隐藏完成，快照剩余 {} 个未分类图标", self.desktop_positions_snapshot.len());
+                log::info!(
+                    "启动隐藏完成，快照剩余 {} 个未分类图标",
+                    self.desktop_positions_snapshot.len()
+                );
             }
         }
 
@@ -927,10 +926,9 @@ let (screen_w_phys, screen_h_phys) = get_screen_resolution();
         }
 
         destroy_all_grid_windows();
-cleanup_system_tray();
+        cleanup_system_tray();
         cleanup_desktop_registry();
 
-        
         restore_all_hidden_icons();
 
         // 等待 Windows 处理图标还原
@@ -965,10 +963,12 @@ cleanup_system_tray();
     }
 
     pub fn set_liquid_glass_param(&mut self, param: crate::config::LiquidGlassParam, value: f32) {
-        self.ctx.config.box_style.liquid_glass.set_param(param, value);
-        crate::platform::windows::liquid_glass::update_liquid_glass_config(&self.ctx.config.box_style.liquid_glass);
-        crate::platform::windows::grid_window::refresh_all_grid_windows();
-        let _ = self.ctx.save_config();
+        self.ctx
+            .config
+            .box_style
+            .liquid_glass
+            .set_param(param, value);
+        self.apply_liquid_glass_config_change();
     }
 
     pub fn get_liquid_glass_param(&self, param: crate::config::LiquidGlassParam) -> f32 {
@@ -977,9 +977,36 @@ cleanup_system_tray();
 
     pub fn reset_liquid_glass_defaults(&mut self) {
         self.ctx.config.box_style.liquid_glass = crate::config::LiquidGlassConfig::default();
-        crate::platform::windows::liquid_glass::update_liquid_glass_config(&self.ctx.config.box_style.liquid_glass);
+        self.apply_liquid_glass_config_change();
+    }
+
+    pub fn set_liquid_glass_enabled(&mut self, enabled: bool) {
+        self.ctx.config.box_style.liquid_glass.enabled = enabled;
+        self.apply_liquid_glass_config_change();
+    }
+
+    /// 同步液态玻璃配置到渲染器、现有分类框和持久化文件。
+    fn apply_liquid_glass_config_change(&mut self) {
+        crate::platform::windows::liquid_glass::update_liquid_glass_config(
+            &self.ctx.config.box_style.liquid_glass,
+        );
         crate::platform::windows::grid_window::refresh_all_grid_windows();
-        let _ = self.ctx.save_config();
+        if let Err(error) = self.ctx.save_config() {
+            log::error!("保存液态玻璃配置失败: {error}");
+        }
+    }
+
+    pub fn get_liquid_glass_enabled(&self) -> bool {
+        self.ctx.config.box_style.liquid_glass.enabled
+    }
+
+    pub fn set_liquid_glass_over_light(&mut self, val: bool) {
+        self.ctx.config.box_style.liquid_glass.over_light = val;
+        self.apply_liquid_glass_config_change();
+    }
+
+    pub fn get_liquid_glass_over_light(&self) -> bool {
+        self.ctx.config.box_style.liquid_glass.over_light
     }
 }
 
@@ -1070,7 +1097,7 @@ mod tests {
         assert!(is_box_name_valid("1234567890123456"));
         assert!(!is_box_name_valid("12345678901234567"));
     }
-#[test]
+    #[test]
     fn test_signal_file_paths() {
         assert!(signal_file_path()
             .to_string_lossy()

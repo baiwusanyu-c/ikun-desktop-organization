@@ -1,4 +1,4 @@
-﻿//! 自定义拖拽覆盖窗口（替代 OLE IDragSourceHelper）
+//! 自定义拖拽覆盖窗口（替代 OLE IDragSourceHelper）
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -256,8 +256,7 @@ pub(crate) unsafe fn update_drag_overlay() {
     DPI_CHECK_COUNTER = (DPI_CHECK_COUNTER + 1) % 8;
 
     if DPI_CHECK_COUNTER == 0 {
-        let current_dpi =
-            crate::platform::windows::monitor_utils::dpi_at_screen_point(pt.x, pt.y);
+        let current_dpi = crate::platform::windows::monitor_utils::dpi_at_screen_point(pt.x, pt.y);
         if current_dpi != DRAG_LAST_DPI && !DRAG_ICON_HANDLE.is_null() {
             rebuild_drag_overlay_at_dpi(current_dpi);
         }

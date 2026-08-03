@@ -1,4 +1,4 @@
-﻿//! 桌面图标逐图标管理器
+//! 桌面图标逐图标管理器
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -1087,11 +1087,12 @@ fn find_desktop_listview() -> Result<HWND> {
 // COM 链路：IShellWindows → IDispatch → IServiceProvider → IShellBrowser
 //           → IShellView → IFolderView2
 
-use windows::core::{Interface as WinInterface, GUID, VARIANT};
+use windows::core::{Interface as WinInterface, GUID};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, IDispatch, IServiceProvider, CLSCTX_ALL,
     COINIT_APARTMENTTHREADED,
 };
+use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Shell::{IFolderView2, IShellBrowser, IShellView, IShellWindows};
 
 /// CLSID_ShellWindows = {9BA05972-F6A8-11CF-A442-00A0C90A8F39}
@@ -1422,15 +1423,26 @@ pub fn show_icon_on_desktop(file_path: &str, screen_x: i32, screen_y: i32) {
         })?;
 
         // 屏幕坐标 → 客户区坐标
-        let mut client_pt = POINT { x: screen_x, y: screen_y };
+        let mut client_pt = POINT {
+            x: screen_x,
+            y: screen_y,
+        };
         unsafe {
             if ScreenToClient(mgr.listview_hwnd(), &mut client_pt) == 0 {
-                client_pt = POINT { x: screen_x, y: screen_y };
+                client_pt = POINT {
+                    x: screen_x,
+                    y: screen_y,
+                };
             }
         }
 
         mgr.show_icon_at(index, client_pt.x, client_pt.y)?;
-        log::info!("[SHOW] 桌面图标已显示: {} -> ({}, {})", file_path, screen_x, screen_y);
+        log::info!(
+            "[SHOW] 桌面图标已显示: {} -> ({}, {})",
+            file_path,
+            screen_x,
+            screen_y
+        );
         Ok(())
     })();
 
@@ -1466,7 +1478,10 @@ pub fn position_icon_at_screen(file_path: &str, screen_x: i32, screen_y: i32) {
 
         let t_mgr = std::time::Instant::now();
         let mut mgr = DesktopIconManager::with_listview(listview)?;
-        log::debug!("[TIMING] DesktopIconManager::with_listview: {:?}", t_mgr.elapsed());
+        log::debug!(
+            "[TIMING] DesktopIconManager::with_listview: {:?}",
+            t_mgr.elapsed()
+        );
 
         let mut client_pt = POINT {
             x: screen_x,
@@ -1546,9 +1561,8 @@ pub fn verify_icon_screen_position(file_path: &str) -> Option<(i32, i32)> {
                 break;
             }
         }
-        let index = index.ok_or_else(|| {
-            anyhow::anyhow!("??: SysListView32 ?????? (names={:?})", names)
-        })?;
+        let index =
+            index.ok_or_else(|| anyhow::anyhow!("??: SysListView32 ?????? (names={:?})", names))?;
 
         let (client_x, client_y) = mgr.get_icon_position(index)?;
 
@@ -1566,12 +1580,7 @@ pub fn verify_icon_screen_position(file_path: &str) -> Option<(i32, i32)> {
 
     match result {
         Ok(pos) => {
-            log::info!(
-                "[VERIFY] ?? '{}' ??????: ({}, {})",
-                file_path,
-                pos.0,
-                pos.1
-            );
+            log::info!("[VERIFY] ?? '{}' ??????: ({}, {})", file_path, pos.0, pos.1);
             Some(pos)
         }
         Err(e) => {

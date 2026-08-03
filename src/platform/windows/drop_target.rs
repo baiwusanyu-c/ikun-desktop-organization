@@ -1,4 +1,4 @@
-﻿//! OLE 拖拽目标实现（IDropTarget）
+//! OLE 拖拽目标实现（IDropTarget）
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -115,13 +115,13 @@ struct IDropTargetHelperVtbl {
     query_interface: unsafe extern "system" fn(*mut c_void, *const u8, *mut *mut c_void) -> HRESULT,
     add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
     release: unsafe extern "system" fn(*mut c_void) -> u32,
-    drag_enter: unsafe extern "system" fn(*mut c_void, HWND, *mut c_void, *mut POINT, u32) -> HRESULT,
+    drag_enter:
+        unsafe extern "system" fn(*mut c_void, HWND, *mut c_void, *mut POINT, u32) -> HRESULT,
     drag_leave: unsafe extern "system" fn(*mut c_void) -> HRESULT,
     drag_over: unsafe extern "system" fn(*mut c_void, *mut POINT, u32) -> HRESULT,
     drop: unsafe extern "system" fn(*mut c_void, *mut c_void, *mut POINT, u32) -> HRESULT,
     show: unsafe extern "system" fn(*mut c_void, i32) -> HRESULT,
 }
-
 
 #[repr(C)]
 struct BoxDropTarget {
@@ -191,7 +191,6 @@ unsafe extern "system" fn drop_target_release(this: *mut c_void) -> u32 {
 
 // ----- IDropTarget 方法 -----
 
-
 /// 释放 IDropTargetHelper 实例
 unsafe fn release_drop_target_helper(target: *mut BoxDropTarget) {
     let helper = (*target).drop_target_helper;
@@ -224,7 +223,12 @@ unsafe extern "system" fn drop_target_drag_enter(
         *effect = DROPEFFECT_MOVE;
         BOX_DRAG_HOVER.store(has_box, Ordering::Relaxed);
         PostMessageW((*target).target_hwnd, WM_USER_DRAG_ENTER, 0, 0);
-        log::info!("[DRAG-ENTER] 拖拽进入: box={} hdrop={} shell_idlist={}", has_box, has_hdrop, has_shell_idlist);
+        log::info!(
+            "[DRAG-ENTER] 拖拽进入: box={} hdrop={} shell_idlist={}",
+            has_box,
+            has_hdrop,
+            has_shell_idlist
+        );
     } else {
         *effect = DROPEFFECT_NONE;
         log::debug!("[DRAG-ENTER] 拒绝拖拽: 无支持的格式");
@@ -242,12 +246,18 @@ unsafe extern "system" fn drop_target_drag_enter(
         );
         if hr == S_OK && !helper.is_null() {
             let vtbl = *(helper as *const *const IDropTargetHelperVtbl);
-            let mut pt = POINT { x: (ptl & 0xFFFFFFFF) as i32, y: (ptl >> 32) as i32 };
+            let mut pt = POINT {
+                x: (ptl & 0xFFFFFFFF) as i32,
+                y: (ptl >> 32) as i32,
+            };
             let _ = ((*vtbl).drag_enter)(helper, (*target).target_hwnd, data_obj, &mut pt, *effect);
             (*target).drop_target_helper = helper;
             log::info!("[DropTarget] IDropTargetHelper 已创建，残影图标保持显示");
         } else {
-            log::warn!("[DropTarget] IDropTargetHelper 创建失败: hr={:#010X}", hr as u32);
+            log::warn!(
+                "[DropTarget] IDropTargetHelper 创建失败: hr={:#010X}",
+                hr as u32
+            );
         }
     }
 
@@ -271,7 +281,10 @@ unsafe extern "system" fn drop_target_drag_over(
         let helper = (*target).drop_target_helper;
         if !helper.is_null() {
             let vtbl = *(helper as *const *const IDropTargetHelperVtbl);
-            let mut pt = POINT { x: (ptl & 0xFFFFFFFF) as i32, y: (ptl >> 32) as i32 };
+            let mut pt = POINT {
+                x: (ptl & 0xFFFFFFFF) as i32,
+                y: (ptl >> 32) as i32,
+            };
             let _ = ((*vtbl).drag_over)(helper, &mut pt, *effect);
         }
         return S_OK;
@@ -322,7 +335,10 @@ unsafe extern "system" fn drop_target_drop(
     if !(*target).drop_target_helper.is_null() {
         let helper = (*target).drop_target_helper;
         let vtbl = *(helper as *const *const IDropTargetHelperVtbl);
-        let mut drop_pt = POINT { x: (pt & 0xFFFFFFFF) as i32, y: (pt >> 32) as i32 };
+        let mut drop_pt = POINT {
+            x: (pt & 0xFFFFFFFF) as i32,
+            y: (pt >> 32) as i32,
+        };
         let _ = ((*vtbl).drop)(helper, data_obj, &mut drop_pt, *effect);
         release_drop_target_helper(target);
         log::info!("[DropTarget] IDropTargetHelper 已释放（Drop）");
@@ -458,7 +474,6 @@ unsafe fn read_drop_files(data_obj: *mut c_void) -> Vec<String> {
     paths
 }
 
-
 /// 从 IDataObject 读取 Shell IDList 格式的 PIDL，提取虚拟 Shell 对象的 CLSID 路径。
 ///
 /// 当从桌面拖拽回收站、此电脑等虚拟对象时，CF_HDROP 为空，
@@ -505,7 +520,11 @@ unsafe fn read_shell_idlist_paths(data_obj: *mut c_void) -> Vec<String> {
             (cidl + 1) as usize,
         );
 
-        log::info!("[PIDL] CIDA cidl={}, offsets={:?}", cidl, &offsets[..std::cmp::min(offsets.len(), 5)]);
+        log::info!(
+            "[PIDL] CIDA cidl={}, offsets={:?}",
+            cidl,
+            &offsets[..std::cmp::min(offsets.len(), 5)]
+        );
 
         // SHGetFileInfoW + SHGFI_PIDL 声明
         #[repr(C)]
@@ -561,7 +580,11 @@ unsafe fn read_shell_idlist_paths(data_obj: *mut c_void) -> Vec<String> {
             );
 
             if result != 0 {
-                let name_len = info.sz_display_name.iter().position(|&c| c == 0).unwrap_or(0);
+                let name_len = info
+                    .sz_display_name
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(0);
                 let display_name = String::from_utf16_lossy(&info.sz_display_name[..name_len]);
                 log::info!("[PIDL] 解析到显示名称: '{}'", display_name);
 
@@ -587,7 +610,11 @@ unsafe fn read_shell_idlist_paths(data_obj: *mut c_void) -> Vec<String> {
     if medium.unk_for_release.is_null() && !medium.h_global.is_null() {
         GlobalFree(medium.h_global);
     }
-    log::info!("[PIDL] 最终解析到 {} 个虚拟 Shell 对象: {:?}", paths.len(), paths);
+    log::info!(
+        "[PIDL] 最终解析到 {} 个虚拟 Shell 对象: {:?}",
+        paths.len(),
+        paths
+    );
     paths
 }
 unsafe fn read_box_drag_data(data_obj: *mut c_void, fmt_id: u32) -> Option<IkunBoxDragData> {

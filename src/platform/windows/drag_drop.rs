@@ -1,4 +1,4 @@
-﻿//! Drag-and-drop operations: same-box drop, box-to-box move, box-to-desktop.
+//! Drag-and-drop operations: same-box drop, box-to-box move, box-to-desktop.
 //!
 //! Handles all drop scenarios when a drag gesture ends, including
 //! grid snap, swap, shift-insert, and OLE drop from external sources.
@@ -248,8 +248,13 @@ pub(crate) fn handle_box_to_desktop(
     _target_is_overlay: bool,
 ) {
     let t0 = std::time::Instant::now();
-    log::info!("[TIMING] handle_box_to_desktop: 开始框→桌面, item_index={}, drop=({}, {})", item_index, drop_x, drop_y);
-    
+    log::info!(
+        "[TIMING] handle_box_to_desktop: 开始框→桌面, item_index={}, drop=({}, {})",
+        item_index,
+        drop_x,
+        drop_y
+    );
+
     let data = match unsafe { get_data(hwnd) } {
         Some(d) => d,
         None => return,
@@ -318,7 +323,10 @@ pub(crate) fn handle_box_to_desktop(
                 // ????
                 log::debug!("[TIMING] ? {} ??? (??? {}ms)", poll + 1, elapsed);
                 super::icon_manager::position_icon_at_screen(&file_path_str, target_x, target_y);
-                log::debug!("[TIMING] position_icon ?? {}ms", t_iter.elapsed().as_millis());
+                log::debug!(
+                    "[TIMING] position_icon ?? {}ms",
+                    t_iter.elapsed().as_millis()
+                );
 
                 // ????
                 let t_verify = std::time::Instant::now();
@@ -328,18 +336,28 @@ pub(crate) fn handle_box_to_desktop(
                         let dy = (actual_y - target_y).abs();
                         log::info!(
                             "[TIMING] ??: ??=({}, {}), ??=({}, {}), ??=({}, {}), ??? {:?}",
-                            target_x, target_y, actual_x, actual_y, dx, dy, t_start.elapsed()
+                            target_x,
+                            target_y,
+                            actual_x,
+                            actual_y,
+                            dx,
+                            dy,
+                            t_start.elapsed()
                         );
                         if dx <= 30 && dy <= 30 {
                             log::info!(
                                 "[TIMING] ????! ? {} ???, ??? {:?}",
-                                poll + 1, t_start.elapsed()
+                                poll + 1,
+                                t_start.elapsed()
                             );
                             return;
                         }
                     }
                     None => {
-                        log::debug!("[TIMING] ????? (verify ?? {}ms)", t_verify.elapsed().as_millis());
+                        log::debug!(
+                            "[TIMING] ????? (verify ?? {}ms)",
+                            t_verify.elapsed().as_millis()
+                        );
                     }
                 }
 
@@ -361,7 +379,14 @@ pub(crate) fn handle_box_to_desktop(
                         let dy = (actual_y - target_y).abs();
                         log::info!(
                             "[TIMING] ?? {}: ??=({}, {}), ??=({}, {}), ??=({}, {}), ??? {:?}",
-                            attempt + 1, target_x, target_y, actual_x, actual_y, dx, dy, t_start.elapsed()
+                            attempt + 1,
+                            target_x,
+                            target_y,
+                            actual_x,
+                            actual_y,
+                            dx,
+                            dy,
+                            t_start.elapsed()
                         );
                         if dx <= 30 && dy <= 30 {
                             log::info!("[TIMING] ??????! ??? {:?}", t_start.elapsed());
@@ -680,7 +705,7 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
     // 计算基础 grid 位置（第一个文件的位置）
     let (base_col, base_row) = compute_drop_grid_position(hwnd, drop.drop_x, drop.drop_y, data);
     let cols = data.cols;
-    
+
     for file_path in &drop.file_paths {
         // 去重：已存在则跳过
         if data.items.iter().any(|i| i.file_path == *file_path) {
@@ -721,7 +746,10 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
             file_path.clone()
         };
 
-        log::info!("[OLE-DROP] effective_path='{}', display_name待提取", effective_path);
+        log::info!(
+            "[OLE-DROP] effective_path='{}', display_name待提取",
+            effective_path
+        );
 
         // 提取图标（使用有效路径）
         let icon_info = super::icon_extract::extract_file_icon(&effective_path);
@@ -747,8 +775,15 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
             let offset_lin = (base_row * cols + base_col) + added as i32;
             let col = offset_lin % cols;
             let row = offset_lin / cols;
-            log::info!("[OLE-DROP-OFFSET] file #{}, base=({}, {}), offset_lin={}, final=({}, {})",
-                added, base_col, base_row, offset_lin, col, row);
+            log::info!(
+                "[OLE-DROP-OFFSET] file #{}, base=({}, {}), offset_lin={}, final=({}, {})",
+                added,
+                base_col,
+                base_row,
+                offset_lin,
+                col,
+                row
+            );
             (col, row)
         };
 
@@ -791,7 +826,11 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
             let t_ingest = std::time::Instant::now();
             match super::icon_hider::ingest_icon(&effective_path) {
                 Ok(()) => {
-                    log::info!("OLE drop: '{}' 已收入仓库 [{:?}]", display_name, t_ingest.elapsed());
+                    log::info!(
+                        "OLE drop: '{}' 已收入仓库 [{:?}]",
+                        display_name,
+                        t_ingest.elapsed()
+                    );
                     data.items.push(super::grid_window::GridFileItem {
                         file_path: effective_path.clone(),
                         display_name: display_name.clone(),
@@ -802,7 +841,11 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
                     added += 1;
                 }
                 Err(e) => {
-                    log::warn!("OLE drop: 收入仓库失败 '{}': {}，不添加到分类框", display_name, e);
+                    log::warn!(
+                        "OLE drop: 收入仓库失败 '{}': {}，不添加到分类框",
+                        display_name,
+                        e
+                    );
                     if !icon_handle.is_null() {
                         super::icon_extract::destroy_icon(icon_handle);
                     }
@@ -822,7 +865,11 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
     }
 
     if added > 0 {
-        log::info!("OLE drop: 添加 {} 个项到分类框 [total {:?}]", added, t0.elapsed());
+        log::info!(
+            "OLE drop: 添加 {} 个项到分类框 [total {:?}]",
+            added,
+            t0.elapsed()
+        );
         super::d2d_render::render_layered_window(hwnd);
         save_config();
     }

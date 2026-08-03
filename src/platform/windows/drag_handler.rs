@@ -1,4 +1,4 @@
-﻿//! Custom drag tracking coordinator.
+//! Custom drag tracking coordinator.
 //!
 //! Manages the drag lifecycle: threshold detection, drag tracking via timer,
 //! and dispatching drop operations. Delegates to sub-modules:
@@ -50,9 +50,16 @@ pub(crate) fn check_drag_threshold(hwnd: HWND, mx: i32, my: i32) -> bool {
     let selected_indices = super::multi_select::selected_in_container(container_type, container_id);
 
     // 如果选中的项包含当前拖动的项，则使用多选模式
-    log::info!("[DRAG-THRESHOLD] item_idx={}, selected_indices={:?}", item_idx, selected_indices);
+    log::info!(
+        "[DRAG-THRESHOLD] item_idx={}, selected_indices={:?}",
+        item_idx,
+        selected_indices
+    );
     if selected_indices.len() > 1 && selected_indices.contains(&(item_idx as usize)) {
-        log::info!("[DRAG-THRESHOLD] Multi-drag activated: {} items", selected_indices.len());
+        log::info!(
+            "[DRAG-THRESHOLD] Multi-drag activated: {} items",
+            selected_indices.len()
+        );
         data.multi_drag_items = selected_indices;
     } else {
         data.multi_drag_items.clear();
@@ -168,7 +175,7 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
     let ext_hwnd = super::zorder::find_external_window_at_point(pt.x, pt.y);
     let target_hwnd = if !ext_hwnd.is_null() {
         log::info!("[END-DRAG] 外部窗口优先: {:?}", ext_hwnd);
-        std::ptr::null_mut()  // 外部窗口 → 视为桌面/Explorer 目标
+        std::ptr::null_mut() // 外部窗口 → 视为桌面/Explorer 目标
     } else {
         super::zorder::find_grid_window_at_point(pt.x, pt.y)
     };
@@ -176,8 +183,13 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
     // 检查是否有多选拖拽
     let is_multi_drag = !data.multi_drag_items.is_empty();
 
-    log::info!("[END-DRAG] item_idx={}, is_multi={}, target_hwnd={:?}, multi_items={:?}",
-        item_idx, is_multi_drag, target_hwnd, data.multi_drag_items);
+    log::info!(
+        "[END-DRAG] item_idx={}, is_multi={}, target_hwnd={:?}, multi_items={:?}",
+        item_idx,
+        is_multi_drag,
+        target_hwnd,
+        data.multi_drag_items
+    );
 
     if target_hwnd == hwnd {
         // 同框内拖拽
@@ -185,34 +197,75 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
             // Multi-drag: compute offset and batch-move all items
             let drag_indices = data.multi_drag_items.clone();
             let primary_idx = item_idx as usize;
-            log::info!("Multi-drag same box: {} items, primary={}", drag_indices.len(), primary_idx);
+            log::info!(
+                "Multi-drag same box: {} items, primary={}",
+                drag_indices.len(),
+                primary_idx
+            );
 
             // Record old positions
-            let old_positions: Vec<(i32, i32)> = drag_indices.iter()
+            let old_positions: Vec<(i32, i32)> = drag_indices
+                .iter()
                 .map(|&i| {
                     if i < data.items.len() {
                         let item = &data.items[i];
-                        if item.grid_col >= 0 { (item.grid_col, item.grid_row) }
-                        else { let c = (i as i32) % data.cols; (c, (i as i32) / data.cols) }
-                    } else { (0, 0) }
+                        if item.grid_col >= 0 {
+                            (item.grid_col, item.grid_row)
+                        } else {
+                            let c = (i as i32) % data.cols;
+                            (c, (i as i32) / data.cols)
+                        }
+                    } else {
+                        (0, 0)
+                    }
                 })
                 .collect();
 
             // Move primary item first
-            super::drag_drop::handle_same_box_drop(hwnd, primary_idx, pt.x, pt.y, saved_insert_col, saved_insert_row);
+            super::drag_drop::handle_same_box_drop(
+                hwnd,
+                primary_idx,
+                pt.x,
+                pt.y,
+                saved_insert_col,
+                saved_insert_row,
+            );
 
             // Get new position of primary
             if primary_idx < data.items.len() {
                 let new_primary = &data.items[primary_idx];
-                let new_col = if new_primary.grid_col >= 0 { new_primary.grid_col } else { (primary_idx as i32) % data.cols };
-                let new_row = if new_primary.grid_row >= 0 { new_primary.grid_row } else { (primary_idx as i32) / data.cols };
-                let delta_col = new_col - old_positions[drag_indices.iter().position(|&x| x == primary_idx).unwrap_or(0)].0;
-                let delta_row = new_row - old_positions[drag_indices.iter().position(|&x| x == primary_idx).unwrap_or(0)].1;
+                let new_col = if new_primary.grid_col >= 0 {
+                    new_primary.grid_col
+                } else {
+                    (primary_idx as i32) % data.cols
+                };
+                let new_row = if new_primary.grid_row >= 0 {
+                    new_primary.grid_row
+                } else {
+                    (primary_idx as i32) / data.cols
+                };
+                let delta_col = new_col
+                    - old_positions[drag_indices
+                        .iter()
+                        .position(|&x| x == primary_idx)
+                        .unwrap_or(0)]
+                    .0;
+                let delta_row = new_row
+                    - old_positions[drag_indices
+                        .iter()
+                        .position(|&x| x == primary_idx)
+                        .unwrap_or(0)]
+                    .1;
 
                 // Move all other selected items by the same delta
-                let primary_pos = drag_indices.iter().position(|&x| x == primary_idx).unwrap_or(0);
+                let primary_pos = drag_indices
+                    .iter()
+                    .position(|&x| x == primary_idx)
+                    .unwrap_or(0);
                 for (k, &idx) in drag_indices.iter().enumerate() {
-                    if k == primary_pos { continue; }
+                    if k == primary_pos {
+                        continue;
+                    }
                     if idx < data.items.len() {
                         let target_col = old_positions[k].0 + delta_col;
                         let target_row = old_positions[k].1 + delta_row;
@@ -243,7 +296,10 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
     if !target_hwnd.is_null() {
         // === 框→框移动 ===
         if is_multi_drag {
-            log::info!("Multi-drag cross box: {} items", data.multi_drag_items.len());
+            log::info!(
+                "Multi-drag cross box: {} items",
+                data.multi_drag_items.len()
+            );
             // Move items in reverse order to avoid index shifting
             let mut sorted_indices = data.multi_drag_items.clone();
             sorted_indices.sort();
@@ -258,14 +314,25 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
         // === 框→桌面/覆盖窗口（从框中移除项）===
         // target_hwnd 为 null 表示拖到覆盖区域或桌面
         if is_multi_drag {
-            log::info!("[END-DRAG] Multi-drag to desktop: {} items, indices={:?}",
-                data.multi_drag_items.len(), data.multi_drag_items);
+            log::info!(
+                "[END-DRAG] Multi-drag to desktop: {} items, indices={:?}",
+                data.multi_drag_items.len(),
+                data.multi_drag_items
+            );
             let mut sorted_indices = data.multi_drag_items.clone();
             sorted_indices.sort();
             sorted_indices.reverse();
-            log::info!("[END-DRAG] Processing in reverse order: {:?}", sorted_indices);
+            log::info!(
+                "[END-DRAG] Processing in reverse order: {:?}",
+                sorted_indices
+            );
             for &drag_idx in &sorted_indices {
-                log::info!("[END-DRAG] Calling handle_box_to_desktop(idx={}, pt=({}, {}))", drag_idx, pt.x, pt.y);
+                log::info!(
+                    "[END-DRAG] Calling handle_box_to_desktop(idx={}, pt=({}, {}))",
+                    drag_idx,
+                    pt.x,
+                    pt.y
+                );
                 super::drag_drop::handle_box_to_desktop(hwnd, drag_idx, pt.x, pt.y, true);
             }
         } else {
@@ -301,7 +368,9 @@ pub(crate) fn handle_grid_drag_timer(hwnd: HWND) {
         super::d2d_render::render_layered_window(hwnd);
         let lbutton_down = unsafe { GetAsyncKeyState(VK_LBUTTON) } & 0x8000u16 as i16 != 0;
         if !lbutton_down {
-            unsafe { PostMessageW(hwnd, WM_LBUTTONUP, 0, 0); }
+            unsafe {
+                PostMessageW(hwnd, WM_LBUTTONUP, 0, 0);
+            }
         }
         return;
     }
@@ -328,7 +397,12 @@ pub(crate) fn handle_grid_drag_timer(hwnd: HWND) {
     // 但仍落在某个分类框的窗口矩形内，导致 find_grid_window_at_point 误判。
     let ext_hwnd = super::zorder::find_external_window_at_point(pt.x, pt.y);
     if !ext_hwnd.is_null() {
-        log::info!("[GRID-TIMER] 检测到外部窗口 {:?} at ({}, {}), 启动 OLE 拖拽", ext_hwnd, pt.x, pt.y);
+        log::info!(
+            "[GRID-TIMER] 检测到外部窗口 {:?} at ({}, {}), 启动 OLE 拖拽",
+            ext_hwnd,
+            pt.x,
+            pt.y
+        );
         start_grid_ole_drag(hwnd, ext_hwnd);
         return;
     }
@@ -394,19 +468,26 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
 
     let is_multi = multi_drag_items.len() > 1;
 
-    log::info!("[GRID-OLE] item_idx={}, is_multi={}, multi_items={:?}", item_idx, is_multi, multi_drag_items);
+    log::info!(
+        "[GRID-OLE] item_idx={}, is_multi={}, multi_items={:?}",
+        item_idx,
+        is_multi,
+        multi_drag_items
+    );
 
     if is_multi {
         // Multi-select OLE drag: collect all file paths and metadata
         // ★ 创建临时目录，复制仓库文件并使用原始文件名
         let temp_dir = std::env::temp_dir().join("ikun_ole_drag");
         let _ = std::fs::create_dir_all(&temp_dir);
-        
+
         let (file_paths, drag_items, icon_handle) = {
             let data = match unsafe { get_data(hwnd) } {
                 Some(d) => d,
                 None => {
-                    unsafe { super::drag_image::destroy_drag_overlay(); }
+                    unsafe {
+                        super::drag_image::destroy_drag_overlay();
+                    }
                     super::d2d_render::render_layered_window(hwnd);
                     return;
                 }
@@ -420,27 +501,36 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
                     let item = &data.items[idx];
                     // 解析到实际存在的路径（仓库路径）
                     let resolved = super::drag_drop::resolve_drag_item_read_path(&item.file_path);
-                    
+
                     // ★ 提取原始文件名（从逻辑路径）并复制到临时目录
                     let original_name = std::path::Path::new(&item.file_path)
                         .file_name()
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_else(|| format!("file_{}", idx));
                     let temp_path = temp_dir.join(&original_name);
-                    
+
                     if resolved.exists() {
                         if let Err(e) = std::fs::copy(&resolved, &temp_path) {
-                            log::warn!("[GRID-OLE-MULTI] 复制文件失败: {:?} -> {:?}: {}", resolved, temp_path, e);
+                            log::warn!(
+                                "[GRID-OLE-MULTI] 复制文件失败: {:?} -> {:?}: {}",
+                                resolved,
+                                temp_path,
+                                e
+                            );
                             continue;
                         }
                     } else {
                         log::warn!("[GRID-OLE-MULTI] 源文件不存在: {:?}", resolved);
                         continue;
                     }
-                    
+
                     let temp_str = temp_path.to_string_lossy().to_string();
-                    log::info!("[GRID-OLE-MULTI] item[{}]: original='{}', temp='{}'",
-                        idx, original_name, temp_str);
+                    log::info!(
+                        "[GRID-OLE-MULTI] item[{}]: original='{}', temp='{}'",
+                        idx,
+                        original_name,
+                        temp_str
+                    );
                     paths.push(temp_str.clone());
                     items.push(IkunDragItemData {
                         index: idx,
@@ -468,13 +558,19 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
 
         // ★ 不销毁拖拽残影，让它在 OLE 拖拽期间保持存活
         // 隐藏分类框，让 OLE hit-testing 能到达 Explorer
-        unsafe { ShowWindow(hwnd, SW_HIDE); }
+        unsafe {
+            ShowWindow(hwnd, SW_HIDE);
+        }
         let drop_succeeded = super::ole_dnd::start_box_drag(file_paths, box_drag_data, icon_handle);
-        unsafe { ShowWindow(hwnd, SW_SHOWNA); }
-        
+        unsafe {
+            ShowWindow(hwnd, SW_SHOWNA);
+        }
+
         // ★ OLE 拖拽完成后销毁残影
-        unsafe { super::drag_image::destroy_drag_overlay(); }
-        
+        unsafe {
+            super::drag_image::destroy_drag_overlay();
+        }
+
         // ★ 清理临时目录
         let _ = std::fs::remove_dir_all(&temp_dir);
         log::info!("[GRID-OLE-MULTI] 临时目录已清理: {:?}", temp_dir);
@@ -493,14 +589,18 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
             let data = match unsafe { get_data(hwnd) } {
                 Some(d) => d,
                 None => {
-                    unsafe { super::drag_image::destroy_drag_overlay(); }
+                    unsafe {
+                        super::drag_image::destroy_drag_overlay();
+                    }
                     super::d2d_render::render_layered_window(hwnd);
                     return;
                 }
             };
 
             if item_idx < 0 || (item_idx as usize) >= data.items.len() {
-                unsafe { super::drag_image::destroy_drag_overlay(); }
+                unsafe {
+                    super::drag_image::destroy_drag_overlay();
+                }
                 super::d2d_render::render_layered_window(hwnd);
                 return;
             }
@@ -542,10 +642,14 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
         };
 
         // 隐藏分类框，让 OLE hit-testing 能到达 Explorer
-        unsafe { ShowWindow(hwnd, SW_HIDE); }
+        unsafe {
+            ShowWindow(hwnd, SW_HIDE);
+        }
         let drop_succeeded =
             super::ole_dnd::start_box_drag(vec![file_path], box_drag_data, icon_handle);
-        unsafe { ShowWindow(hwnd, SW_SHOWNA); }
+        unsafe {
+            ShowWindow(hwnd, SW_SHOWNA);
+        }
 
         if drop_succeeded {
             log::info!("分类框→Explorer OLE 拖拽成功，图标保持原位");
@@ -553,16 +657,17 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
             log::info!("分类框→Explorer OLE 拖拽取消，图标保持原位");
         }
         // 图标始终保持原位（复制操作，不是移动）
-        
+
         // ★ OLE 拖拽完成后销毁残影并清理临时目录
-        unsafe { super::drag_image::destroy_drag_overlay(); }
+        unsafe {
+            super::drag_image::destroy_drag_overlay();
+        }
         let _ = std::fs::remove_dir_all(&temp_dir);
         super::d2d_render::render_layered_window(hwnd);
     }
     // OLE 拖拽结束后清除全局多选状态
     super::multi_select::clear();
 }
-
 
 // =============================================================================
 // Config save helper (used by drag_drop sub-module)

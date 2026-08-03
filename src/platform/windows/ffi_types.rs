@@ -1,4 +1,4 @@
-﻿//! Win32 FFI 类型定义、C 结构体和常量
+//! Win32 FFI 类型定义、C 结构体和常量
 //!
 //! 本模块包含所有 Win32 FFI 所需的类型别名、结构体定义和常量。
 //! 被 grid_window、win32_ffi、shell_menu、d2d_render 等模块共享使用。
@@ -657,7 +657,7 @@ pub const WM_USER_OVERLAY_DROP: u32 = WM_APP + 18;
 pub const WM_USER_OVERLAY_LBUTTONDOWN: u32 = WM_APP + 19; // 鼠标钩子转发的覆盖区域左键按下
 pub const WM_USER_OVERLAY_LBUTTONUP: u32 = WM_APP + 20;
 pub const WM_USER_DEFERRED_INGEST: u32 = WM_APP + 21; // 异步文件收入仓库（避免阻塞 OLE 回调）
- // 鼠标钩子转发的覆盖区域左键释放
+                                                      // 鼠标钩子转发的覆盖区域左键释放
 
 /// 拖拽项信息（用于框间拖拽数据传递）
 #[derive(Debug, Clone)]

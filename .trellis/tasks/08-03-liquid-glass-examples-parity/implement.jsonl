@@ -1,0 +1,5 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "液态玻璃配置 JSON 持久化"}
+{"file": ".trellis/spec/backend/windows-platform-guidelines.md", "reason": "Windows D2D/DXGI 分层窗口渲染"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "控制面板到窗口渲染的跨层同步"}

@@ -30,11 +30,13 @@ env_logger = "0.11"
 [target.'cfg(windows)'.dependencies]
 gpui = "0.2.2"
 gpui-component = "0.5.1"
-windows = { version = "0.58", features = [
+windows-numerics = "0.3"
+windows = { version = "0.62", features = [
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
     "Win32_System_Com",
     "Win32_System_Ole",
+    "Win32_System_Variant",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Storage_FileSystem",
     "Win32_Graphics_Gdi",
@@ -77,7 +79,7 @@ tempfile = "3.0"
 opt-level = 3
 lto = true
 
-
 [features]
 default = []
 eframe-ui = ["dep:egui", "dep:eframe", "dep:epaint"]
+

@@ -48,7 +48,7 @@ fn load_icon_from_resource(_size: i32) -> Option<HICON> {
     // MAKEINTRESOURCE(1) 对应 .rc 中的资源 ID
     let hicon = unsafe {
         LoadIconW(
-            hinstance,
+            Some(hinstance),
             windows::core::PCWSTR(APP_ICON_RESOURCE_ID as usize as *const u16),
         )
     };

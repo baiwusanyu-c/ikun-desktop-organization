@@ -512,11 +512,11 @@ fn thumbnail_to_hicon(hbitmap: RawHBITMAP) -> HICON {
 
     // Release mask bitmap (CreateIconIndirect copies the data)
     unsafe {
-        let _ = DeleteObject(mask_bitmap);
+        let _ = DeleteObject(mask_bitmap.into());
     }
     // Release original thumbnail HBITMAP
     unsafe {
-        let _ = DeleteObject(WinHBITMAP(hbitmap));
+        let _ = DeleteObject(WinHBITMAP(hbitmap).into());
     }
 
     match hicon_result {
