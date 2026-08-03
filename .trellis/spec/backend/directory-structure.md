@@ -134,6 +134,11 @@ build/
 **配置存储位置**（用户主目录）：
 - 所有平台: `~/.ikun_organizer.json`
 
+**Windows 图标仓库存储位置**：
+- 当前用户桌面图标: `~/.ikun_organizer/managed_icons/`
+- Public 桌面图标: `C:\Users\Public\.ikun_organizer\managed_icons/`
+- Public 图标在配置中仍保存 `C:\Users\Public\Desktop\<文件名>` 作为逻辑路径，读取时解析到公共仓库。
+
 ---
 
 ## Module Organization Rules

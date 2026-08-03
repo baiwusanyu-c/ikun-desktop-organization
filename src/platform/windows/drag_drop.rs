@@ -272,9 +272,11 @@ pub(crate) fn handle_box_to_desktop(
 
     let t_export = std::time::Instant::now();
     let mut export_path = super::icon_hider::export_desktop_path(&file_path);
+    let mut export_succeeded = false;
     match super::icon_hider::export_icon(&file_path) {
         Ok((true, path)) => {
             export_path = path;
+            export_succeeded = true;
             log::info!(
                 "框→桌面: 图标 '{}' 已导出到 {}",
                 display_name,
@@ -284,6 +286,7 @@ pub(crate) fn handle_box_to_desktop(
         Ok((false, path)) => {
             export_path = path;
             if export_path.exists() {
+                export_succeeded = true;
                 log::info!("框→桌面: 图标 '{}' 已在桌面", display_name);
             } else {
                 log::warn!("框→桌面: 图标 '{}' 不在仓库也不在桌面", display_name);
@@ -406,6 +409,11 @@ pub(crate) fn handle_box_to_desktop(
 
     log::info!("[TIMING] handle_box_to_desktop 总计 [{:?}]", t0.elapsed());
 
+    if super::icon_hider::is_public_desktop_path(&file_path) && !export_succeeded {
+        log::warn!("框→桌面: 公共图标导出未完成，保留分类框项目: {}", file_path);
+        return;
+    }
+
     // 从框中移除项
     let data = match unsafe { get_data(hwnd) } {
         Some(d) => d,
@@ -472,6 +480,11 @@ pub(crate) fn handle_drag_item_added(hwnd: HWND) {
             drop_y
         );
         // 检查是否已存在
+        let public_preflight = super::icon_hider::is_public_desktop_path(&file_path);
+        if public_preflight && !hide_single_desktop_icon(&file_path, &display_name) {
+            log::warn!("公共图标收纳失败，取消加入分类框: {}", file_path);
+            return;
+        }
         if let Some(data) = unsafe { get_data(hwnd) } {
             if data.items.iter().any(|i| i.file_path == file_path) {
                 log::debug!("跳过已存在项: {}", file_path);
@@ -556,7 +569,9 @@ pub(crate) fn handle_drag_item_added(hwnd: HWND) {
         }
 
         // ★ 隐藏桌面原始图标（该图标已在分类框中管理，桌面不应再显示）
-        hide_single_desktop_icon(&file_path, &display_name);
+        if !public_preflight {
+            hide_single_desktop_icon(&file_path, &display_name);
+        }
     }
 }
 
@@ -571,15 +586,15 @@ fn resolve_drag_item_read_path_with(
     resolve_read_path(file_path).unwrap_or_else(|| std::path::PathBuf::from(file_path))
 }
 
-pub(crate) fn hide_single_desktop_icon(file_path: &str, display_name: &str) {
+pub(crate) fn hide_single_desktop_icon(file_path: &str, display_name: &str) -> bool {
     match super::icon_hider::hide_single_icon(file_path) {
         Ok(()) => {
-            if !super::icon_hider::is_public_desktop_path(file_path) {
-                log::info!("桌面图标 '{}' 已收入仓库", display_name);
-            }
+            log::info!("桌面图标 '{}' 已收入仓库", display_name);
+            true
         }
         Err(e) => {
             log::warn!("收入仓库失败 '{}': {}", display_name, e);
+            false
         }
     }
 }
@@ -821,7 +836,7 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
             }
         }
 
-        // 外部→框：同步收入仓库（handle_ole_drop 已在 DoDragDrop 返回后执行，不会阻塞拖拽）
+        // 外部→框：按统一收纳流程处理桌面图标。
         if !is_box_drag {
             let t_ingest = std::time::Instant::now();
             match super::icon_hider::ingest_icon(&effective_path) {

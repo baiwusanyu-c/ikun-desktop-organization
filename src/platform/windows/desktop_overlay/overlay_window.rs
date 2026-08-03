@@ -580,6 +580,8 @@ fn is_managed_icon_path(path: &str, display_name: &str, managed_paths: &HashSet<
         return true;
     }
 
+    let is_public_path = crate::platform::windows::icon_hider::is_public_desktop_path(path);
+
     let Some(file_name) = Path::new(path).file_name().and_then(|name| name.to_str()) else {
         return false;
     };
@@ -588,11 +590,19 @@ fn is_managed_icon_path(path: &str, display_name: &str, managed_paths: &HashSet<
     let public_alias = normalize_path_key(&format!("public__{}", file_name));
 
     managed_paths.iter().any(|managed| {
+        let managed_key = normalize_path_key(managed);
         // 精确匹配文件名部分（避免子串误判：如"企业微信.lnk"匹配"微信.lnk"）
         let managed_file_name = Path::new(managed)
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("");
+            .map(normalize_path_key)
+            .unwrap_or_default();
+        let managed_is_public = crate::platform::windows::icon_hider::is_public_desktop_path(managed)
+            || managed_key.contains(r"\users\public\.ikun_organizer\managed_icons\")
+            || managed_file_name.starts_with("public__");
+        if managed_is_public != is_public_path {
+            return false;
+        }
         // 检查 managed 路径的文件名是否精确匹配
         if managed_file_name == norm_file_name {
             return true;
@@ -1130,6 +1140,16 @@ mod tests {
     #[test]
     fn test_is_managed_icon_path_no_match() {
         let managed = make_managed_paths(&[r"C:\Users\chenzhihui\Desktop\Apifox.lnk"]);
+        assert!(!is_managed_icon_path(
+            r"C:\Users\Public\Desktop\Chrome.lnk",
+            "Chrome",
+            &managed,
+        ));
+    }
+
+    #[test]
+    fn test_is_managed_icon_path_keeps_public_same_name_separate() {
+        let managed = make_managed_paths(&[r"C:\Users\chenzhihui\Desktop\Chrome.lnk"]);
         assert!(!is_managed_icon_path(
             r"C:\Users\Public\Desktop\Chrome.lnk",
             "Chrome",

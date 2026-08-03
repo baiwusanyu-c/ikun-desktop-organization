@@ -1449,6 +1449,26 @@ fn end_overlay_drag(hwnd: HWND) {
             });
         }
 
+        // Public 图标先完成收纳，授权失败时保持覆盖层和分类框原状。
+        let public_items: Vec<_> = items_to_add
+            .iter()
+            .filter(|item| crate::platform::windows::icon_hider::is_public_desktop_path(&item.file_path))
+            .collect();
+        let mut ingested_public = Vec::new();
+        for item in public_items {
+            if !crate::platform::windows::drag_drop::hide_single_desktop_icon(
+                &item.file_path,
+                &item.display_name,
+            ) {
+                for path in ingested_public {
+                    let _ = crate::platform::windows::icon_hider::export_icon(path);
+                }
+                log::warn!("公共图标收纳失败，取消多选拖入分类框: {}", item.file_path);
+                return;
+            }
+            ingested_public.push(item.file_path.clone());
+        }
+
         // ★ 直接操作目标网格数据（绕过消息队列，避免渲染时自动布局覆盖坐标）
         if let Some(target_data) = unsafe { crate::platform::windows::grid_window::get_data(target_hwnd) } {
             // Materialize all existing auto-layout positions first
@@ -1484,7 +1504,9 @@ fn end_overlay_drag(hwnd: HWND) {
                     info.display_name, info.grid_col, info.grid_row);
 
                 // Hide desktop icon
-                crate::platform::windows::drag_drop::hide_single_desktop_icon(&info.file_path, &info.display_name);
+                if !crate::platform::windows::icon_hider::is_public_desktop_path(&info.file_path) {
+                    crate::platform::windows::drag_drop::hide_single_desktop_icon(&info.file_path, &info.display_name);
+                }
             }
 
             // 验证日志：打印所有项的网格坐标
@@ -1529,6 +1551,17 @@ fn end_overlay_drag(hwnd: HWND) {
             }
             None => return,
         };
+
+        let public_preflight = crate::platform::windows::icon_hider::is_public_desktop_path(&file_path);
+        if public_preflight
+            && !crate::platform::windows::drag_drop::hide_single_desktop_icon(
+                &file_path,
+                &display_name,
+            )
+        {
+            log::warn!("公共图标收纳失败，取消拖入分类框: {}", file_path);
+            return;
+        }
 
         // 读取目标框的拖拽覆盖状态（用于插入模式）
         let (insert_col, insert_row) = unsafe {

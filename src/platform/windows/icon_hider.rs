@@ -11,7 +11,7 @@
 //!
 //! 拖拽操作使用文件仓库管理图标：
 //! - 用户桌面 `.lnk` → **移动**到 `~/.ikun_organizer/managed_icons/`
-//! - 公共桌面 `.lnk` → **复制**到仓库（原文件保留）
+//! - 公共桌面 `.lnk` → **移动**到 `C:\Users\Public\.ikun_organizer\managed_icons\`
 //! - 拖回桌面 → 从仓库导出到用户桌面
 
 use anyhow::Result;
@@ -56,6 +56,16 @@ fn move_file(src: &Path, dst: &Path) -> Result<()> {
                 ))
             }
         }
+    }
+}
+
+/// 移动公共桌面文件：先走普通文件操作，权限不足时交给系统 Shell/UAC。
+/// 失败时源文件保持不变，调用方可据此保持 UI 与配置不变。
+fn move_public_file(src: &Path, dst: &Path) -> Result<()> {
+    match std::fs::rename(src, dst) {
+        Ok(()) => Ok(()),
+        Err(rename_error) => move_with_ifile_operation(&src.to_string_lossy(), dst)
+            .map_err(|e| anyhow::anyhow!("普通移动失败: {}; 提权移动失败: {}", rename_error, e)),
     }
 }
 
@@ -265,7 +275,10 @@ const PREFIX_PUBLIC: &str = "public__";
 
 /// 公共桌面仓库根目录
 fn public_app_data_root() -> PathBuf {
-    get_public_desktop().join(".ikun_organizer")
+    get_public_desktop()
+        .parent()
+        .map(|root| root.join(".ikun_organizer"))
+        .unwrap_or_else(|| PathBuf::from(r"C:\Users\Public\.ikun_organizer"))
 }
 
 /// 公共桌面仓库路径
@@ -273,15 +286,48 @@ fn get_public_vault_dir() -> PathBuf {
     public_app_data_root().join(MANAGED_DIR_NAME)
 }
 
+/// 旧版本错误创建在 Public\Desktop 下的公共仓库
+fn legacy_public_vault_dir() -> PathBuf {
+    get_public_desktop()
+        .join(".ikun_organizer")
+        .join(MANAGED_DIR_NAME)
+}
+
+fn public_vault_path_for(logical_path: &str) -> Result<PathBuf> {
+    let file_name = Path::new(logical_path)
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("无法获取公共桌面文件名: {}", logical_path))?;
+    let current = get_public_vault_dir().join(file_name);
+    if current.exists() {
+        return Ok(current);
+    }
+    let legacy = legacy_public_vault_dir().join(file_name);
+    if legacy.exists() {
+        return Ok(legacy);
+    }
+    // 兼容更早版本：公共图标曾以 public__ 前缀写入用户仓库。
+    let legacy_user = app_data_root()?.join(MANAGED_DIR_NAME).join(format!(
+        "{}{}",
+        PREFIX_PUBLIC,
+        file_name.to_string_lossy()
+    ));
+    if legacy_user.exists() {
+        return Ok(legacy_user);
+    }
+    Ok(current)
+}
+
 /// 确保公共桌面仓库目录存在
 fn ensure_public_vault_dir() -> Result<()> {
     let dir = get_public_vault_dir();
     if dir.exists() {
+        migrate_legacy_public_vault_dir(&dir)?;
         return Ok(());
     }
     // 先尝试直接创建（可能不需要管理员权限）
     if std::fs::create_dir_all(&dir).is_ok() {
         log::info!("创建公共仓库目录: {}", dir.display());
+        migrate_legacy_public_vault_dir(&dir)?;
         return Ok(());
     }
     // 权限不足，使用 ShellExecuteExW + runas 提升权限（无终端闪烁）
@@ -361,10 +407,53 @@ fn ensure_public_vault_dir() -> Result<()> {
 
     if dir.exists() {
         log::info!("[ELEVATE] 公共仓库目录已创建: {}", dir.display());
+        migrate_legacy_public_vault_dir(&dir)?;
         Ok(())
     } else {
         Err(anyhow::anyhow!("目录创建失败"))
     }
+}
+
+/// 将旧版本错误创建在 Public\Desktop 下的文件迁移到公共根目录。
+fn migrate_legacy_public_vault_dir(new_dir: &Path) -> Result<()> {
+    let legacy_dir = legacy_public_vault_dir();
+    if !legacy_dir.exists() || legacy_dir == new_dir {
+        return Ok(());
+    }
+
+    let entries = std::fs::read_dir(&legacy_dir)
+        .map_err(|e| anyhow::anyhow!("读取旧公共仓库失败 {}: {}", legacy_dir.display(), e))?;
+    let mut migrated = 0;
+    for entry in entries.flatten() {
+        let src = entry.path();
+        if !src.is_file() {
+            continue;
+        }
+        let Some(name) = src.file_name() else {
+            continue;
+        };
+        let dest = new_dir.join(name);
+        if dest.exists() {
+            continue;
+        }
+        match move_file(&src, &dest) {
+            Ok(()) => migrated += 1,
+            Err(e) => log::warn!(
+                "旧公共仓库迁移失败 {} -> {}: {}",
+                src.display(),
+                dest.display(),
+                e
+            ),
+        }
+    }
+    if migrated > 0 {
+        log::info!(
+            "已迁移 {} 个旧公共仓库文件到 {}",
+            migrated,
+            new_dir.display()
+        );
+    }
+    Ok(())
 }
 
 const SHCNE_UPDATEITEM: u32 = 0x0000_2000;
@@ -435,7 +524,12 @@ fn migrate_legacy_hidden_dir(managed_dir: &Path) -> Result<()> {
 }
 
 pub fn is_public_desktop_path(file_path: &str) -> bool {
-    Path::new(file_path).starts_with(get_public_desktop())
+    let path = file_path.replace('/', "\\").to_lowercase();
+    let root = get_public_desktop()
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_lowercase();
+    path == root || path.starts_with(&(root + "\\"))
 }
 
 #[allow(dead_code)]
@@ -462,6 +556,9 @@ fn vault_filename(logical_path: &str) -> Option<String> {
 fn vault_path_for(logical_path: &str) -> Result<PathBuf> {
     let name = vault_filename(logical_path)
         .ok_or_else(|| anyhow::anyhow!("无法生成仓库文件名: {}", logical_path))?;
+    if is_public_desktop_path(logical_path) {
+        return public_vault_path_for(logical_path);
+    }
     Ok(get_managed_dir()?.join(name))
 }
 
@@ -564,7 +661,7 @@ pub fn resolve_icon_read_path(logical_path: &str) -> Option<PathBuf> {
     }
 }
 
-/// 收入仓库：用户桌面移动，公共桌面只读复制
+/// 收入仓库：用户桌面和公共桌面都移入对应仓库，公共桌面仅在权限层使用 Shell 操作。
 pub fn ingest_icon(logical_path: &str) -> Result<()> {
     let t0 = std::time::Instant::now();
     log::info!("[TIMING] ingest_icon 开始: logical_path={}", logical_path);
@@ -572,8 +669,12 @@ pub fn ingest_icon(logical_path: &str) -> Result<()> {
     if logical_path.starts_with("::{") {
         return Ok(());
     }
-    let vault = vault_path_for(logical_path)?;
     let src = Path::new(logical_path);
+    if is_public_desktop_path(logical_path) {
+        // 先创建/迁移公共仓库，再解析目标，避免旧目录中的文件触发提前返回。
+        ensure_public_vault_dir()?;
+    }
+    let vault = vault_path_for(logical_path)?;
     log::info!(
         "收入仓库: vault={}, src.exists={}",
         vault.display(),
@@ -581,7 +682,9 @@ pub fn ingest_icon(logical_path: &str) -> Result<()> {
     );
 
     if vault.exists() {
-        if is_user_desktop_path(logical_path) && src.exists() {
+        if (is_user_desktop_path(logical_path) || is_public_desktop_path(logical_path))
+            && src.exists()
+        {
             if let Err(e) = std::fs::remove_file(src) {
                 log::warn!("清理桌面残留副本失败 {}: {}", logical_path, e);
             } else {
@@ -604,13 +707,13 @@ pub fn ingest_icon(logical_path: &str) -> Result<()> {
             "[INGEST] 公共桌面图标，使用 IFileOperation: {}",
             logical_path
         );
-        ensure_public_vault_dir()?;
         let file_name = Path::new(logical_path)
             .file_name()
             .ok_or_else(|| anyhow::anyhow!("无法获取文件名: {}", logical_path))?;
         let public_vault = get_public_vault_dir().join(file_name);
-        match move_with_ifile_operation(logical_path, &public_vault) {
+        match move_public_file(src, &public_vault) {
             Ok(()) => {
+                notify_shell_delete(logical_path);
                 log::info!(
                     "[INGEST] 公共桌面图标已移动: {} → {}",
                     logical_path,
@@ -669,15 +772,26 @@ pub fn export_icon(logical_path: &str) -> Result<(bool, PathBuf)> {
     }
 
     let t_rename = std::time::Instant::now();
-    std::fs::rename(&vault, &export).map_err(|e| {
-        anyhow::anyhow!(
-            "从仓库导出失败 {} → {}: {}",
-            vault.display(),
-            export.display(),
-            e
-        )
-    })?;
-    log::info!("[TIMING] export rename 完成 [{:?}]", t_rename.elapsed());
+    if is_public_desktop_path(logical_path) {
+        move_public_file(&vault, &export).map_err(|e| {
+            anyhow::anyhow!(
+                "公共图标导出失败 {} → {}: {}",
+                vault.display(),
+                export.display(),
+                e
+            )
+        })?;
+    } else {
+        std::fs::rename(&vault, &export).map_err(|e| {
+            anyhow::anyhow!(
+                "从仓库导出失败 {} → {}: {}",
+                vault.display(),
+                export.display(),
+                e
+            )
+        })?;
+    }
+    log::info!("[TIMING] export move 完成 [{:?}]", t_rename.elapsed());
     let t_notify = std::time::Instant::now();
     notify_shell_create(&export.to_string_lossy());
     log::info!(
@@ -773,6 +887,62 @@ pub fn delete_vault_copy_for(logical_path: &str) {
     }
 }
 
+fn rename_public_icon_file(
+    logical_path: &str,
+    new_path: &Path,
+    new_logical: &str,
+) -> Result<String> {
+    let old_path = Path::new(logical_path);
+    let old_vault = vault_path_for(logical_path)?;
+    let new_vault = vault_path_for(new_logical)?;
+    let mut desktop_moved = false;
+
+    if old_path.exists() {
+        move_public_file(old_path, new_path).map_err(|e| {
+            anyhow::anyhow!(
+                "公共桌面重命名失败 {} -> {}: {}",
+                old_path.display(),
+                new_path.display(),
+                e
+            )
+        })?;
+        desktop_moved = true;
+    }
+
+    if old_vault.exists() {
+        if let Err(e) = move_public_file(&old_vault, &new_vault) {
+            if desktop_moved {
+                let _ = move_public_file(new_path, old_path);
+            }
+            return Err(anyhow::anyhow!(
+                "公共仓库重命名失败 {} -> {}: {}",
+                old_vault.display(),
+                new_vault.display(),
+                e
+            ));
+        }
+    }
+
+    if desktop_moved {
+        use std::os::windows::ffi::OsStrExt;
+        let old_wide: Vec<u16> = old_path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        unsafe {
+            super::ffi_imports::SHChangeNotify(
+                SHCNE_DELETE,
+                SHCNF_PATHW | SHCNF_FLUSH,
+                old_wide.as_ptr() as *const _,
+                std::ptr::null(),
+            );
+        }
+        notify_shell_path(new_logical);
+    }
+    Ok(new_logical.to_string())
+}
+
 /// Rename icon file (desktop + vault copy), returns new logical path
 pub fn rename_icon_file(logical_path: &str, new_name: &str) -> Result<String> {
     log::info!("rename icon: {} -> {}", logical_path, new_name);
@@ -787,6 +957,9 @@ pub fn rename_icon_file(logical_path: &str, new_name: &str) -> Result<String> {
     let new_logical = new_path.to_string_lossy().to_string();
     if new_path == old_path {
         return Ok(new_logical);
+    }
+    if is_public_desktop_path(logical_path) {
+        return rename_public_icon_file(logical_path, &new_path, &new_logical);
     }
     // 1. Rename desktop file
     if old_path.exists() {
@@ -928,6 +1101,19 @@ pub fn restore_all_hidden_icons() {
     };
     log::info!("还原图标: managed_dir={}", managed_dir.display());
     let (restored, skipped) = restore_icons_from_dir(&managed_dir);
+    let public_dir = if get_public_vault_dir().exists() {
+        get_public_vault_dir()
+    } else {
+        legacy_public_vault_dir()
+    };
+    if public_dir.exists() {
+        let (public_restored, public_skipped) = restore_public_icons_from_dir(&public_dir);
+        log::info!(
+            "public vault restored: restored={}, skipped={}",
+            public_restored,
+            public_skipped
+        );
+    }
     log::info!("还原图标完成: 还原={}, 跳过={}", restored, skipped);
 }
 
@@ -1054,12 +1240,101 @@ pub fn restore_unmanaged_vault_icons() {
             kept
         );
     }
+
+    restore_unmanaged_public_vault_icons(&managed_paths);
+}
+
+fn restore_unmanaged_public_vault_icons(managed_paths: &std::collections::HashSet<String>) {
+    let public_dir = get_public_vault_dir();
+    let entries = match std::fs::read_dir(&public_dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let vault_path = entry.path();
+        if !vault_path.is_file() {
+            continue;
+        }
+        let Some(name) = vault_path.file_name() else {
+            continue;
+        };
+        let logical_path = get_public_desktop().join(name);
+        let logical = logical_path
+            .to_string_lossy()
+            .replace('/', "\\")
+            .to_lowercase();
+        let is_managed = managed_paths.contains(&logical)
+            || managed_paths.iter().any(|path| {
+                let file_name = Path::new(path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("");
+                !file_name.is_empty() && logical.ends_with(file_name)
+            });
+        if is_managed {
+            continue;
+        }
+
+        if logical_path.exists() {
+            let _ = std::fs::remove_file(&vault_path);
+            continue;
+        }
+        if let Err(e) = export_icon(&logical_path.to_string_lossy()) {
+            log::warn!(
+                "公共图标未再被分类框管理，恢复失败 {}: {}",
+                logical_path.display(),
+                e
+            );
+        }
+    }
 }
 
 /// 从指定目录还原图标（可测试的核心逻辑）。
 ///
 /// 遍历给定目录中的所有文件，根据仓库文件名前缀还原原始桌面路径，
 /// 将文件移回桌面。返回 `(restored, skipped)` 计数。
+fn restore_public_icons_from_dir(public_dir: &Path) -> (u32, u32) {
+    let entries = match std::fs::read_dir(public_dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            log::warn!("读取公共图标仓库失败 {}: {}", public_dir.display(), e);
+            return (0, 0);
+        }
+    };
+    let mut restored = 0;
+    let mut skipped = 0;
+    for entry in entries.flatten() {
+        let vault_path = entry.path();
+        if !vault_path.is_file() {
+            continue;
+        }
+        let Some(name) = vault_path.file_name() else {
+            continue;
+        };
+        let desktop_path = get_public_desktop().join(name);
+        if desktop_path.exists() {
+            if std::fs::remove_file(&vault_path).is_ok() {
+                skipped += 1;
+            }
+            continue;
+        }
+        match move_public_file(&vault_path, &desktop_path) {
+            Ok(()) => {
+                notify_shell_path(&desktop_path.to_string_lossy());
+                restored += 1;
+            }
+            Err(e) => log::warn!(
+                "公共图标还原失败 {} -> {}: {}",
+                vault_path.display(),
+                desktop_path.display(),
+                e
+            ),
+        }
+    }
+    (restored, skipped)
+}
+
 fn restore_icons_from_dir(managed_dir: &Path) -> (u32, u32) {
     let entries = match std::fs::read_dir(managed_dir) {
         Ok(e) => e,
@@ -1154,77 +1429,84 @@ pub fn list_vault_icons() -> Vec<crate::platform::types::DesktopIcon> {
         }
     };
 
-    if !managed_dir.exists() {
-        return Vec::new();
+    let mut icons = Vec::new();
+    let mut vault_dirs = vec![(managed_dir, false)];
+    let public_dir = get_public_vault_dir();
+    if public_dir.exists() {
+        vault_dirs.push((public_dir, true));
     }
 
-    let entries = match std::fs::read_dir(&managed_dir) {
-        Ok(e) => e,
-        Err(e) => {
-            log::warn!("读取仓库目录失败: {}", e);
-            return Vec::new();
-        }
-    };
-
-    let mut icons = Vec::new();
-
-    for entry in entries.flatten() {
-        let vault_file_path = entry.path();
-
-        // 跳过子目录
-        if !vault_file_path.is_file() {
-            continue;
-        }
-
-        let vault_name = match vault_file_path.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n.to_string(),
-            None => continue,
-        };
-
-        // 还原原始桌面路径
-        let logical_path = match logical_path_from_vault_name(&vault_name) {
-            Some(p) => p,
-            None => {
-                log::debug!("无法解析仓库文件名: {}", vault_name);
+    for (managed_dir, is_public) in vault_dirs {
+        let entries = match std::fs::read_dir(&managed_dir) {
+            Ok(e) => e,
+            Err(e) => {
+                log::warn!("读取仓库目录失败 {}: {}", managed_dir.display(), e);
                 continue;
             }
         };
 
-        let is_shortcut = vault_file_path
-            .extension()
-            .map(|ext| ext == "lnk" || ext == "url")
-            .unwrap_or(false);
+        for entry in entries.flatten() {
+            let vault_file_path = entry.path();
 
-        // 显示名称（去掉扩展名）
-        let display_name = if is_shortcut {
-            logical_path
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| vault_name.clone())
-        } else {
-            logical_path
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| vault_name.clone())
-        };
+            // 跳过子目录
+            if !vault_file_path.is_file() {
+                continue;
+            }
 
-        // 解析快捷方式目标路径（从仓库中的 .lnk 文件）
-        let target_path = if is_shortcut {
-            let vault_str = vault_file_path.to_string_lossy();
-            super::icon_extract::resolve_shortcut_target(&vault_str).map(PathBuf::from)
-        } else {
-            Some(logical_path.clone())
-        };
+            let vault_name = match vault_file_path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
 
-        icons.push(crate::platform::types::DesktopIcon {
-            id: uuid::Uuid::new_v4(),
-            display_name,
-            path: logical_path,
-            target_path,
-            icon_path: None,
-            position: (0, 0),
-            is_shortcut,
-        });
+            // 还原原始桌面路径
+            let logical_path = match if is_public {
+                Some(get_public_desktop().join(&vault_name))
+            } else {
+                logical_path_from_vault_name(&vault_name)
+            } {
+                Some(p) => p,
+                None => {
+                    log::debug!("无法解析仓库文件名: {}", vault_name);
+                    continue;
+                }
+            };
+
+            let is_shortcut = vault_file_path
+                .extension()
+                .map(|ext| ext == "lnk" || ext == "url")
+                .unwrap_or(false);
+
+            // 显示名称（去掉扩展名）
+            let display_name = if is_shortcut {
+                logical_path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| vault_name.clone())
+            } else {
+                logical_path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| vault_name.clone())
+            };
+
+            // 解析快捷方式目标路径（从仓库中的 .lnk 文件）
+            let target_path = if is_shortcut {
+                let vault_str = vault_file_path.to_string_lossy();
+                super::icon_extract::resolve_shortcut_target(&vault_str).map(PathBuf::from)
+            } else {
+                Some(logical_path.clone())
+            };
+
+            icons.push(crate::platform::types::DesktopIcon {
+                id: uuid::Uuid::new_v4(),
+                display_name,
+                path: logical_path,
+                target_path,
+                icon_path: None,
+                position: (0, 0),
+                is_shortcut,
+            });
+        }
     }
 
     if !icons.is_empty() {
@@ -1270,10 +1552,12 @@ fn move_with_ifile_operation(src_path: &str, dst_path: &Path) -> anyhow::Result<
     // 20: RenameItem, 21: RenameItems
     // 22: NewItem, 23: NewItems
     // 24: PerformOperations, 25: GetAnyOperationsAborted
+    const IDX_SET_OPERATION_FLAGS: usize = 5;
     const IDX_MOVE_ITEM: usize = 14;
     const IDX_PERFORM_OPS: usize = 24;
     const IDX_GET_ABORTED: usize = 25;
 
+    type SetOperationFlagsFn = unsafe extern "system" fn(*mut c_void, u32) -> i32;
     type MoveItemFn =
         unsafe extern "system" fn(*mut c_void, *mut c_void, *mut c_void, *const u16, u32) -> i32;
     type PerformOpsFn = unsafe extern "system" fn(*mut c_void) -> i32;
@@ -1317,6 +1601,8 @@ fn move_with_ifile_operation(src_path: &str, dst_path: &Path) -> anyhow::Result<
 
         let vtbl = *(file_op as *const *const *const c_void);
         let release_fn: ReleaseFn = std::mem::transmute(*vtbl.add(2));
+        let set_operation_flags_fn: SetOperationFlagsFn =
+            std::mem::transmute(*vtbl.add(IDX_SET_OPERATION_FLAGS));
         let move_item_fn: MoveItemFn = std::mem::transmute(*vtbl.add(IDX_MOVE_ITEM));
         let perform_fn: PerformOpsFn = std::mem::transmute(*vtbl.add(IDX_PERFORM_OPS));
         let get_aborted_fn: GetAbortedFn = std::mem::transmute(*vtbl.add(IDX_GET_ABORTED));
@@ -1371,6 +1657,16 @@ fn move_with_ifile_operation(src_path: &str, dst_path: &Path) -> anyhow::Result<
             .unwrap_or_default();
 
         // MoveItem: 将移动操作加入队列
+        // 请求 Windows 在需要时显示标准权限/UAC 对话框；用户取消则整个操作失败。
+        const FOFX_SHOWELEVATIONPROMPT: u32 = 0x0004_0000;
+        let hr = set_operation_flags_fn(file_op, FOFX_SHOWELEVATIONPROMPT);
+        if hr != S_OK {
+            release_fn(dst_item);
+            release_fn(src_item);
+            release_fn(file_op);
+            return Err(anyhow::anyhow!("SetOperationFlags 失败: {:#x}", hr));
+        }
+
         let hr = move_item_fn(
             file_op,
             src_item,
@@ -1435,6 +1731,48 @@ mod tests {
         let export = export_desktop_path(public);
         assert!(is_public_desktop_path(&export.to_string_lossy()));
         assert!(export.file_name().unwrap() == "Chrome.lnk");
+    }
+
+    #[test]
+    fn test_public_desktop_path_is_case_insensitive() {
+        assert!(is_public_desktop_path(
+            r"C:\USERS\PUBLIC\DESKTOP\Chrome.lnk"
+        ));
+    }
+
+    #[test]
+    fn test_public_vault_root_is_outside_desktop() {
+        assert_eq!(
+            public_app_data_root(),
+            PathBuf::from(r"C:\Users\Public\.ikun_organizer")
+        );
+        assert_eq!(
+            get_public_vault_dir(),
+            PathBuf::from(r"C:\Users\Public\.ikun_organizer\managed_icons")
+        );
+    }
+
+    #[test]
+    fn test_public_vault_path_does_not_use_user_vault() {
+        let path = vault_path_for(r"C:\Users\Public\Desktop\Chrome.lnk").unwrap();
+        assert_eq!(
+            path,
+            PathBuf::from(r"C:\Users\Public\.ikun_organizer\managed_icons\Chrome.lnk")
+        );
+    }
+
+    #[test]
+    fn test_user_vault_path_remains_in_user_home() {
+        let logical = dirs::home_dir().unwrap().join("Desktop").join("Chrome.lnk");
+        let path = vault_path_for(&logical.to_string_lossy()).unwrap();
+        assert_eq!(
+            path,
+            dirs::home_dir()
+                .unwrap()
+                .join(".ikun_organizer")
+                .join("managed_icons")
+                .join("user__Chrome.lnk")
+        );
     }
 
     #[test]

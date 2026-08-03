@@ -1,0 +1,48 @@
+{
+  "id": "fix-public-desktop-vault",
+  "name": "fix-public-desktop-vault",
+  "title": "修复 Public 桌面图标收纳路径与分类框显示",
+  "description": "统一 Public 桌面图标的公共仓库路径，并修复收纳后的读取、显示与隐藏链路。",
+  "status": "in_progress",
+  "dev_type": "backend",
+  "scope": "windows-platform",
+  "package": null,
+  "priority": "P1",
+  "creator": "codex-agent",
+  "assignee": "codex-agent",
+  "createdAt": "2026-08-03",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "master",
+  "worktree_path": null,
+  "current_phase": 3,
+  "next_action": [
+    {
+      "phase": 3,
+      "action": "implement"
+    },
+    {
+      "phase": 4,
+      "action": "check"
+    },
+    {
+      "phase": 5,
+      "action": "update-spec"
+    },
+    {
+      "phase": 6,
+      "action": "record-session"
+    }
+  ],
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "src/platform/windows/icon_hider.rs",
+    "src/platform/windows/drag_drop.rs"
+  ],
+  "notes": "Python 运行时不可用，任务按 task.py create/start 的文件格式手动创建。",
+  "meta": {}
+}
