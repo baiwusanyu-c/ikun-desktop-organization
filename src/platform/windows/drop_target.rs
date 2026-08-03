@@ -274,7 +274,7 @@ unsafe extern "system" fn drop_target_drag_over(
         *effect = DROPEFFECT_MOVE;
     }
 
-    // 外部拖拽（桌面→框）：跳过所有视觉更新，更新 IDropTargetHelper 保持残影跟随光标
+    // 外部拖拽（桌面/资源管理器→框）：更新系统拖拽残影后，继续更新分类框插入指示器。
     let is_box_hover = BOX_DRAG_HOVER.load(Ordering::Relaxed);
     if !is_box_hover {
         let target = this as *mut BoxDropTarget;
@@ -287,10 +287,9 @@ unsafe extern "system" fn drop_target_drag_over(
             };
             let _ = ((*vtbl).drag_over)(helper, &mut pt, *effect);
         }
-        return S_OK;
     }
 
-    // 框间拖拽：显示插入指示器
+    // 框间拖拽和外部拖拽使用同一套插入位置计算与分割线渲染逻辑。
     let target = &*(this as *const BoxDropTarget);
     let should_update = super::grid_window::get_data(target.target_hwnd)
         .map(|d| !d.drag_active)
