@@ -398,6 +398,10 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
 
     if is_multi {
         // Multi-select OLE drag: collect all file paths and metadata
+        // ★ 创建临时目录，复制仓库文件并使用原始文件名
+        let temp_dir = std::env::temp_dir().join("ikun_ole_drag");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        
         let (file_paths, drag_items, icon_handle) = {
             let data = match unsafe { get_data(hwnd) } {
                 Some(d) => d,
@@ -414,15 +418,33 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
             for &idx in &multi_drag_items {
                 if idx < data.items.len() {
                     let item = &data.items[idx];
-                    // ★ 解析到实际存在的路径（仓库路径），否则 Explorer 找不到文件
+                    // 解析到实际存在的路径（仓库路径）
                     let resolved = super::drag_drop::resolve_drag_item_read_path(&item.file_path);
-                    let resolved_str = resolved.to_string_lossy().to_string();
-                    log::info!("[GRID-OLE-MULTI] item[{}]: logical='{}', resolved='{}'",
-                        idx, item.file_path, resolved_str);
-                    paths.push(resolved_str.clone());
+                    
+                    // ★ 提取原始文件名（从逻辑路径）并复制到临时目录
+                    let original_name = std::path::Path::new(&item.file_path)
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| format!("file_{}", idx));
+                    let temp_path = temp_dir.join(&original_name);
+                    
+                    if resolved.exists() {
+                        if let Err(e) = std::fs::copy(&resolved, &temp_path) {
+                            log::warn!("[GRID-OLE-MULTI] 复制文件失败: {:?} -> {:?}: {}", resolved, temp_path, e);
+                            continue;
+                        }
+                    } else {
+                        log::warn!("[GRID-OLE-MULTI] 源文件不存在: {:?}", resolved);
+                        continue;
+                    }
+                    
+                    let temp_str = temp_path.to_string_lossy().to_string();
+                    log::info!("[GRID-OLE-MULTI] item[{}]: original='{}', temp='{}'",
+                        idx, original_name, temp_str);
+                    paths.push(temp_str.clone());
                     items.push(IkunDragItemData {
                         index: idx,
-                        file_path: resolved_str,
+                        file_path: temp_str,
                         display_name: item.display_name.clone(),
                     });
                     if idx == item_idx as usize {
@@ -436,8 +458,6 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
             (paths, items, primary_icon)
         };
 
-        // 销毁拖拽残影
-        unsafe { super::drag_image::destroy_drag_overlay(); }
         log::info!("分类框→Explorer OLE (multi): {} items", file_paths.len());
 
         let box_drag_data = IkunBoxDragData {
@@ -446,10 +466,18 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
             items: drag_items,
         };
 
+        // ★ 不销毁拖拽残影，让它在 OLE 拖拽期间保持存活
         // 隐藏分类框，让 OLE hit-testing 能到达 Explorer
         unsafe { ShowWindow(hwnd, SW_HIDE); }
         let drop_succeeded = super::ole_dnd::start_box_drag(file_paths, box_drag_data, icon_handle);
         unsafe { ShowWindow(hwnd, SW_SHOWNA); }
+        
+        // ★ OLE 拖拽完成后销毁残影
+        unsafe { super::drag_image::destroy_drag_overlay(); }
+        
+        // ★ 清理临时目录
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        log::info!("[GRID-OLE-MULTI] 临时目录已清理: {:?}", temp_dir);
 
         if drop_succeeded {
             log::info!("分类框→Explorer OLE 多文件拖拽成功，图标保持原位");
@@ -459,6 +487,8 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
         super::d2d_render::render_layered_window(hwnd);
     } else {
         // Single-item OLE drag (existing logic)
+        let temp_dir = std::env::temp_dir().join("ikun_ole_drag");
+        let _ = std::fs::create_dir_all(&temp_dir);
         let (item_idx, file_path, display_name, icon_handle) = {
             let data = match unsafe { get_data(hwnd) } {
                 Some(d) => d,
@@ -476,9 +506,17 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
             }
 
             let item = &data.items[item_idx as usize];
-            // ★ 解析到实际存在的路径
+            // ★ 解析到实际存在的路径并复制到临时目录使用原始文件名
             let resolved = super::drag_drop::resolve_drag_item_read_path(&item.file_path);
-            let resolved_str = resolved.to_string_lossy().to_string();
+            let original_name = std::path::Path::new(&item.file_path)
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| format!("file_{}", item_idx));
+            let temp_path = temp_dir.join(&original_name);
+            if resolved.exists() {
+                let _ = std::fs::copy(&resolved, &temp_path);
+            }
+            let resolved_str = temp_path.to_string_lossy().to_string();
             (
                 item_idx,
                 resolved_str,
@@ -487,8 +525,8 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
             )
         };
 
-        // 销毁拖拽残影
-        unsafe { super::drag_image::destroy_drag_overlay(); }
+        // ★ 不销毁拖拽残影，让它在 OLE 拖拽期间保持存活
+        // unsafe { super::drag_image::destroy_drag_overlay(); }
 
         log::info!("分类框→Explorer OLE: {} (path={})", display_name, file_path);
 
@@ -515,6 +553,10 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
             log::info!("分类框→Explorer OLE 拖拽取消，图标保持原位");
         }
         // 图标始终保持原位（复制操作，不是移动）
+        
+        // ★ OLE 拖拽完成后销毁残影并清理临时目录
+        unsafe { super::drag_image::destroy_drag_overlay(); }
+        let _ = std::fs::remove_dir_all(&temp_dir);
         super::d2d_render::render_layered_window(hwnd);
     }
     // OLE 拖拽结束后清除全局多选状态

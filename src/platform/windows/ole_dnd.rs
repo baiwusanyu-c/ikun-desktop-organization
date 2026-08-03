@@ -706,7 +706,10 @@ unsafe extern "system" fn drop_source_query_continue_drag(
 ///
 /// 返回 DRAGDROP_S_USEDEFAULTCURSORS 让系统自动处理光标。
 unsafe extern "system" fn drop_source_give_feedback(_this: *mut c_void, _effect: u32) -> HRESULT {
-    DRAGDROP_S_USEDEFAULTCURSORS
+    // 更新拖拽残影位置，保持残影跟随光标
+    super::drag_image::update_drag_overlay();
+    // 返回 S_OK 表示我们自己处理了反馈（不使用系统默认光标）
+    S_OK
 }
 
 // =============================================================================
