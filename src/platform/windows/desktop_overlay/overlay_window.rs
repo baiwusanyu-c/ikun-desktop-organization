@@ -405,6 +405,7 @@ fn reset_overlay_interaction_state(data: &mut OverlayWindowData) {
     data.drag_item_index = -1;
     data.drag_start_x = 0;
     data.drag_start_y = 0;
+    data.multi_drag_items.clear();
 }
 
 fn release_overlay_window_data(hwnd: HWND) {

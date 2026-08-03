@@ -571,9 +571,12 @@ fn handle_lbutton_down(hwnd: HWND, local_x: i32, local_y: i32, screen_x: i32, sc
                     data.selected_item = -1;
                 }
             } else {
-                super::super::multi_select::clear();
-                super::super::multi_select::add(key);
-                super::super::multi_select::set_anchor(Some(key));
+                // ★ 标准 Windows 行为：点击已选中的项时保持多选（等释放后再清除）
+                if !super::super::multi_select::is_selected(key) {
+                    super::super::multi_select::clear();
+                    super::super::multi_select::add(key);
+                    super::super::multi_select::set_anchor(Some(key));
+                }
                 data.shift_anchor = hit;
                 data.selected_item = hit;
             }
@@ -700,15 +703,29 @@ fn handle_overlay_drag_timer(hwnd: HWND) {
             KillTimer(hwnd, TIMER_ID_OVERLAY_DRAG);
             crate::platform::windows::drag_image::destroy_drag_overlay();
         }
+        if let Some(data) = get_overlay_data(hwnd) {
+            data.multi_drag_items.clear();
+        }
         return;
     }
 
     // 更新拖拽残影位置
     unsafe { crate::platform::windows::drag_image::update_drag_overlay() };
 
-    // 检测光标下的窗口，管理跨框可视化反馈
+    // 检测光标位置
     let mut pt = POINT { x: 0, y: 0 };
     unsafe { GetCursorPos(&mut pt) };
+
+    // ★ 优先检测外部窗口（Explorer 等）— 必须在分类框检测之前！
+    // 分类框的窗口矩形可能覆盖到 Explorer 区域，导致误判。
+    let ext_hwnd = crate::platform::windows::zorder::find_external_window_at_point(pt.x, pt.y);
+    if !ext_hwnd.is_null() {
+        log::info!("[OVERLAY-TIMER] 检测到外部窗口 {:?} at ({}, {}), 启动 OLE 拖拽", ext_hwnd, pt.x, pt.y);
+        start_overlay_ole_drag(hwnd, ext_hwnd);
+        return;
+    }
+
+    // 检测光标下的分类框窗口
     let target_hwnd = crate::platform::windows::zorder::find_grid_window_at_point(pt.x, pt.y);
 
     if !target_hwnd.is_null() {
@@ -729,13 +746,6 @@ fn handle_overlay_drag_timer(hwnd: HWND) {
             PostMessageW(target_hwnd, WM_USER_DRAG_OVER_UPDATE, 0, lparam as LPARAM);
         }
     } else {
-        // 检测外部窗口（Explorer 等）— find_external_window_at_point 使用 EnumWindows
-        // 遍历所有顶层窗口的包围盒，无需隐藏覆盖窗口即可准确检测，避免频繁 SW_HIDE 导致图标闪烁
-        let ext_hwnd = crate::platform::windows::zorder::find_external_window_at_point(pt.x, pt.y);
-        if !ext_hwnd.is_null() {
-            start_overlay_ole_drag(hwnd, ext_hwnd);
-            return;
-        }
         update_overlay_drag_over_visual(hwnd, pt.x, pt.y);
     }
 
@@ -755,78 +765,145 @@ fn start_overlay_ole_drag(hwnd: HWND, external_hwnd: HWND) {
         KillTimer(hwnd, TIMER_ID_OVERLAY_DRAG);
     }
 
-    let item_idx = match get_overlay_data(hwnd) {
+    // Read drag state including multi_drag_items before clearing
+    let (item_idx, multi_drag_items) = match get_overlay_data(hwnd) {
         Some(data) => {
             let idx = data.drag_item_index;
+            let multi = data.multi_drag_items.clone();
             data.drag_pending = false;
             data.drag_active = false;
             data.drag_item_index = -1;
             data.drag_over_item = -1;
             data.drag_over_insert_col = -1;
             data.drag_over_insert_row = -1;
-            idx
+            data.multi_drag_items.clear();
+            (idx, multi)
         }
         None => return,
     };
 
-    let (file_path, display_name, icon_handle) = match get_overlay_data(hwnd) {
-        Some(data) if item_idx >= 0 && (item_idx as usize) < data.icons.len() => {
-            let item = &data.icons[item_idx as usize];
-            (
-                item.file_path.clone(),
-                item.display_name.clone(),
-                item.icon_handle,
-            )
-        }
-        _ => {
-            unsafe {
-                crate::platform::windows::drag_image::destroy_drag_overlay();
+    let is_multi = multi_drag_items.len() > 1;
+
+    if is_multi {
+        // Multi-select OLE drag: collect all file paths and metadata
+        let (file_paths, drag_items, icon_handle) = match get_overlay_data(hwnd) {
+            Some(data) => {
+                let mut paths = Vec::new();
+                let mut items = Vec::new();
+                let mut primary_icon = std::ptr::null_mut();
+                for &idx in &multi_drag_items {
+                    if idx < data.icons.len() {
+                        let item = &data.icons[idx];
+                        paths.push(item.file_path.clone());
+                        items.push(IkunDragItemData {
+                            index: idx,
+                            file_path: item.file_path.clone(),
+                            display_name: item.display_name.clone(),
+                        });
+                        if idx == item_idx as usize {
+                            primary_icon = item.icon_handle;
+                        }
+                    }
+                }
+                if primary_icon.is_null() && !data.icons.is_empty() && item_idx >= 0 {
+                    if (item_idx as usize) < data.icons.len() {
+                        primary_icon = data.icons[item_idx as usize].icon_handle;
+                    }
+                }
+                (paths, items, primary_icon)
             }
-            render_desktop_overlay(hwnd);
-            return;
+            None => {
+                unsafe { crate::platform::windows::drag_image::destroy_drag_overlay(); }
+                render_desktop_overlay(hwnd);
+                return;
+            }
+        };
+
+        unsafe { crate::platform::windows::drag_image::destroy_drag_overlay(); }
+        log::info!("覆盖窗口→Explorer OLE (multi): {} items", file_paths.len());
+
+        let box_drag_data = IkunBoxDragData {
+            source_hwnd: hwnd as usize,
+            source_config_id: String::new(),
+            items: drag_items,
+        };
+
+        unsafe { ShowWindow(hwnd, SW_HIDE); }
+        let drop_succeeded = crate::platform::windows::ole_dnd::start_box_drag(
+            file_paths, box_drag_data, icon_handle,
+        );
+        unsafe { ShowWindow(hwnd, SW_SHOWNA); }
+
+        if drop_succeeded {
+            log::info!("OLE 多文件复制成功，图标保持原位");
+        } else {
+            log::info!("OLE 多文件取消，图标保持原位");
         }
-    };
-
-    unsafe {
-        crate::platform::windows::drag_image::destroy_drag_overlay();
-    }
-    log::info!(
-        "覆盖窗口→Explorer OLE: \'{}\' (path={})",
-        display_name,
-        file_path
-    );
-
-    let box_drag_data = IkunBoxDragData {
-        source_hwnd: hwnd as usize,
-        source_config_id: String::new(),
-        items: vec![IkunDragItemData {
-            index: item_idx as usize,
-            file_path: file_path.clone(),
-            display_name: display_name.clone(),
-        }],
-    };
-
-    // 隐藏覆盖窗口，让 OLE hit-testing 能到达 Explorer
-    unsafe {
-        ShowWindow(hwnd, SW_HIDE);
-    }
-    let drop_succeeded = crate::platform::windows::ole_dnd::start_box_drag(
-        vec![file_path],
-        box_drag_data,
-        icon_handle,
-    );
-    unsafe {
-        ShowWindow(hwnd, SW_SHOWNA);
-    }
-
-    if drop_succeeded {
-        log::info!("OLE 复制成功，图标保持原位");
+        render_desktop_overlay(hwnd);
     } else {
-        log::info!("OLE 取消，图标保持原位");
+        // Single-item OLE drag (existing logic)
+        let (file_path, display_name, icon_handle) = match get_overlay_data(hwnd) {
+            Some(data) if item_idx >= 0 && (item_idx as usize) < data.icons.len() => {
+                let item = &data.icons[item_idx as usize];
+                (
+                    item.file_path.clone(),
+                    item.display_name.clone(),
+                    item.icon_handle,
+                )
+            }
+            _ => {
+                unsafe {
+                    crate::platform::windows::drag_image::destroy_drag_overlay();
+                }
+                render_desktop_overlay(hwnd);
+                return;
+            }
+        };
+
+        unsafe {
+            crate::platform::windows::drag_image::destroy_drag_overlay();
+        }
+        log::info!(
+            "覆盖窗口→Explorer OLE: '{}' (path={})",
+            display_name,
+            file_path
+        );
+
+        let box_drag_data = IkunBoxDragData {
+            source_hwnd: hwnd as usize,
+            source_config_id: String::new(),
+            items: vec![IkunDragItemData {
+                index: item_idx as usize,
+                file_path: file_path.clone(),
+                display_name: display_name.clone(),
+            }],
+        };
+
+        // 隐藏覆盖窗口，让 OLE hit-testing 能到达 Explorer
+        unsafe {
+            ShowWindow(hwnd, SW_HIDE);
+        }
+        let drop_succeeded = crate::platform::windows::ole_dnd::start_box_drag(
+            vec![file_path],
+            box_drag_data,
+            icon_handle,
+        );
+        unsafe {
+            ShowWindow(hwnd, SW_SHOWNA);
+        }
+
+        if drop_succeeded {
+            log::info!("OLE 复制成功，图标保持原位");
+        } else {
+            log::info!("OLE 取消，图标保持原位");
+        }
+        // 图标始终保持原位（复制操作，不是移动）
+        render_desktop_overlay(hwnd);
     }
-    // 图标始终保持原位（复制操作，不是移动）
-    render_desktop_overlay(hwnd);
+    // OLE 拖拽结束后清除全局多选状态
+    super::super::multi_select::clear();
 }
+
 
 pub(crate) fn update_overlay_drag_over_visual(hwnd: HWND, screen_x: i32, screen_y: i32) {
     let data = match get_overlay_data(hwnd) {
@@ -1203,6 +1280,19 @@ fn start_overlay_drag(hwnd: HWND) {
             data.drag_pending = false;
             data.drag_active = true;
             data.drag_item_index = item_idx;
+
+            // Check multi-select: if multiple items are selected and the clicked
+            // item is among them, activate multi-drag mode.
+            let container_type = super::super::multi_select::ContainerType::Overlay;
+            let container_id: u64 = 0;
+            let selected_indices = super::super::multi_select::selected_in_container(container_type, container_id);
+            if selected_indices.len() > 1 && selected_indices.contains(&(item_idx as usize)) {
+                log::info!("[OVERLAY-DRAG] Multi-drag activated: {} items", selected_indices.len());
+                data.multi_drag_items = selected_indices;
+            } else {
+                data.multi_drag_items.clear();
+            }
+
             let item = &data.icons[item_idx as usize];
             (
                 item.icon_handle,
@@ -1245,9 +1335,10 @@ fn start_overlay_drag(hwnd: HWND) {
 
 fn end_overlay_drag(hwnd: HWND) {
     log::info!("end_overlay_drag called");
-    let item_idx = match get_overlay_data(hwnd) {
+    let (item_idx, multi_drag_items) = match get_overlay_data(hwnd) {
         Some(data) => {
             let item_idx = data.drag_item_index;
+            let multi_drag_items = data.multi_drag_items.clone();
             data.drag_active = false;
             data.drag_pending = false;
             data.drag_item_index = -1;
@@ -1255,7 +1346,8 @@ fn end_overlay_drag(hwnd: HWND) {
             data.drag_over_item = -1;
             data.drag_over_insert_col = -1;
             data.drag_over_insert_row = -1;
-            item_idx
+            data.multi_drag_items.clear();
+            (item_idx, multi_drag_items)
         }
         None => return,
     };
@@ -1265,54 +1357,162 @@ fn end_overlay_drag(hwnd: HWND) {
         crate::platform::windows::drag_image::destroy_drag_overlay();
     }
 
+    let is_multi_drag = multi_drag_items.len() > 1;
+
     let mut pt = POINT { x: 0, y: 0 };
     unsafe { GetCursorPos(&mut pt) };
-    let target_hwnd = crate::platform::windows::zorder::find_grid_window_at_point(pt.x, pt.y);
+    // ★ 优先检测外部窗口（Explorer 等），避免分类框窗口矩形误判
+    let ext_hwnd = crate::platform::windows::zorder::find_external_window_at_point(pt.x, pt.y);
+    let target_hwnd = if !ext_hwnd.is_null() {
+        log::info!("[END-OVERLAY-DRAG] 外部窗口优先: {:?}", ext_hwnd);
+        std::ptr::null_mut()
+    } else {
+        crate::platform::windows::zorder::find_grid_window_at_point(pt.x, pt.y)
+    };
+
     if target_hwnd.is_null() {
-        restore_dragged_icon_position(hwnd, item_idx, pt.x, pt.y);
+        // Dropped on overlay (same container) — restore positions
+        if is_multi_drag {
+            log::info!("Multi-drag to overlay: {} items", multi_drag_items.len());
+            for &idx in &multi_drag_items {
+                restore_dragged_icon_position(hwnd, idx as i32, pt.x, pt.y);
+            }
+        } else {
+            restore_dragged_icon_position(hwnd, item_idx, pt.x, pt.y);
+        }
         log::info!("覆盖窗口内图标位置已更新");
+        super::super::multi_select::clear();
         return;
     }
 
-    let (file_path, display_name) = match get_overlay_data(hwnd) {
-        Some(data) => {
-            if item_idx < 0 || (item_idx as usize) >= data.icons.len() {
-                return;
-            }
-            let item = &data.icons[item_idx as usize];
-            (item.file_path.clone(), item.display_name.clone())
+    // Dropped on a grid box — move items from overlay to grid
+    if is_multi_drag {
+        log::info!("Multi-drag overlay→grid: {} items", multi_drag_items.len());
+        // Read target box insert state once
+        let (insert_col, insert_row) = unsafe {
+            crate::platform::windows::grid_window::get_data(target_hwnd)
+                .map(|d| (d.drag_over_insert_col, d.drag_over_insert_row))
+                .unwrap_or((-1, -1))
+        };
+
+        // Compute target grid layout for multi-item offset
+        let (target_cols, target_cell_w, target_cell_h, target_grid_left, target_grid_top, target_wr_left, target_wr_top) = unsafe {
+            crate::platform::windows::grid_window::get_data(target_hwnd)
+                .map(|d| {
+                    let mut twr = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+                    GetWindowRect(target_hwnd, &mut twr);
+                    let tdpi = GetDpiForWindow(target_hwnd);
+                    let tdpi = if tdpi > 0 { tdpi } else { 96 };
+                    let ww = twr.right - twr.left;
+                    let vp = crate::box_core::view_engine::get_view_params(&d.view_mode, tdpi);
+                    let layout = crate::box_core::layout_calc::calculate_grid(ww, d.title_h, &vp, tdpi);
+                    (d.cols, layout.cell_w, layout.cell_h, layout.grid_left, layout.grid_top, twr.left, twr.top)
+                })
+                .unwrap_or((4, 80, 100, 10, 50, 0, 0))
+        };
+
+        // Compute base grid cell from drop position
+        let base_col = ((pt.x - target_wr_left - target_grid_left) / target_cell_w).max(0);
+        let base_row = ((pt.y - target_wr_top - target_grid_top) / target_cell_h).max(0);
+
+        // Collect items to move (in original order for layout, reverse for removal)
+        let mut sorted_indices = multi_drag_items.clone();
+        sorted_indices.sort();
+
+        // Enqueue items with offset grid positions
+        for (i, &drag_idx) in sorted_indices.iter().enumerate() {
+            let (file_path, display_name) = match get_overlay_data(hwnd) {
+                Some(data) if drag_idx < data.icons.len() => {
+                    let item = &data.icons[drag_idx];
+                    (item.file_path.clone(), item.display_name.clone())
+                }
+                _ => continue,
+            };
+
+            // Offset each item to a different grid cell
+            let offset_lin = (base_row * target_cols + base_col) + i as i32;
+            let item_col = offset_lin % target_cols;
+            let item_row = offset_lin / target_cols;
+            // Convert grid cell back to screen coordinates for drop position
+            let offset_x = target_wr_left + target_grid_left + item_col * target_cell_w + target_cell_w / 2;
+            let offset_y = target_wr_top + target_grid_top + item_row * target_cell_h + target_cell_h / 2;
+
+            log::info!("[MULTI-DROP] item {} (idx={}): grid=({}, {}), screen=({}, {})",
+                i, drag_idx, item_col, item_row, offset_x, offset_y);
+
+            crate::platform::windows::drop_target::set_pending_add_item(
+                file_path,
+                display_name.clone(),
+                offset_x,
+                offset_y,
+                -1,  // use normal mode (not insert) with computed offset position
+                -1,
+            );
+            unsafe { PostMessageW(target_hwnd, WM_USER_DRAG_ITEM_ADDED, 0, 0) };
         }
-        None => return,
-    };
 
-    // 读取目标框的拖拽覆盖状态（用于插入模式）
-    let (insert_col, insert_row) = unsafe {
-        crate::platform::windows::grid_window::get_data(target_hwnd)
-            .map(|d| (d.drag_over_insert_col, d.drag_over_insert_row))
-            .unwrap_or((-1, -1))
-    };
+        // Remove items from overlay in reverse order to avoid index shifting
+        for &drag_idx in sorted_indices.iter().rev() {
+            if let Some(data) = get_overlay_data(hwnd) {
+                if drag_idx < data.icons.len() {
+                    let removed = data.icons.remove(drag_idx);
+                    crate::platform::windows::icon_extract::destroy_icon(removed.icon_handle);
+                }
+            }
+        }
 
-    crate::platform::windows::drop_target::set_pending_add_item(
-        file_path,
-        display_name.clone(),
-        pt.x,
-        pt.y,
-        insert_col,
-        insert_row,
-    );
-    unsafe { PostMessageW(target_hwnd, WM_USER_DRAG_ITEM_ADDED, 0, 0) };
-
-    if let Some(data) = get_overlay_data(hwnd) {
-        if item_idx >= 0 && (item_idx as usize) < data.icons.len() {
-            let removed = data.icons.remove(item_idx as usize);
-            crate::platform::windows::icon_extract::destroy_icon(removed.icon_handle);
+        if let Some(data) = get_overlay_data(hwnd) {
             data.selected_item = -1;
             data.hovered_item = -1;
         }
+        render_desktop_overlay(hwnd);
+        unsafe { PostMessageW(target_hwnd, WM_USER_DRAG_LEAVE, 0, 0) };
+        // 拖拽结束后清除全局多选状态
+        super::super::multi_select::clear();
+        log::info!("覆盖窗口→分类框: {} items (multi)", sorted_indices.len());
+    } else {
+        // Single-item drag (existing logic)
+        let (file_path, display_name) = match get_overlay_data(hwnd) {
+            Some(data) => {
+                if item_idx < 0 || (item_idx as usize) >= data.icons.len() {
+                    return;
+                }
+                let item = &data.icons[item_idx as usize];
+                (item.file_path.clone(), item.display_name.clone())
+            }
+            None => return,
+        };
+
+        // 读取目标框的拖拽覆盖状态（用于插入模式）
+        let (insert_col, insert_row) = unsafe {
+            crate::platform::windows::grid_window::get_data(target_hwnd)
+                .map(|d| (d.drag_over_insert_col, d.drag_over_insert_row))
+                .unwrap_or((-1, -1))
+        };
+
+        crate::platform::windows::drop_target::set_pending_add_item(
+            file_path,
+            display_name.clone(),
+            pt.x,
+            pt.y,
+            insert_col,
+            insert_row,
+        );
+        unsafe { PostMessageW(target_hwnd, WM_USER_DRAG_ITEM_ADDED, 0, 0) };
+
+        if let Some(data) = get_overlay_data(hwnd) {
+            if item_idx >= 0 && (item_idx as usize) < data.icons.len() {
+                let removed = data.icons.remove(item_idx as usize);
+                crate::platform::windows::icon_extract::destroy_icon(removed.icon_handle);
+                data.selected_item = -1;
+                data.hovered_item = -1;
+            }
+        }
+        render_desktop_overlay(hwnd);
+        unsafe { PostMessageW(target_hwnd, WM_USER_DRAG_LEAVE, 0, 0) };
+        super::super::multi_select::clear();
+        log::info!("覆盖窗口→分类框: {}", display_name);
     }
-    render_desktop_overlay(hwnd);
-    unsafe { PostMessageW(target_hwnd, WM_USER_DRAG_LEAVE, 0, 0) };
-    log::info!("覆盖窗口→分类框: {}", display_name);
 }
 
 fn restore_dragged_icon_position(hwnd: HWND, item_idx: i32, screen_x: i32, screen_y: i32) {

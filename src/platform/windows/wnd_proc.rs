@@ -762,9 +762,13 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                         if super::multi_select::is_selected(key) { data.shift_anchor = hit; data.selected_item = hit; }
                         else if data.selected_item == hit { data.selected_item = -1; }
                     } else {
-                        super::multi_select::clear();
-                        super::multi_select::add(key);
-                        super::multi_select::set_anchor(Some(key));
+                        // ★ 标准 Windows 行为：点击已选中的项时保持多选（等释放后再清除）
+                        // 只有点击未选中的项时才清除多选
+                        if !super::multi_select::is_selected(key) {
+                            super::multi_select::clear();
+                            super::multi_select::add(key);
+                            super::multi_select::set_anchor(Some(key));
+                        }
                         data.shift_anchor = hit;
                         data.selected_item = hit;
                     }
@@ -776,6 +780,8 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                         // If clicking an already-selected item, prepare multi-drag
                         if super::multi_select::is_selected(key) {
                             data.multi_drag_items = super::multi_select::selected_in_container(ct, cid);
+                            log::info!("[GRID-CLICK] multi_drag_items={:?} ({} items)",
+                                data.multi_drag_items, data.multi_drag_items.len());
                         } else {
                             data.multi_drag_items.clear();
                         }
