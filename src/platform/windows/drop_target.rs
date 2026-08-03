@@ -57,10 +57,14 @@ pub fn take_pending_source_removal() -> Option<PendingSourceRemoval> {
         .and_then(|mut g| g.take())
 }
 
-/// 框→框移动：暂存待添加项信息（含释放坐标）
-static PENDING_ADD_ITEM: Mutex<Option<(String, String, i32, i32, i32, i32)>> = Mutex::new(None);
+/// 框→框移动：暂存待添加项信息队列（含释放坐标）
+/// 支持多选拖拽时批量入队，每次 take 取出队头元素
+lazy_static::lazy_static! {
+    static ref PENDING_ADD_ITEM: Mutex<std::collections::VecDeque<(String, String, i32, i32, i32, i32)>> =
+        Mutex::new(std::collections::VecDeque::new());
+}
 
-/// 设置待添加项（包含释放位置的屏幕坐标）
+/// 设置待添加项（包含释放位置的屏幕坐标）—— 入队而非覆盖
 pub fn set_pending_add_item(
     file_path: String,
     display_name: String,
@@ -70,7 +74,7 @@ pub fn set_pending_add_item(
     insert_row: i32,
 ) {
     if let Ok(mut g) = PENDING_ADD_ITEM.lock() {
-        *g = Some((
+        g.push_back((
             file_path,
             display_name,
             drop_x,
@@ -81,9 +85,9 @@ pub fn set_pending_add_item(
     }
 }
 
-/// 取出待添加项（包含释放坐标）
+/// 取出待添加项（包含释放坐标）—— 从队头取出
 pub fn take_pending_add_item() -> Option<(String, String, i32, i32, i32, i32)> {
-    PENDING_ADD_ITEM.lock().ok().and_then(|mut g| g.take())
+    PENDING_ADD_ITEM.lock().ok().and_then(|mut g| g.pop_front())
 }
 
 // =============================================================================
