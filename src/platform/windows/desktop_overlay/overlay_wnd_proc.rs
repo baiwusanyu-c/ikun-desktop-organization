@@ -1388,14 +1388,8 @@ fn end_overlay_drag(hwnd: HWND) {
     // Dropped on a grid box — move items from overlay to grid
     if is_multi_drag {
         log::info!("Multi-drag overlay→grid: {} items", multi_drag_items.len());
-        // Read target box insert state once
-        let (insert_col, insert_row) = unsafe {
-            crate::platform::windows::grid_window::get_data(target_hwnd)
-                .map(|d| (d.drag_over_insert_col, d.drag_over_insert_row))
-                .unwrap_or((-1, -1))
-        };
 
-        // Compute target grid layout for multi-item offset
+        // Compute target grid layout once
         let (target_cols, target_cell_w, target_cell_h, target_grid_left, target_grid_top, target_wr_left, target_wr_top) = unsafe {
             crate::platform::windows::grid_window::get_data(target_hwnd)
                 .map(|d| {
@@ -1406,20 +1400,30 @@ fn end_overlay_drag(hwnd: HWND) {
                     let ww = twr.right - twr.left;
                     let vp = crate::box_core::view_engine::get_view_params(&d.view_mode, tdpi);
                     let layout = crate::box_core::layout_calc::calculate_grid(ww, d.title_h, &vp, tdpi);
-                    (d.cols, layout.cell_w, layout.cell_h, layout.grid_left, layout.grid_top, twr.left, twr.top)
+                    (d.cols, layout.cell_w.max(1), layout.cell_h.max(1), layout.grid_left, layout.grid_top, twr.left, twr.top)
                 })
                 .unwrap_or((4, 80, 100, 10, 50, 0, 0))
         };
 
         // Compute base grid cell from drop position
-        let base_col = ((pt.x - target_wr_left - target_grid_left) / target_cell_w).max(0);
-        let base_row = ((pt.y - target_wr_top - target_grid_top) / target_cell_h).max(0);
+        let client_x = pt.x - target_wr_left;
+        let client_y = pt.y - target_wr_top;
+        let base_col = ((client_x - target_grid_left) / target_cell_w).max(0);
+        let base_row = ((client_y - target_grid_top) / target_cell_h).max(0);
+        let base_lin = base_row * target_cols + base_col;
 
-        // Collect items to move (in original order for layout, reverse for removal)
+        // Collect items info from overlay (in sorted order)
         let mut sorted_indices = multi_drag_items.clone();
         sorted_indices.sort();
 
-        // Enqueue items with offset grid positions
+        struct DragItemInfo {
+            file_path: String,
+            display_name: String,
+            grid_col: i32,
+            grid_row: i32,
+        }
+
+        let mut items_to_add: Vec<DragItemInfo> = Vec::new();
         for (i, &drag_idx) in sorted_indices.iter().enumerate() {
             let (file_path, display_name) = match get_overlay_data(hwnd) {
                 Some(data) if drag_idx < data.icons.len() => {
@@ -1429,29 +1433,66 @@ fn end_overlay_drag(hwnd: HWND) {
                 _ => continue,
             };
 
-            // Offset each item to a different grid cell
-            let offset_lin = (base_row * target_cols + base_col) + i as i32;
-            let item_col = offset_lin % target_cols;
-            let item_row = offset_lin / target_cols;
-            // Convert grid cell back to screen coordinates for drop position
-            let offset_x = target_wr_left + target_grid_left + item_col * target_cell_w + target_cell_w / 2;
-            let offset_y = target_wr_top + target_grid_top + item_row * target_cell_h + target_cell_h / 2;
+            // Each item gets a different linear grid position
+            let lin = base_lin + i as i32;
+            let item_col = lin % target_cols;
+            let item_row = lin / target_cols;
 
-            log::info!("[MULTI-DROP] item {} (idx={}): grid=({}, {}), screen=({}, {})",
-                i, drag_idx, item_col, item_row, offset_x, offset_y);
+            log::info!("[MULTI-DROP-DIRECT] item {} (idx={}): grid=({}, {}), lin={}",
+                i, drag_idx, item_col, item_row, lin);
 
-            crate::platform::windows::drop_target::set_pending_add_item(
+            items_to_add.push(DragItemInfo {
                 file_path,
-                display_name.clone(),
-                offset_x,
-                offset_y,
-                -1,  // use normal mode (not insert) with computed offset position
-                -1,
-            );
-            unsafe { PostMessageW(target_hwnd, WM_USER_DRAG_ITEM_ADDED, 0, 0) };
+                display_name,
+                grid_col: item_col,
+                grid_row: item_row,
+            });
         }
 
-        // Remove items from overlay in reverse order to avoid index shifting
+        // ★ 直接操作目标网格数据（绕过消息队列，避免渲染时自动布局覆盖坐标）
+        if let Some(target_data) = unsafe { crate::platform::windows::grid_window::get_data(target_hwnd) } {
+            // Materialize all existing auto-layout positions first
+            for (idx, item) in target_data.items.iter_mut().enumerate() {
+                if item.grid_col < 0 {
+                    item.grid_col = (idx as i32) % target_data.cols;
+                    item.grid_row = (idx as i32) / target_data.cols;
+                }
+            }
+
+            // Add all new items directly
+            for info in &items_to_add {
+                // Skip duplicates
+                if target_data.items.iter().any(|i| i.file_path == info.file_path) {
+                    log::debug!("[MULTI-DROP-DIRECT] 跳过已存在项: {}", info.file_path);
+                    continue;
+                }
+
+                let read_path = crate::platform::windows::drag_drop::resolve_drag_item_read_path(&info.file_path);
+                let read_path_str = read_path.to_string_lossy().to_string();
+                let icon_handle = crate::platform::windows::icon_extract::extract_file_icon(&read_path_str)
+                    .map(|ic| ic.hicon)
+                    .unwrap_or(std::ptr::null_mut());
+
+                target_data.items.push(crate::platform::windows::grid_window::GridFileItem {
+                    file_path: info.file_path.clone(),
+                    display_name: info.display_name.clone(),
+                    icon_handle,
+                    grid_col: info.grid_col,
+                    grid_row: info.grid_row,
+                });
+                log::info!("[MULTI-DROP-DIRECT] 直接添加: '{}' grid=({}, {})",
+                    info.display_name, info.grid_col, info.grid_row);
+
+                // Hide desktop icon
+                crate::platform::windows::drag_drop::hide_single_desktop_icon(&info.file_path, &info.display_name);
+            }
+
+            // Render and save once
+            crate::platform::windows::d2d_render::render_layered_window(target_hwnd);
+            crate::platform::windows::drag_handler::save_config();
+        }
+
+        // Remove items from overlay in reverse order
         for &drag_idx in sorted_indices.iter().rev() {
             if let Some(data) = get_overlay_data(hwnd) {
                 if drag_idx < data.icons.len() {
@@ -1467,9 +1508,8 @@ fn end_overlay_drag(hwnd: HWND) {
         }
         render_desktop_overlay(hwnd);
         unsafe { PostMessageW(target_hwnd, WM_USER_DRAG_LEAVE, 0, 0) };
-        // 拖拽结束后清除全局多选状态
         super::super::multi_select::clear();
-        log::info!("覆盖窗口→分类框: {} items (multi)", sorted_indices.len());
+        log::info!("覆盖窗口→分类框: {} items (multi, direct)", items_to_add.len());
     } else {
         // Single-item drag (existing logic)
         let (file_path, display_name) = match get_overlay_data(hwnd) {

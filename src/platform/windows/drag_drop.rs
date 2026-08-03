@@ -535,7 +535,7 @@ pub(crate) fn handle_drag_item_added(hwnd: HWND) {
     }
 }
 
-fn resolve_drag_item_read_path(file_path: &str) -> std::path::PathBuf {
+pub(crate) fn resolve_drag_item_read_path(file_path: &str) -> std::path::PathBuf {
     resolve_drag_item_read_path_with(file_path, super::icon_hider::resolve_icon_read_path)
 }
 
@@ -546,7 +546,7 @@ fn resolve_drag_item_read_path_with(
     resolve_read_path(file_path).unwrap_or_else(|| std::path::PathBuf::from(file_path))
 }
 
-fn hide_single_desktop_icon(file_path: &str, display_name: &str) {
+pub(crate) fn hide_single_desktop_icon(file_path: &str, display_name: &str) {
     match super::icon_hider::hide_single_icon(file_path) {
         Ok(()) => {
             if !super::icon_hider::is_public_desktop_path(file_path) {
