@@ -414,10 +414,15 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
             for &idx in &multi_drag_items {
                 if idx < data.items.len() {
                     let item = &data.items[idx];
-                    paths.push(item.file_path.clone());
+                    // ★ 解析到实际存在的路径（仓库路径），否则 Explorer 找不到文件
+                    let resolved = super::drag_drop::resolve_drag_item_read_path(&item.file_path);
+                    let resolved_str = resolved.to_string_lossy().to_string();
+                    log::info!("[GRID-OLE-MULTI] item[{}]: logical='{}', resolved='{}'",
+                        idx, item.file_path, resolved_str);
+                    paths.push(resolved_str.clone());
                     items.push(IkunDragItemData {
                         index: idx,
-                        file_path: item.file_path.clone(),
+                        file_path: resolved_str,
                         display_name: item.display_name.clone(),
                     });
                     if idx == item_idx as usize {
@@ -471,9 +476,12 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
             }
 
             let item = &data.items[item_idx as usize];
+            // ★ 解析到实际存在的路径
+            let resolved = super::drag_drop::resolve_drag_item_read_path(&item.file_path);
+            let resolved_str = resolved.to_string_lossy().to_string();
             (
                 item_idx,
-                item.file_path.clone(),
+                resolved_str,
                 item.display_name.clone(),
                 item.icon_handle,
             )
