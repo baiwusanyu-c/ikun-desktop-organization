@@ -1390,24 +1390,35 @@ fn end_overlay_drag(hwnd: HWND) {
         log::info!("Multi-drag overlay→grid: {} items", multi_drag_items.len());
 
         // Compute target grid layout once
-        let (target_cols, target_cell_w, target_cell_h, target_grid_left, target_grid_top, target_wr_left, target_wr_top) = unsafe {
-            crate::platform::windows::grid_window::get_data(target_hwnd)
-                .map(|d| {
-                    let mut twr = RECT { left: 0, top: 0, right: 0, bottom: 0 };
-                    GetWindowRect(target_hwnd, &mut twr);
-                    let tdpi = GetDpiForWindow(target_hwnd);
-                    let tdpi = if tdpi > 0 { tdpi } else { 96 };
-                    let ww = twr.right - twr.left;
-                    let vp = crate::box_core::view_engine::get_view_params(&d.view_mode, tdpi);
-                    let layout = crate::box_core::layout_calc::calculate_grid(ww, d.title_h, &vp, tdpi);
-                    (d.cols, layout.cell_w.max(1), layout.cell_h.max(1), layout.grid_left, layout.grid_top, twr.left, twr.top)
-                })
-                .unwrap_or((4, 80, 100, 10, 50, 0, 0))
+        let Some(twr) = crate::platform::windows::grid_window::get_grid_content_rect(target_hwnd)
+        else {
+            log::warn!("overlay→grid: 无法读取目标分类框内容矩形，取消放置");
+            return;
+        };
+        let Some((target_cols, target_cell_w, target_cell_h, target_grid_left, target_grid_top)) = (unsafe {
+            crate::platform::windows::grid_window::get_data(target_hwnd).map(|d| {
+                let tdpi = GetDpiForWindow(target_hwnd);
+                let tdpi = if tdpi > 0 { tdpi } else { 96 };
+                let ww = twr.right - twr.left;
+                let vp = crate::box_core::view_engine::get_view_params(&d.view_mode, tdpi);
+                let layout =
+                    crate::box_core::layout_calc::calculate_grid(ww, d.title_h, &vp, tdpi);
+                (
+                    d.cols,
+                    layout.cell_w.max(1),
+                    layout.cell_h.max(1),
+                    layout.grid_left,
+                    layout.grid_top,
+                )
+            })
+        }) else {
+            log::warn!("overlay→grid: 目标分类框数据已失效，取消放置");
+            return;
         };
 
         // Compute base grid cell from drop position
-        let client_x = pt.x - target_wr_left;
-        let client_y = pt.y - target_wr_top;
+        let client_x = pt.x - twr.left;
+        let client_y = pt.y - twr.top;
         let base_col = ((client_x - target_grid_left) / target_cell_w).max(0);
         let base_row = ((client_y - target_grid_top) / target_cell_h).max(0);
         let base_lin = base_row * target_cols + base_col;

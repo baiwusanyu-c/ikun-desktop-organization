@@ -1,0 +1,33 @@
+{
+  "id": "fix-liquid-glass-corner-shadow",
+  "name": "fix-liquid-glass-corner-shadow",
+  "title": "修复液态玻璃圆角上限与裁切阴影直角",
+  "description": "将液态玻璃圆角上限统一为 30，并消除等大窗口裁切外投影造成的直角边。",
+  "status": "completed",
+  "dev_type": "backend",
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "codex-agent",
+  "assignee": "codex-agent",
+  "createdAt": "2026-08-03",
+  "completedAt": "2026-08-03",
+  "branch": null,
+  "base_branch": "master",
+  "worktree_path": null,
+  "current_phase": 6,
+  "next_action": [],
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "src/config/app_config.rs",
+    "src/gpui_app/settings_view.rs",
+    "src/ui/settings_panel.rs",
+    "src/platform/windows/liquid_glass.rs"
+  ],
+  "notes": "实现、视觉确认、交互坐标修复与自动检查已完成。完整外阴影保留，内容坐标契约已同步到 Windows layered window guide。Trellis Python 脚本在当前 Windows 环境不可用，归档按相同目录契约完成。",
+  "meta": {}
+}

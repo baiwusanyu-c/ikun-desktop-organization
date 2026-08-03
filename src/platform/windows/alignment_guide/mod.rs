@@ -15,7 +15,7 @@ use guide_overlay::{
 #[allow(unused_imports)]
 pub use alignment_detect::{AlignmentDirection, AlignmentMatch, AlignmentResult};
 
-use crate::platform::windows::ffi_imports::{GetWindowRect, KillTimer, SetTimer};
+use crate::platform::windows::ffi_imports::{GetDpiForWindow, KillTimer, SetTimer};
 use crate::platform::windows::ffi_types::{RECT, TIMER_ID_ALIGNMENT};
 use crate::platform::windows::grid_window;
 
@@ -53,13 +53,9 @@ pub fn on_exit_size_move(hwnd: *mut std::ffi::c_void) {
 
 /// Timer 回调：检测对齐并更新参考线
 pub fn on_alignment_timer(hwnd: *mut std::ffi::c_void) {
-    let mut current_rect = RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
+    let Some(current_rect) = grid_window::get_grid_content_rect(hwnd) else {
+        return;
     };
-    unsafe { GetWindowRect(hwnd, &mut current_rect) };
 
     if let Some(data) = unsafe { grid_window::get_data(hwnd) } {
         if data.locked {
@@ -84,7 +80,18 @@ pub fn on_moving(hwnd: *mut std::ffi::c_void, proposed_rect: &mut RECT) {
         }
     }
     let others = collect_other_box_rects(hwnd);
-    let result = detect_alignments(proposed_rect, &others, DEFAULT_ALIGNMENT_THRESHOLD);
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    let dpi = if dpi > 0 { dpi } else { 96 };
+    let content_rect = grid_window::content_rect_from_window_rect(
+        RECT {
+            left: proposed_rect.left,
+            top: proposed_rect.top,
+            right: proposed_rect.right,
+            bottom: proposed_rect.bottom,
+        },
+        dpi,
+    );
+    let result = detect_alignments(&content_rect, &others, DEFAULT_ALIGNMENT_THRESHOLD);
     let (work_x, work_y, _, _) =
         crate::platform::windows::monitor_utils::get_virtual_desktop_bounds();
     update_guide_lines(&result, (work_x, work_y));
@@ -102,14 +109,9 @@ fn collect_other_box_rects(
         if grid.hwnd == exclude_hwnd {
             continue;
         }
-        let mut rect = RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        };
-        unsafe { GetWindowRect(grid.hwnd, &mut rect) };
-        result.push((grid.hwnd, rect));
+        if let Some(rect) = grid_window::get_grid_content_rect(grid.hwnd) {
+            result.push((grid.hwnd, rect));
+        }
     }
     result
 }

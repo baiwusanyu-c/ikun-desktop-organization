@@ -6,7 +6,7 @@
 use super::d2d_render::render_layered_window;
 use super::ffi_imports::*;
 use super::ffi_types::*;
-use super::grid_window::get_data;
+use super::grid_window::{get_data, get_grid_content_rect};
 
 /// 清除拖拽覆盖可视化状态
 pub(crate) fn clear_drag_over_visual(data: &mut super::grid_window::GridWindowData) {
@@ -30,13 +30,9 @@ pub(crate) fn handle_cross_box_drag_over(hwnd: HWND, screen_x: i32, screen_y: i3
         None => return,
     };
 
-    let mut wr = RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
+    let Some(wr) = get_grid_content_rect(hwnd) else {
+        return;
     };
-    unsafe { GetWindowRect(hwnd, &mut wr) };
     let client_x = screen_x - wr.left;
     let client_y = screen_y - wr.top;
 
@@ -121,13 +117,9 @@ pub(crate) fn update_drag_over_visual(hwnd: HWND, screen_x: i32, screen_y: i32) 
     }
 
     // 计算窗口坐标
-    let mut wr = RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
+    let Some(wr) = get_grid_content_rect(hwnd) else {
+        return;
     };
-    unsafe { GetWindowRect(hwnd, &mut wr) };
     let client_x = screen_x - wr.left;
     let client_y = screen_y - wr.top;
 

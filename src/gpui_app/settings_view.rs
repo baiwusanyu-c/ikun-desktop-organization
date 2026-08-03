@@ -62,7 +62,7 @@ const PARAMS: &[ParamDef] = &[
         param: crate::config::LiquidGlassParam::CornerRadius,
         label: "圆角半径",
         min: 0.0,
-        max: 100.0,
+        max: crate::config::LIQUID_GLASS_CORNER_RADIUS_MAX,
         step: 1.0,
         format: ParamFormat::Number,
     },

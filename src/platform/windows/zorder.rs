@@ -13,7 +13,7 @@
 
 use super::ffi_imports::*;
 use super::ffi_types::*;
-use super::grid_window::get_grid_list;
+use super::grid_window::{get_grid_content_rect, get_grid_list};
 
 use std::cell::Cell;
 
@@ -98,21 +98,13 @@ pub fn find_grid_window_at_point(screen_x: i32, screen_y: i32) -> HWND {
         Err(_) => return std::ptr::null_mut(),
     };
     for grid in grids.iter().rev() {
-        let mut rect = RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        };
-        unsafe {
-            if GetWindowRect(grid.hwnd, &mut rect) != 0 {
-                if screen_x >= rect.left
-                    && screen_x < rect.right
-                    && screen_y >= rect.top
-                    && screen_y < rect.bottom
-                {
-                    return grid.hwnd;
-                }
+        if let Some(rect) = get_grid_content_rect(grid.hwnd) {
+            if screen_x >= rect.left
+                && screen_x < rect.right
+                && screen_y >= rect.top
+                && screen_y < rect.bottom
+            {
+                return grid.hwnd;
             }
         }
     }

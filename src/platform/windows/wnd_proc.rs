@@ -25,7 +25,10 @@ use super::ffi_types::*;
 use super::grid_layout::{
     grid_hit_test, lock_btn_rect, more_btn_rect, recalculate_layout, reflow_items,
 };
-use super::grid_window::{get_data, GridWindowData};
+use super::grid_window::{
+    client_to_content_point, get_data, get_grid_content_rect, shadow_padding_for_dpi,
+    GridWindowData,
+};
 use super::menu_window::show_menu_window;
 use super::shell_menu::{show_desktop_context_menu, show_shell_context_menu};
 use super::zorder::{
@@ -33,6 +36,34 @@ use super::zorder::{
 };
 use crate::box_core::layout_calc::calculate_grid;
 use crate::box_core::view_engine::get_view_params;
+
+fn window_dpi(hwnd: HWND) -> u32 {
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    if dpi > 0 {
+        dpi
+    } else {
+        96
+    }
+}
+
+fn content_point_from_lparam(hwnd: HWND, lparam: LPARAM) -> (i32, i32) {
+    let client_x = get_x_lparam(lparam);
+    let client_y = get_y_lparam(lparam);
+    let mut screen_point = POINT {
+        x: client_x,
+        y: client_y,
+    };
+    if unsafe { ClientToScreen(hwnd, &mut screen_point) } != 0 {
+        if let Some(content_rect) = get_grid_content_rect(hwnd) {
+            return (
+                screen_point.x - content_rect.left,
+                screen_point.y - content_rect.top,
+            );
+        }
+    }
+
+    client_to_content_point(window_dpi(hwnd), client_x, client_y)
+}
 
 fn remove_grid_item_if_missing_after_shell_menu(hwnd: HWND, logical_path: &str) {
     if super::icon_hider::icon_exists_for_box(logical_path) {
@@ -97,15 +128,10 @@ fn handle_shell_menu_result(
             let current_name = data.items[item_idx].display_name.clone();
 
             // 计算标签位置（屏幕坐标）
-            let mut wr = RECT {
-                left: 0,
-                top: 0,
-                right: 0,
-                bottom: 0,
+            let Some(wr) = get_grid_content_rect(hwnd) else {
+                return;
             };
-            unsafe { GetWindowRect(hwnd, &mut wr) };
-            let dpi = unsafe { GetDpiForWindow(hwnd) };
-            let dpi = if dpi > 0 { dpi } else { 96 };
+            let dpi = window_dpi(hwnd);
             let view_params = get_view_params(&data.view_mode, dpi);
             let layout = calculate_grid(wr.right - wr.left, data.title_h, &view_params, dpi);
 
@@ -209,13 +235,9 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             let screen_x = get_x_lparam(lparam);
             let screen_y = get_y_lparam(lparam);
 
-            let mut wr = RECT {
-                left: 0,
-                top: 0,
-                right: 0,
-                bottom: 0,
+            let Some(wr) = get_grid_content_rect(hwnd) else {
+                return HTTRANSPARENT as LRESULT;
             };
-            unsafe { GetWindowRect(hwnd, &mut wr) };
             let dx = screen_x - wr.left;
             let dy = screen_y - wr.top;
             let win_w = wr.right - wr.left;
@@ -226,6 +248,18 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             let is_locked = data_opt.as_ref().map(|d| d.locked).unwrap_or(false);
             let dpi = unsafe { GetDpiForWindow(hwnd) };
             let dpi = if dpi > 0 { dpi } else { 96 };
+
+            // The layered window includes transparent padding for the complete shadow.
+            // Only the visible content rectangle participates in interaction.
+            if dx < 0 || dx >= win_w || dy < 0 || dy >= win_h {
+                if let Some(data) = get_data(hwnd) {
+                    if data.hover_edge != 0 {
+                        data.hover_edge = 0;
+                        render_layered_window(hwnd);
+                    }
+                }
+                return HTTRANSPARENT as LRESULT;
+            }
 
             // 锁定按钮区域（标题栏右侧）→ 始终返回 HTCLIENT（可点击，不触发拖拽）
             let (btn_x, btn_y, btn_size) = lock_btn_rect(win_w, title_h, dpi);
@@ -375,15 +409,9 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             // Always recalculate layout on resize (wparam == 0 is SIZE_RESTORED = normal resize)
             let dpi = unsafe { GetDpiForWindow(hwnd) };
             let dpi = if dpi > 0 { dpi } else { 96 };
-            let mut wr = RECT {
-                left: 0,
-                top: 0,
-                right: 0,
-                bottom: 0,
-            };
-            unsafe { GetWindowRect(hwnd, &mut wr) };
-            let win_w = wr.right - wr.left;
-            let win_h = wr.bottom - wr.top;
+            let (win_w, win_h) = get_grid_content_rect(hwnd)
+                .map(|rect| (rect.right - rect.left, rect.bottom - rect.top))
+                .unwrap_or((0, 0));
 
             if win_w > 0 && win_h > 0 {
                 if let Some(data) = get_data(hwnd) {
@@ -411,8 +439,11 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             log::info!("DPI 变化: {} → 重新计算布局", new_dpi);
 
             let suggested_rect = lparam as *const RECT;
-            let new_w = unsafe { (*suggested_rect).right - (*suggested_rect).left };
-            let new_h = unsafe { (*suggested_rect).bottom - (*suggested_rect).top };
+            let outer_w = unsafe { (*suggested_rect).right - (*suggested_rect).left };
+            let outer_h = unsafe { (*suggested_rect).bottom - (*suggested_rect).top };
+            let padding = shadow_padding_for_dpi(new_dpi);
+            let new_w = (outer_w - padding * 2).max(0);
+            let new_h = (outer_h - padding * 2).max(0);
 
             if let Some(data) = get_data(hwnd) {
                 reflow_items(data);
@@ -425,8 +456,8 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                     std::ptr::null_mut(),
                     (*suggested_rect).left,
                     (*suggested_rect).top,
-                    new_w,
-                    new_h,
+                    outer_w,
+                    outer_h,
                     SWP_NOZORDER,
                 );
             }
@@ -442,22 +473,22 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             let title_h = get_data(hwnd)
                 .map(|d| d.title_h)
                 .unwrap_or(scale_for_dpi(40, dpi));
+            let padding = shadow_padding_for_dpi(dpi) * 2;
             let mmi = &mut *(lparam as *mut MINMAXINFO);
             mmi.pt_min_track_size = POINT {
-                x: scale_for_dpi(200, dpi),
-                y: title_h + scale_for_dpi(100, dpi),
+                x: scale_for_dpi(200, dpi) + padding,
+                y: title_h + scale_for_dpi(100, dpi) + padding,
             };
             mmi.pt_max_track_size = POINT {
-                x: scale_for_dpi(3000, dpi),
-                y: scale_for_dpi(3000, dpi),
+                x: scale_for_dpi(3000, dpi) + padding,
+                y: scale_for_dpi(3000, dpi) + padding,
             };
             0
         }
 
         // ===== 鼠标移动：hover 效果 + tooltip + 锁定按钮 + 边缘指示 + 拖拽检测 =====
         WM_MOUSEMOVE => {
-            let mx = get_x_lparam(lparam);
-            let my = get_y_lparam(lparam);
+            let (mx, my) = content_point_from_lparam(hwnd, lparam);
 
             // Phase 1: 拖拽阈值检测（超过阈值 → 创建覆盖窗口 + SetCapture）
             if super::drag_handler::check_drag_threshold(hwnd, mx, my) {
@@ -472,8 +503,6 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             // Marquee selection update: just update coordinates (render happens in timer)
             if let Some(data) = get_data(hwnd) {
                 if data.marquee_active {
-                    let mx = get_x_lparam(lparam);
-                    let my = get_y_lparam(lparam);
                     data.marquee_current_x = mx;
                     data.marquee_current_y = my;
                     return 0;
@@ -498,15 +527,10 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             }
 
             if let Some(data) = get_data(hwnd) {
-                let mut wr = RECT {
-                    left: 0,
-                    top: 0,
-                    right: 0,
-                    bottom: 0,
+                let Some(wr) = get_grid_content_rect(hwnd) else {
+                    return 0;
                 };
-                unsafe { GetWindowRect(hwnd, &mut wr) };
                 let w = wr.right - wr.left;
-                let _h = wr.bottom - wr.top;
                 let dpi = unsafe { GetDpiForWindow(hwnd) };
                 let dpi = if dpi > 0 { dpi } else { 96 };
 
@@ -634,18 +658,13 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
 
         // ===== 鼠标左键：编辑模式按钮 + 锁定按钮 + "更多"按钮 + 图标选中 =====
         WM_LBUTTONDOWN => {
-            let click_x = get_x_lparam(lparam);
-            let click_y = get_y_lparam(lparam);
+            let (click_x, click_y) = content_point_from_lparam(hwnd, lparam);
             let mut need_rerender = false;
 
             // 获取窗口尺寸和 DPI
-            let mut wr = RECT {
-                left: 0,
-                top: 0,
-                right: 0,
-                bottom: 0,
+            let Some(wr) = get_grid_content_rect(hwnd) else {
+                return 0;
             };
-            unsafe { GetWindowRect(hwnd, &mut wr) };
             let win_w = wr.right - wr.left;
             let dpi = unsafe { GetDpiForWindow(hwnd) };
             let dpi = if dpi > 0 { dpi } else { 96 };
@@ -858,17 +877,12 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
 
         // ===== 鼠标左键双击：标题栏进入名称编辑 / 图标打开文件 =====
         WM_LBUTTONDBLCLK => {
-            let click_x = get_x_lparam(lparam);
-            let click_y = get_y_lparam(lparam);
+            let (click_x, click_y) = content_point_from_lparam(hwnd, lparam);
 
             if let Some(data) = get_data(hwnd) {
-                let mut wr = RECT {
-                    left: 0,
-                    top: 0,
-                    right: 0,
-                    bottom: 0,
+                let Some(wr) = get_grid_content_rect(hwnd) else {
+                    return 0;
                 };
-                unsafe { GetWindowRect(hwnd, &mut wr) };
                 let w = wr.right - wr.left;
                 let dpi = unsafe { GetDpiForWindow(hwnd) };
                 let dpi = if dpi > 0 { dpi } else { 96 };
@@ -937,13 +951,9 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 let screen_y = ((lparam >> 16) & 0xFFFF) as i16 as i32;
 
                 if let Some(data) = get_data(hwnd) {
-                    let mut wr = RECT {
-                        left: 0,
-                        top: 0,
-                        right: 0,
-                        bottom: 0,
+                    let Some(wr) = get_grid_content_rect(hwnd) else {
+                        return 0;
                     };
-                    unsafe { GetWindowRect(hwnd, &mut wr) };
                     let w = wr.right - wr.left;
                     let click_x = screen_x - wr.left;
                     let click_y = screen_y - wr.top;
@@ -988,19 +998,14 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
 
         // ===== 鼠标右键：弹出上下文菜单 =====
         WM_RBUTTONUP => {
-            let click_x = get_x_lparam(lparam);
-            let click_y = get_y_lparam(lparam);
+            let (click_x, click_y) = content_point_from_lparam(hwnd, lparam);
 
             let mut file_path: Option<String> = None;
             let mut hit_index: i32 = -1;
             if let Some(data) = get_data(hwnd) {
-                let mut wr = RECT {
-                    left: 0,
-                    top: 0,
-                    right: 0,
-                    bottom: 0,
+                let Some(wr) = get_grid_content_rect(hwnd) else {
+                    return 0;
                 };
-                unsafe { GetWindowRect(hwnd, &mut wr) };
                 let w = wr.right - wr.left;
                 let dpi = unsafe { GetDpiForWindow(hwnd) };
                 let dpi = if dpi > 0 { dpi } else { 96 };
@@ -1065,13 +1070,9 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             if let Some(data) = get_data(hwnd) {
                 let dpi = unsafe { GetDpiForWindow(hwnd) };
                 let dpi = if dpi > 0 { dpi } else { 96 };
-                let mut wr = RECT {
-                    left: 0,
-                    top: 0,
-                    right: 0,
-                    bottom: 0,
+                let Some(wr) = get_grid_content_rect(hwnd) else {
+                    return 0;
                 };
-                unsafe { GetWindowRect(hwnd, &mut wr) };
                 let window_w = wr.right - wr.left;
                 let view_params = get_view_params(&data.view_mode, dpi);
                 let grid_layout = calculate_grid(window_w, data.title_h, &view_params, dpi);
@@ -1267,13 +1268,9 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                     let dx = (data.marquee_current_x - data.marquee_start_x).abs();
                     let dy = (data.marquee_current_y - data.marquee_start_y).abs();
                     if dx > 3 || dy > 3 {
-                        let mut wr2 = RECT {
-                            left: 0,
-                            top: 0,
-                            right: 0,
-                            bottom: 0,
+                        let Some(wr2) = get_grid_content_rect(hwnd) else {
+                            return 0;
                         };
-                        unsafe { GetWindowRect(hwnd, &mut wr2) };
                         let ww2 = wr2.right - wr2.left;
                         let d2 = unsafe { GetDpiForWindow(hwnd) };
                         let d2 = if d2 > 0 { d2 } else { 96 };

@@ -30,7 +30,7 @@ pub(crate) fn process_deferred_ingests() {
     }
 }
 
-use super::grid_window::get_data;
+use super::grid_window::{get_data, get_grid_content_rect};
 
 /// Save grid layout configuration to disk after drag operations.
 fn save_config() {
@@ -56,27 +56,16 @@ pub(crate) fn handle_same_box_drop(
     }
 
     // Convert screen coords to window client coords
-    let mut wr = RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
+    let Some(wr) = get_grid_content_rect(hwnd) else {
+        return;
     };
-    unsafe { GetWindowRect(hwnd, &mut wr) };
     let client_x = screen_x - wr.left;
     let client_y = screen_y - wr.top;
 
     // Get current layout
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     let dpi = if dpi > 0 { dpi } else { 96 };
-    let mut wr2 = RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
-    };
-    unsafe { GetWindowRect(hwnd, &mut wr2) };
-    let window_width = wr2.right - wr2.left;
+    let window_width = wr.right - wr.left;
 
     let view_params = crate::box_core::view_engine::get_view_params(&data.view_mode, dpi);
     let layout =
@@ -606,13 +595,9 @@ fn compute_drop_grid_position(
     drop_y: i32,
     data: &super::grid_window::GridWindowData,
 ) -> (i32, i32) {
-    let mut wr = RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
+    let Some(wr) = get_grid_content_rect(hwnd) else {
+        return (-1, -1);
     };
-    unsafe { GetWindowRect(hwnd, &mut wr) };
     let client_x = drop_x - wr.left;
     let client_y = drop_y - wr.top;
 

@@ -264,7 +264,9 @@ fn get_config_lock() -> &'static std::sync::RwLock<LiquidGlassConfig> {
 
 pub fn update_liquid_glass_config(config: &LiquidGlassConfig) {
     if let Ok(mut guard) = get_config_lock().write() {
-        *guard = config.clone();
+        let mut normalized = config.clone();
+        normalized.normalize();
+        *guard = normalized;
     }
 }
 
@@ -278,13 +280,14 @@ pub fn get_liquid_glass_config() -> LiquidGlassConfig {
 pub fn render_background(
     screen_x: i32,
     screen_y: i32,
-    width: i32,
-    height: i32,
+    content_width: i32,
+    content_height: i32,
+    padding: i32,
     corner_radius: f32,
     dpi_scale: f32,
     glass_config: &LiquidGlassConfig,
 ) -> Option<Vec<Pixel32>> {
-    if width <= 0 || height <= 0 {
+    if content_width <= 0 || content_height <= 0 || padding < 0 {
         return None;
     }
 
@@ -323,8 +326,9 @@ pub fn render_background(
         match renderer.render(
             screen_x,
             screen_y,
-            width as u32,
-            height as u32,
+            content_width as u32,
+            content_height as u32,
+            padding as u32,
             corner_radius,
             dpi_scale,
             glass_config,
@@ -905,14 +909,15 @@ impl GlassRenderer {
         &mut self,
         screen_x: i32,
         screen_y: i32,
-        width: u32,
-        height: u32,
+        content_width: u32,
+        content_height: u32,
+        padding: u32,
         corner_radius: f32,
         dpi_scale: f32,
         glass_config: &LiquidGlassConfig,
     ) -> Result<Vec<Pixel32>> {
-        let center_x = screen_x + width as i32 / 2;
-        let center_y = screen_y + height as i32 / 2;
+        let center_x = screen_x + padding as i32 + content_width as i32 / 2;
+        let center_y = screen_y + padding as i32 + content_height as i32 / 2;
 
         let output_index = self
             .outputs
@@ -935,10 +940,10 @@ impl GlassRenderer {
                 output,
                 blur_sigma,
                 saturation,
-                screen_x,
-                screen_y,
-                width as i32,
-                height as i32,
+                screen_x + padding as i32,
+                screen_y + padding as i32,
+                content_width as i32,
+                content_height as i32,
             )?;
         }
 
@@ -955,8 +960,10 @@ impl GlassRenderer {
         let target_light = unsafe {
             if GetCursorPos(&mut cursor).is_ok() {
                 [
-                    cursor.x as f32 - (screen_x as f32 + width as f32 * 0.5),
-                    cursor.y as f32 - (screen_y as f32 + height as f32 * 0.5),
+                    cursor.x as f32
+                        - (screen_x as f32 + padding as f32 + content_width as f32 * 0.5),
+                    cursor.y as f32
+                        - (screen_y as f32 + padding as f32 + content_height as f32 * 0.5),
                 ]
             } else {
                 [0.0, 0.0]
@@ -971,8 +978,9 @@ impl GlassRenderer {
             output_rect,
             screen_x,
             screen_y,
-            width,
-            height,
+            content_width,
+            content_height,
+            padding,
             corner_radius,
             dpi_scale,
             hdr_active,
@@ -986,14 +994,17 @@ impl GlassRenderer {
         output_rect: WinRect,
         screen_x: i32,
         screen_y: i32,
-        width: u32,
-        height: u32,
+        content_width: u32,
+        content_height: u32,
+        padding: u32,
         corner_radius: f32,
         dpi_scale: f32,
         hdr_active: bool,
         glass_config: &LiquidGlassConfig,
     ) -> Result<Vec<Pixel32>> {
-        self.ensure_surfaces(width, height)?;
+        let surface_width = content_width + padding * 2;
+        let surface_height = content_height + padding * 2;
+        self.ensure_surfaces(surface_width, surface_height)?;
 
         let output_width = (output_rect.right - output_rect.left).max(1) as f32;
         let output_height = (output_rect.bottom - output_rect.top).max(1) as f32;
@@ -1006,9 +1017,9 @@ impl GlassRenderer {
             output_origin: [output_rect.left as f32, output_rect.top as f32],
             output_size: [output_width, output_height],
             window_origin: [screen_x as f32, screen_y as f32],
-            window_size: [width as f32, height as f32],
-            lens_size: [width as f32, height as f32],
-            padding: [0.0, 0.0],
+            window_size: [surface_width as f32, surface_height as f32],
+            lens_size: [content_width as f32, content_height as f32],
+            padding: [padding as f32, padding as f32],
             shadow_settings: [
                 (if glass_config.over_light { 16.0 } else { 12.0 }) * dpi_scale,
                 (if glass_config.over_light { 70.0 } else { 40.0 }) * dpi_scale,
@@ -1031,7 +1042,7 @@ impl GlassRenderer {
                     glass_config.saturation
                 },
                 if glass_config.over_light { 0.0 } else { 0.018 },
-                width as f32 * 0.324_668_2,
+                content_width as f32 * 0.324_668_2,
                 0.07,
             ],
             detail_settings: [0.34, 0.08, 0.75, 0.75],
@@ -1039,7 +1050,7 @@ impl GlassRenderer {
                 if glass_config.over_light { 1.0 } else { 0.0 },
                 dpi_scale,
                 glass_config.elasticity,
-                corner_radius.min(height as f32 * 0.5) * dpi_scale,
+                corner_radius.min(content_height as f32 * 0.5) * dpi_scale,
             ],
             mouse_offset: self.light_direction,
             interaction_padding: [
@@ -1051,7 +1062,7 @@ impl GlassRenderer {
         unsafe {
             let surfaces = self
                 .surfaces
-                .get(&(width, height))
+                .get(&(surface_width, surface_height))
                 .context("渲染表面未创建")?;
 
             self.context
@@ -1059,8 +1070,8 @@ impl GlassRenderer {
             self.context
                 .ClearRenderTargetView(&surfaces.output_target, &[0.0; 4]);
             self.context.RSSetViewports(Some(&[D3D11_VIEWPORT {
-                Width: width as f32,
-                Height: height as f32,
+                Width: surface_width as f32,
+                Height: surface_height as f32,
                 MaxDepth: 1.0,
                 ..Default::default()
             }]));
@@ -1091,8 +1102,8 @@ impl GlassRenderer {
             self.context.RSSetScissorRects(Some(&[WinRect {
                 left: 0,
                 top: 0,
-                right: width as i32,
-                bottom: height as i32,
+                right: surface_width as i32,
+                bottom: surface_height as i32,
             }]));
             self.context.PSSetShaderResources(
                 0,
@@ -1120,11 +1131,11 @@ impl GlassRenderer {
                     r: 0,
                     a: 0
                 };
-                (width * height) as usize
+                (surface_width * surface_height) as usize
             ];
-            let row_bytes = width as usize * size_of::<Pixel32>();
+            let row_bytes = surface_width as usize * size_of::<Pixel32>();
 
-            for row in 0..height as usize {
+            for row in 0..surface_height as usize {
                 let source = mapped
                     .pData
                     .cast::<u8>()
@@ -1134,7 +1145,9 @@ impl GlassRenderer {
             }
 
             self.context.Unmap(&surfaces.staging_texture, 0);
-            let center_index = ((height / 2) * width + width / 2) as usize;
+            let center_index = ((padding + content_height / 2) * surface_width
+                + padding
+                + content_width / 2) as usize;
             if pixels.get(center_index).is_none_or(|pixel| pixel.a == 0) {
                 return Err(anyhow!("液态玻璃 GPU 输出中心像素完全透明"));
             }
@@ -1158,5 +1171,12 @@ mod tests {
         assert!(SHADER.contains("proceduralMode=interactionPadding.y>=2.5"));
         assert!(SHADER.contains("sampleChromatic"));
         assert!(SHADER.contains("controlSettings.z"));
+    }
+
+    #[test]
+    fn shader_renders_outer_shadow_into_padded_surface() {
+        assert!(SHADER.contains("shadow*(1-glassAlpha)"));
+        assert!(SHADER.contains("local=px-padding"));
+        assert!(SHADER.contains("lensSize"));
     }
 }

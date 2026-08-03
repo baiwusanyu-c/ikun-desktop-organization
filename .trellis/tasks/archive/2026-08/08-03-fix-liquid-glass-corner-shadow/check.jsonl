@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Rust 格式化、测试和 Clippy 检查"}
+{"file": ".trellis/spec/backend/windows-platform-guidelines.md", "reason": "复核 Windows 渲染与 alpha 行为"}

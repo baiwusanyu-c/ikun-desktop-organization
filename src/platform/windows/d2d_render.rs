@@ -40,7 +40,7 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::HDC as GdiHDC;
 use windows::Win32::Graphics::Imaging::{CLSID_WICImagingFactory, IWICImagingFactory};
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
-use windows_numerics::Vector2;
+use windows_numerics::{Matrix3x2, Vector2};
 
 use super::ffi_imports::*;
 use super::ffi_types::*;
@@ -165,9 +165,14 @@ pub fn render_layered_window(hwnd: HWND) {
         bottom: 0,
     };
     unsafe { GetWindowRect(hwnd, &mut wr) };
-    let w = wr.right - wr.left;
-    let h = wr.bottom - wr.top;
-    if w <= 0 || h <= 0 {
+    let outer_w = wr.right - wr.left;
+    let outer_h = wr.bottom - wr.top;
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    let dpi = if dpi > 0 { dpi } else { 96 };
+    let shadow_padding = super::grid_window::shadow_padding_for_dpi(dpi);
+    let w = outer_w - shadow_padding * 2;
+    let h = outer_h - shadow_padding * 2;
+    if w <= 0 || h <= 0 || outer_w <= 0 || outer_h <= 0 {
         RENDERING.store(false, Ordering::SeqCst);
         return;
     }
@@ -181,8 +186,8 @@ pub fn render_layered_window(hwnd: HWND) {
 
     let bi = BITMAPINFOHEADER {
         bi_size: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-        bi_width: w,
-        bi_height: -h, // 自上而下
+        bi_width: outer_w,
+        bi_height: -outer_h, // 自上而下
         bi_planes: 1,
         bi_bit_count: 32,
         bi_compression: 0,
@@ -219,8 +224,8 @@ pub fn render_layered_window(hwnd: HWND) {
     let bind_rect = windows::Win32::Foundation::RECT {
         left: 0,
         top: 0,
-        right: w,
-        bottom: h,
+        right: outer_w,
+        bottom: outer_h,
     };
     if unsafe { target.BindDC(GdiHDC(mem_dc), &bind_rect) }.is_err() {
         log::error!("BindDC 失败");
@@ -237,6 +242,13 @@ pub fn render_layered_window(hwnd: HWND) {
     // ===== D2D 渲染开始 =====
     unsafe { target.BeginDraw() };
 
+    let identity = Matrix3x2 {
+        M11: 1.0,
+        M22: 1.0,
+        ..Default::default()
+    };
+    unsafe { target.SetTransform(&identity) };
+
     // 清空为全透明（premultiplied alpha: 所有通道为 0）
     let transparent = D2D1_COLOR_F {
         r: 0.0,
@@ -245,10 +257,6 @@ pub fn render_layered_window(hwnd: HWND) {
         a: 0.0,
     };
     unsafe { target.Clear(Some(&transparent)) };
-
-    // ===== 获取 DPI =====
-    let dpi = unsafe { GetDpiForWindow(hwnd) };
-    let _dpi = if dpi > 0 { dpi } else { 96 }; // DPI 预留供后续 DPI 感知渲染使用
 
     // ===== 绘制液态玻璃背景；GPU 捕获不可用时回退原半透明背景 =====
     let glass_config = super::liquid_glass::get_liquid_glass_config();
@@ -260,6 +268,7 @@ pub fn render_layered_window(hwnd: HWND) {
             wr.top,
             w,
             h,
+            shadow_padding,
             corner_radius,
             dpi as f32 / 96.0,
         )
@@ -271,13 +280,29 @@ pub fn render_layered_window(hwnd: HWND) {
         let bg_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(1, 1, 1, 38), None) };
         if let Ok(ref brush) = bg_brush {
             let rounded_rect = D2D1_ROUNDED_RECT {
-                rect: d2d_rect(0.0, 0.0, ww, hh),
+                rect: d2d_rect(
+                    shadow_padding as f32,
+                    shadow_padding as f32,
+                    shadow_padding as f32 + ww,
+                    shadow_padding as f32 + hh,
+                ),
                 radiusX: fallback_radius,
                 radiusY: fallback_radius,
             };
             unsafe { target.FillRoundedRectangle(&rounded_rect, brush) };
         }
     }
+
+    // 后续标题、图标与交互反馈继续使用原有内容坐标系；仅在提交位图时
+    // 平移到透明外投影留白之内。
+    let content_transform = Matrix3x2 {
+        M11: 1.0,
+        M22: 1.0,
+        M31: shadow_padding as f32,
+        M32: shadow_padding as f32,
+        ..Default::default()
+    };
+    unsafe { target.SetTransform(&content_transform) };
 
     // ===== 绘制标题栏与主体的分隔线 =====
     let title_h = data.title_h;
@@ -286,10 +311,6 @@ pub fn render_layered_window(hwnd: HWND) {
         let sep_rect = d2d_rect(0.0, (title_h - 1) as f32, ww, title_h as f32);
         unsafe { target.FillRectangle(&sep_rect, brush) };
     }
-
-    // ===== 获取 DPI =====
-    let dpi = unsafe { GetDpiForWindow(hwnd) };
-    let _dpi = if dpi > 0 { dpi } else { 96 }; // DPI 预留供后续 DPI 感知渲染使用
 
     // ===== 创建文字画刷（标题专用，图标标签画刷在 render_icon_grid 内创建）=====
     let white_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(255, 255, 255, 255), None) };
@@ -598,6 +619,7 @@ pub fn render_layered_window(hwnd: HWND) {
     }
 
     // ===== D2D 渲染结束 =====
+    unsafe { target.SetTransform(&identity) };
     let mut tag1: u64 = 0;
     let mut tag2: u64 = 0;
     if let Err(e) = unsafe { target.EndDraw(Some(&mut tag1), Some(&mut tag2)) } {
@@ -605,7 +627,10 @@ pub fn render_layered_window(hwnd: HWND) {
     }
 
     // ===== 调用 UpdateLayeredWindow 提交渲染结果 =====
-    let size = POINT { x: w, y: h };
+    let size = POINT {
+        x: outer_w,
+        y: outer_h,
+    };
     let src_pt = POINT { x: 0, y: 0 };
     let blend = BLENDFUNCTION {
         blend_op: AC_SRC_OVER,
@@ -633,8 +658,8 @@ pub fn render_layered_window(hwnd: HWND) {
             log::error!(
                 "UpdateLayeredWindow 提交分类框画面失败: hwnd={:?}, size={}x{}, error={}",
                 hwnd,
-                w,
-                h,
+                outer_w,
+                outer_h,
                 error_code
             );
         }
@@ -659,6 +684,7 @@ fn draw_liquid_glass_background(
     screen_y: i32,
     width: i32,
     height: i32,
+    padding: i32,
     corner_radius: f32,
     dpi_scale: f32,
 ) -> bool {
@@ -668,6 +694,7 @@ fn draw_liquid_glass_background(
         screen_y,
         width,
         height,
+        padding,
         corner_radius,
         dpi_scale,
         &glass_config,
@@ -686,11 +713,11 @@ fn draw_liquid_glass_background(
     let bitmap = unsafe {
         target.CreateBitmap(
             D2D_SIZE_U {
-                width: width as u32,
-                height: height as u32,
+                width: (width + padding * 2) as u32,
+                height: (height + padding * 2) as u32,
             },
             Some(pixels.as_ptr().cast::<c_void>()),
-            width as u32 * std::mem::size_of::<Pixel32>() as u32,
+            (width + padding * 2) as u32 * std::mem::size_of::<Pixel32>() as u32,
             &bitmap_props,
         )
     };
@@ -701,7 +728,12 @@ fn draw_liquid_glass_background(
     unsafe {
         target.DrawBitmap(
             &bitmap,
-            Some(&d2d_rect(0.0, 0.0, width as f32, height as f32)),
+            Some(&d2d_rect(
+                0.0,
+                0.0,
+                (width + padding * 2) as f32,
+                (height + padding * 2) as f32,
+            )),
             1.0,
             D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
             None,

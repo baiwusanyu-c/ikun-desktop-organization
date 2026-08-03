@@ -12,7 +12,7 @@
 use super::d2d_render::render_layered_window;
 use super::ffi_imports::*;
 use super::ffi_types::*;
-use super::grid_window::get_data;
+use super::grid_window::{get_data, get_grid_content_rect};
 
 use crate::config::app_config::{GroupBy, SortMode, ViewMode};
 
@@ -91,13 +91,9 @@ pub fn show_menu_window(parent_hwnd: HWND) {
     let dpi = if dpi > 0 { dpi } else { 96 };
 
     // 获取当前窗口实际尺寸（而非 base_window_w，修复缩放后位置偏移）
-    let mut parent_rect = RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
+    let Some(parent_rect) = get_grid_content_rect(parent_hwnd) else {
+        return;
     };
-    unsafe { GetWindowRect(parent_hwnd, &mut parent_rect) };
     let win_w = parent_rect.right - parent_rect.left;
 
     let (btn_x, btn_y, btn_size) =

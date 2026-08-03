@@ -89,8 +89,9 @@ impl AppConfig {
         if path.exists() {
             let content = std::fs::read_to_string(&path)
                 .map_err(|e| anyhow::anyhow!("无法读取配置文件 {}: {}", path.display(), e))?;
-            let config: AppConfig = serde_json::from_str(&content)
+            let mut config: AppConfig = serde_json::from_str(&content)
                 .map_err(|e| anyhow::anyhow!("配置文件格式错误 {}: {}", path.display(), e))?;
+            config.box_style.liquid_glass.normalize();
             log::info!("加载配置成功: {}", path.display());
             Ok(config)
         } else {
@@ -130,8 +131,9 @@ impl AppConfig {
     pub fn import_from(path: &std::path::Path) -> anyhow::Result<Self> {
         let content =
             std::fs::read_to_string(path).map_err(|e| anyhow::anyhow!("读取配置失败: {}", e))?;
-        let config: AppConfig = serde_json::from_str(&content)
+        let mut config: AppConfig = serde_json::from_str(&content)
             .map_err(|e| anyhow::anyhow!("配置文件格式错误: {}", e))?;
+        config.box_style.liquid_glass.normalize();
         log::info!("导入配置成功: {}", path.display());
         Ok(config)
     }
@@ -279,6 +281,9 @@ impl Default for BoxStyleConfig {
 // LiquidGlassConfig - 液态玻璃渲染参数（对齐 liquid-glass-rs EffectStyle）
 // =============================================================================
 
+/// 液态玻璃圆角半径的控制面板与渲染上限。
+pub const LIQUID_GLASS_CORNER_RADIUS_MAX: f32 = 30.0;
+
 /// 液态玻璃渲染参数，对齐 liquid-glass-rs FrostedLiquid 示例的 EffectStyle。
 ///
 /// - 滑块参数通过 LiquidGlassParam 枚举访问
@@ -296,7 +301,7 @@ pub struct LiquidGlassConfig {
     pub saturation: f32,
     /// 色差偏移（示例滑块 0~20），默认 2.0
     pub chromatic_offset: f32,
-    /// 圆角半径（示例滑块 0~100），默认 32.0
+    /// 圆角半径（控制面板范围 0~30），默认 30.0
     pub corner_radius: f32,
     /// 弹性形变系数（示例滑块 0~1），默认 0.0
     pub elasticity: f32,
@@ -314,7 +319,7 @@ impl Default for LiquidGlassConfig {
             blur_amount: 0.5,
             saturation: 1.40,
             chromatic_offset: 2.0,
-            corner_radius: 32.0,
+            corner_radius: LIQUID_GLASS_CORNER_RADIUS_MAX,
             elasticity: 0.0,
             refraction_mode: 0,
             over_light: false,
@@ -335,6 +340,12 @@ pub enum LiquidGlassParam {
 }
 
 impl LiquidGlassConfig {
+    /// 将持久化或外部传入的配置收敛到当前支持范围。
+    pub(crate) fn normalize(&mut self) {
+        let corner_radius = self.corner_radius;
+        self.set_param(LiquidGlassParam::CornerRadius, corner_radius);
+    }
+
     /// 设置液态玻璃参数
     pub fn set_param(&mut self, param: LiquidGlassParam, value: f32) {
         match param {
@@ -344,7 +355,9 @@ impl LiquidGlassConfig {
             LiquidGlassParam::BlurAmount => self.blur_amount = value.clamp(0.0, 1.0),
             LiquidGlassParam::Saturation => self.saturation = value.clamp(1.0, 3.0),
             LiquidGlassParam::ChromaticOffset => self.chromatic_offset = value.clamp(0.0, 20.0),
-            LiquidGlassParam::CornerRadius => self.corner_radius = value.clamp(0.0, 100.0),
+            LiquidGlassParam::CornerRadius => {
+                self.corner_radius = value.clamp(0.0, LIQUID_GLASS_CORNER_RADIUS_MAX)
+            }
             LiquidGlassParam::Elasticity => self.elasticity = value.clamp(0.0, 1.0),
             LiquidGlassParam::RefractionMode => {
                 self.refraction_mode = value.round().clamp(0.0, 3.0) as u32
@@ -1253,7 +1266,7 @@ mod liquid_glass_tests {
         assert!((config.blur_amount - 0.5).abs() < f32::EPSILON);
         assert!((config.saturation - 1.40).abs() < f32::EPSILON);
         assert!((config.chromatic_offset - 2.0).abs() < f32::EPSILON);
-        assert!((config.corner_radius - 32.0).abs() < f32::EPSILON);
+        assert!((config.corner_radius - LIQUID_GLASS_CORNER_RADIUS_MAX).abs() < f32::EPSILON);
         assert!((config.elasticity - 0.0).abs() < f32::EPSILON);
         assert_eq!(config.refraction_mode, 0);
         assert!(!config.over_light);
@@ -1312,8 +1325,22 @@ mod liquid_glass_tests {
         assert_eq!(config.saturation, 1.0);
         config.set_param(LiquidGlassParam::ChromaticOffset, 99.0);
         assert_eq!(config.chromatic_offset, 20.0);
+        config.set_param(LiquidGlassParam::CornerRadius, 99.0);
+        assert_eq!(config.corner_radius, LIQUID_GLASS_CORNER_RADIUS_MAX);
         config.set_param(LiquidGlassParam::RefractionMode, 99.0);
         assert_eq!(config.refraction_mode, 3);
+    }
+
+    #[test]
+    fn test_liquid_glass_normalizes_legacy_corner_radius() {
+        let mut config = LiquidGlassConfig {
+            corner_radius: 100.0,
+            ..LiquidGlassConfig::default()
+        };
+
+        config.normalize();
+
+        assert_eq!(config.corner_radius, LIQUID_GLASS_CORNER_RADIUS_MAX);
     }
 
     #[test]
@@ -1384,7 +1411,10 @@ mod liquid_glass_tests {
             (LiquidGlassParam::BlurAmount, 0.75),
             (LiquidGlassParam::Saturation, 2.0),
             (LiquidGlassParam::ChromaticOffset, 3.0),
-            (LiquidGlassParam::CornerRadius, 40.0),
+            (
+                LiquidGlassParam::CornerRadius,
+                LIQUID_GLASS_CORNER_RADIUS_MAX,
+            ),
             (LiquidGlassParam::Elasticity, 0.3),
             (LiquidGlassParam::RefractionMode, 1.0),
         ];

@@ -63,7 +63,13 @@ pub fn render_settings_panel(ctx: &mut AppContext, ui: &mut egui::Ui) {
                 .add(egui::Slider::new(&mut glass.elasticity, 0.0..=1.0).text("弹性形变"))
                 .changed();
             changed |= ui
-                .add(egui::Slider::new(&mut glass.corner_radius, 0.0..=100.0).text("圆角半径"))
+                .add(
+                    egui::Slider::new(
+                        &mut glass.corner_radius,
+                        0.0..=crate::config::LIQUID_GLASS_CORNER_RADIUS_MAX,
+                    )
+                    .text("圆角半径"),
+                )
                 .changed();
             ui.horizontal(|ui| {
                 ui.label("折射贴图:");

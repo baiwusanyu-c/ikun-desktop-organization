@@ -1,0 +1,7 @@
+{"file": ".trellis/workflow.md", "reason": "项目工作流与任务约定"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Rust 后端与平台层开发规范"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "液态玻璃配置持久化约束"}
+{"file": ".trellis/spec/backend/windows-platform-guidelines.md", "reason": "Windows 分层窗口与 D2D/D3D 渲染约束"}
+{"file": ".trellis/spec/guides/windows-layered-window-guide.md", "reason": "WS_EX_LAYERED alpha 与窗口边界行为"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "设置 UI、配置与平台渲染跨层同步"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "圆角上限使用单一事实来源"}

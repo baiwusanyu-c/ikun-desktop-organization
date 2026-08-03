@@ -296,6 +296,50 @@ pub(super) fn get_grid_list() -> Result<
 }
 static CLASS_REGISTERED: Mutex<bool> = Mutex::new(false);
 
+/// 液态玻璃外投影在分类框四周预留的逻辑像素。
+///
+/// 128px 可覆盖最强亮区模式下约 3 倍高斯标准差加垂直偏移，避免投影在
+/// `WS_EX_LAYERED` 窗口边界被矩形裁切。
+pub(crate) const LIQUID_GLASS_SHADOW_PADDING: i32 = 128;
+
+/// 返回当前 DPI 下液态玻璃外投影所需的物理像素留白。
+pub(crate) fn shadow_padding_for_dpi(dpi: u32) -> i32 {
+    scale_for_dpi(LIQUID_GLASS_SHADOW_PADDING, dpi.max(1))
+}
+
+/// 将分层窗口外部矩形转换为用户可见的分类框内容矩形。
+pub(crate) fn content_rect_from_window_rect(rect: RECT, dpi: u32) -> RECT {
+    let padding = shadow_padding_for_dpi(dpi);
+    RECT {
+        left: rect.left + padding,
+        top: rect.top + padding,
+        right: rect.right - padding,
+        bottom: rect.bottom - padding,
+    }
+}
+
+/// 获取分类框用户可见内容的屏幕坐标矩形。
+pub(crate) fn get_grid_content_rect(hwnd: HWND) -> Option<RECT> {
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
+        return None;
+    }
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    let dpi = if dpi > 0 { dpi } else { 96 };
+    Some(content_rect_from_window_rect(rect, dpi))
+}
+
+/// 将窗口客户区坐标转换为分类框内容坐标。
+pub(crate) fn client_to_content_point(dpi: u32, x: i32, y: i32) -> (i32, i32) {
+    let padding = shadow_padding_for_dpi(dpi);
+    (x - padding, y - padding)
+}
+
 static CLASS_NAME: &[u16] = &[
     68, 101, 115, 107, 116, 111, 112, 79, 114, 103, 71, 114, 105, 100, 0,
 ]; // "DesktopOrgGrid"
@@ -363,8 +407,11 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
 
     // 先用初始 DPI 创建窗口，创建后查询实际 DPI 并重新计算尺寸
     let initial_dpi: u32 = 96;
-    let initial_w = scale_for_dpi(params.width, initial_dpi);
-    let initial_h = scale_for_dpi(params.height, initial_dpi);
+    let initial_padding = shadow_padding_for_dpi(initial_dpi);
+    let initial_w = scale_for_dpi(params.width, initial_dpi) + initial_padding * 2;
+    let initial_h = scale_for_dpi(params.height, initial_dpi) + initial_padding * 2;
+    let initial_x = params.x - initial_padding;
+    let initial_y = params.y - initial_padding;
 
     // 1. 创建主窗口（WS_EX_LAYERED 用于 UpdateLayeredWindow 逐像素 alpha）
     let hwnd = unsafe {
@@ -373,8 +420,8 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
             CLASS_NAME.as_ptr(),
             std::ptr::null(),
             WS_POPUP | WS_VISIBLE | WS_THICKFRAME,
-            params.x,
-            params.y,
+            initial_x,
+            initial_y,
             initial_w,
             initial_h,
             std::ptr::null_mut(),
@@ -405,6 +452,11 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
     let scaled_h = scale_for_dpi(params.height, dpi);
     let scaled_x = scale_for_dpi(params.x, dpi);
     let scaled_y = scale_for_dpi(params.y, dpi);
+    let shadow_padding = shadow_padding_for_dpi(dpi);
+    let outer_x = scaled_x - shadow_padding;
+    let outer_y = scaled_y - shadow_padding;
+    let outer_w = scaled_w + shadow_padding * 2;
+    let outer_h = scaled_h + shadow_padding * 2;
     let title_h = scale_for_dpi(40, dpi);
 
     // 通过 view_engine 获取视图参数（参数化，支持 8 种视图模式）
@@ -423,20 +475,21 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
             SetWindowPos(
                 hwnd,
                 std::ptr::null_mut(),
-                scaled_x,
-                scaled_y,
-                scaled_w,
-                scaled_h,
+                outer_x,
+                outer_y,
+                outer_w,
+                outer_h,
                 SWP_NOZORDER,
             );
         }
         log::info!(
-            "DPI 自适应: {} -> 位置 ({},{}), 尺寸 {}x{}, title_h={}, icon_size={}, cols={}",
+            "DPI 自适应: {} -> 内容位置 ({},{}), 内容尺寸 {}x{}, shadow_padding={}, title_h={}, icon_size={}, cols={}",
             dpi,
             scaled_x,
             scaled_y,
             scaled_w,
             scaled_h,
+            shadow_padding,
             title_h,
             icon_size,
             cols
@@ -713,14 +766,10 @@ pub fn collect_grid_layout() -> Vec<crate::config::BoxLayoutData> {
         let dpi = unsafe { GetDpiForWindow(grid.hwnd) };
         let dpi = if dpi > 0 { dpi } else { 96 };
 
-        // 读取窗口当前位置和尺寸（物理像素）
-        let mut wr = RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
+        // 读取用户可见内容矩形（排除透明外投影留白）。
+        let Some(wr) = get_grid_content_rect(grid.hwnd) else {
+            continue;
         };
-        unsafe { GetWindowRect(grid.hwnd, &mut wr) };
 
         // 物理像素 → 逻辑像素（DPI 96 基准），避免恢复时双重缩放
         let x = (wr.left as f32 * 96.0) / dpi as f32;
@@ -814,6 +863,44 @@ pub(crate) unsafe fn get_data<'a>(hwnd: HWND) -> Option<&'a mut GridWindowData> 
 mod tests {
     use super::super::grid_layout::{lock_btn_rect, more_btn_rect};
     use super::*;
+
+    #[test]
+    fn shadow_padding_preserves_content_rect_at_96_dpi() {
+        let outer = RECT {
+            left: 72,
+            top: 172,
+            right: 728,
+            bottom: 828,
+        };
+        let content = content_rect_from_window_rect(outer, 96);
+
+        assert_eq!(content.left, 200);
+        assert_eq!(content.top, 300);
+        assert_eq!(content.right, 600);
+        assert_eq!(content.bottom, 700);
+        assert_eq!(client_to_content_point(96, 128, 128), (0, 0));
+        assert_eq!(client_to_content_point(96, 528, 528), (400, 400));
+    }
+
+    #[test]
+    fn shadow_padding_scales_with_dpi() {
+        assert_eq!(shadow_padding_for_dpi(144), 192);
+        let content = content_rect_from_window_rect(
+            RECT {
+                left: -92,
+                top: 8,
+                right: 692,
+                bottom: 792,
+            },
+            144,
+        );
+
+        assert_eq!(content.left, 100);
+        assert_eq!(content.top, 200);
+        assert_eq!(content.right, 500);
+        assert_eq!(content.bottom, 600);
+        assert_eq!(client_to_content_point(144, 192, 192), (0, 0));
+    }
 
     // ===== lock_btn_rect 计算验证 =====
 

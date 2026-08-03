@@ -267,6 +267,89 @@ This guide was created after **7 failed debug attempts** (commits de9ed40 throug
 
 ---
 
+## Rounded Shadow Clipping at Window Bounds
+
+### Problem
+
+`src/platform/windows/liquid_glass.rs` renders a rounded glass body and a blurred outer shadow into a D3D11 texture whose dimensions exactly match the `WS_EX_LAYERED` classification window. The glass body is rounded, but the shadow develops straight horizontal or vertical ends near the corners.
+
+### Root Cause
+
+An outer shadow needs transparent pixels beyond the content bounds. When all three bounds are identical, there is no overflow area:
+
+```text
+rounded glass bounds == D3D11 output texture == native layered window
+padding == 0
+```
+
+The shader can calculate shadow pixels outside the rounded SDF, but pixels outside the render target and native window do not exist. The GPU and `UpdateLayeredWindow` clip the blurred shadow to a rectangle, producing a visible right-angle intersection at the window edge.
+
+### Supported Patterns
+
+```hlsl
+// Good: no outer shadow when the surface is exactly window-sized.
+return float4(col * glassAlpha, glassAlpha);
+```
+
+When an outer shadow is required, use a padded native window:
+
+```text
+native window = content bounds + transparent shadow padding on every side
+render target = native window bounds
+content origin = (padding_left, padding_top)
+```
+
+The padded-window design must update these consumers together:
+
+- `grid_window.rs`: native bounds and persisted content position conversion
+- `d2d_render.rs`: content origin for title, icons, resize borders and bitmap draw
+- `wnd_proc.rs`: hit testing and resize edges
+- drag/drop code: screen/client coordinate conversion
+- `liquid_glass.rs`: `lens_size`, `padding`, capture rectangle and scissor rectangle
+
+### Coordinate Contract
+
+| Producer / API | Coordinate space | Required conversion before layout or hit testing |
+|---|---|---|
+| `WM_MOUSEMOVE`, `WM_LBUTTONDOWN`, `WM_LBUTTONDBLCLK`, `WM_RBUTTONUP` | layered-window client coordinates | `ClientToScreen`, then subtract `get_grid_content_rect(hwnd).left/top`; `client_to_content_point` is the fallback |
+| `WM_NCHITTEST`, OLE drop points, drag timer cursor points | screen coordinates | subtract `get_grid_content_rect(hwnd).left/top` |
+| `WM_SIZE`, `WM_DPICHANGED`, `WM_GETMINMAXINFO` | expanded native-window size | subtract/add `2 * shadow_padding_for_dpi(dpi)` when crossing the content-size boundary |
+| `WM_MOVING`, `WM_SIZING` proposed `RECT` | expanded native-window screen rectangle | pass a copied `content_rect_from_window_rect(rect, dpi)` to alignment detection; never mutate the OS proposal into content bounds |
+| configuration persistence | logical content rectangle | read `get_grid_content_rect(hwnd)`, then convert physical pixels to 96-DPI logical pixels |
+
+`find_grid_window_at_point` must test only `get_grid_content_rect`; otherwise a cursor over another window can be misclassified as being over an invisible shadow-padding region.
+
+Failure behavior:
+
+| Failure | Required result |
+|---|---|
+| `GetWindowRect` / `get_grid_content_rect` fails | skip layout/drop/menu work; do not synthesize a `(0, 0)` target |
+| Cursor is inside shadow padding but outside content | return `HTTRANSPARENT` and clear resize hover state |
+| DPI query returns `0` | use 96 DPI consistently for both padding and content conversion |
+
+### Bad Pattern
+
+```hlsl
+// Bad: outer-effect alpha without render-target and native-window padding.
+float alpha = glassAlpha + shadow * (1 - glassAlpha);
+```
+
+### Verification
+
+- Automated: `cargo test shader_renders_outer_shadow_into_padded_surface` and content-coordinate conversion tests in `grid_window.rs`
+- Manual: inspect all four corners over light and dark wallpaper at 100%, 125% and 150% DPI
+- Regression: resize the classification window and confirm no extra straight edge appears along the old bounds
+- Interaction: verify title dragging, all resize edges, title buttons, title double-click, icon click/drag/marquee and cross-window drops
+
+### Prevention Checklist
+
+- [ ] Does the effect sample or draw outside the content SDF?
+- [ ] Is there actual transparent space in both the render target and native window?
+- [ ] Is `padding` reflected in drawing, hit testing, drag/drop and persisted coordinates?
+- [ ] If padding is intentionally zero, is outer-effect alpha disabled or clipped to the content mask?
+
+---
+
 ## Drag and Drop on Layered Windows
 
 > Lessons learned from fixing 7 drag-related bugs in 2 days
