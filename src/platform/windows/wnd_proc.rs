@@ -37,6 +37,14 @@ use super::zorder::{
 use crate::box_core::layout_calc::calculate_grid;
 use crate::box_core::view_engine::get_view_params;
 
+// 跟踪拖拽状态，用于检测 Windows 是否 clamp 了窗口位置
+thread_local! {
+    static IN_DRAG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static IN_MOVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };  // 区分拖拽移动和边缘缩放
+    static PROPOSED_X: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
+    static PROPOSED_Y: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
+}
+
 fn window_dpi(hwnd: HWND) -> u32 {
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     if dpi > 0 {
@@ -1424,6 +1432,22 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         // 将分类框强制放到 Z-order 底部（HWND_BOTTOM），然后通过延迟消息
         // 将其他分类框也推到底部，使被激活的分类框在分类框组中保持最前。
         WM_WINDOWPOSCHANGING => {
+            // 检测 Windows 是否 clamp 了窗口位置（将负坐标强制改为 0）
+            // 只在拖拽移动时应用，边缘缩放时不应用
+            if IN_DRAG.get() && IN_MOVE.get() {
+                let wp_ptr = lparam as *mut WINDOWPOS;
+                if !wp_ptr.is_null() {
+                    let wp = unsafe { &mut *wp_ptr };
+                    if wp.flags & SWP_NOMOVE == 0 {
+                        let expected_x = PROPOSED_X.get();
+                        let expected_y = PROPOSED_Y.get();
+                        if wp.x != expected_x || wp.y != expected_y {
+                            wp.x = expected_x;
+                            wp.y = expected_y;
+                        }
+                    }
+                }
+            }
             // 拖拽进行中不干预 Z-order，否则 OLE hit-testing 无法检测到目标窗口
             if !is_zorder_suppressing() && !is_drag_in_progress() {
                 let windowpos = lparam as *mut WINDOWPOS;
@@ -1451,12 +1475,15 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         }
         // ===== Enter move/resize mode: start alignment detection =====
         WM_ENTERSIZEMOVE => {
+            IN_DRAG.set(true);
             super::alignment_guide::on_enter_size_move(hwnd);
             0
         }
 
         // ===== Exit move/resize mode: clear guide lines =====
         WM_EXITSIZEMOVE => {
+            IN_DRAG.set(false);
+            IN_MOVE.set(false);  // 重置移动标记
             super::alignment_guide::on_exit_size_move(hwnd);
             // Save layout after move/resize
             super::drag_handler::save_config();
@@ -1465,9 +1492,13 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
 
         // ===== Moving: detect alignment and show guide lines =====
         WM_MOVING => {
+            IN_MOVE.set(true);  // 标记这是拖拽移动
             let proposed_rect = lparam as *mut RECT;
             if !proposed_rect.is_null() {
                 let rect = unsafe { &mut *proposed_rect };
+                // 保存用户期望的位置
+                PROPOSED_X.set(rect.left);
+                PROPOSED_Y.set(rect.top);
                 super::alignment_guide::on_moving(hwnd, rect);
             }
             0
