@@ -1,4 +1,4 @@
-//! 分类框液态玻璃 GPU 渲染器（对齐 liquid-glass-rs/examples 实现）
+﻿//! 分类框液态玻璃 GPU 渲染器（对齐 liquid-glass-rs/examples 实现）
 //!
 //! 使用 DXGI Desktop Duplication 捕获显示器画面，通过 D2D Effect Graph
 //! (Crop -> Border -> GaussianBlur -> ColorMatrix) 处理纹理，再通过自定义
@@ -210,6 +210,7 @@ struct Constants {
 
 struct CaptureOutput {
     rect: WinRect,
+    output1: IDXGIOutput1,
     duplication: IDXGIOutputDuplication,
     hdr_active: bool,
     desktop_texture: Option<ID3D11Texture2D>,
@@ -291,6 +292,7 @@ pub fn render_background(
         return None;
     }
 
+    log::debug!("[LG] render_background called: {}x{}+{} padding={}", content_width, content_height, screen_x, padding);
     GLASS_STATE.with(|state| {
         let mut state = match state.try_borrow_mut() {
             Ok(s) => s,
@@ -333,7 +335,7 @@ pub fn render_background(
             dpi_scale,
             glass_config,
         ) {
-            Ok(pixels) => Some(pixels),
+            Ok(pixels) => { log::debug!("[LG] render OK, {} pixels", pixels.len()); Some(pixels) }
             Err(error) => {
                 log::warn!("液态玻璃帧渲染失败，回退半透明背景: {error:#}");
                 *state = GlassState::Failed {
@@ -420,6 +422,7 @@ fn create_outputs(device: &ID3D11Device) -> Result<Vec<CaptureOutput>> {
             let desc = output.GetDesc()?;
             outputs.push(CaptureOutput {
                 rect: desc.DesktopCoordinates,
+                output1: output1.clone(),
                 duplication,
                 hdr_active: false,
                 desktop_texture: None,
@@ -603,6 +606,30 @@ impl GlassRenderer {
         }
     }
 
+    /// Rebuild the IDXGIOutputDuplication for a specific output after DXGI_ERROR_ACCESS_LOST.
+    /// This is much cheaper than recreating the entire GlassRenderer and avoids
+    /// the 3-second fallback to semi-transparent background during window resize.
+    fn rebuild_duplication(&mut self, index: usize) -> Result<()> {
+        unsafe {
+            let output = &mut self.outputs[index];
+            // Release any held frame (best-effort; may already be released)
+            let _ = output.duplication.ReleaseFrame();
+            // Create a new duplication from the stored IDXGIOutput1 reference
+            let new_duplication = output.output1.DuplicateOutput(&self.device)?;
+            output.duplication = new_duplication;
+            // Clear cached textures so they get recreated with the new duplication
+            output.desktop_texture = None;
+            output.desktop_view = None;
+            output.blurred_texture = None;
+            output.blurred_view = None;
+            log::info!(
+                "液态玻璃 DXGI Output Duplication 已重建 (index={})", 
+                index
+            );
+            Ok(())
+        }
+    }
+
     fn capture_output(&mut self, index: usize) -> Result<()> {
         unsafe {
             let output = &mut self.outputs[index];
@@ -614,10 +641,13 @@ impl GlassRenderer {
 
             if let Err(e) = acquire {
                 if e.code() == DXGI_ERROR_WAIT_TIMEOUT {
+                    log::debug!("[LG] capture WAIT_TIMEOUT, desktop_texture={}", output.desktop_texture.is_some());
                     return Ok(());
                 }
                 if e.code() == DXGI_ERROR_ACCESS_LOST {
-                    return Err(anyhow!("桌面捕获访问丢失"));
+                    // DXGI desktop capture access lost — rebuild duplication instead of
+                    // failing the entire renderer. This is common during rapid window resize.
+                    return self.rebuild_duplication(index);
                 }
                 return Err(e.into());
             }
@@ -842,15 +872,6 @@ impl GlassRenderer {
 
     fn ensure_surfaces(&mut self, width: u32, height: u32) -> Result<()> {
         if self.surfaces.contains_key(&(width, height)) {
-            if self.surfaces.len() > MAX_SURFACE_CACHE_ENTRIES {
-                let keys: Vec<_> = self.surfaces.keys().copied().collect();
-                for key in keys
-                    .iter()
-                    .take(self.surfaces.len() - MAX_SURFACE_CACHE_ENTRIES)
-                {
-                    self.surfaces.remove(key);
-                }
-            }
             return Ok(());
         }
 
@@ -901,6 +922,23 @@ impl GlassRenderer {
                     staging_texture,
                 },
             );
+
+            // Evict oldest entries AFTER insertion, never evict the current key.
+            // HashMap iteration order is non-deterministic, so we explicitly skip
+            // the key we just inserted to avoid use-after-evict.
+            while self.surfaces.len() > MAX_SURFACE_CACHE_ENTRIES {
+                let evict_key = self
+                    .surfaces
+                    .keys()
+                    .copied()
+                    .find(|k| *k != (width, height));
+                if let Some(k) = evict_key {
+                    log::debug!("[LG] evict surface cache: {:?}", k);
+                    self.surfaces.remove(&k);
+                } else {
+                    break;
+                }
+            }
             Ok(())
         }
     }
@@ -1063,8 +1101,7 @@ impl GlassRenderer {
             let surfaces = self
                 .surfaces
                 .get(&(surface_width, surface_height))
-                .context("渲染表面未创建")?;
-
+                .ok_or_else(|| { log::warn!("[LG] surfaces.get FAILED for {}x{}, cache_len={}", surface_width, surface_height, self.surfaces.len()); anyhow::anyhow!("渲染表面未创建") })?;
             self.context
                 .OMSetRenderTargets(Some(&[Some(surfaces.output_target.clone())]), None);
             self.context
