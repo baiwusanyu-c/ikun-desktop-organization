@@ -283,6 +283,8 @@ impl Default for BoxStyleConfig {
 
 /// 液态玻璃圆角半径的控制面板与渲染上限。
 pub const LIQUID_GLASS_CORNER_RADIUS_MAX: f32 = 30.0;
+/// 弹性形变系数最大值
+pub const LIQUID_GLASS_ELASTICITY_MAX: f32 = 0.2;
 
 /// 液态玻璃渲染参数，对齐 liquid-glass-rs FrostedLiquid 示例的 EffectStyle。
 ///
@@ -320,7 +322,7 @@ impl Default for LiquidGlassConfig {
             saturation: 1.40,
             chromatic_offset: 2.0,
             corner_radius: LIQUID_GLASS_CORNER_RADIUS_MAX,
-            elasticity: 0.0,
+            elasticity: 0.02,
             refraction_mode: 0,
             over_light: false,
         }
@@ -344,6 +346,8 @@ impl LiquidGlassConfig {
     pub(crate) fn normalize(&mut self) {
         let corner_radius = self.corner_radius;
         self.set_param(LiquidGlassParam::CornerRadius, corner_radius);
+        let elasticity = self.elasticity;
+        self.set_param(LiquidGlassParam::Elasticity, elasticity);
     }
 
     /// 设置液态玻璃参数
@@ -358,7 +362,9 @@ impl LiquidGlassConfig {
             LiquidGlassParam::CornerRadius => {
                 self.corner_radius = value.clamp(0.0, LIQUID_GLASS_CORNER_RADIUS_MAX)
             }
-            LiquidGlassParam::Elasticity => self.elasticity = value.clamp(0.0, 1.0),
+            LiquidGlassParam::Elasticity => {
+                self.elasticity = value.clamp(0.0, LIQUID_GLASS_ELASTICITY_MAX)
+            }
             LiquidGlassParam::RefractionMode => {
                 self.refraction_mode = value.round().clamp(0.0, 3.0) as u32
             }
@@ -1267,7 +1273,7 @@ mod liquid_glass_tests {
         assert!((config.saturation - 1.40).abs() < f32::EPSILON);
         assert!((config.chromatic_offset - 2.0).abs() < f32::EPSILON);
         assert!((config.corner_radius - LIQUID_GLASS_CORNER_RADIUS_MAX).abs() < f32::EPSILON);
-        assert!((config.elasticity - 0.0).abs() < f32::EPSILON);
+        assert!((config.elasticity - 0.02).abs() < f32::EPSILON);
         assert_eq!(config.refraction_mode, 0);
         assert!(!config.over_light);
     }
@@ -1293,8 +1299,8 @@ mod liquid_glass_tests {
         config.set_param(LiquidGlassParam::CornerRadius, 24.0);
         assert!((config.get_param(LiquidGlassParam::CornerRadius) - 24.0).abs() < f32::EPSILON);
 
-        config.set_param(LiquidGlassParam::Elasticity, 0.5);
-        assert!((config.get_param(LiquidGlassParam::Elasticity) - 0.5).abs() < f32::EPSILON);
+        config.set_param(LiquidGlassParam::Elasticity, 0.1);
+        assert!((config.get_param(LiquidGlassParam::Elasticity) - 0.1).abs() < f32::EPSILON);
 
         config.set_param(LiquidGlassParam::RefractionMode, 2.0);
         assert!((config.get_param(LiquidGlassParam::RefractionMode) - 2.0).abs() < f32::EPSILON);
@@ -1415,7 +1421,7 @@ mod liquid_glass_tests {
                 LiquidGlassParam::CornerRadius,
                 LIQUID_GLASS_CORNER_RADIUS_MAX,
             ),
-            (LiquidGlassParam::Elasticity, 0.3),
+            (LiquidGlassParam::Elasticity, 0.15),
             (LiquidGlassParam::RefractionMode, 1.0),
         ];
 
@@ -1467,7 +1473,11 @@ mod liquid_glass_tests {
                 999.0,
                 LIQUID_GLASS_CORNER_RADIUS_MAX,
             ),
-            (LiquidGlassParam::Elasticity, 5.0, 1.0),
+            (
+                LiquidGlassParam::Elasticity,
+                5.0,
+                LIQUID_GLASS_ELASTICITY_MAX,
+            ),
         ];
         for (param, input, expected) in over_max_params.iter() {
             config.set_param(*param, *input);
@@ -1506,5 +1516,136 @@ mod liquid_glass_tests {
         };
         config.normalize();
         assert!((config.corner_radius - LIQUID_GLASS_CORNER_RADIUS_MAX).abs() < f32::EPSILON);
+    }
+
+    // ===== 弹性形变参数范围测试（v2.1 新增） =====
+
+    #[test]
+    fn test_elasticity_max_constant_value() {
+        // 验证 LIQUID_GLASS_ELASTICITY_MAX 常量为 0.2
+        assert!(
+            (LIQUID_GLASS_ELASTICITY_MAX - 0.2).abs() < f32::EPSILON,
+            "LIQUID_GLASS_ELASTICITY_MAX should be 0.2, got {}",
+            LIQUID_GLASS_ELASTICITY_MAX
+        );
+    }
+
+    #[test]
+    fn test_elasticity_default_value() {
+        // 验证弹性形变默认值为 0.02
+        let config = LiquidGlassConfig::default();
+        assert!(
+            (config.elasticity - 0.02).abs() < f32::EPSILON,
+            "Default elasticity should be 0.02, got {}",
+            config.elasticity
+        );
+    }
+
+    #[test]
+    fn test_elasticity_set_param_clamps_to_max() {
+        // 验证 set_param 将超出 LIQUID_GLASS_ELASTICITY_MAX 的值钳位
+        let mut config = LiquidGlassConfig::default();
+        config.set_param(LiquidGlassParam::Elasticity, 0.5);
+        assert!(
+            (config.elasticity - LIQUID_GLASS_ELASTICITY_MAX).abs() < f32::EPSILON,
+            "Elasticity should be clamped to {}, got {}",
+            LIQUID_GLASS_ELASTICITY_MAX,
+            config.elasticity
+        );
+    }
+
+    #[test]
+    fn test_elasticity_set_param_clamps_negative() {
+        // 验证 set_param 将负值钳位到 0
+        let mut config = LiquidGlassConfig::default();
+        config.set_param(LiquidGlassParam::Elasticity, -0.1);
+        assert!(
+            (config.elasticity - 0.0).abs() < f32::EPSILON,
+            "Negative elasticity should be clamped to 0, got {}",
+            config.elasticity
+        );
+    }
+
+    #[test]
+    fn test_elasticity_set_param_accepts_valid_range() {
+        // 验证 set_param 接受 [0, LIQUID_GLASS_ELASTICITY_MAX] 范围内的值
+        let mut config = LiquidGlassConfig::default();
+        let valid_values = [0.0, 0.01, 0.02, 0.1, 0.15, LIQUID_GLASS_ELASTICITY_MAX];
+        for &value in &valid_values {
+            config.set_param(LiquidGlassParam::Elasticity, value);
+            assert!(
+                (config.elasticity - value).abs() < f32::EPSILON,
+                "set_param should accept {}, got {}",
+                value,
+                config.elasticity
+            );
+        }
+    }
+
+    #[test]
+    fn test_normalize_clamps_elasticity_over_max() {
+        // 验证 normalize() 将超出 LIQUID_GLASS_ELASTICITY_MAX 的值钳位
+        let mut config = LiquidGlassConfig {
+            elasticity: 0.5,
+            ..LiquidGlassConfig::default()
+        };
+        config.normalize();
+        assert!(
+            (config.elasticity - LIQUID_GLASS_ELASTICITY_MAX).abs() < f32::EPSILON,
+            "normalize() should clamp elasticity to {}, got {}",
+            LIQUID_GLASS_ELASTICITY_MAX,
+            config.elasticity
+        );
+    }
+
+    #[test]
+    fn test_normalize_clamps_negative_elasticity() {
+        // 验证 normalize() 将负值钳位到 0
+        let mut config = LiquidGlassConfig {
+            elasticity: -0.1,
+            ..LiquidGlassConfig::default()
+        };
+        config.normalize();
+        assert!(
+            (config.elasticity - 0.0).abs() < f32::EPSILON,
+            "normalize() should clamp negative elasticity to 0, got {}",
+            config.elasticity
+        );
+    }
+
+    #[test]
+    fn test_normalize_preserves_valid_elasticity() {
+        // 验证 normalize() 保留 [0, LIQUID_GLASS_ELASTICITY_MAX] 范围内的值
+        let mut config = LiquidGlassConfig {
+            elasticity: 0.1,
+            ..LiquidGlassConfig::default()
+        };
+        config.normalize();
+        assert!(
+            (config.elasticity - 0.1).abs() < f32::EPSILON,
+            "normalize() should preserve valid elasticity 0.1, got {}",
+            config.elasticity
+        );
+    }
+
+    #[test]
+    fn test_elasticity_boundary_values() {
+        // 验证边界值处理：0 和 LIQUID_GLASS_ELASTICITY_MAX
+        let mut config = LiquidGlassConfig::default();
+
+        // 下边界
+        config.set_param(LiquidGlassParam::Elasticity, 0.0);
+        assert!((config.elasticity - 0.0).abs() < f32::EPSILON);
+
+        // 上边界
+        config.set_param(LiquidGlassParam::Elasticity, LIQUID_GLASS_ELASTICITY_MAX);
+        assert!((config.elasticity - LIQUID_GLASS_ELASTICITY_MAX).abs() < f32::EPSILON);
+
+        // 略超上边界
+        config.set_param(
+            LiquidGlassParam::Elasticity,
+            LIQUID_GLASS_ELASTICITY_MAX + 0.01,
+        );
+        assert!((config.elasticity - LIQUID_GLASS_ELASTICITY_MAX).abs() < f32::EPSILON);
     }
 }

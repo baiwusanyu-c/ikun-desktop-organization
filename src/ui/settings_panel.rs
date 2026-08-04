@@ -60,7 +60,13 @@ pub fn render_settings_panel(ctx: &mut AppContext, ui: &mut egui::Ui) {
                 .add(egui::Slider::new(&mut glass.chromatic_offset, 0.0..=20.0).text("色差偏移"))
                 .changed();
             changed |= ui
-                .add(egui::Slider::new(&mut glass.elasticity, 0.0..=1.0).text("弹性形变"))
+                .add(
+                    egui::Slider::new(
+                        &mut glass.elasticity,
+                        0.0..=crate::config::LIQUID_GLASS_ELASTICITY_MAX,
+                    )
+                    .text("弹性形变"),
+                )
                 .changed();
             changed |= ui
                 .add(

@@ -1,4 +1,4 @@
-//! 液态玻璃效果设置面板（对齐 liquid-glass-rs FrostedLiquid EffectStyle）
+﻿//! 液态玻璃效果设置面板（对齐 liquid-glass-rs FrostedLiquid EffectStyle）
 
 use crate::gpui_app::app_runtime::AppRuntime;
 use gpui::{
@@ -70,7 +70,7 @@ const PARAMS: &[ParamDef] = &[
         param: crate::config::LiquidGlassParam::Elasticity,
         label: "弹性形变",
         min: 0.0,
-        max: 1.0,
+        max: crate::config::LIQUID_GLASS_ELASTICITY_MAX,
         step: 0.01,
         format: ParamFormat::Number,
     },

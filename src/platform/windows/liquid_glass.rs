@@ -1004,17 +1004,25 @@ impl GlassRenderer {
         let hdr_active = output.hdr_active;
 
         let mut cursor = POINT::default();
-        let target_light = unsafe {
+        let surface_w = (content_width + padding * 2) as i32;
+        let surface_h = (content_height + padding * 2) as i32;
+        let cursor_in_window = unsafe {
             if GetCursorPos(&mut cursor).is_ok() {
-                [
-                    cursor.x as f32
-                        - (screen_x as f32 + padding as f32 + content_width as f32 * 0.5),
-                    cursor.y as f32
-                        - (screen_y as f32 + padding as f32 + content_height as f32 * 0.5),
-                ]
+                cursor.x >= screen_x
+                    && cursor.x < screen_x + surface_w
+                    && cursor.y >= screen_y
+                    && cursor.y < screen_y + surface_h
             } else {
-                [0.0, 0.0]
+                false
             }
+        };
+        let target_light = if cursor_in_window {
+            [
+                cursor.x as f32 - (screen_x as f32 + padding as f32 + content_width as f32 * 0.5),
+                cursor.y as f32 - (screen_y as f32 + padding as f32 + content_height as f32 * 0.5),
+            ]
+        } else {
+            [0.0, 0.0]
         };
         const LIGHT_BLEND: f32 = 0.14;
         self.light_direction[0] += (target_light[0] - self.light_direction[0]) * LIGHT_BLEND;
@@ -1032,6 +1040,7 @@ impl GlassRenderer {
             dpi_scale,
             hdr_active,
             glass_config,
+            cursor_in_window,
         )
     }
 
@@ -1048,6 +1057,7 @@ impl GlassRenderer {
         dpi_scale: f32,
         hdr_active: bool,
         glass_config: &LiquidGlassConfig,
+        cursor_in_window: bool,
     ) -> Result<Vec<Pixel32>> {
         let surface_width = content_width + padding * 2;
         let surface_height = content_height + padding * 2;
@@ -1096,10 +1106,18 @@ impl GlassRenderer {
             control_settings: [
                 if glass_config.over_light { 1.0 } else { 0.0 },
                 dpi_scale,
-                glass_config.elasticity,
+                if cursor_in_window {
+                    glass_config.elasticity
+                } else {
+                    0.0
+                },
                 corner_radius.min(content_height as f32 * 0.5) * dpi_scale,
             ],
-            mouse_offset: self.light_direction,
+            mouse_offset: if cursor_in_window {
+                self.light_direction
+            } else {
+                [0.0, 0.0]
+            },
             interaction_padding: [
                 if hdr_active { 1.0 } else { 0.0 },
                 glass_config.refraction_mode as f32,
@@ -1232,5 +1250,144 @@ mod tests {
         assert!(SHADER.contains("shadow*(1-glassAlpha)"));
         assert!(SHADER.contains("local=px-padding"));
         assert!(SHADER.contains("lensSize"));
+    }
+
+    // ===== 单框弹性形变响应测试（v2.1 新增） =====
+
+    /// 验证 cursor_in_window 判断逻辑：鼠标在窗口内
+    #[test]
+    fn test_cursor_in_window_detection_inside() {
+        // 模拟窗口位置：screen_x=100, screen_y=100, surface_w=400, surface_h=300
+        let screen_x = 100i32;
+        let screen_y = 100i32;
+        let surface_w = 400i32;
+        let surface_h = 300i32;
+
+        // 鼠标在窗口中心
+        let cursor_x = 300i32;
+        let cursor_y = 250i32;
+
+        let in_window = cursor_x >= screen_x
+            && cursor_x < screen_x + surface_w
+            && cursor_y >= screen_y
+            && cursor_y < screen_y + surface_h;
+
+        assert!(
+            in_window,
+            "Cursor at ({}, {}) should be inside window",
+            cursor_x, cursor_y
+        );
+    }
+
+    /// 验证 cursor_in_window 判断逻辑：鼠标在窗口外
+    #[test]
+    fn test_cursor_in_window_detection_outside() {
+        let screen_x = 100i32;
+        let screen_y = 100i32;
+        let surface_w = 400i32;
+        let surface_h = 300i32;
+
+        // 鼠标在窗口右侧外部
+        let cursor_x = 600i32;
+        let cursor_y = 250i32;
+
+        let in_window = cursor_x >= screen_x
+            && cursor_x < screen_x + surface_w
+            && cursor_y >= screen_y
+            && cursor_y < screen_y + surface_h;
+
+        assert!(
+            !in_window,
+            "Cursor at ({}, {}) should be outside window",
+            cursor_x, cursor_y
+        );
+    }
+
+    /// 验证 cursor_in_window 边界条件：左上角
+    #[test]
+    fn test_cursor_in_window_boundary_top_left() {
+        let screen_x = 100i32;
+        let screen_y = 100i32;
+        let surface_w = 400i32;
+        let surface_h = 300i32;
+
+        // 鼠标在窗口左上角（包含边界）
+        let cursor_x = 100i32;
+        let cursor_y = 100i32;
+
+        let in_window = cursor_x >= screen_x
+            && cursor_x < screen_x + surface_w
+            && cursor_y >= screen_y
+            && cursor_y < screen_y + surface_h;
+
+        assert!(in_window, "Cursor at top-left boundary should be inside");
+    }
+
+    /// 验证 cursor_in_window 边界条件：右下角（不包含）
+    #[test]
+    fn test_cursor_in_window_boundary_bottom_right() {
+        let screen_x = 100i32;
+        let screen_y = 100i32;
+        let surface_w = 400i32;
+        let surface_h = 300i32;
+
+        // 鼠标在窗口右下角（不包含边界，使用 < 而非 <=）
+        let cursor_x = screen_x + surface_w; // 500
+        let cursor_y = screen_y + surface_h; // 400
+
+        let in_window = cursor_x >= screen_x
+            && cursor_x < screen_x + surface_w
+            && cursor_y >= screen_y
+            && cursor_y < screen_y + surface_h;
+
+        assert!(
+            !in_window,
+            "Cursor at bottom-right boundary (exclusive) should be outside"
+        );
+    }
+
+    /// 验证 shader 中使用 controlSettings.z (elasticity) 和 mouseOffset
+    #[test]
+    fn test_shader_uses_elasticity_and_mouse_offset() {
+        // controlSettings.z 是 elasticity
+        assert!(
+            SHADER.contains("controlSettings.z"),
+            "Shader must use controlSettings.z for elasticity"
+        );
+
+        // mouseOffset 用于计算鼠标位置
+        assert!(
+            SHADER.contains("mouseOffset"),
+            "Shader must use mouseOffset for cursor position"
+        );
+    }
+
+    /// 验证 Constants 结构中 control_settings 和 mouse_offset 字段存在
+    #[test]
+    fn test_constants_structure_has_elasticity_fields() {
+        // 验证 Constants 结构包含必要的弹性形变相关字段
+        let constants = Constants {
+            output_origin: [0.0; 2],
+            output_size: [0.0; 2],
+            window_origin: [0.0; 2],
+            window_size: [0.0; 2],
+            lens_size: [0.0; 2],
+            padding: [0.0; 2],
+            shadow_settings: [0.0; 4],
+            refraction_settings: [0.0; 4],
+            effects_settings: [0.0; 4],
+            color_settings: [0.0; 4],
+            detail_settings: [0.0; 4],
+            control_settings: [0.0, 0.0, 0.1, 0.0], // z = elasticity
+            mouse_offset: [10.0, 20.0],
+            interaction_padding: [0.0; 2],
+        };
+
+        // 验证 control_settings.z (elasticity) 可以设置
+        assert!((constants.control_settings[2] - 0.1).abs() < f32::EPSILON);
+
+        // 验证 mouse_offset 可以设置
+        assert!((constants.mouse_offset[0] - 10.0).abs() < f32::EPSILON);
+        assert!((constants.mouse_offset[1] - 20.0).abs() < f32::EPSILON);
     }
 }
