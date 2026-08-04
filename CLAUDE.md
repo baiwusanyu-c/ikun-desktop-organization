@@ -51,6 +51,8 @@ cargo watch -x check             # 自动检查（需 cargo install cargo-watch�
 | chrono | 0.4 | 时间处理 |
 | dirs | 5.0 | 跨平台配置目录 |
 | notify | 6.0 | 文件系统监听（TODO） |
+| lazy_static | 1.0 | 全局静态状态（多选、拖拽等） |
+| windows-numerics | — | D2D 向量/矩阵类型（Vector2 等） |
 
 ---
 
@@ -78,7 +80,8 @@ src/
 │   ├── app_runtime.rs         #   UI 框架无关运行时/命令层（AppContext + 平台服务）
 │   ├── control_panel.rs       #   GPUI 控制面板视图
 │   ├── create_box_dialog.rs   #   GPUI 独立“创建分类框”窗口
-│   └── windows_main.rs        #   GPUI Application 事件循环与轮询调度
+│   ├── windows_main.rs        #   GPUI Application 事件循环与轮询调度
+│   └── settings_view.rs       #   液态玻璃效果设置面板（GPUI 独立窗口）
 │
 ├── platform/                  # 平台抽象层
 │   ├── mod.rs                 #   DesktopManagerTrait + re-exports
@@ -90,6 +93,7 @@ src/
 │   │   ├── desktop_manager.rs #   桌面图标枚举（文件系统 + 虚拟 Shell 对象 CLSID）
 │   │   ├── desktop_overlay/   #   桌面覆盖窗口（渲染未管理图标 + Grid 吸附布局 + 桌面接管生命周期 + 文件监听刷新）
 │   │   │   ├── overlay_mouse_hook.rs # 全局鼠标钩子（WH_MOUSE_LL + 独立线程消息泵，拦截覆盖区域右键）
+│   │   │   ├── overlay_drop_target.rs # OLE 拖放目标（IDropTarget 实现）
 │   │   ├── alignment_guide/   #   对齐参考线（对齐检测 + 动态对比色 + overlay 渲染）
 │   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎（draw_icon_with_label 统一图标+文本渲染）
 │   │   ├── grid_window.rs     #   窗口创建/销毁/布局收集/Z-order 管理
@@ -100,6 +104,9 @@ src/
 │   │   ├── app_icon.rs        #   嵌入 logo.ico 资源加载（托盘/菜单图标）
 │   │   ├── icon_extract.rs    #   图标提取（SHDefExtractIconW + .lnk 解析目标图标）
 │   │   ├── icon_hider.rs      #   图标隐藏/恢复（SysListView32）+ managed_icons 仓库（Vault）+ 删除分类框后还原非管理图标
+│   │   ├── liquid_glass.rs    #   液态玻璃 GPU 渲染器（DXGI + D2D Effect + HLSL Shader）
+│   │   ├── multi_select.rs    #   全局多选状态管理（跨分类框/覆盖区域）
+│   │   ├── desktop_utils.rs   #   桌面工具函数（自动排列检测/图标定位）
 │   │   ├── rename_editor.rs   #   内联重命名编辑器（独立线程 EDIT 控件 + 异步消息通信 + 扩展名保留）
 │   │   ├── grid_layout.rs     #   布局计算/按钮矩形/命中测试/滚动重排
 │   │   ├── monitor_utils.rs   #   显示器查询/窗口定位工具
@@ -263,6 +270,12 @@ pub trait Plugin: Send {
 - 托盘双击 = 呼出控制面板
 - 托盘右键 = 固定菜单（打开控制面板 / 创建分类框 / 一键AI分类 / 退出）
 
+### 渲染架构
+
+- **原生桌面渲染**：未分类图标留在桌面原位由 Windows 渲染，已分类图标移入仓库后自然不显示
+- **液态玻璃效果**：通过 DXGI Desktop Duplication 捕获桌面画面，D2D Effect Graph 处理纹理，HLSL Shader 生成预乘 alpha 位图
+- **覆盖区域交互层**：透明分层窗口提供多选、右键菜单、拖拽等交互能力（非渲染层）
+
 ### 依赖关系
 
 ```
@@ -373,6 +386,13 @@ main.rs
 - [x] 统一图标渲染（draw_icon_with_label 公共函数，分类框/覆盖区域/拖拽残影共用，字体/截断/阴影一致）
 - [x] 拖拽可视化反馈（插入分隔线 + 替换高亮，支持同框/跨框/覆盖区域拖拽，shift-insert 替代 swap）
 - [x] 分类框拖拽文件到资源管理器（OLE CF_HDROP 复制到 Explorer，图标保持原位）
+- [x] 液态玻璃效果（GPU 渲染器 + 可配置参数 + 实时调节界面）
+- [x] 多选图标（Ctrl/Shift+点击 + 框选 + 跨容器多选）
+- [x] 覆盖区域拖拽到资源管理器（OLE CF_HDROP）
+- [x] 分类框多选拖拽到资源管理器
+- [x] 原生桌面图标渲染（移除覆盖区域窗口，直接使用原生桌面）
+- [x] 文件缩略图显示（IShellItemImageFactory）
+- [x] 公共桌面图标支持（Public Desktop vault）
 
 ### 桌面右键菜单
 - [x] 打开控制面板（注册表注入 + 信号文件 IPC + GPUI 控制面板显示）

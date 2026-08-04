@@ -34,7 +34,8 @@ src/
 │   ├── control_panel.rs       #   GPUI 控制面板视图
 │   ├── create_box_dialog.rs   #   独立 GPUI 创建分类框窗口
 │   ├── edit_box_dialog.rs    #   独立 GPUI 编辑分类框窗口（双击标题打开）
-│   └── windows_main.rs        #   GPUI Application 事件循环
+│   ├── windows_main.rs        #   GPUI Application 事件循环
+│   └── settings_view.rs       #   液态玻璃效果设置面板（GPUI 独立窗口）
 │
 ├── platform/                  # 平台抽象层
 │   ├── mod.rs                 #   DesktopManagerTrait + re-exports
@@ -45,6 +46,8 @@ src/
 │   │   ├── ffi_imports.rs     #   Win32 extern "system" 声明
 │   │   ├── desktop_manager.rs #   桌面图标枚举（文件系统 + 虚拟 Shell 对象 CLSID）
 │   │   ├── desktop_overlay/   #   桌面覆盖窗口（渲染未管理图标 + Grid 吸附布局 + 桌面接管生命周期 + 文件监听刷新）
+│   │   │   ├── overlay_mouse_hook.rs   # 全局鼠标钩子（WH_MOUSE_LL + 独立线程消息泵）
+│   │   │   └── overlay_drop_target.rs  # OLE 拖放目标（IDropTarget 实现）
 │   │   ├── alignment_guide/   #   对齐参考线（对齐检测 + 动态对比色 + overlay 渲染）
 │   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎
 │   │   ├── grid_window.rs     #   窗口创建/销毁/数据模型/Z-order 管理（push_other_grids_below + 递归抑制）
@@ -57,6 +60,9 @@ src/
 │   │   ├── app_icon.rs        #   嵌入 logo.ico 项目图标（托盘/菜单）
 │   │   ├── icon_extract.rs    #   图标提取（IShellItemImageFactory 缩略图 + SHDefExtractIconW + .lnk 解析）
 │   │   ├── icon_hider.rs      #   图标隐藏/恢复 + managed_icons vault
+│   │   ├── liquid_glass.rs    #   液态玻璃 GPU 渲染器（DXGI + D2D + HLSL）
+│   │   ├── multi_select.rs    #   全局多选状态管理（跨容器选择/锚点/框选）
+│   │   ├── desktop_utils.rs   #   桌面工具函数（自动排列检测/图标定位）
 ├── rename_editor.rs   #   内联重命名编辑器（独立线程 EDIT 控件 + 异步消息通信） + 删除分类框后还原非管理图标
 │   │   ├── drag_image.rs      #   拖拽残影覆盖窗口（D2D 渲染跟随光标的半透明图标）
 │   │   ├── ole_dnd.rs         #   OLE 拖拽源（IDropSource + IDataObject 实现）
@@ -203,6 +209,7 @@ platform/windows/
 ├── desktop_manager.rs # DesktopManagerTrait 实现 + 虚拟 Shell 对象（CLSID）枚举
 ├── desktop_overlay/   # 桌面覆盖窗口（渲染/交互/Grid 吸附/DPI 自适应）
 │   ├── overlay_mouse_hook.rs # 全局鼠标钩子（WH_MOUSE_LL + 独立线程消息泵）
+│   └── overlay_drop_target.rs  # OLE 拖放目标（IDropTarget 实现）
 ├── alignment_guide/   # 对齐参考线（对齐检测 + 动态对比色 + overlay 渲染）
 ├── d2d_render.rs      # D2D/DirectWrite 渲染（draw_icon_with_label 统一图标+文本渲染）
 ├── grid_window.rs     # 窗口创建/销毁/数据模型
@@ -214,6 +221,9 @@ platform/windows/
 ├── app_icon.rs        # 项目图标资源加载
 ├── icon_extract.rs    # 图标提取（IShellItemImageFactory 缩略图 + SHDefExtractIconW + .lnk 目标解析）
 ├── icon_hider.rs      # 图标隐藏/恢复 + managed_icons vault
+├── liquid_glass.rs    # 液态玻璃 GPU 渲染器（DXGI + D2D + HLSL）
+├── multi_select.rs    # 全局多选状态管理（跨容器选择/锚点/框选）
+├── desktop_utils.rs   # 桌面工具函数（自动排列检测/图标定位）
 ├── drag_image.rs      # 拖拽残影覆盖窗口（跨显示器 DPI 自适应重建）
 ├── ole_dnd.rs         # OLE 拖拽源（IDropSource + IDataObject）
 ├── drop_target.rs     # 分类框拖放目标（IDropTarget）
@@ -269,6 +279,10 @@ plugin/ → context (通过参数传递)
 box_core/ → config (枚举类型)
 classification/ → platform (仅 DesktopIcon 类型)
 platform/ → (无 UI/业务反向依赖，仅外部 crate 或平台子模块)
+platform/windows/liquid_glass → config (LiquidGlassConfig)
+platform/windows/multi_select → (无内部依赖，纯全局状态)
+platform/windows/desktop_overlay/overlay_drop_target → ffi_imports, ole_dnd
+platform/windows/desktop_overlay/overlay_mouse_hook → ffi_imports, zorder
 utils/ → (无内部依赖)
 ```
 

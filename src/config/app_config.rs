@@ -1430,4 +1430,81 @@ mod liquid_glass_tests {
             );
         }
     }
+
+    // ===== 架构自检新增测试：LiquidGlassConfig 参数钳位边界 =====
+
+    #[test]
+    fn test_set_param_clamps_negative_values() {
+        let mut config = LiquidGlassConfig::default();
+        let negative_params = [
+            (LiquidGlassParam::DisplacementScale, -10.0, 0.0),
+            (LiquidGlassParam::BlurAmount, -0.5, 0.0),
+            (LiquidGlassParam::ChromaticOffset, -3.0, 0.0),
+            (LiquidGlassParam::CornerRadius, -5.0, 0.0),
+            (LiquidGlassParam::Elasticity, -1.0, 0.0),
+        ];
+        for (param, input, expected) in negative_params.iter() {
+            config.set_param(*param, *input);
+            assert!(
+                (config.get_param(*param) - *expected).abs() < f32::EPSILON,
+                "Negative clamp failed for {:?}: got {}",
+                param,
+                config.get_param(*param)
+            );
+        }
+    }
+
+    #[test]
+    fn test_set_param_clamps_over_max_values() {
+        let mut config = LiquidGlassConfig::default();
+        let over_max_params = [
+            (LiquidGlassParam::DisplacementScale, 999.0, 200.0),
+            (LiquidGlassParam::BlurAmount, 5.0, 1.0),
+            (LiquidGlassParam::Saturation, 10.0, 3.0),
+            (LiquidGlassParam::ChromaticOffset, 100.0, 20.0),
+            (
+                LiquidGlassParam::CornerRadius,
+                999.0,
+                LIQUID_GLASS_CORNER_RADIUS_MAX,
+            ),
+            (LiquidGlassParam::Elasticity, 5.0, 1.0),
+        ];
+        for (param, input, expected) in over_max_params.iter() {
+            config.set_param(*param, *input);
+            assert!(
+                (config.get_param(*param) - *expected).abs() < f32::EPSILON,
+                "Over-max clamp failed for {:?}: got {}",
+                param,
+                config.get_param(*param)
+            );
+        }
+    }
+
+    #[test]
+    fn test_set_param_refraction_mode_rounds_and_clamps() {
+        let mut config = LiquidGlassConfig::default();
+        config.set_param(LiquidGlassParam::RefractionMode, 1.7);
+        assert_eq!(config.refraction_mode, 2);
+        config.set_param(LiquidGlassParam::RefractionMode, -1.0);
+        assert_eq!(config.refraction_mode, 0);
+        config.set_param(LiquidGlassParam::RefractionMode, 10.0);
+        assert_eq!(config.refraction_mode, 3);
+    }
+
+    #[test]
+    fn test_saturation_lower_bound_is_one() {
+        let mut config = LiquidGlassConfig::default();
+        config.set_param(LiquidGlassParam::Saturation, 0.5);
+        assert!((config.saturation - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_normalize_clamps_corner_radius_over_max() {
+        let mut config = LiquidGlassConfig {
+            corner_radius: 999.0,
+            ..LiquidGlassConfig::default()
+        };
+        config.normalize();
+        assert!((config.corner_radius - LIQUID_GLASS_CORNER_RADIUS_MAX).abs() < f32::EPSILON);
+    }
 }

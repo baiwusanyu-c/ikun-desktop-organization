@@ -1483,7 +1483,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         // ===== Exit move/resize mode: clear guide lines =====
         WM_EXITSIZEMOVE => {
             IN_DRAG.set(false);
-            IN_MOVE.set(false);  // 重置移动标记
+            IN_MOVE.set(false); // 重置移动标记
             super::alignment_guide::on_exit_size_move(hwnd);
             // Save layout after move/resize
             super::drag_handler::save_config();
@@ -1492,7 +1492,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
 
         // ===== Moving: detect alignment and show guide lines =====
         WM_MOVING => {
-            IN_MOVE.set(true);  // 标记这是拖拽移动
+            IN_MOVE.set(true); // 标记这是拖拽移动
             let proposed_rect = lparam as *mut RECT;
             if !proposed_rect.is_null() {
                 let rect = unsafe { &mut *proposed_rect };

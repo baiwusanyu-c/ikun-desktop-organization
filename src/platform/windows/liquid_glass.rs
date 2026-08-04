@@ -1,4 +1,4 @@
-﻿//! 分类框液态玻璃 GPU 渲染器（对齐 liquid-glass-rs/examples 实现）
+//! 分类框液态玻璃 GPU 渲染器（对齐 liquid-glass-rs/examples 实现）
 //!
 //! 使用 DXGI Desktop Duplication 捕获显示器画面，通过 D2D Effect Graph
 //! (Crop -> Border -> GaussianBlur -> ColorMatrix) 处理纹理，再通过自定义
@@ -292,7 +292,13 @@ pub fn render_background(
         return None;
     }
 
-    log::debug!("[LG] render_background called: {}x{}+{} padding={}", content_width, content_height, screen_x, padding);
+    log::debug!(
+        "[LG] render_background called: {}x{}+{} padding={}",
+        content_width,
+        content_height,
+        screen_x,
+        padding
+    );
     GLASS_STATE.with(|state| {
         let mut state = match state.try_borrow_mut() {
             Ok(s) => s,
@@ -335,7 +341,10 @@ pub fn render_background(
             dpi_scale,
             glass_config,
         ) {
-            Ok(pixels) => { log::debug!("[LG] render OK, {} pixels", pixels.len()); Some(pixels) }
+            Ok(pixels) => {
+                log::debug!("[LG] render OK, {} pixels", pixels.len());
+                Some(pixels)
+            }
             Err(error) => {
                 log::warn!("液态玻璃帧渲染失败，回退半透明背景: {error:#}");
                 *state = GlassState::Failed {
@@ -622,10 +631,7 @@ impl GlassRenderer {
             output.desktop_view = None;
             output.blurred_texture = None;
             output.blurred_view = None;
-            log::info!(
-                "液态玻璃 DXGI Output Duplication 已重建 (index={})", 
-                index
-            );
+            log::info!("液态玻璃 DXGI Output Duplication 已重建 (index={})", index);
             Ok(())
         }
     }
@@ -641,7 +647,10 @@ impl GlassRenderer {
 
             if let Err(e) = acquire {
                 if e.code() == DXGI_ERROR_WAIT_TIMEOUT {
-                    log::debug!("[LG] capture WAIT_TIMEOUT, desktop_texture={}", output.desktop_texture.is_some());
+                    log::debug!(
+                        "[LG] capture WAIT_TIMEOUT, desktop_texture={}",
+                        output.desktop_texture.is_some()
+                    );
                     return Ok(());
                 }
                 if e.code() == DXGI_ERROR_ACCESS_LOST {
@@ -1101,7 +1110,15 @@ impl GlassRenderer {
             let surfaces = self
                 .surfaces
                 .get(&(surface_width, surface_height))
-                .ok_or_else(|| { log::warn!("[LG] surfaces.get FAILED for {}x{}, cache_len={}", surface_width, surface_height, self.surfaces.len()); anyhow::anyhow!("渲染表面未创建") })?;
+                .ok_or_else(|| {
+                    log::warn!(
+                        "[LG] surfaces.get FAILED for {}x{}, cache_len={}",
+                        surface_width,
+                        surface_height,
+                        self.surfaces.len()
+                    );
+                    anyhow::anyhow!("渲染表面未创建")
+                })?;
             self.context
                 .OMSetRenderTargets(Some(&[Some(surfaces.output_target.clone())]), None);
             self.context
