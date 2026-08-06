@@ -111,7 +111,7 @@ src/
 │   │   ├── rename_editor.rs   #   内联重命名编辑器（独立线程 EDIT 控件 + 异步消息通信 + 扩展名保留）
 │   │   ├── grid_layout.rs     #   布局计算/按钮矩形/命中测试/滚动重排
 │   │   ├── monitor_utils.rs   #   显示器查询/窗口定位工具
-│   │   ├── drag_image.rs      #   拖拽残影覆盖窗口（D2D 渲染跟随光标的半透明图标）
+│   │   ├── drag_image.rs      #   拖拽残影覆盖窗口（单选/多选图标残影，D2D 渲染 + 跨显示器 DPI 自适应）
 │   │   ├── ole_dnd.rs         #   OLE 拖拽源（IDropSource + IDataObject 实现）
 │   │   ├── drop_target.rs     #   分类框拖放目标（IDropTarget 实现）
 │   │   ├── drag_handler.rs    #   拖拽协调器（拖拽生命周期：阈值检测/位置更新/释放分发）

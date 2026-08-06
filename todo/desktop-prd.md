@@ -35,7 +35,7 @@
 * ✅液态玻璃弹性单个（不要弹性设置了）
 * ✅拉伸时液态玻璃效果消失
 * 🎯❗分类框移动有采样延时重影、性能优化
-* 🎯分类框多选拖拽时残影图标只有一个
+* ✅分类框多选拖拽时残影图标只有一个
 * 🎯public图标没授权提醒
 * ✅图标显示异常（比较小）
 * ✅图标退出后乱序
@@ -67,6 +67,6 @@
 1.2 对于实现中，不符合架构设计、CLAUDE.md 和 .trellis 中的 spec 的架构规范部分，在不影响功能、逻辑的前提下进行重构
 2.根据你的改动，添加单元测试
 
-
+[$finish-task](D:\\github-project\\ikun_organizer\\.agents\\skills\\finish-task\\SKILL.md) 结束任务，归档任务，提交代码（包括 desktop-prd.md）
 
 gpui-component

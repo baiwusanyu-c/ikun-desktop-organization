@@ -1,17 +1,21 @@
 //! 自定义拖拽覆盖窗口（替代 OLE IDragSourceHelper）
-
-#![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
-//! 创建一个小型 WS_EX_LAYERED 窗口跟随鼠标光标，
-//! 显示被拖拽图标 + 名称的半透明图像。与原生桌面拖拽体验一致。
+//! 显示被拖拽图标的半透明残影，支持单选和多选拖拽。与原生桌面拖拽体验一致。
 //!
-//! # 渲染方案
+//! # 单选拖拽
 //!
-//! 使用 Direct2D + DirectWrite 渲染复合位图（图标 + 标签文字），
-//! 与分类框内图标标签质量一致。详见 `d2d_render::render_drag_overlay_bitmap`。
+//! 创建小型 WS_EX_LAYERED 窗口跟随鼠标光标，显示单个图标 + 名称标签。
+//! 使用 D2D + DirectWrite 渲染复合位图，详见 `d2d_render::render_drag_overlay_bitmap`。
+//!
+//! # 多选拖拽
+//!
+//! 当拖拽多个选中项时，显示所有图标并保持它们在网格中的相对排列，
+//! 与 Windows 桌面多选拖拽行为一致。使用 GDI `DrawIconEx` 在大位图上按网格位置绘制每个图标。
 //!
 //! 不依赖 OLE 拖拽图像（IDragSourceHelper），
 //! 避免了 Shell 拒绝 drop 时拖拽图像不显示的问题。
+
+#![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 
 use super::ffi_imports::*;
 use super::ffi_types::*;
@@ -409,6 +413,8 @@ pub(crate) unsafe fn destroy_drag_overlay() {
     DRAG_DISPLAY_NAME = String::new();
     DRAG_LAST_DPI = 0;
     DRAG_ORIGINAL_DPI = 0;
+    // 清理多选拖拽状态
+    clear_multi_drag_state();
 }
 
 /// 覆盖窗口的 WndProc（极简，仅处理默认消息）
@@ -434,53 +440,401 @@ unsafe extern "system" fn overlay_wnd_proc(
     }
 }
 
-/// 创建多选拖拽覆盖窗口（显示多个图标 + 数量徽章）
-///
-/// 当拖拽多个选中项时，显示第一个图标 + 右上角的数量徽章。
-/// 徽章样式：圆形背景 + 白色数字文本。
+// ============================================================================
+// 多选拖拽支持
+// ============================================================================
+
+/// 多选拖拽中每个选中项的信息
+pub(crate) struct MultiDragItemInfo {
+    pub icon_handle: HICON,
+    pub display_name: String,
+    pub grid_col: i32,
+    pub grid_row: i32,
+}
+
+// ============================================================================
+// 多选拖拽 - 纯逻辑函数（可独立测试）
+// ============================================================================
+
+/// 计算多选拖拽的网格布局（bounding box）
 ///
 /// # 参数
-/// - icons: 被拖拽的图标句柄列表（最多显示 3 个层叠效果）
-/// - icon_size: 图标显示尺寸（DPI 自适应）
-/// - cell_w: 分类框的单元格宽度
-/// - display_name: 第一个图标的标签文字
-/// - count: 总选中数量（用于显示徽章）
-/// - dpi: 当前窗口 DPI
-pub(crate) unsafe fn create_multi_drag_overlay(
-    icons: &[HICON],
+/// - `positions`: 选中项的网格位置列表 `[(col, row), ...]`
+///
+/// # 返回
+/// `(min_col, max_col, min_row, max_row, cols_span, rows_span)`
+///
+/// # 示例
+/// ```
+/// let positions = vec![(0, 0), (1, 0), (0, 1), (1, 1)]; // 2x2 矩形
+/// let (min_col, max_col, min_row, max_row, cols, rows) = compute_multi_drag_layout(&positions);
+/// assert_eq!((min_col, max_col, min_row, max_row), (0, 1, 0, 1));
+/// assert_eq!((cols, rows), (2, 2));
+/// ```
+fn compute_multi_drag_layout(positions: &[(i32, i32)]) -> (i32, i32, i32, i32, i32, i32) {
+    if positions.is_empty() {
+        return (0, 0, 0, 0, 0, 0);
+    }
+    let min_col = positions.iter().map(|(c, _)| *c).min().unwrap_or(0);
+    let max_col = positions.iter().map(|(c, _)| *c).max().unwrap_or(0);
+    let min_row = positions.iter().map(|(_, r)| *r).min().unwrap_or(0);
+    let max_row = positions.iter().map(|(_, r)| *r).max().unwrap_or(0);
+    let cols_span = max_col - min_col + 1;
+    let rows_span = max_row - min_row + 1;
+    (min_col, max_col, min_row, max_row, cols_span, rows_span)
+}
+
+/// 计算图标在位图中的像素位置
+///
+/// 根据图标的网格位置和 bounding box 信息，计算其在输出位图中的绘制坐标。
+/// 图标在单元格内水平垂直居中。
+///
+/// # 参数
+/// - `grid_col`: 图标的网格列号
+/// - `grid_row`: 图标的网格行号
+/// - `min_col`: bounding box 的最小列号
+/// - `min_row`: bounding box 的最小行号
+/// - `cell_w`: 单元格宽度（像素）
+/// - `cell_h`: 单元格高度（像素）
+/// - `icon_size`: 图标尺寸（像素）
+///
+/// # 返回
+/// `(x, y)` 像素坐标（位图左上角为原点）
+fn compute_item_pixel_position(
+    grid_col: i32,
+    grid_row: i32,
+    min_col: i32,
+    min_row: i32,
+    cell_w: i32,
+    cell_h: i32,
+    icon_size: i32,
+) -> (i32, i32) {
+    let col_offset = grid_col - min_col;
+    let row_offset = grid_row - min_row;
+    let x = col_offset * cell_w + (cell_w - icon_size) / 2;
+    let y = row_offset * cell_h + (cell_h - icon_size) / 2;
+    (x, y)
+}
+
+/// 计算热区偏移（拖拽源图标在位图中的中心位置）
+///
+/// 热区是鼠标光标点相对于残影窗口左上角的偏移量。
+/// 默认锚定到拖拽源图标的中心。
+///
+/// # 参数
+/// - `source_col`: 拖拽源图标的网格列号
+/// - `source_row`: 拖拽源图标的网格行号
+/// - `min_col`: bounding box 的最小列号
+/// - `min_row`: bounding box 的最小行号
+/// - `cell_w`: 单元格宽度（像素）
+/// - `cell_h`: 单元格高度（像素）
+///
+/// # 返回
+/// `(offset_x, offset_y)` 热区偏移量
+fn compute_hotzone_offset(
+    source_col: i32,
+    source_row: i32,
+    min_col: i32,
+    min_row: i32,
+    cell_w: i32,
+    cell_h: i32,
+) -> (i32, i32) {
+    let col_offset = source_col - min_col;
+    let row_offset = source_row - min_row;
+    let offset_x = col_offset * cell_w + cell_w / 2;
+    let offset_y = row_offset * cell_h + cell_h / 2;
+    (offset_x, offset_y)
+}
+
+/// 多选拖拽状态（用于 DPI 重建）
+static mut MULTI_DRAG_ACTIVE: bool = false;
+static mut MULTI_DRAG_ITEMS_STORE: Vec<MultiDragItemInfo> = Vec::new();
+static mut MULTI_DRAG_SOURCE_IDX: usize = 0;
+static mut MULTI_DRAG_ICON_SIZE: i32 = 0;
+static mut MULTI_DRAG_CELL_W: i32 = 0;
+static mut MULTI_DRAG_CELL_H: i32 = 0;
+
+/// 创建多选拖拽覆盖窗口（显示多个图标，保持相对位置）
+///
+/// 当拖拽多个选中项时，显示所有图标并保持它们在网格中的相对排列，
+/// 与 Windows 桌面多选拖拽行为一致。
+///
+/// # 参数
+/// - `items`: 所有选中项的信息（图标、名称、网格位置）
+/// - `drag_source_idx`: `items` 中被鼠标点击的项索引（热区锚点）
+/// - `icon_size`: 图标渲染尺寸（DPI 自适应）
+/// - `cell_w`: 单元格宽度
+/// - `cell_h`: 单元格高度
+/// - `dpi`: 当前窗口 DPI
+pub(crate) unsafe fn create_drag_overlay_multi(
+    items: Vec<MultiDragItemInfo>,
+    drag_source_idx: usize,
     icon_size: i32,
     cell_w: i32,
-    display_name: &str,
-    count: usize,
+    cell_h: i32,
     dpi: u32,
 ) {
     log::info!(
-        "create_multi_drag_overlay called: {} icons, count={}, display_name='{}'",
-        icons.len(),
-        count,
-        display_name
+        "create_drag_overlay_multi: {} items, source_idx={}, OVERLAY_HWND={:?}",
+        items.len(),
+        drag_source_idx,
+        OVERLAY_HWND
     );
+    destroy_drag_overlay();
+    clear_multi_drag_state();
 
-    if icons.is_empty() {
-        log::warn!("create_multi_drag_overlay: no icons provided");
+    if items.is_empty() || drag_source_idx >= items.len() {
+        log::debug!("多选拖拽覆盖: 无效参数");
         return;
     }
 
-    // Use the first icon as the primary icon
-    let primary_icon = icons[0];
+    // DPI 缩放处理
+    let source_dpi = dpi;
+    let mut cursor_pt = POINT { x: 0, y: 0 };
+    GetCursorPos(&mut cursor_pt);
+    let cursor_dpi =
+        crate::platform::windows::monitor_utils::dpi_at_screen_point(cursor_pt.x, cursor_pt.y);
+    let dpi = if cursor_dpi > 0 { cursor_dpi } else { dpi };
 
-    // Call single icon creation function
-    create_drag_overlay(primary_icon, icon_size, cell_w, display_name, dpi);
+    let icon_size = scale_dpi(icon_size, dpi, source_dpi);
+    let cell_w = scale_dpi(cell_w, dpi, source_dpi);
+    let cell_h = scale_dpi(cell_h, dpi, source_dpi);
 
-    // TODO: Add count badge rendering in future iterations
-    // Currently using single icon display, can be enhanced later to:
-    // 1. Draw a circular badge in the top-right corner
-    // 2. Display the count (e.g., "3" or "99+")
-    // 3. Optional: Show 2-3 icons in a stacked effect
+    // 计算网格布局（bounding box）
+    let positions: Vec<(i32, i32)> = items.iter().map(|i| (i.grid_col, i.grid_row)).collect();
+    let (min_col, _max_col, min_row, _max_row, cols_span, rows_span) =
+        compute_multi_drag_layout(&positions);
+
+    // 位图尺寸：基于网格跨度
+    let total_w = cols_span * cell_w;
+    let total_h = rows_span * cell_h;
+
+    if total_w <= 0 || total_h <= 0 {
+        log::warn!("多选拖拽: 无效的位图尺寸 {}x{}", total_w, total_h);
+        return;
+    }
 
     log::info!(
-        "Multi-select drag overlay created (simplified version, badge display to be enhanced)"
+        "多选拖拽: bounding box {}x{} cells, bitmap {}x{} pixels, {} icons",
+        cols_span,
+        rows_span,
+        total_w,
+        total_h,
+        items.len()
     );
+
+    // 创建 32-bit DIB Section
+    let screen_dc = GetDC(std::ptr::null_mut());
+    let mem_dc = CreateCompatibleDC(screen_dc);
+
+    let bi = BITMAPINFOHEADER {
+        bi_size: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+        bi_width: total_w,
+        bi_height: -total_h,
+        bi_planes: 1,
+        bi_bit_count: 32,
+        bi_compression: 0,
+        bi_size_image: 0,
+        bi_x_pels_per_meter: 0,
+        bi_y_pels_per_meter: 0,
+        bi_clr_used: 0,
+        bi_clr_important: 0,
+    };
+
+    let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+    let dib = CreateDIBSection(
+        mem_dc,
+        &bi as *const BITMAPINFOHEADER as *const std::ffi::c_void,
+        DIB_RGB_COLORS,
+        &mut bits,
+        std::ptr::null_mut(),
+        0,
+    );
+
+    if dib.is_null() || bits.is_null() {
+        log::warn!("创建多选拖拽位图失败");
+        DeleteDC(mem_dc);
+        ReleaseDC(std::ptr::null_mut(), screen_dc);
+        return;
+    }
+
+    let old_bmp = SelectObject(mem_dc, dib as HGDIOBJ);
+
+    // 填充透明背景（premultiplied alpha: 全 0 = 完全透明）
+    std::ptr::write_bytes(bits as *mut u8, 0, (total_w * total_h * 4) as usize);
+
+    // 绘制每个图标
+    for item in &items {
+        if item.icon_handle.is_null() {
+            continue;
+        }
+
+        let (x, y) = compute_item_pixel_position(
+            item.grid_col,
+            item.grid_row,
+            min_col,
+            min_row,
+            cell_w,
+            cell_h,
+            icon_size,
+        );
+
+        DrawIconEx(
+            mem_dc,
+            x,
+            y,
+            item.icon_handle,
+            icon_size,
+            icon_size,
+            0,
+            std::ptr::null_mut(),
+            DI_NORMAL,
+        );
+    }
+
+    SelectObject(mem_dc, old_bmp);
+    DeleteDC(mem_dc);
+    ReleaseDC(std::ptr::null_mut(), screen_dc);
+
+    // 计算热区偏移：基于拖拽源图标的位置
+    let source_item = &items[drag_source_idx];
+    let (icon_offset_x, icon_offset_y) = compute_hotzone_offset(
+        source_item.grid_col,
+        source_item.grid_row,
+        min_col,
+        min_row,
+        cell_w,
+        cell_h,
+    );
+
+    // 保存多选拖拽状态（用于 DPI 重建和清理）
+    MULTI_DRAG_ACTIVE = true;
+    MULTI_DRAG_ITEMS_STORE = items;
+    MULTI_DRAG_SOURCE_IDX = drag_source_idx;
+    MULTI_DRAG_ICON_SIZE = icon_size;
+    MULTI_DRAG_CELL_W = cell_w;
+    MULTI_DRAG_CELL_H = cell_h;
+
+    // 注册窗口类（只注册一次）
+    static mut CLASS_REG: bool = false;
+    if !CLASS_REG {
+        let hinstance = GetModuleHandleW(std::ptr::null());
+        let wc = WNDCLASSEXW {
+            cb_size: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: 0,
+            lpfn_wnd_proc: Some(overlay_wnd_proc),
+            cb_cls_extra: 0,
+            cb_wnd_extra: 0,
+            h_instance: hinstance,
+            h_icon: std::ptr::null_mut(),
+            h_cursor: LoadCursorW(std::ptr::null_mut(), IDC_ARROW_ID as *const u16),
+            hbr_background: std::ptr::null_mut(),
+            lpsz_menu_name: std::ptr::null(),
+            lpsz_class_name: DRAG_OVERLAY_CLASS.as_ptr(),
+            h_icon_sm: std::ptr::null_mut(),
+        };
+        RegisterClassExW(&wc);
+        CLASS_REG = true;
+    }
+
+    // 获取光标位置用于窗口初始坐标
+    let mut init_pt = POINT { x: 0, y: 0 };
+    GetCursorPos(&mut init_pt);
+
+    // 创建分层窗口
+    let hwnd = CreateWindowExW(
+        WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+        DRAG_OVERLAY_CLASS.as_ptr(),
+        std::ptr::null(),
+        WS_POPUP,
+        init_pt.x - icon_offset_x,
+        init_pt.y - icon_offset_y,
+        total_w,
+        total_h,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        GetModuleHandleW(std::ptr::null()),
+        std::ptr::null_mut(),
+    );
+
+    if hwnd.is_null() {
+        log::warn!("创建多选拖拽覆盖窗口失败");
+        DeleteObject(dib as HGDIOBJ);
+        return;
+    }
+
+    // 使用 UpdateLayeredWindow 设置位图内容
+    let hdc_screen = GetDC(std::ptr::null_mut());
+    let hdc_mem = CreateCompatibleDC(hdc_screen);
+    let old_bmp2 = SelectObject(hdc_mem, dib as HGDIOBJ);
+
+    let pt_dst = POINT {
+        x: init_pt.x - icon_offset_x,
+        y: init_pt.y - icon_offset_y,
+    };
+    let sz = SIZE {
+        cx: total_w,
+        cy: total_h,
+    };
+    let pt_src = POINT { x: 0, y: 0 };
+
+    // 70% 不透明度（与单选拖拽一致）
+    let blend = BLENDFUNCTION {
+        blend_op: AC_SRC_OVER,
+        blend_flags: 0,
+        source_constant_alpha: 180,
+        alpha_format: AC_SRC_ALPHA,
+    };
+
+    UpdateLayeredWindow(
+        hwnd,
+        hdc_screen,
+        &pt_dst,
+        &sz as *const SIZE as *const POINT,
+        hdc_mem,
+        &pt_src,
+        0,
+        &blend,
+        0x02, // ULW_ALPHA
+    );
+
+    SelectObject(hdc_mem, old_bmp2);
+    DeleteDC(hdc_mem);
+    ReleaseDC(std::ptr::null_mut(), hdc_screen);
+
+    ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+
+    OVERLAY_HWND = hwnd;
+    OVERLAY_HBMP = dib;
+    DRAG_ICON_OFFSET_X = icon_offset_x;
+    DRAG_ICON_SIZE = MULTI_DRAG_ICON_SIZE;
+    DRAG_CELL_W = MULTI_DRAG_CELL_W;
+    DRAG_LAST_DPI = dpi;
+    DRAG_ORIGINAL_DPI = dpi;
+
+    log::info!(
+        "多选拖拽覆盖窗口已创建: {}x{}, {} icons, offset=({},{}), 70% 不透明",
+        total_w,
+        total_h,
+        MULTI_DRAG_ITEMS_STORE.len(),
+        icon_offset_x,
+        icon_offset_y
+    );
+}
+
+/// 检查是否处于多选拖拽模式
+pub(crate) unsafe fn is_multi_drag_active() -> bool {
+    MULTI_DRAG_ACTIVE
+}
+
+/// 清理多选拖拽状态
+pub(crate) unsafe fn clear_multi_drag_state() {
+    MULTI_DRAG_ACTIVE = false;
+    MULTI_DRAG_ITEMS_STORE.clear();
+    MULTI_DRAG_SOURCE_IDX = 0;
+    MULTI_DRAG_ICON_SIZE = 0;
+    MULTI_DRAG_CELL_W = 0;
+    MULTI_DRAG_CELL_H = 0;
 }
 
 #[cfg(test)]
@@ -569,6 +923,150 @@ mod tests {
     #[test]
     fn test_drag_icon_gap_no_label() {
         assert_eq!(drag_icon_gap(48, false), 0);
+    }
+
+    // ===== 多选拖拽纯逻辑函数测试 =====
+
+    #[test]
+    fn test_compute_multi_drag_layout_single_item() {
+        let positions = vec![(2, 3)];
+        let (min_col, max_col, min_row, max_row, cols, rows) =
+            compute_multi_drag_layout(&positions);
+        assert_eq!((min_col, max_col, min_row, max_row), (2, 2, 3, 3));
+        assert_eq!((cols, rows), (1, 1));
+    }
+
+    #[test]
+    fn test_compute_multi_drag_layout_2x2_rectangle() {
+        // A(0,0) B(1,0)
+        // C(0,1) D(1,1)
+        let positions = vec![(0, 0), (1, 0), (0, 1), (1, 1)];
+        let (min_col, max_col, min_row, max_row, cols, rows) =
+            compute_multi_drag_layout(&positions);
+        assert_eq!((min_col, max_col, min_row, max_row), (0, 1, 0, 1));
+        assert_eq!((cols, rows), (2, 2));
+    }
+
+    #[test]
+    fn test_compute_multi_drag_layout_horizontal_line() {
+        // A(1,0) B(2,0) C(3,0) D(4,0)
+        let positions = vec![(1, 0), (2, 0), (3, 0), (4, 0)];
+        let (min_col, max_col, min_row, max_row, cols, rows) =
+            compute_multi_drag_layout(&positions);
+        assert_eq!((min_col, max_col, min_row, max_row), (1, 4, 0, 0));
+        assert_eq!((cols, rows), (4, 1));
+    }
+
+    #[test]
+    fn test_compute_multi_drag_layout_vertical_line() {
+        // A(0,0)
+        // B(0,1)
+        // C(0,2)
+        let positions = vec![(0, 0), (0, 1), (0, 2)];
+        let (min_col, max_col, min_row, max_row, cols, rows) =
+            compute_multi_drag_layout(&positions);
+        assert_eq!((min_col, max_col, min_row, max_row), (0, 0, 0, 2));
+        assert_eq!((cols, rows), (1, 3));
+    }
+
+    #[test]
+    fn test_compute_multi_drag_layout_l_shape() {
+        // A(0,0)
+        // B(0,1) C(1,1)
+        let positions = vec![(0, 0), (0, 1), (1, 1)];
+        let (min_col, max_col, min_row, max_row, cols, rows) =
+            compute_multi_drag_layout(&positions);
+        assert_eq!((min_col, max_col, min_row, max_row), (0, 1, 0, 1));
+        assert_eq!((cols, rows), (2, 2));
+    }
+
+    #[test]
+    fn test_compute_multi_drag_layout_sparse() {
+        // A(0,0)         D(3,0)
+        //
+        // B(0,2)         C(3,2)
+        let positions = vec![(0, 0), (3, 0), (0, 2), (3, 2)];
+        let (min_col, max_col, min_row, max_row, cols, rows) =
+            compute_multi_drag_layout(&positions);
+        assert_eq!((min_col, max_col, min_row, max_row), (0, 3, 0, 2));
+        assert_eq!((cols, rows), (4, 3));
+    }
+
+    #[test]
+    fn test_compute_multi_drag_layout_empty() {
+        let positions: Vec<(i32, i32)> = vec![];
+        let (min_col, max_col, min_row, max_row, cols, rows) =
+            compute_multi_drag_layout(&positions);
+        assert_eq!(
+            (min_col, max_col, min_row, max_row, cols, rows),
+            (0, 0, 0, 0, 0, 0)
+        );
+    }
+
+    #[test]
+    fn test_compute_item_pixel_position_top_left() {
+        // 图标在 (0,0)，bounding box 从 (0,0) 开始
+        let (x, y) = compute_item_pixel_position(0, 0, 0, 0, 80, 100, 48);
+        // col_offset=0, row_offset=0
+        // x = 0 * 80 + (80 - 48) / 2 = 16
+        // y = 0 * 100 + (100 - 48) / 2 = 26
+        assert_eq!((x, y), (16, 26));
+    }
+
+    #[test]
+    fn test_compute_item_pixel_position_offset_cell() {
+        // 图标在 (2, 1)，bounding box 从 (1, 0) 开始
+        let (x, y) = compute_item_pixel_position(2, 1, 1, 0, 80, 100, 48);
+        // col_offset=1, row_offset=1
+        // x = 1 * 80 + 16 = 96
+        // y = 1 * 100 + 26 = 126
+        assert_eq!((x, y), (96, 126));
+    }
+
+    #[test]
+    fn test_compute_item_pixel_position_full_cell_icon() {
+        // 图标尺寸等于单元格尺寸
+        let (x, y) = compute_item_pixel_position(0, 0, 0, 0, 48, 48, 48);
+        // x = 0 + (48-48)/2 = 0
+        // y = 0 + (48-48)/2 = 0
+        assert_eq!((x, y), (0, 0));
+    }
+
+    #[test]
+    fn test_compute_hotzone_offset_source_at_origin() {
+        // 拖拽源在 (0,0)，bounding box 从 (0,0) 开始
+        let (ox, oy) = compute_hotzone_offset(0, 0, 0, 0, 80, 100);
+        // offset_x = 0 * 80 + 40 = 40
+        // offset_y = 0 * 100 + 50 = 50
+        assert_eq!((ox, oy), (40, 50));
+    }
+
+    #[test]
+    fn test_compute_hotzone_offset_source_at_bottom_right() {
+        // 拖拽源在 (1,1)，bounding box 从 (0,0) 开始
+        let (ox, oy) = compute_hotzone_offset(1, 1, 0, 0, 80, 100);
+        // offset_x = 1 * 80 + 40 = 120
+        // offset_y = 1 * 100 + 50 = 150
+        assert_eq!((ox, oy), (120, 150));
+    }
+
+    #[test]
+    fn test_compute_hotzone_offset_with_min_offset() {
+        // 拖拽源在 (3,2)，bounding box 从 (2,1) 开始
+        let (ox, oy) = compute_hotzone_offset(3, 2, 2, 1, 80, 100);
+        // col_offset=1, row_offset=1
+        // offset_x = 1 * 80 + 40 = 120
+        // offset_y = 1 * 100 + 50 = 150
+        assert_eq!((ox, oy), (120, 150));
+    }
+
+    #[test]
+    fn test_compute_hotzone_offset_small_cells() {
+        // 小单元格尺寸
+        let (ox, oy) = compute_hotzone_offset(0, 0, 0, 0, 20, 24);
+        // offset_x = 0 + 10 = 10
+        // offset_y = 0 + 12 = 12
+        assert_eq!((ox, oy), (10, 12));
     }
 }
 

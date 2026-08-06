@@ -89,7 +89,47 @@ pub(crate) fn check_drag_threshold(hwnd: HWND, mx: i32, my: i32) -> bool {
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     let dpi = if dpi > 0 { dpi } else { 96 };
     unsafe {
-        super::drag_image::create_drag_overlay(icon_handle, icon_size, cell_w, &display_name, dpi);
+        if data.multi_drag_items.len() > 1 {
+            // 多选拖拽：显示所有选中图标的残影
+            let mut multi_items = Vec::new();
+            let mut source_idx_in_list = 0;
+            for (list_idx, &item_idx) in data.multi_drag_items.iter().enumerate() {
+                if item_idx < data.items.len() {
+                    let item = &data.items[item_idx];
+                    multi_items.push(super::drag_image::MultiDragItemInfo {
+                        icon_handle: item.icon_handle,
+                        display_name: item.display_name.clone(),
+                        grid_col: item.grid_col,
+                        grid_row: item.grid_row,
+                    });
+                    if item_idx == drag_source_idx {
+                        source_idx_in_list = list_idx;
+                    }
+                }
+            }
+            log::info!(
+                "多选拖拽: 创建 {} 个图标的残影, source_idx={}",
+                multi_items.len(),
+                source_idx_in_list
+            );
+            super::drag_image::create_drag_overlay_multi(
+                multi_items,
+                source_idx_in_list,
+                icon_size,
+                cell_w,
+                data.cell_h,
+                dpi,
+            );
+        } else {
+            // 单选拖拽：只显示单个图标
+            super::drag_image::create_drag_overlay(
+                icon_handle,
+                icon_size,
+                cell_w,
+                &display_name,
+                dpi,
+            );
+        }
         super::drag_image::update_drag_overlay();
         // 使用 Timer 轮询检测鼠标释放（SetCapture 在分层窗口上不稳定）
         SetTimer(hwnd, TIMER_ID_GRID_DRAG, 8, std::ptr::null_mut());

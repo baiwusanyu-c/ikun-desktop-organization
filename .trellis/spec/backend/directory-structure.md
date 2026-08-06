@@ -65,7 +65,7 @@ src/
 │   │   ├── multi_select.rs    #   全局多选状态管理（跨容器选择/锚点/框选）
 │   │   ├── desktop_utils.rs   #   桌面工具函数（自动排列检测/图标定位）
 ├── rename_editor.rs   #   内联重命名编辑器（独立线程 EDIT 控件 + 异步消息通信） + 删除分类框后还原非管理图标
-│   │   ├── drag_image.rs      #   拖拽残影覆盖窗口（D2D 渲染跟随光标的半透明图标）
+│   │   ├── drag_image.rs      #   拖拽残影覆盖窗口（单选/多选图标残影，D2D 渲染 + 跨显示器 DPI 自适应）
 │   │   ├── ole_dnd.rs         #   OLE 拖拽源（IDropSource + IDataObject 实现）
 │   │   ├── drop_target.rs     #   分类框拖放目标（IDropTarget 实现）
 │   │   ├── drag_handler.rs    #   拖拽协调器（拖拽生命周期：阈值检测/位置更新/释放分发）
@@ -226,7 +226,7 @@ platform/windows/
 ├── liquid_glass.rs    # 液态玻璃 GPU 渲染器（DXGI + D2D + HLSL）
 ├── multi_select.rs    # 全局多选状态管理（跨容器选择/锚点/框选）
 ├── desktop_utils.rs   # 桌面工具函数（自动排列检测/图标定位）
-├── drag_image.rs      # 拖拽残影覆盖窗口（跨显示器 DPI 自适应重建）
+├── drag_image.rs      # 拖拽残影覆盖窗口（单选/多选图标残影，跨显示器 DPI 自适应重建）
 ├── ole_dnd.rs         # OLE 拖拽源（IDropSource + IDataObject）
 ├── drop_target.rs     # 分类框拖放目标（IDropTarget）
 ├── drag_handler.rs    # 拖拽协调器（拖拽生命周期：阈值检测/位置更新/释放分发）
