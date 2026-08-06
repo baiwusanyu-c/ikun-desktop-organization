@@ -189,6 +189,31 @@ pub struct AppRuntime {
     pub edit_dialog_initial_name: String,
 }
 
+/// 从桌面图标快照中过滤出仓库管理的图标
+///
+/// 纯逻辑函数，不含平台 API 调用，可独立进行单元测试。
+/// 输入完整的桌面图标位置快照和仓库图标显示名称集合，
+/// 返回仅包含仓库图标的位置列表（供后续恢复使用）。
+///
+/// # 参数
+/// - snapshot: 启动时记录的桌面图标名称→位置映射
+/// - `vault_display_names`: 仓库中所有图标的显示名称（小写）
+///
+/// # 返回
+/// 返回仅包含仓库图标的位置元组列表 (名称引用, x, y)
+fn filter_vault_positions<'a>(
+    snapshot: &'a std::collections::HashMap<String, (i32, i32)>,
+    vault_display_names: &std::collections::HashSet<String>,
+) -> Vec<(&'a str, i32, i32)> {
+    let mut result = Vec::new();
+    for (name, &(x, y)) in snapshot {
+        if vault_display_names.contains(&name.to_lowercase()) {
+            result.push((name.as_str(), x, y));
+        }
+    }
+    result
+}
+
 impl AppRuntime {
     /// 创建新的应用运行时
     pub fn new() -> Self {
@@ -821,13 +846,7 @@ impl AppRuntime {
         self.quit_requested
     }
 
-    /// 恢复桌面图标到快照的位置
-    ///
-    /// 在程序退出时调用，将所有图标移回到启动时记录的位置。
-    /// 由于 restore_all_hidden_icons() 将文件移回桌面后，Windows 需要时间
-    /// 处理 Shell 通知并将图标添加到 SysListView32，因此采用重试机制：
-    /// 最多重试 4 次，每次间隔递增（500ms, 1000ms, 1500ms, 2000ms）。
-    fn restore_desktop_positions(&self) {
+    fn restore_desktop_positions(&self, vault_display_names: &std::collections::HashSet<String>) {
         log::info!("开始恢复桌面图标位置");
 
         let positions = &self.desktop_positions_snapshot;
@@ -837,25 +856,33 @@ impl AppRuntime {
             return;
         }
 
+        // 使用纯逻辑函数过滤出仓库图标（跳过用户在运行时拖拽的其他图标）
         let total = positions.len();
-        // 第一轮：尝试设置所有图标位置，收集未找到的图标
+        let vault_icons = filter_vault_positions(positions, vault_display_names);
+        let filtered_count = total - vault_icons.len();
         let mut pending: Vec<(&str, i32, i32)> = Vec::new();
         let mut success_count = 0;
 
-        for (name, &(x, y)) in positions {
+        for &(name, x, y) in &vault_icons {
             match crate::platform::windows::icon_manager::set_icon_position_by_name(name, x, y) {
                 Ok(()) => success_count += 1,
                 Err(e) => {
                     let msg = format!("{}", e);
                     if msg.contains("未找到图标") {
                         log::info!("图标 '{}' 尚未出现在 SysListView32，加入重试队列", name);
-                        pending.push((name.as_str(), x, y));
+                        pending.push((name, x, y));
                     } else {
                         log::debug!("恢复图标位置失败: '{}': {}", name, e);
                     }
                 }
             }
         }
+
+        log::info!(
+            "跳过 {} 个非仓库图标，恢复 {} 个仓库图标",
+            filtered_count,
+            success_count + pending.len()
+        );
 
         // 重试轮次：等待 Windows 将刚还原的图标加入 SysListView32
         let retry_delays = [500u64, 1000, 1500, 2000];
@@ -929,13 +956,21 @@ impl AppRuntime {
         cleanup_system_tray();
         cleanup_desktop_registry();
 
+        // 在还原图标之前，获取仓库中的图标显示名称
+        // 只恢复这些图标的位置，避免覆盖用户在运行时拖拽的其他图标位置
+        let vault_display_names = crate::platform::windows::icon_hider::get_vault_display_names();
+        log::info!(
+            "仓库图标显示名称: {} 个，只恢复这些图标的位置",
+            vault_display_names.len()
+        );
+
         restore_all_hidden_icons();
 
         // 等待 Windows 处理图标还原
         std::thread::sleep(std::time::Duration::from_millis(500));
 
-        // 恢复图标到快照的位置
-        self.restore_desktop_positions();
+        // 只恢复仓库图标到快照的位置（用户在运行时拖拽的其他图标位置不受影响）
+        self.restore_desktop_positions(&vault_display_names);
     }
 
     // =================================================================
@@ -1461,5 +1496,119 @@ mod rename_validation_tests {
         assert_eq!(req.0, id3);
         assert_eq!(req.1, "第三次");
         assert!(take_pending_edit_request().is_none());
+    }
+}
+
+// ===== filter_vault_positions ???? =====
+
+#[cfg(test)]
+mod filter_vault_positions_tests {
+    use super::*;
+    use std::collections::{HashMap, HashSet};
+
+    fn make_vault_names(names: &[&str]) -> HashSet<String> {
+        names.iter().map(|n| n.to_lowercase().to_string()).collect()
+    }
+
+    #[test]
+    fn test_empty_snapshot_returns_empty() {
+        let snapshot = HashMap::new();
+        let vault = make_vault_names(&["Chrome"]);
+        let result = filter_vault_positions(&snapshot, &vault);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_empty_vault_returns_empty() {
+        let mut snapshot = HashMap::new();
+        snapshot.insert("Chrome".to_string(), (100, 200));
+        snapshot.insert("Firefox".to_string(), (300, 400));
+        let vault = HashSet::new();
+        let result = filter_vault_positions(&snapshot, &vault);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_filters_only_vault_icons() {
+        let mut snapshot = HashMap::new();
+        snapshot.insert("Chrome".to_string(), (100, 200));
+        snapshot.insert("Firefox".to_string(), (300, 400));
+        snapshot.insert("Notepad".to_string(), (500, 600));
+
+        let vault = make_vault_names(&["Chrome", "Firefox"]);
+        let result = filter_vault_positions(&snapshot, &vault);
+
+        assert_eq!(result.len(), 2);
+        let names: Vec<&str> = result.iter().map(|(n, _, _)| *n).collect();
+        assert!(names.contains(&"Chrome"));
+        assert!(names.contains(&"Firefox"));
+        assert!(!names.contains(&"Notepad"));
+    }
+
+    #[test]
+    fn test_case_insensitive_matching() {
+        let mut snapshot = HashMap::new();
+        snapshot.insert("CHROME".to_string(), (100, 200));
+        snapshot.insert("firefox".to_string(), (300, 400));
+
+        // Vault names are stored lowercase
+        let vault = make_vault_names(&["chrome", "FIREFOX"]);
+        let result = filter_vault_positions(&snapshot, &vault);
+
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_preserves_coordinates() {
+        let mut snapshot = HashMap::new();
+        snapshot.insert("Chrome".to_string(), (42, 84));
+
+        let vault = make_vault_names(&["Chrome"]);
+        let result = filter_vault_positions(&snapshot, &vault);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, "Chrome");
+        assert_eq!(result[0].1, 42);
+        assert_eq!(result[0].2, 84);
+    }
+
+    #[test]
+    fn test_no_match_returns_empty() {
+        let mut snapshot = HashMap::new();
+        snapshot.insert("Notepad".to_string(), (100, 200));
+        snapshot.insert("Calc".to_string(), (300, 400));
+
+        let vault = make_vault_names(&["Chrome", "Firefox"]);
+        let result = filter_vault_positions(&snapshot, &vault);
+
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_chinese_icon_names() {
+        let mut snapshot = HashMap::new();
+        snapshot.insert("æ­¤çµè".to_string(), (100, 200));
+        snapshot.insert("åæ¶ç«".to_string(), (300, 400));
+        snapshot.insert("Chrome".to_string(), (500, 600));
+
+        let vault = make_vault_names(&["æ­¤çµè"]);
+        let result = filter_vault_positions(&snapshot, &vault);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].1, 100);
+        assert_eq!(result[0].2, 200);
+    }
+
+    #[test]
+    fn test_all_icons_in_vault() {
+        let mut snapshot = HashMap::new();
+        snapshot.insert("A".to_string(), (10, 20));
+        snapshot.insert("B".to_string(), (30, 40));
+        snapshot.insert("C".to_string(), (50, 60));
+
+        let vault = make_vault_names(&["A", "B", "C"]);
+        let result = filter_vault_positions(&snapshot, &vault);
+
+        assert_eq!(result.len(), 3);
     }
 }

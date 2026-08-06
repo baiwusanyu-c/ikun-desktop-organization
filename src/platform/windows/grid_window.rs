@@ -1,4 +1,4 @@
-﻿//! 格子窗口 - 核心组件（Direct2D/DirectWrite 渲染）
+//! 格子窗口 - 核心组件（Direct2D/DirectWrite 渲染）
 //!
 //! 每个收纳格子是一个独立的 WS_POPUP 分层窗口。
 //! 使用 Direct2D + DirectWrite 渲染到 DIB，通过 UpdateLayeredWindow 提交。
@@ -307,7 +307,6 @@ pub(crate) const LIQUID_GLASS_SHADOW_PADDING: i32 = 128;
 /// 大幅减少 GPU 负载和与 GPUI 渲染帧的 RefCell 冲突频率。
 /// 视觉差异极小（液态玻璃效果变化较慢），但 GPU 开销降低约 70%。
 pub(crate) const LIQUID_GLASS_RENDER_INTERVAL_MS: u32 = 100;
-
 
 /// 返回当前 DPI 下液态玻璃外投影所需的物理像素留白。
 pub(crate) fn shadow_padding_for_dpi(dpi: u32) -> i32 {
@@ -618,7 +617,12 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
     // 3. 首次渲染（使用 Direct2D + UpdateLayeredWindow）
     render_layered_window(hwnd);
     unsafe {
-        SetTimer(hwnd, TIMER_ID_LIQUID_GLASS, LIQUID_GLASS_RENDER_INTERVAL_MS, std::ptr::null_mut());
+        SetTimer(
+            hwnd,
+            TIMER_ID_LIQUID_GLASS,
+            LIQUID_GLASS_RENDER_INTERVAL_MS,
+            std::ptr::null_mut(),
+        );
     }
 
     // 4. 注册到全局列表

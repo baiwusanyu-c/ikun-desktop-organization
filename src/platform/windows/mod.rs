@@ -69,7 +69,8 @@ pub use icon_extract::extract_file_icon;
 #[allow(unused_imports)] // 公共 API 预留
 #[allow(unused_imports)] // 公共 API 预留
 pub use icon_hider::{
-    icon_exists_for_box, list_vault_icons, resolve_icon_read_path, restore_all_hidden_icons,
+    get_vault_display_names, icon_exists_for_box, list_vault_icons, resolve_icon_read_path,
+    restore_all_hidden_icons,
 };
 #[allow(unused_imports)] // 公共 API 预留
 pub use icon_manager::DesktopIconManager;

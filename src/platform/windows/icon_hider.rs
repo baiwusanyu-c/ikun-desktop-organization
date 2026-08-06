@@ -1085,6 +1085,80 @@ pub fn cut_icon_to_clipboard(logical_path: &str) -> Result<()> {
     Ok(())
 }
 
+/// 从仓库文件名解析出桌面图标显示名称（纯逻辑函数，可独立测试）
+///
+/// 去掉 user__/public__ 前缀和 .lnk 扩展名，返回小写名称。
+/// 如果解析结果为空则返回 None。
+fn parse_vault_display_name(vault_name: &str) -> Option<String> {
+    let file_name = vault_name
+        .strip_prefix(PREFIX_USER)
+        .or_else(|| vault_name.strip_prefix(PREFIX_PUBLIC))
+        .unwrap_or(vault_name);
+
+    let display_name = file_name
+        .strip_suffix(".lnk")
+        .or_else(|| file_name.strip_suffix(".LNK"))
+        .unwrap_or(file_name);
+
+    if display_name.is_empty() {
+        None
+    } else {
+        Some(display_name.to_lowercase())
+    }
+}
+
+/// 获取仓库中所有图标的显示名称集合（用于退出时只恢复仓库图标的位置）
+///
+/// 扫描用户仓库（managed_icons）和公共仓库目录，从仓库文件名推导出
+/// 图标在 SysListView32 中的显示名称：去掉 user__/public__ 前缀
+/// 和 .lnk 扩展名。返回的集合使用小写，用于大小写不敏感匹配。
+pub fn get_vault_display_names() -> std::collections::HashSet<String> {
+    let mut names = std::collections::HashSet::new();
+
+    let mut vault_dirs: Vec<PathBuf> = Vec::new();
+    if let Ok(managed_dir) = get_managed_dir() {
+        if managed_dir.exists() {
+            vault_dirs.push(managed_dir);
+        }
+    }
+    let public_dir = get_public_vault_dir();
+    if public_dir.exists() {
+        vault_dirs.push(public_dir);
+    }
+    let legacy_dir = legacy_public_vault_dir();
+    if legacy_dir.exists() {
+        vault_dirs.push(legacy_dir);
+    }
+
+    for dir in &vault_dirs {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(e) => {
+                log::warn!("读取仓库目录失败 {}: {}", dir.display(), e);
+                continue;
+            }
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let vault_name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+
+            if let Some(display_name) = parse_vault_display_name(&vault_name) {
+                names.insert(display_name);
+            }
+        }
+    }
+
+    log::info!("仓库图标显示名称: {} 个", names.len());
+    names
+}
+
 /// 程序退出时将所有仓库中的图标还原到桌面。
 ///
 /// 遍历 `managed_icons/` 目录下的所有文件，根据文件名前缀
@@ -1929,5 +2003,64 @@ mod tests {
         // 清理可能在桌面上创建的 nonexistent_app.lnk
         let desktop = dirs::home_dir().expect("home dir").join("Desktop");
         let _ = std::fs::remove_file(desktop.join("nonexistent_app.lnk"));
+    }
+
+    // ===== parse_vault_display_name ???? =====
+
+    #[test]
+    fn test_parse_vault_user_prefix_lnk() {
+        let result = parse_vault_display_name("user__Chrome.lnk");
+        assert_eq!(result, Some("chrome".to_string()));
+    }
+
+    #[test]
+    fn test_parse_vault_public_prefix_lnk() {
+        let result = parse_vault_display_name("public__Firefox.lnk");
+        assert_eq!(result, Some("firefox".to_string()));
+    }
+
+    #[test]
+    fn test_parse_vault_no_prefix() {
+        let result = parse_vault_display_name("Notepad.lnk");
+        assert_eq!(result, Some("notepad".to_string()));
+    }
+
+    #[test]
+    fn test_parse_vault_no_lnk_extension() {
+        let result = parse_vault_display_name("user__MyFile.txt");
+        assert_eq!(result, Some("myfile.txt".to_string()));
+    }
+
+    #[test]
+    fn test_parse_vault_uppercase_lnk() {
+        let result = parse_vault_display_name("user__App.LNK");
+        assert_eq!(result, Some("app".to_string()));
+    }
+
+    #[test]
+    fn test_parse_vault_empty_after_strip() {
+        // "user__" with nothing after ? empty ? None
+        let result = parse_vault_display_name("user__");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_vault_empty_string() {
+        let result = parse_vault_display_name("");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_vault_chinese_name() {
+        let result = parse_vault_display_name("user__æ­¤çµè.lnk");
+        assert_eq!(result, Some("æ­¤çµè".to_string()));
+    }
+
+    #[test]
+    fn test_parse_vault_case_insensitive_result() {
+        let r1 = parse_vault_display_name("user__CHROME.lnk");
+        let r2 = parse_vault_display_name("user__chrome.lnk");
+        assert_eq!(r1, r2);
+        assert_eq!(r1, Some("chrome".to_string()));
     }
 }

@@ -1,4 +1,4 @@
-﻿//! Windows GPUI 应用入口
+//! Windows GPUI 应用入口
 //!
 //! 完整替代 eframe 的 Windows 平台入口。
 //! 使用 GPUI Application 事件循环驱动控制面板和创建分类框对话框。
@@ -254,7 +254,6 @@ fn safe_gpui_update<T>(
 /// 通常在定时器回调与渲染回调同时访问同一 Entity 时发生。
 struct RefCellBorrowConflict;
 
-
 /// 支持 #RRGGBB 和 #RRGGBBAA 格式。
 fn apply_ui_theme(ui_theme: &crate::config::app_config::UiThemeConfig, cx: &mut gpui::App) {
     use gpui::hsla;
@@ -392,9 +391,7 @@ mod tests {
     #[test]
     fn test_safe_update_pattern_app_released() {
         // 模拟 cx.update() 返回 Err（AsyncApp 已释放）
-        let inner = || -> Result<i32, anyhow::Error> {
-            Err(anyhow::anyhow!("app was released"))
-        };
+        let inner = || -> Result<i32, anyhow::Error> { Err(anyhow::anyhow!("app was released")) };
         let result = catch_unwind(AssertUnwindSafe(|| inner()));
 
         match result {
@@ -439,7 +436,12 @@ mod tests {
                     let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
                     let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
                     let a = u8::from_str_radix(&hex[6..8], 16).ok()?;
-                    Some((r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, a as f32 / 255.0))
+                    Some((
+                        r as f32 / 255.0,
+                        g as f32 / 255.0,
+                        b as f32 / 255.0,
+                        a as f32 / 255.0,
+                    ))
                 }
                 _ => None,
             }
