@@ -118,6 +118,35 @@ fn main() -> eframe::Result<()> {
 
 ---
 
+### Pattern 4: 框架层 panic 捕获（GPUI 专用）
+
+**当第三方框架（如 GPUI）的 panic 无法通过 Result 传播时，使用 catch_unwind 降级为跳过操作**：
+
+`
+ust
+/// 安全执行 GPUI update 操作，捕获 RefCell 借用冲突 panic
+fn safe_gpui_update<T>(
+    cx: &gpui::AsyncApp,
+    operation_name: &str,
+    f: impl FnOnce(&mut gpui::App) -> T,
+) -> Result<anyhow::Result<T>, RefCellBorrowConflict> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cx.update(f))) {
+        Ok(result) => Ok(result),
+        Err(_) => {
+            log::debug!("定时器跳过 {}: RefCell 借用冲突", operation_name);
+            Err(RefCellBorrowConflict)
+        }
+    }
+}
+`
+
+**适用场景**：
+- GPUI 定时器回调与渲染循环的 RefCell 借用冲突
+- 第三方 UI 框架内部 panic 无法通过 Result 传播时
+- **不适用于**业务逻辑中的可恢复错误（应使用 nyhow::Result）
+
+---
+
 ## Error Logging
 
 ### 错误级别对应

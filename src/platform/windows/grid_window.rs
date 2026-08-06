@@ -301,6 +301,13 @@ static CLASS_REGISTERED: Mutex<bool> = Mutex::new(false);
 /// 128px 可覆盖最强亮区模式下约 3 倍高斯标准差加垂直偏移，避免投影在
 /// `WS_EX_LAYERED` 窗口边界被矩形裁切。
 pub(crate) const LIQUID_GLASS_SHADOW_PADDING: i32 = 128;
+/// 液态玻璃渲染定时器间隔（毫秒）
+///
+/// 从原始的 33ms (~30 FPS) 降低到 100ms (~10 FPS)，
+/// 大幅减少 GPU 负载和与 GPUI 渲染帧的 RefCell 冲突频率。
+/// 视觉差异极小（液态玻璃效果变化较慢），但 GPU 开销降低约 70%。
+pub(crate) const LIQUID_GLASS_RENDER_INTERVAL_MS: u32 = 100;
+
 
 /// 返回当前 DPI 下液态玻璃外投影所需的物理像素留白。
 pub(crate) fn shadow_padding_for_dpi(dpi: u32) -> i32 {
@@ -611,7 +618,7 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
     // 3. 首次渲染（使用 Direct2D + UpdateLayeredWindow）
     render_layered_window(hwnd);
     unsafe {
-        SetTimer(hwnd, TIMER_ID_LIQUID_GLASS, 33, std::ptr::null_mut());
+        SetTimer(hwnd, TIMER_ID_LIQUID_GLASS, LIQUID_GLASS_RENDER_INTERVAL_MS, std::ptr::null_mut());
     }
 
     // 4. 注册到全局列表
@@ -1040,5 +1047,40 @@ mod tests {
         // config_id 应为 v4 UUID
         assert_eq!(data.config_id.get_version_num(), 4);
         let _ = id; // 验证外部 UUID 可用
+    }
+}
+
+#[cfg(test)]
+mod liquid_glass_timer_tests {
+    use super::LIQUID_GLASS_RENDER_INTERVAL_MS;
+
+    /// 验证液态玻璃渲染定时器间隔已从 33ms 提升到 100ms
+    ///
+    /// 100ms (~10 FPS) 在视觉上与 33ms (~30 FPS) 差异极小，
+    /// 但 GPU 开销降低约 70%，同时减少与 GPUI 渲染帧的 RefCell 冲突窗口。
+    #[test]
+    fn test_liquid_glass_render_interval() {
+        assert_eq!(
+            LIQUID_GLASS_RENDER_INTERVAL_MS, 100,
+            "液态玻璃渲染间隔应为 100ms（从 33ms 优化而来）"
+        );
+    }
+
+    /// 验证渲染间隔不低于合理下限（避免过于频繁的渲染）
+    #[test]
+    fn test_liquid_glass_render_interval_minimum() {
+        assert!(
+            LIQUID_GLASS_RENDER_INTERVAL_MS >= 50,
+            "渲染间隔不应低于 50ms，避免过高 GPU 负载"
+        );
+    }
+
+    /// 验证渲染间隔不超过合理上限（避免明显卡顿）
+    #[test]
+    fn test_liquid_glass_render_interval_maximum() {
+        assert!(
+            LIQUID_GLASS_RENDER_INTERVAL_MS <= 200,
+            "渲染间隔不应超过 200ms，避免视觉卡顿"
+        );
     }
 }

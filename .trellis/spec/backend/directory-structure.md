@@ -34,7 +34,7 @@ src/
 │   ├── control_panel.rs       #   GPUI 控制面板视图
 │   ├── create_box_dialog.rs   #   独立 GPUI 创建分类框窗口
 │   ├── edit_box_dialog.rs    #   独立 GPUI 编辑分类框窗口（双击标题打开）
-│   ├── windows_main.rs        #   GPUI Application 事件循环
+│   ├── windows_main.rs        #   GPUI Application 事件循环与轮询调度（safe_gpui_update 防崩溃）
 │   └── settings_view.rs       #   液态玻璃效果设置面板（GPUI 独立窗口）
 │
 ├── platform/                  # 平台抽象层

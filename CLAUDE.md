@@ -80,7 +80,7 @@ src/
 │   ├── app_runtime.rs         #   UI 框架无关运行时/命令层（AppContext + 平台服务）
 │   ├── control_panel.rs       #   GPUI 控制面板视图
 │   ├── create_box_dialog.rs   #   GPUI 独立“创建分类框”窗口
-│   ├── windows_main.rs        #   GPUI Application 事件循环与轮询调度
+│   ├── windows_main.rs        #   GPUI Application 事件循环与轮询调度（safe_gpui_update 防崩溃）
 │   └── settings_view.rs       #   液态玻璃效果设置面板（GPUI 独立窗口）
 │
 ├── platform/                  # 平台抽象层
@@ -335,6 +335,20 @@ main.rs
 **图标提取与项目图标**：`SHDefExtractIconW` 优先提取 128×128 高清图标，`.lnk` 先通过 `IShellLink` + `IPersistFile` 解析目标后提取目标图标，避免快捷方式箭头覆层污染分类框图标。应用项目图标从 `logo.ico` 经 `build.rs` 嵌入可执行文件，供系统托盘和菜单项图标使用。
 
 **DPI 适配**：manifest + 运行时 `SetProcessDpiAwarenessContext(PER_MONITOR_V2)`，`GetDpiForWindow` + `WM_DPICHANGED` 动态响应
+
+---
+
+## GPUI 定时器防崩溃机制
+
+GPUI 的 Entity::update() / App::update() 内部使用 RefCell 借用检查。当 100ms 异步定时器的 orrow_mut 与渲染循环的 orrow 同时发生时，会触发 double_lease_panic! 导致进程硬崩溃。
+
+**解决方案**：windows_main.rs 中的 safe_gpui_update() 辅助函数通过 std::panic::catch_unwind 将 panic 降级为可恢复的跳过操作：
+
+- Ok(Ok(T)) — update 成功执行
+- Ok(Err(_)) — GPUI AsyncApp 已释放（应用正在退出），终止定时器
+- Err(RefCellBorrowConflict) — RefCell 借用冲突，跳过本次 tick（continue）
+
+**注意**：定时器间隔已从 50ms 调整为 100ms，液态玻璃渲染定时器从 33ms 调整为 100ms，大幅降低冲突概率。
 
 ---
 
