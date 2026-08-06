@@ -14,7 +14,7 @@
 - **legacy eframe 回退**：`app.rs` + `ui/` 仅作为 `eframe-ui` feature 回退路径
 - **平台抽象**：`platform/` 通过 trait 统一接口，各平台独立实现
 - **业务解耦**：`box_core/` 分类框业务逻辑与平台渲染完全分离
-- **插件化**：`plugin/` 功能模块作为插件注册
+- **插件扩展边界**：`plugin/` 提供 `Plugin`/`PluginRegistry` 预留接口，当前 GPUI 运行时尚未接入；平台渲染与 Shell 集成不作为业务插件注册
 - **条件编译隔离**：平台特定代码使用 `#[cfg(...)]` 隔离
 - **层次清晰**：UI View → AppRuntime/AppContext → 业务/平台，单向依赖
 
@@ -50,6 +50,7 @@ src/
 │   │   │   └── overlay_drop_target.rs  # OLE 拖放目标（IDropTarget 实现）
 │   │   ├── alignment_guide/   #   对齐参考线（对齐检测 + 动态对比色 + overlay 渲染）
 │   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎
+│   │   ├── icon_bitmap.rs     #   图标透明边界与等比居中计算（纯逻辑）
 │   │   ├── grid_window.rs     #   窗口创建/销毁/数据模型/Z-order 管理（push_other_grids_below + 递归抑制）
 │   │   ├── grid_layout.rs     #   布局计算/按钮矩形/命中测试/滚动重排
 │   │   ├── monitor_utils.rs   #   显示器查询/窗口定位工具
@@ -58,7 +59,7 @@ src/
 │   │   ├── menu_window.rs     #   自定义分层窗口深色菜单（D2D/DirectWrite）
 │   │   ├── shell_menu.rs      #   Shell 右键菜单 + 桌面背景注册表菜单（覆盖区域含 Ikun 动作，分类框不含）
 │   │   ├── app_icon.rs        #   嵌入 logo.ico 项目图标（托盘/菜单）
-│   │   ├── icon_extract.rs    #   图标提取（IShellItemImageFactory 缩略图 + SHDefExtractIconW + .lnk 解析）
+│   │   ├── icon_extract.rs    #   图标提取（内容缩略图/应用 HICON 分流 + .lnk 目标解析）
 │   │   ├── icon_hider.rs      #   图标隐藏/恢复 + managed_icons vault
 │   │   ├── liquid_glass.rs    #   液态玻璃 GPU 渲染器（DXGI + D2D + HLSL）
 │   │   ├── multi_select.rs    #   全局多选状态管理（跨容器选择/锚点/框选）
@@ -212,6 +213,7 @@ platform/windows/
 │   └── overlay_drop_target.rs  # OLE 拖放目标（IDropTarget 实现）
 ├── alignment_guide/   # 对齐参考线（对齐检测 + 动态对比色 + overlay 渲染）
 ├── d2d_render.rs      # D2D/DirectWrite 渲染（draw_icon_with_label 统一图标+文本渲染）
+├── icon_bitmap.rs     # 图标透明边界与等比居中计算（纯逻辑 + 单元测试）
 ├── grid_window.rs     # 窗口创建/销毁/数据模型
 ├── grid_layout.rs     # 布局计算/按钮矩形/命中测试/滚动重排
 ├── monitor_utils.rs   # 显示器查询/窗口定位工具
@@ -219,7 +221,7 @@ platform/windows/
 ├── menu_window.rs     # 自定义分层窗口深色菜单（D2D/DirectWrite）
 ├── shell_menu.rs      # Shell 右键菜单 + 注册表菜单动作（覆盖区域含 Ikun 动作，分类框不含）
 ├── app_icon.rs        # 项目图标资源加载
-├── icon_extract.rs    # 图标提取（IShellItemImageFactory 缩略图 + SHDefExtractIconW + .lnk 目标解析）
+├── icon_extract.rs    # 图标提取（内容缩略图/应用 HICON 分流 + .lnk 目标解析）
 ├── icon_hider.rs      # 图标隐藏/恢复 + managed_icons vault
 ├── liquid_glass.rs    # 液态玻璃 GPU 渲染器（DXGI + D2D + HLSL）
 ├── multi_select.rs    # 全局多选状态管理（跨容器选择/锚点/框选）

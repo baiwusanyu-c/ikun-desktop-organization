@@ -1390,7 +1390,24 @@ struct IShellItemImageFactoryVtbl {
 - `SIIGBF_RESIZETOFIT`: Generate thumbnail on-demand if not cached
 - `SIIGBF_THUMBNAILONLY`: Only return cached thumbnails (returns error if not cached)
 
-**Recommendation**: Use `SIIGBF_RESIZETOFIT` without `THUMBNAILONLY` to ensure thumbnails are always available.
+**Recommendation**: Use `SIIGBF_RESIZETOFIT` without `THUMBNAILONLY` for content files that should display a preview.
+
+#### Source Selection: Content Preview vs Application Icon
+
+`IShellItemImageFactory` is not a universal first choice. For `.lnk`, `.exe`, `.dll`,
+`.msi`, `.cmd`, `.bat`, `.com`, `.url`, and `.appref-ms`, Shell may return a small
+application glyph centered in a large thumbnail canvas. Scaling that canvas into a grid
+cell makes the visible icon much smaller than neighboring icons.
+
+Use `should_extract_thumbnail()` in `src/platform/windows/icon_extract.rs` as the single
+selection policy:
+
+- Content files: try `IShellItemImageFactory`, then fall back to Shell icon extraction.
+- Application/shortcut files: skip thumbnails and use `SHDefExtractIconW`/`SHGetFileInfoW`.
+- `.lnk`: resolve the target first, then apply the target file's extraction policy.
+
+Do not duplicate extension checks at call sites. Add table-driven unit tests whenever the
+application-extension set changes, including uppercase extensions.
 
 #### Conversion to HICON
 
@@ -1404,6 +1421,24 @@ fn thumbnail_to_hicon(hbitmap: RawHBITMAP) -> HICON {
     // Release original HBITMAP
 }
 ```
+
+#### Transparent Canvas Normalization
+
+HICON sources can contain a valid glyph surrounded by transparent pixels. Use the pure
+helpers in `src/platform/windows/icon_bitmap.rs` to calculate non-zero-alpha bounds and
+the aspect-ratio-preserving destination rectangle. `d2d_render.rs` applies these helpers
+once when an HICON is converted to a cached D2D bitmap.
+
+This normalization belongs in the shared D2D icon path so the classification grid,
+desktop overlay, and drag image stay visually consistent. It must not change
+`ViewParams::icon_size`, grid cell dimensions, or label coordinates.
+
+Required pure-logic tests:
+
+- transparent padding is removed;
+- full-canvas and fully transparent inputs are handled;
+- malformed dimensions do not panic;
+- landscape and portrait content remain centered without stretching.
 
 ### DWRITE Text Trimming
 

@@ -41,7 +41,7 @@ cargo watch -x check             # 自动检查（需 cargo install cargo-watch�
 |-------|------|------|
 | gpui / gpui-component | 0.2.2 / 0.5.1 | Windows 默认控制面板与独立创建分类框窗口 |
 | egui / eframe / epaint | 0.27 | legacy 控制面板回退路径（`eframe-ui` feature） |
-| windows | 0.58 | Windows API（Shell COM、Direct2D、DirectWrite、GDI、窗口管理） |
+| windows | 0.62 | Windows API（Shell COM、Direct2D、DirectWrite、GDI、窗口管理） |
 | cocoa / objc | 0.25 | macOS API（实验性） |
 | serde / serde_json | 1.0 | 统一 JSON 配置序列化 |
 | serde_yaml | 0.9 | YAML 分类规则（兼容旧格式） |
@@ -63,9 +63,9 @@ cargo watch -x check             # 自动检查（需 cargo install cargo-watch�
 - **平台抽象**：`platform/` 通过 trait 统一接口，Windows/macOS 各自实现
 - **业务分离**：`box_core/` 分类框业务逻辑与平台渲染完全解耦
 - **上下文注入**：所有模块通过 `AppContext` 共享状态，替代全局变量
-- **插件化**：`plugin/` 功能模块作为插件注册，灵活扩展
+- **插件扩展边界**：`plugin/` 提供 `Plugin`/`PluginRegistry` 预留接口，当前 GPUI 运行时尚未接入，不支持运行时热拔插；平台渲染与 Shell 集成保留在 `platform/`
 - **统一配置**：单一 `~/.ikun_organizer.json` 管理所有设置，支持导入/导出
-- **单文件 ≤ 1500 行**：渲染引擎等复杂模块可适当放宽（如 d2d_render.rs ~1400 行），但应控制在合理范围内
+- **单文件 ≤ 1500 行**：渲染引擎等复杂模块可适当放宽；可独立测试的纯逻辑应拆到小模块，避免继续扩大渲染文件
 
 ### 项目目录结构
 
@@ -96,13 +96,14 @@ src/
 │   │   │   ├── overlay_drop_target.rs # OLE 拖放目标（IDropTarget 实现）
 │   │   ├── alignment_guide/   #   对齐参考线（对齐检测 + 动态对比色 + overlay 渲染）
 │   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎（draw_icon_with_label 统一图标+文本渲染）
+│   │   ├── icon_bitmap.rs     #   图标透明边界与等比居中计算（纯逻辑 + 单元测试）
 │   │   ├── grid_window.rs     #   窗口创建/销毁/布局收集/Z-order 管理
 │   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc
 │   │   ├── zorder.rs          #   Z-order 层级管理（分类框低于其他应用窗口 + 坐标查找）
 │   │   ├── menu_window.rs     #   自定义分层窗口深色菜单（D2D/DirectWrite 渲染）
 │   │   ├── shell_menu.rs      #   Shell 右键菜单 + 桌面背景注册表菜单（覆盖区域含 Ikun 动作，分类框空白处不含）
 │   │   ├── app_icon.rs        #   嵌入 logo.ico 资源加载（托盘/菜单图标）
-│   │   ├── icon_extract.rs    #   图标提取（SHDefExtractIconW + .lnk 解析目标图标）
+│   │   ├── icon_extract.rs    #   图标提取（内容缩略图/应用 HICON 分流 + .lnk 目标解析）
 │   │   ├── icon_hider.rs      #   图标隐藏/恢复（SysListView32）+ managed_icons 仓库（Vault）+ 删除分类框后还原非管理图标
 │   │   ├── liquid_glass.rs    #   液态玻璃 GPU 渲染器（DXGI + D2D Effect + HLSL Shader）
 │   │   ├── multi_select.rs    #   全局多选状态管理（跨分类框/覆盖区域）
@@ -273,6 +274,8 @@ pub trait Plugin: Send {
 ### 渲染架构
 
 - **原生桌面渲染**：未分类图标留在桌面原位由 Windows 渲染，已分类图标移入仓库后自然不显示
+- **图标资源分流**：`platform/windows/icon_extract.rs` 对图片、视频、PDF 等内容文件使用 `IShellItemImageFactory` 缩略图；对 `.lnk`、`.exe` 等应用文件使用 `SHDefExtractIconW`/Shell 图标，避免 Shell 缩略图画布中的额外留白。
+- **图标内容适配**：`platform/windows/icon_bitmap.rs` 负责透明边界与等比居中计算，`d2d_render.rs` 在 HICON 转 D2D 位图时应用该策略；网格尺寸仍由 `box_core::view_engine` 和 `grid_layout` 统一控制。
 - **液态玻璃效果**：通过 DXGI Desktop Duplication 捕获桌面画面，D2D Effect Graph 处理纹理，HLSL Shader 生成预乘 alpha 位图
 - **覆盖区域交互层**：透明分层窗口提供多选、右键菜单、拖拽等交互能力（非渲染层）
 

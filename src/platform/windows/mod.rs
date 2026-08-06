@@ -7,6 +7,7 @@
 //! - `ffi_imports`: Win32 FFI 函数声明�?Shell COM 类型
 //! - `desktop_manager`: Windows DesktopManager 实现
 //! - `d2d_render`: Direct2D/DirectWrite 渲染
+//! - `icon_bitmap`: 图标透明边界与等比居中计算
 //! - `grid_window`: 格子窗口管理
 //! - `icon_extract`: 文件图标提取
 //! - `icon_hider`: 图标仓库（managed_icons，无需管理员）
@@ -30,6 +31,7 @@ pub mod ffi_types;
 pub mod global_hotkey;
 pub mod grid_layout;
 pub mod grid_window;
+mod icon_bitmap;
 pub mod icon_extract;
 pub mod icon_hider;
 pub mod icon_manager;

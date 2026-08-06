@@ -11,12 +11,16 @@
 //! - `GridLayout`：布局位置（cols/cell_w/cell_h/grid_left/grid_top）
 //! - `ViewParams`：视图模式参数（icon_size/show_label 等）
 //!
+//! HICON 转换为 D2D 位图时会裁剪外围透明画布，并在目标图标区域内保持
+//! 内容宽高比居中；图标区域尺寸仍由 `ViewParams`/`GridLayout` 决定。
+//!
 //! 支持 4 种图标模式（ExtraLarge/Large/Medium/Small），未来扩展列表/详细信息/平铺/内容。
 
 use crate::box_core::layout_calc::{calculate_grid, GridLayout};
 use crate::box_core::view_engine::{get_view_params, ViewParams};
 
 use super::grid_window::GridFileItem;
+use super::icon_bitmap::{icon_destination_rect, visible_pixel_bounds};
 
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -1172,6 +1176,21 @@ fn draw_icon_d2d(
 
     unsafe { ReleaseDC(std::ptr::null_mut(), screen_dc) };
 
+    // Remove transparent canvas padding before scaling the icon into its cell.
+    let source_w = bmp_w as usize;
+    let source_h = bmp_h as usize;
+    let (mut pixels, bitmap_w, bitmap_h) = match visible_pixel_bounds(&pixels, source_w, source_h) {
+        Some((left, top, width, height)) if width != source_w || height != source_h => {
+            let mut cropped = Vec::with_capacity(width * height);
+            for row in top..top + height {
+                let start = row * source_w + left;
+                cropped.extend_from_slice(&pixels[start..start + width]);
+            }
+            (cropped, width, height)
+        }
+        _ => (pixels, source_w, source_h),
+    };
+
     // 3. 将 straight alpha (BGRA) 转换为 premultiplied alpha
     //    HBITMAP 像素是 straight alpha: RGB 是原始颜色，A 是透明度
     //    D2D 需要 premultiplied: RGB' = RGB * A/255
@@ -1195,11 +1214,11 @@ fn draw_icon_d2d(
     let d2d_bitmap = unsafe {
         target.CreateBitmap(
             D2D_SIZE_U {
-                width: bmp_w as u32,
-                height: bmp_h as u32,
+                width: bitmap_w as u32,
+                height: bitmap_h as u32,
             },
             Some(pixels.as_ptr() as *const c_void),
-            (bmp_w as u32) * 4, // pitch = width * bytes_per_pixel
+            (bitmap_w as u32) * 4, // pitch = width * bytes_per_pixel
             &bitmap_props,
         )
     };
@@ -1221,7 +1240,10 @@ fn draw_icon_d2d(
 }
 
 fn draw_icon_bitmap(target: &ID2D1DCRenderTarget, bitmap: &ID2D1Bitmap, x: i32, y: i32, size: i32) {
-    let dest_rect = d2d_rect(x as f32, y as f32, (x + size) as f32, (y + size) as f32);
+    let bitmap_size = unsafe { bitmap.GetPixelSize() };
+    let (left, top, right, bottom) =
+        icon_destination_rect(bitmap_size.width, bitmap_size.height, x, y, size);
+    let dest_rect = d2d_rect(left, top, right, bottom);
     unsafe {
         target.DrawBitmap(
             bitmap,

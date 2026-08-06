@@ -2,8 +2,10 @@
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
-//! 使用 SHGetFileInfoW / SHDefExtractIconW 获取文件的系统图标句柄 (HICON)
-//! 支持解析 .lnk 快捷方式的目标路径以提取高清图标
+//! 获取文件缩略图或系统图标句柄 (HICON)。
+//!
+//! 内容文件优先使用 `IShellItemImageFactory` 缩略图；应用文件和 `.lnk`
+//! 快捷方式使用 `SHDefExtractIconW` 等 Shell 图标 API，避免缩略图画布留白。
 
 use std::ffi::c_void;
 
@@ -591,15 +593,17 @@ pub fn extract_file_icon(file_path: &str) -> Option<FileIconInfo> {
 
     // 0. 优先尝试提取缩略图（图片/视频/文档等支持缩略图的文件）
     //    缩略图由 IShellItemImageFactory 提供，与 Windows 资源管理器显示一致
-    if let Some(thumbnail) = extract_file_thumbnail(icon_extract_path, 256) {
-        let hicon = thumbnail_to_hicon(thumbnail);
-        if !hicon.is_null() {
-            log::info!("[thumbnail] using thumbnail: {}", file_path);
-            return Some(FileIconInfo {
-                hicon,
-                display_name,
-                type_name,
-            });
+    if should_extract_thumbnail(icon_extract_path) {
+        if let Some(thumbnail) = extract_file_thumbnail(icon_extract_path, 256) {
+            let hicon = thumbnail_to_hicon(thumbnail);
+            if !hicon.is_null() {
+                log::info!("[thumbnail] using thumbnail: {}", file_path);
+                return Some(FileIconInfo {
+                    hicon,
+                    display_name,
+                    type_name,
+                });
+            }
         }
     }
 
@@ -670,6 +674,28 @@ pub fn extract_file_icon(file_path: &str) -> Option<FileIconInfo> {
     None
 }
 
+/// Thumbnails are useful for content files, but executable/shortcut thumbnails
+/// often contain a padded shell preview instead of the application icon.
+fn should_extract_thumbnail(file_path: &str) -> bool {
+    let extension = std::path::Path::new(file_path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase());
+
+    !matches!(
+        extension.as_deref(),
+        Some("lnk")
+            | Some("url")
+            | Some("exe")
+            | Some("dll")
+            | Some("com")
+            | Some("bat")
+            | Some("cmd")
+            | Some("msi")
+            | Some("appref-ms")
+    )
+}
+
 /// 释放图标句柄
 pub fn destroy_icon(hicon: HICON) {
     if !hicon.is_null() {
@@ -702,6 +728,32 @@ mod thumbnail_tests {
         // Null HBITMAP should return null HICON
         let result = thumbnail_to_hicon(std::ptr::null_mut());
         assert!(result.is_null(), "Null input should return null HICON");
+    }
+
+    #[test]
+    fn test_should_skip_padded_shell_thumbnails_for_app_files() {
+        let application_paths = [
+            r"C:\Apps\cursor.EXE",
+            r"C:\Users\test\Desktop\app.lnk",
+            r"C:\Apps\library.dll",
+            r"C:\Apps\legacy.com",
+            r"C:\Apps\installer.msi",
+            r"C:\Apps\launcher.appref-ms",
+            r"C:\Apps\setup.bat",
+            r"C:\Apps\script.cmd",
+            r"C:\Apps\website.url",
+        ];
+        for path in application_paths {
+            assert!(!should_extract_thumbnail(path), "should skip {path}");
+        }
+
+        assert!(should_extract_thumbnail(
+            r"C:\Users\test\Pictures\photo.png"
+        ));
+        assert!(should_extract_thumbnail(
+            r"C:\Users\test\Documents\manual.pdf"
+        ));
+        assert!(should_extract_thumbnail(r"C:\Users\test\Documents\README"));
     }
 
     #[test]

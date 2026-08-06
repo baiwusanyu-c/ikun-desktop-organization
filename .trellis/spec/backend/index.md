@@ -13,7 +13,7 @@
 - **AppContext 上下文注入**：所有模块通过中心上下文共享状态和配置，GPUI 路径由 `gpui_app::AppRuntime` 持有并调度 `AppContext`
 - **Trait-based 设计**：跨平台功能通过 trait 统一接口
 - **条件编译**：平台特定代码和 legacy UI 使用 `#[cfg(...)]` 隔离
-- **插件化**：功能模块作为 Plugin 注册，灵活扩展
+- **插件扩展边界**：`Plugin`/`PluginRegistry` 已定义，当前 GPUI 运行时尚未接入；新增平台渲染或 Shell 细节仍留在 `platform/`，不得为追求“插件化”制造反向依赖
 - **统一配置**：单一 JSON 文件管理所有设置
 - **单向依赖**：UI View → AppRuntime/AppContext → 业务/平台，禁止反向依赖
 
