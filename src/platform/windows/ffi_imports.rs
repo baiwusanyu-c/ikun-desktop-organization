@@ -1106,3 +1106,11 @@ extern "system" {
     pub fn ImmDestroyContext(himc: HIMC) -> i32;
 
 }
+
+
+// ===== SHFileOperationW (shell32.dll) =====
+
+#[link(name = "shell32")]
+extern "system" {
+    pub fn SHFileOperationW(p_fileop: *const SHFILEOPSTRUCTW) -> i32;
+}

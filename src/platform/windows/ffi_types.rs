@@ -975,3 +975,29 @@ mod tests {
     }
 }
 pub const DI_NORMAL: u32 = 0x0003;
+
+
+// ===== SHFileOperationW FFI 类型/常量 =====
+
+/// SHFileOperationW 文件操作结构体
+#[repr(C)]
+#[allow(non_snake_case)]
+pub struct SHFILEOPSTRUCTW {
+    pub hwnd: HWND,
+    pub w_func: u32,
+    pub p_from: *const u16,
+    pub p_to: *const u16,
+    pub f_flags: u16,
+    pub f_any_operations_aborted: i32,
+    pub h_name_mappings: *mut c_void,
+    pub lpsz_progress_title: *const u16,
+}
+
+// SHFileOperationW 操作类型
+pub const FO_MOVE: u32 = 0x0001;
+pub const FO_COPY: u32 = 0x0002;
+pub const FO_DELETE: u32 = 0x0003;
+
+// SHFileOperationW 标志
+pub const FOF_NOCONFIRMATION: u16 = 0x0010;
+pub const FOF_NOCONFIRMMKDIR: u16 = 0x0200;

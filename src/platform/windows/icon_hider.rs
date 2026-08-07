@@ -62,11 +62,57 @@ fn move_file(src: &Path, dst: &Path) -> Result<()> {
 /// 移动公共桌面文件：先走普通文件操作，权限不足时交给系统 Shell/UAC。
 /// 失败时源文件保持不变，调用方可据此保持 UI 与配置不变。
 fn move_public_file(src: &Path, dst: &Path) -> Result<()> {
+    use super::ffi_imports::SHFileOperationW;
+    use super::ffi_types::{SHFILEOPSTRUCTW, FO_MOVE, FOF_NOCONFIRMATION, FOF_NOCONFIRMMKDIR};
+
+    // 1. 先尝试直接移动（有权限时无需 UAC）
     match std::fs::rename(src, dst) {
-        Ok(()) => Ok(()),
-        Err(rename_error) => move_with_ifile_operation(&src.to_string_lossy(), dst)
-            .map_err(|e| anyhow::anyhow!("普通移动失败: {}; 提权移动失败: {}", rename_error, e)),
+        Ok(()) => return Ok(()),
+        Err(rename_error) => {
+            log::info!("[MOVE-PUBLIC] rename 失败 ({}), 尝试 SHFileOperationW", rename_error);
+        }
     }
+
+    // 2. 使用 SHFileOperationW（会弹出 UAC 授权框）
+    log::info!("[MOVE-PUBLIC] 使用 SHFileOperationW: {} -> {}", src.display(), dst.display());
+
+    let from_wide = make_double_null_wide(src);
+    let to_wide = make_double_null_wide(dst);
+
+    let fileop = SHFILEOPSTRUCTW {
+        hwnd: std::ptr::null_mut(),
+        w_func: FO_MOVE,
+        p_from: from_wide.as_ptr(),
+        p_to: to_wide.as_ptr(),
+        f_flags: FOF_NOCONFIRMATION | FOF_NOCONFIRMMKDIR,
+        f_any_operations_aborted: 0,
+        h_name_mappings: std::ptr::null_mut(),
+        lpsz_progress_title: std::ptr::null(),
+    };
+
+    let result = unsafe { SHFileOperationW(&fileop) };
+
+    if result != 0 {
+        log::warn!("[MOVE-PUBLIC] SHFileOperationW 失败: {}", result);
+        return Err(anyhow::anyhow!("SHFileOperationW 失败: {}", result));
+    }
+
+    if fileop.f_any_operations_aborted != 0 {
+        return Err(anyhow::anyhow!("用户取消了操作"));
+    }
+
+    log::info!("[MOVE-PUBLIC] SHFileOperationW 成功");
+    Ok(())
+}
+
+/// 将路径编码为双 null 结尾的 UTF-16 宽字符串（SHFileOperationW 要求的格式）
+fn make_double_null_wide(path: &Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    path.as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .chain(std::iter::once(0))
+        .collect()
 }
 
 // =============================================================================
@@ -1594,195 +1640,6 @@ pub fn list_vault_icons() -> Vec<crate::platform::types::DesktopIcon> {
 ///
 /// Windows 原生文件操作接口，权限不足时自动弹出标准对话框：
 /// "你需要权限来执行此操作" → 用户点"继续" → UAC 授权 → 文件移动
-fn move_with_ifile_operation(src_path: &str, dst_path: &Path) -> anyhow::Result<()> {
-    use std::ffi::c_void;
-
-    extern "system" {
-        fn CoCreateInstance(
-            clsid: *const u8,
-            p_unk: *mut c_void,
-            cls_ctx: u32,
-            iid: *const u8,
-            ppv: *mut *mut c_void,
-        ) -> i32;
-        fn SHCreateItemFromParsingName(
-            psz_path: *const u16,
-            pbc: *mut c_void,
-            riid: *const u8,
-            ppv: *mut *mut c_void,
-        ) -> i32;
-    }
-
-    // IFileOperation vtable - 按 Windows SDK shobjidl_core.h 正确顺序
-    // 0: QueryInterface, 1: AddRef, 2: Release (IUnknown)
-    // 3: Advise, 4: Unadvise, 5: SetOperationFlags
-    // 6: SetProgressMessage, 7: SetProgressDialogTitle
-    // 8: SetProgressDialogMessage, 9: SetProgressDialogAnimation
-    // 10: SetOwnerWindow, 11: ApplyPropertiesToItem
-    // 12: ApplyPropertiesToItems, 13: SetProperties
-    // 14: MoveItem, 15: MoveItems
-    // 16: CopyItem, 17: CopyItems
-    // 18: DeleteItem, 19: DeleteItems
-    // 20: RenameItem, 21: RenameItems
-    // 22: NewItem, 23: NewItems
-    // 24: PerformOperations, 25: GetAnyOperationsAborted
-    const IDX_SET_OPERATION_FLAGS: usize = 5;
-    const IDX_MOVE_ITEM: usize = 14;
-    const IDX_PERFORM_OPS: usize = 24;
-    const IDX_GET_ABORTED: usize = 25;
-
-    type SetOperationFlagsFn = unsafe extern "system" fn(*mut c_void, u32) -> i32;
-    type MoveItemFn =
-        unsafe extern "system" fn(*mut c_void, *mut c_void, *mut c_void, *const u16, u32) -> i32;
-    type PerformOpsFn = unsafe extern "system" fn(*mut c_void) -> i32;
-    type GetAbortedFn = unsafe extern "system" fn(*mut c_void, *mut i32) -> i32;
-    type ReleaseFn = unsafe extern "system" fn(*mut c_void) -> u32;
-
-    // CLSID_FileOperation = {3ad05575-8857-4850-98f2-148fa4e14053}
-    const CLSID: [u8; 16] = [
-        0x75, 0x55, 0xd0, 0x3a, 0x57, 0x88, 0x50, 0x48, 0x98, 0xf2, 0x14, 0x8f, 0xa4, 0xe1, 0x40,
-        0x53,
-    ];
-    // IID_IFileOperation = {947aab5f-0a5c-4c13-b4d6-4bf7836fc9f8}
-    const IID_IOP: [u8; 16] = [
-        0x5f, 0xab, 0x7a, 0x94, 0x5c, 0x0a, 0x13, 0x4c, 0xb4, 0xd6, 0x4b, 0xf7, 0x83, 0x6f, 0xc9,
-        0xf8,
-    ];
-    // IID_IShellItem = {43826d1e-e718-42ee-bc55-a1e261c37bfe}
-    const IID_SI: [u8; 16] = [
-        0x1e, 0x6d, 0x82, 0x43, 0x18, 0xe7, 0xee, 0x42, 0xbc, 0x55, 0xa1, 0xe2, 0x61, 0xc3, 0x7b,
-        0xfe,
-    ];
-
-    const CLSCTX: u32 = 1;
-    const S_OK: i32 = 0;
-
-    unsafe {
-        let mut file_op: *mut c_void = std::ptr::null_mut();
-        let hr = CoCreateInstance(
-            CLSID.as_ptr(),
-            std::ptr::null_mut(),
-            CLSCTX,
-            IID_IOP.as_ptr(),
-            &mut file_op,
-        );
-        if hr != S_OK || file_op.is_null() {
-            return Err(anyhow::anyhow!(
-                "CoCreateInstance(IFileOperation) failed: {:#x}",
-                hr
-            ));
-        }
-
-        let vtbl = *(file_op as *const *const *const c_void);
-        let release_fn: ReleaseFn = std::mem::transmute(*vtbl.add(2));
-        let set_operation_flags_fn: SetOperationFlagsFn =
-            std::mem::transmute(*vtbl.add(IDX_SET_OPERATION_FLAGS));
-        let move_item_fn: MoveItemFn = std::mem::transmute(*vtbl.add(IDX_MOVE_ITEM));
-        let perform_fn: PerformOpsFn = std::mem::transmute(*vtbl.add(IDX_PERFORM_OPS));
-        let get_aborted_fn: GetAbortedFn = std::mem::transmute(*vtbl.add(IDX_GET_ABORTED));
-
-        // 创建源 IShellItem
-        let src_w: Vec<u16> = src_path.encode_utf16().chain(std::iter::once(0)).collect();
-        let mut src_item: *mut c_void = std::ptr::null_mut();
-        let hr = SHCreateItemFromParsingName(
-            src_w.as_ptr(),
-            std::ptr::null_mut(),
-            IID_SI.as_ptr(),
-            &mut src_item,
-        );
-        if hr != S_OK {
-            release_fn(file_op);
-            return Err(anyhow::anyhow!("创建源 IShellItem 失败: {:#x}", hr));
-        }
-
-        // 创建目标目录 IShellItem（ensure_public_vault_dir 已确保目录存在）
-        let dst_dir = dst_path.parent().unwrap_or(Path::new("."));
-        let dst_w: Vec<u16> = dst_dir
-            .to_string_lossy()
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
-        let mut dst_item: *mut c_void = std::ptr::null_mut();
-        let hr = SHCreateItemFromParsingName(
-            dst_w.as_ptr(),
-            std::ptr::null_mut(),
-            IID_SI.as_ptr(),
-            &mut dst_item,
-        );
-        if hr != S_OK {
-            release_fn(src_item);
-            release_fn(file_op);
-            return Err(anyhow::anyhow!(
-                "创建目标目录 IShellItem 失败: {:#x} ({})",
-                hr,
-                dst_dir.display()
-            ));
-        }
-
-        // 目标文件名
-        let new_name: Vec<u16> = dst_path
-            .file_name()
-            .map(|n| {
-                n.to_string_lossy()
-                    .encode_utf16()
-                    .chain(std::iter::once(0))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        // MoveItem: 将移动操作加入队列
-        // 请求 Windows 在需要时显示标准权限/UAC 对话框；用户取消则整个操作失败。
-        const FOFX_SHOWELEVATIONPROMPT: u32 = 0x0004_0000;
-        let hr = set_operation_flags_fn(file_op, FOFX_SHOWELEVATIONPROMPT);
-        if hr != S_OK {
-            release_fn(dst_item);
-            release_fn(src_item);
-            release_fn(file_op);
-            return Err(anyhow::anyhow!("SetOperationFlags 失败: {:#x}", hr));
-        }
-
-        let hr = move_item_fn(
-            file_op,
-            src_item,
-            dst_item,
-            if new_name.is_empty() {
-                std::ptr::null()
-            } else {
-                new_name.as_ptr()
-            },
-            0,
-        );
-        if hr != S_OK {
-            release_fn(dst_item);
-            release_fn(src_item);
-            release_fn(file_op);
-            return Err(anyhow::anyhow!("MoveItem 入队失败: {:#x}", hr));
-        }
-
-        // PerformOperations: 执行所有排队的操作
-        // Windows 会在这里弹出原生权限对话框（无终端窗口）
-        log::info!("[IFileOp] PerformOperations 开始");
-        let hr = perform_fn(file_op);
-        log::info!("[IFileOp] PerformOperations 返回: {:#x}", hr);
-
-        let mut aborted: i32 = 0;
-        get_aborted_fn(file_op, &mut aborted);
-
-        release_fn(dst_item);
-        release_fn(src_item);
-        release_fn(file_op);
-
-        if hr != S_OK {
-            return Err(anyhow::anyhow!("PerformOperations 失败: {:#x}", hr));
-        }
-        if aborted != 0 {
-            return Err(anyhow::anyhow!("用户取消了操作"));
-        }
-
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2063,4 +1920,60 @@ mod tests {
         assert_eq!(r1, r2);
         assert_eq!(r1, Some("chrome".to_string()));
     }
+
+    // ===== make_double_null_wide 单元测试 =====
+
+    #[test]
+    fn test_make_double_null_wide_ascii_path() {
+        let path = std::path::Path::new(r"C:\Users\Public\Desktop\test.lnk");
+        let wide = make_double_null_wide(path);
+        // 最后两个元素必须是 0（双 null 结尾）
+        assert!(wide.len() >= 2);
+        assert_eq!(wide[wide.len() - 1], 0);
+        assert_eq!(wide[wide.len() - 2], 0);
+        // 倒数第三个元素不是 0（最后一个有效字符）
+        assert_ne!(wide[wide.len() - 3], 0);
+    }
+
+    #[test]
+    fn test_make_double_null_wide_chinese_path() {
+        let path = std::path::Path::new(r"C:\Users\Public\Desktop\微信.lnk");
+        let wide = make_double_null_wide(path);
+        // 双 null 结尾
+        assert!(wide.len() >= 2);
+        assert_eq!(wide[wide.len() - 1], 0);
+        assert_eq!(wide[wide.len() - 2], 0);
+        // 包含中文字符
+        let s = String::from_utf16_lossy(&wide[..wide.len() - 2]);
+        assert!(s.contains("微信"));
+    }
+
+    #[test]
+    fn test_make_double_null_wide_empty_path() {
+        let path = std::path::Path::new("");
+        let wide = make_double_null_wide(path);
+        // 空路径应只有两个 null
+        assert_eq!(wide, vec![0, 0]);
+    }
+
+    #[test]
+    fn test_make_double_null_wide_length() {
+        // "C:\test.lnk" = 10 字符 + 2 null = 12
+        let path = std::path::Path::new(r"C:\test.lnk");
+        let wide = make_double_null_wide(path);
+        assert_eq!(wide.len(), 13);
+    }
+
+    // ===== FFI 常量单元测试 =====
+
+    #[test]
+    fn test_shfileop_constants() {
+        use super::super::ffi_types::{FO_MOVE, FO_COPY, FO_DELETE, FOF_NOCONFIRMATION, FOF_NOCONFIRMMKDIR};
+        assert_eq!(FO_MOVE, 0x0001);
+        assert_eq!(FO_COPY, 0x0002);
+        assert_eq!(FO_DELETE, 0x0003);
+        assert_eq!(FOF_NOCONFIRMATION, 0x0010);
+        assert_eq!(FOF_NOCONFIRMMKDIR, 0x0200);
+    }
+
 }
