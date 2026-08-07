@@ -111,7 +111,7 @@ src/
 │   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc
 │   │   ├── zorder.rs          #   Z-order 层级管理（分类框低于其他应用窗口 + 坐标查找）
 │   │   ├── menu_window.rs     #   自定义分层窗口深色菜单（D2D/DirectWrite 渲染）
-│   │   ├── shell_menu.rs      #   Shell 右键菜单 + 桌面背景注册表菜单（覆盖区域含 Ikun 动作，分类框空白处不含）
+│   │   ├── shell_menu.rs      #   Shell 右键菜单（单选+多选上下文菜单）+ 桌面背景注册表菜单（覆盖区域含 Ikun 动作）
 │   │   ├── app_icon.rs        #   嵌入 logo.ico 资源加载（托盘/菜单图标）
 │   │   ├── icon_extract.rs    #   图标提取（内容缩略图/应用 HICON 分流 + .lnk 目标解析）
 │   │   ├── icon_hider.rs      #   图标隐藏/恢复（SysListView32）+ managed_icons 仓库（Vault）+ Staging 机制 + 删除分类框后还原非管理图标 + get_vault_display_names
@@ -436,9 +436,10 @@ GPUI 的 Entity::update() / App::update() 内部使用 RefCell 借用检查。�
 - [x] 拖拽可视化反馈（插入分隔线 + 替换高亮，支持同框/跨框/覆盖区域拖拽，shift-insert 替代 swap）
 - [x] 分类框拖拽文件到资源管理器（OLE CF_HDROP 复制到 Explorer，图标保持原位）
 - [x] 液态玻璃效果（GPU 渲染器 + 可配置参数 + 实时调节界面）
-- [x] 多选图标（Ctrl/Shift+点击 + 框选 + 跨容器多选）
+- [x] 多选图标（Ctrl/Shift+点击 + 框选 + 跨容器多选 + 多选右键菜单）
 - [x] 覆盖区域拖拽到资源管理器（OLE CF_HDROP）
 - [x] 分类框多选拖拽到资源管理器
+- [x] 回收站文件拖入分类框（自动恢复原始文件名）
 - [x] 原生桌面图标渲染（移除覆盖区域窗口，直接使用原生桌面）
 - [x] 文件缩略图显示（IShellItemImageFactory）
 - [x] 公共桌面图标支持（Public Desktop vault）

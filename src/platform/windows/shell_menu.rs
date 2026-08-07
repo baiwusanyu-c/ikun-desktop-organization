@@ -13,8 +13,8 @@
 use super::ffi_imports::*;
 use super::ffi_types::*;
 use anyhow::Result;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Windows Shell 变更通知常量（用于刷新桌面右键菜单缓存）
 /// SHCNE_ASSOCCHANGED: 文件关联已更改，通知 Shell 重新读取关联信息
@@ -102,6 +102,16 @@ pub enum ShellMenuResult {
 pub struct ShellMenuResponse {
     pub result: ShellMenuResult,
     pub staging_path: Option<PathBuf>,
+}
+
+/// 多选 Shell 菜单响应
+pub struct MultiShellMenuResponse {
+    /// 操作结果
+    pub result: ShellMenuResult,
+    /// 每个文件的 staging 路径（与 file_paths 顺序对应）
+    pub staging_paths: Vec<Option<PathBuf>>,
+    /// 所有文件的原始路径（logical_path）
+    pub file_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,11 +202,330 @@ pub fn show_shell_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResponse
     // 尝试使用 windows crate 获取完整 Shell 上下文菜单
     let result = try_windows_crate_context_menu(hwnd, &actual_menu_path);
     if should_skip_fallback(&result) {
-        return ShellMenuResponse { result, staging_path };
+        return ShellMenuResponse {
+            result,
+            staging_path,
+        };
     }
     // 仅当 try_windows_crate_context_menu 未能显示菜单（Cancelled）时才回退
     let fallback_result = show_shell_fallback_menu(hwnd, &actual_menu_path);
-    ShellMenuResponse { result: fallback_result, staging_path }
+    ShellMenuResponse {
+        result: fallback_result,
+        staging_path,
+    }
+}
+
+/// 多选图标的 Shell 上下文菜单（代理入口）
+///
+/// 将分类框中多选图标的右键操作代理到 vault 原始文件上。
+/// 与 Windows 原生桌面多选行为一致：使用 GetUIObjectOf 传入多个 PIDL。
+///
+/// 注意：GetUIObjectOf 要求所有文件在同一父文件夹下，
+/// 因此会自动按父目录分组，选取最大分组显示菜单。
+pub fn show_multi_select_shell_context_menu(
+    hwnd: HWND,
+    file_paths: &[String],
+) -> MultiShellMenuResponse {
+    log::info!("[多选菜单] 入口: {} 个文件", file_paths.len());
+
+    if file_paths.is_empty() {
+        return MultiShellMenuResponse {
+            result: ShellMenuResult::Cancelled,
+            staging_paths: Vec::new(),
+            file_paths: Vec::new(),
+        };
+    }
+
+    // 1. 为每个文件解析路径并创建 staging 副本
+    let mut resolved_paths: Vec<String> = Vec::new();
+    let mut staging_paths: Vec<Option<PathBuf>> = Vec::new();
+
+    for file_path in file_paths {
+        let menu_path = resolve_shell_menu_path(file_path);
+        let (actual_path, staging) = if super::icon_hider::is_vault_path(&menu_path) {
+            match super::icon_hider::create_staging_for_shell(file_path) {
+                Some(staging) => {
+                    log::info!("[多选菜单][STAGING] 创建 staging: {}", staging.display());
+                    (staging.to_string_lossy().to_string(), Some(staging))
+                }
+                None => {
+                    log::debug!("[多选菜单][STAGING] 创建 staging 失败，使用 vault 路径");
+                    (menu_path.clone(), None)
+                }
+            }
+        } else {
+            (menu_path.clone(), None)
+        };
+        resolved_paths.push(actual_path);
+        staging_paths.push(staging);
+    }
+
+    log::debug!("[多选菜单] 已解析路径: {:?}", resolved_paths);
+
+    // 2. 按父目录分组，选取最大分组
+    let largest_group = group_by_parent(&resolved_paths);
+    if largest_group.is_empty() {
+        log::warn!("[多选菜单] 无有效分组");
+        for sp in &staging_paths {
+            if let Some(ref p) = sp {
+                super::icon_hider::cleanup_staging(p);
+            }
+        }
+        return MultiShellMenuResponse {
+            result: ShellMenuResult::Cancelled,
+            staging_paths,
+            file_paths: file_paths.to_vec(),
+        };
+    }
+
+    // 3. 对最大分组调用 COM API
+    let result = try_windows_crate_multi_context_menu(hwnd, &largest_group);
+
+    // 4. 清理未使用分组的 staging
+    for (i, resolved) in resolved_paths.iter().enumerate() {
+        if !largest_group.contains(resolved) {
+            if let Some(ref sp) = staging_paths[i] {
+                super::icon_hider::cleanup_staging(sp);
+                staging_paths[i] = None;
+            }
+        }
+    }
+
+    if should_skip_fallback(&result) {
+        return MultiShellMenuResponse {
+            result,
+            staging_paths,
+            file_paths: file_paths.to_vec(),
+        };
+    }
+
+    // COM 失败时回退到单选菜单（仅对第一个文件）
+    log::info!("[多选菜单] COM 多选失败，回退到单选");
+    if let Some(first_path) = resolved_paths.first() {
+        let fallback_result = show_shell_fallback_menu(hwnd, first_path);
+        MultiShellMenuResponse {
+            result: fallback_result,
+            staging_paths,
+            file_paths: file_paths.to_vec(),
+        }
+    } else {
+        MultiShellMenuResponse {
+            result: ShellMenuResult::Cancelled,
+            staging_paths,
+            file_paths: file_paths.to_vec(),
+        }
+    }
+}
+
+/// 按父目录分组路径，返回最大分组
+fn group_by_parent(paths: &[String]) -> Vec<String> {
+    use std::collections::HashMap;
+    let mut groups: HashMap<String, Vec<String>> = HashMap::new();
+    for path in paths {
+        let parent = std::path::Path::new(path)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        groups.entry(parent).or_default().push(path.clone());
+    }
+    groups
+        .into_values()
+        .max_by_key(|g| g.len())
+        .unwrap_or_default()
+}
+
+/// 使用 windows crate 获取多选 Shell 上下文菜单
+fn try_windows_crate_multi_context_menu(hwnd: HWND, paths: &[String]) -> ShellMenuResult {
+    use windows::core::PCWSTR;
+    use windows::core::PSTR;
+    use windows::Win32::UI::Shell::{
+        IContextMenu, ILFree, IShellFolder, SHBindToParent, SHParseDisplayName,
+    };
+
+    if paths.is_empty() {
+        return ShellMenuResult::Cancelled;
+    }
+
+    unsafe {
+        let mut full_pidls: Vec<*mut windows::Win32::UI::Shell::Common::ITEMIDLIST> = Vec::new();
+
+        for path in paths {
+            let path_wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+            let mut full_pidl = std::ptr::null_mut();
+            if SHParseDisplayName(PCWSTR(path_wide.as_ptr()), None, &mut full_pidl, 0, None)
+                .is_err()
+                || full_pidl.is_null()
+            {
+                log::warn!("[多选菜单] SHParseDisplayName 失败: {}", path);
+                for pidl in &full_pidls {
+                    let _ = ILFree(Some(*pidl));
+                }
+                return ShellMenuResult::Cancelled;
+            }
+            full_pidls.push(full_pidl);
+        }
+
+        let mut rel_pidl: *mut windows::Win32::UI::Shell::Common::ITEMIDLIST = std::ptr::null_mut();
+        let parent: Result<IShellFolder, _> =
+            SHBindToParent(full_pidls[0] as *const _, Some(&mut rel_pidl));
+        let parent = match parent {
+            Ok(f) => f,
+            Err(e) => {
+                log::warn!("[多选菜单] SHBindToParent(首个) 失败: {:?}", e);
+                for pidl in &full_pidls {
+                    let _ = ILFree(Some(*pidl));
+                }
+                return ShellMenuResult::Cancelled;
+            }
+        };
+
+        if rel_pidl.is_null() {
+            log::warn!("[多选菜单] SHBindToParent 返回空相对 PIDL");
+            for pidl in &full_pidls {
+                let _ = ILFree(Some(*pidl));
+            }
+            return ShellMenuResult::Cancelled;
+        }
+
+        let mut rel_pidls: Vec<*const windows::Win32::UI::Shell::Common::ITEMIDLIST> = Vec::new();
+        rel_pidls.push(rel_pidl as *const _);
+
+        for i in 1..full_pidls.len() {
+            let mut other_rel: *mut windows::Win32::UI::Shell::Common::ITEMIDLIST =
+                std::ptr::null_mut();
+            match SHBindToParent::<IShellFolder>(full_pidls[i] as *const _, Some(&mut other_rel)) {
+                Ok(_) => {
+                    if !other_rel.is_null() {
+                        rel_pidls.push(other_rel as *const _);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("[多选菜单] SHBindToParent[{}] 失败: {:?}", i, e);
+                }
+            }
+        }
+
+        log::debug!("[多选菜单] 有效 PIDL: {}/{}", rel_pidls.len(), paths.len());
+
+        let result: Result<IContextMenu, _> = parent.GetUIObjectOf(
+            windows::Win32::Foundation::HWND(std::ptr::null_mut()),
+            &rel_pidls,
+            None,
+        );
+
+        match result {
+            Ok(cm) => {
+                let mut pt = POINT { x: 0, y: 0 };
+                GetCursorPos(&mut pt);
+                let menu = CreatePopupMenu();
+                let flags = CMF_NORMAL | CMF_EXPLORE | CMF_EXTENDED_VERBS | CMF_ITEMMENU;
+                let hmenu = windows::Win32::UI::WindowsAndMessaging::HMENU(menu);
+
+                match cm
+                    .QueryContextMenu(hmenu, 0, FCIDM_SHVIEWFIRST, MENU_CMD_ID_LAST, flags)
+                    .ok()
+                {
+                    Ok(()) => {
+                        log::info!(
+                            "[多选菜单] TrackPopupMenu: pt=({}, {}), 菜单项数={}",
+                            pt.x,
+                            pt.y,
+                            GetMenuItemCount(menu)
+                        );
+                        let cmd = TrackPopupMenu(
+                            menu,
+                            TPM_RETURNCMD,
+                            pt.x,
+                            pt.y,
+                            0,
+                            hwnd,
+                            std::ptr::null(),
+                        );
+                        if cmd > 0 {
+                            let verb_ordinal = (cmd as u32 - FCIDM_SHVIEWFIRST) as usize;
+                            let mut verb_buf: Vec<u8> = vec![0; 256];
+                            let verb = match cm.GetCommandString(
+                                verb_ordinal,
+                                windows::Win32::UI::Shell::GCS_VERBA,
+                                None,
+                                PSTR(verb_buf.as_mut_ptr()),
+                                verb_buf.len() as u32,
+                            ) {
+                                Ok(_) => {
+                                    let end = verb_buf.iter().position(|&c| c == 0).unwrap_or(0);
+                                    String::from_utf8_lossy(&verb_buf[..end]).to_lowercase()
+                                }
+                                Err(_) => String::new(),
+                            };
+                            log::info!("[多选菜单] verb: '{}'", verb);
+
+                            let invoke = |verb_ordinal: usize| -> windows::Win32::UI::Shell::CMINVOKECOMMANDINFO {
+                                windows::Win32::UI::Shell::CMINVOKECOMMANDINFO {
+                                    cbSize: std::mem::size_of::<windows::Win32::UI::Shell::CMINVOKECOMMANDINFO>() as u32,
+                                    fMask: 0,
+                                    hwnd: windows::Win32::Foundation::HWND(hwnd),
+                                    lpVerb: windows::core::PCSTR(verb_ordinal as *const u8),
+                                    lpParameters: windows::core::PCSTR(std::ptr::null()),
+                                    lpDirectory: windows::core::PCSTR(std::ptr::null()),
+                                    nShow: SW_SHOW,
+                                    dwHotKey: 0,
+                                    hIcon: windows::Win32::Foundation::HANDLE(std::ptr::null_mut()),
+                                }
+                            };
+
+                            let result = match verb.as_str() {
+                                "cut" => {
+                                    if let Err(e) = cm.InvokeCommand(&invoke(verb_ordinal)) {
+                                        log::warn!("[多选菜单] cut InvokeCommand: {:?}", e);
+                                    }
+                                    ShellMenuResult::NeedsCutMonitor(paths[0].clone())
+                                }
+                                "delete" => {
+                                    if let Err(e) = cm.InvokeCommand(&invoke(verb_ordinal)) {
+                                        log::warn!("[多选菜单] delete InvokeCommand: {:?}", e);
+                                    }
+                                    ShellMenuResult::NeedsDelete(paths[0].clone())
+                                }
+                                _ => {
+                                    if let Err(e) = cm.InvokeCommand(&invoke(verb_ordinal)) {
+                                        log::warn!("[多选菜单] InvokeCommand: {:?}", e);
+                                    }
+                                    ShellMenuResult::Completed(Some(verb))
+                                }
+                            };
+                            for pidl in &full_pidls {
+                                let _ = ILFree(Some(*pidl));
+                            }
+                            DestroyMenu(menu);
+                            return result;
+                        } else {
+                            for pidl in &full_pidls {
+                                let _ = ILFree(Some(*pidl));
+                            }
+                            DestroyMenu(menu);
+                            return ShellMenuResult::Dismissed;
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("[多选菜单] QueryContextMenu 失败: {:?}", e);
+                    }
+                }
+                DestroyMenu(menu);
+                drop(cm);
+                for pidl in &full_pidls {
+                    let _ = ILFree(Some(*pidl));
+                }
+                ShellMenuResult::Completed(None)
+            }
+            Err(e) => {
+                log::warn!("[多选菜单] GetUIObjectOf 失败: {:?}", e);
+                for pidl in &full_pidls {
+                    let _ = ILFree(Some(*pidl));
+                }
+                ShellMenuResult::Cancelled
+            }
+        }
+    }
 }
 
 fn resolve_shell_menu_path(file_path: &str) -> String {
@@ -1337,5 +1666,46 @@ mod tests {
         // SHCNE_ASSOCCHANGED 和 SHCNF_IDLIST 的值必须与 Windows SDK 定义一致
         assert_eq!(SHCNE_ASSOCCHANGED, 0x08000000_u32);
         assert_eq!(SHCNF_IDLIST, 0x0000_u32);
+    }
+
+    #[test]
+    fn test_group_by_parent_single_dir() {
+        let paths = vec![
+            "C:/Users/test/.ikun_organizer/staging/a.lnk".to_string(),
+            "C:/Users/test/.ikun_organizer/staging/b.lnk".to_string(),
+            "C:/Users/test/.ikun_organizer/staging/c.lnk".to_string(),
+        ];
+        let result = group_by_parent(&paths);
+        assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn test_group_by_parent_mixed_dirs() {
+        let paths = vec![
+            "C:/Users/test/.ikun_organizer/staging/a.lnk".to_string(),
+            "C:/Users/test/.ikun_organizer/staging/b.lnk".to_string(),
+            "C:/Users/Public/.ikun_organizer/staging/c.lnk".to_string(),
+        ];
+        let result = group_by_parent(&paths);
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().all(|p| p.contains("Users/test")));
+    }
+
+    #[test]
+    fn test_group_by_parent_empty() {
+        let paths: Vec<String> = vec![];
+        let result = group_by_parent(&paths);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_group_by_parent_all_different() {
+        let paths = vec![
+            "C:/dir1/a.lnk".to_string(),
+            "C:/dir2/b.lnk".to_string(),
+            "C:/dir3/c.lnk".to_string(),
+        ];
+        let result = group_by_parent(&paths);
+        assert_eq!(result.len(), 1);
     }
 }

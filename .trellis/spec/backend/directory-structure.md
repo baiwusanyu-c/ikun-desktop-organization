@@ -66,7 +66,7 @@ src/
 │   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc
 │   │   ├── zorder.rs          #   Z-order 层级管理（HWND_BOTTOM + 递归抑制 + 坐标查找）
 │   │   ├── menu_window.rs     #   自定义分层窗口深色菜单（D2D/DirectWrite）
-│   │   ├── shell_menu.rs      #   Shell 右键菜单 + 桌面背景注册表菜单（覆盖区域含 Ikun 动作，分类框不含）
+│   │   ├── shell_menu.rs      #   Shell 右键菜单（单选+多选）+ 桌面背景注册表菜单（覆盖区域含 Ikun 动作）
 │   │   ├── app_icon.rs        #   嵌入 logo.ico 项目图标（托盘/菜单）
 │   │   ├── icon_extract.rs    #   图标提取（内容缩略图/应用 HICON 分流 + .lnk 目标解析）
 │   │   ├── icon_hider.rs      #   图标隐藏/恢复 + managed_icons vault + get_vault_display_names
@@ -78,7 +78,7 @@ src/
 │   │   ├── ole_dnd.rs         #   OLE 拖拽源（IDropSource + IDataObject 实现）
 │   │   ├── drop_target.rs     #   分类框拖放目标（IDropTarget 实现）
 │   │   ├── drag_handler.rs    #   拖拽协调器（拖拽生命周期：阈值检测/位置更新/释放分发）
-│   │   ├── drag_drop.rs       #   拖拽放置操作（同框/跨框/桌面/OLE drop）
+│   │   ├── drag_drop.rs       #   拖拽放置操作（同框/跨框/桌面/OLE drop + 回收站文件恢复）
 │   │   ├── drag_visual.rs     #   拖拽可视化反馈（HWND 感知部分，纯逻辑已提取到 shared/drag_logic.rs）
 │   │   ├── icon_manager.rs    #   图标管理器（SysListView32 跨进程操作 + 图像列表提取 + 位置快照/恢复）
 │   │   ├── control_panel_window.rs # 控制面板 Win32 显示/隐藏辅助（托盘优先生命周期）
@@ -228,7 +228,7 @@ platform/windows/
 ├── monitor_utils.rs   # 显示器查询/窗口定位工具
 ├── wnd_proc.rs        # 窗口消息处理
 ├── menu_window.rs     # 自定义分层窗口深色菜单（D2D/DirectWrite）
-├── shell_menu.rs      # Shell 右键菜单 + 注册表菜单动作（覆盖区域含 Ikun 动作，分类框不含）
+├── shell_menu.rs      # Shell 右键菜单（单选+多选上下文菜单）+ 注册表菜单动作（覆盖区域含 Ikun 动作）
 ├── app_icon.rs        # 项目图标资源加载
 ├── icon_extract.rs    # 图标提取（内容缩略图/应用 HICON 分流 + .lnk 目标解析）
 ├── icon_hider.rs      # 图标隐藏/恢复 + managed_icons vault + get_vault_display_names
@@ -239,7 +239,7 @@ platform/windows/
 ├── ole_dnd.rs         # OLE 拖拽源（IDropSource + IDataObject）
 ├── drop_target.rs     # 分类框拖放目标（IDropTarget）
 ├── drag_handler.rs    # 拖拽协调器（拖拽生命周期：阈值检测/位置更新/释放分发）
-├── drag_drop.rs       # 拖拽放置操作（同框/跨框/桌面/OLE drop）
+├── drag_drop.rs       # 拖拽放置操作（同框/跨框/桌面/OLE drop + 回收站文件恢复）
 ├── drag_visual.rs     # 拖拽可视化反馈（HWND 感知部分，纯逻辑已提取到 shared/drag_logic.rs）
 ├── icon_manager.rs    # 图标管理器（SysListView32 跨进程操作 + 图像列表提取）
 ├── control_panel_window.rs # GPUI/eframe 控制面板 Win32 显示/隐藏辅助

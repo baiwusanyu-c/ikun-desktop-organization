@@ -216,6 +216,53 @@ pub(crate) struct GridWindowData {
 
 unsafe impl Send for GridWindowData {}
 
+/// 从全局多选状态收集所有选中的 GridBox 图标的文件路径
+///
+/// 遍历所有 GRID_WINDOWS，对每个窗口的 config_id 查找选中的 item_index，
+/// 支持跨分类框多选。
+pub(crate) fn collect_selected_file_paths() -> Vec<String> {
+    use super::multi_select::{
+        all_keys, container_id_from_uuid, selected_in_container, ContainerType,
+    };
+
+    let mut paths: Vec<String> = Vec::new();
+
+    // 获取所有选中的 SelectionKey 快照
+    let keys = all_keys();
+    if keys.is_empty() {
+        return paths;
+    }
+
+    // 遍历所有 Grid 窗口，按 container_id 查找选中项
+    let Ok(grid_list) = get_grid_list() else {
+        log::warn!("[多选菜单] 无法获取窗口列表");
+        return paths;
+    };
+
+    for grid in grid_list.iter() {
+        let data = match unsafe { get_data(grid.hwnd) } {
+            Some(d) => d,
+            None => continue,
+        };
+
+        let cid = container_id_from_uuid(data.config_id);
+
+        // 查找该容器中选中的索引
+        let selected_indices = selected_in_container(ContainerType::GridBox, cid);
+        if selected_indices.is_empty() {
+            continue;
+        }
+
+        for idx in selected_indices {
+            if idx < data.items.len() {
+                paths.push(data.items[idx].file_path.clone());
+            }
+        }
+    }
+
+    paths
+}
+
 #[cfg(test)]
 impl GridWindowData {
     /// 创建测试用的默认实例（所有字段为初始值）

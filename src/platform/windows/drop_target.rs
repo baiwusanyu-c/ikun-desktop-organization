@@ -382,11 +382,15 @@ unsafe extern "system" fn drop_target_drop(
 ) -> HRESULT {
     // 防御性检查：确保指针有效
     if this.is_null() || data_obj.is_null() || effect.is_null() {
-        log::warn!("[DropTarget] Drop: 空指针被拒绝 (this={:?}, data_obj={:?}, effect={:?})", 
-            this, data_obj, effect);
+        log::warn!(
+            "[DropTarget] Drop: 空指针被拒绝 (this={:?}, data_obj={:?}, effect={:?})",
+            this,
+            data_obj,
+            effect
+        );
         return E_POINTER;
     }
-    
+
     let target = this as *mut BoxDropTarget;
 
     // 外部拖拽：通知 IDropTargetHelper Drop 完成并释放

@@ -956,7 +956,10 @@ fn get_staging_dir() -> Result<std::path::PathBuf> {
 
 /// 从 vault 文件名还原原始文件名
 fn original_filename_from_vault(logical_path: &str) -> Option<String> {
-    let vault_name = std::path::Path::new(logical_path).file_name()?.to_string_lossy().to_string();
+    let vault_name = std::path::Path::new(logical_path)
+        .file_name()?
+        .to_string_lossy()
+        .to_string();
     let original = if let Some(stripped) = vault_name.strip_prefix(PREFIX_USER) {
         stripped.to_string()
     } else if let Some(stripped) = vault_name.strip_prefix(PREFIX_PUBLIC) {
@@ -964,7 +967,11 @@ fn original_filename_from_vault(logical_path: &str) -> Option<String> {
     } else {
         vault_name
     };
-    if original.is_empty() { None } else { Some(original) }
+    if original.is_empty() {
+        None
+    } else {
+        Some(original)
+    }
 }
 
 /// 检查路径是否是 vault 路径（managed_icons 目录下）
@@ -2075,8 +2082,12 @@ mod tests {
 
     #[test]
     fn test_is_vault_path_with_managed_icons() {
-        assert!(is_vault_path(r"C:\Users\test\.ikun_organizer\managed_icons\user__Chrome.lnk"));
-        assert!(is_vault_path(r"C:\Users\Public\.ikun_organizer\managed_icons\public__Edge.lnk"));
+        assert!(is_vault_path(
+            r"C:\Users\test\.ikun_organizer\managed_icons\user__Chrome.lnk"
+        ));
+        assert!(is_vault_path(
+            r"C:\Users\Public\.ikun_organizer\managed_icons\public__Edge.lnk"
+        ));
     }
 
     #[test]
@@ -2088,7 +2099,7 @@ mod tests {
     #[test]
     fn test_original_filename_from_vault_user_prefix() {
         let result = original_filename_from_vault(
-            r"C:\Users\test\.ikun_organizer\managed_icons\user__Chrome.lnk"
+            r"C:\Users\test\.ikun_organizer\managed_icons\user__Chrome.lnk",
         );
         assert_eq!(result, Some("Chrome.lnk".to_string()));
     }
@@ -2096,7 +2107,7 @@ mod tests {
     #[test]
     fn test_original_filename_from_vault_public_prefix() {
         let result = original_filename_from_vault(
-            r"C:\Users\Public\.ikun_organizer\managed_icons\public__Edge.lnk"
+            r"C:\Users\Public\.ikun_organizer\managed_icons\public__Edge.lnk",
         );
         assert_eq!(result, Some("Edge.lnk".to_string()));
     }
@@ -2104,7 +2115,7 @@ mod tests {
     #[test]
     fn test_original_filename_from_vault_no_prefix() {
         let result = original_filename_from_vault(
-            r"C:\Users\test\.ikun_organizer\managed_icons\SomeFile.lnk"
+            r"C:\Users\test\.ikun_organizer\managed_icons\SomeFile.lnk",
         );
         assert_eq!(result, Some("SomeFile.lnk".to_string()));
     }

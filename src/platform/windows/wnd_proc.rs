@@ -30,7 +30,9 @@ use super::grid_window::{
     GridWindowData,
 };
 use super::menu_window::show_menu_window;
-use super::shell_menu::{show_desktop_context_menu, show_shell_context_menu};
+use super::shell_menu::{
+    show_desktop_context_menu, show_multi_select_shell_context_menu, show_shell_context_menu,
+};
 use super::zorder::{
     is_drag_in_progress, is_zorder_suppressing, push_other_grids_below, with_zorder_suppressed,
 };
@@ -191,9 +193,17 @@ fn handle_shell_menu_result(
             }
         }
         ShellMenuResult::NeedsCutMonitor(_staging_path) => {
-            log::info!("[CUT] starting cut monitor: staging={:?}, original={}", staging_path, file_path);
+            log::info!(
+                "[CUT] starting cut monitor: staging={:?}, original={}",
+                staging_path,
+                file_path
+            );
             if let Some(ref sp) = staging_path {
-                start_cut_monitor(hwnd, sp.to_string_lossy().to_string(), file_path.to_string());
+                start_cut_monitor(
+                    hwnd,
+                    sp.to_string_lossy().to_string(),
+                    file_path.to_string(),
+                );
             } else {
                 start_cut_monitor(hwnd, file_path.to_string(), file_path.to_string());
             }
@@ -225,6 +235,76 @@ fn start_cut_monitor(hwnd: HWND, monitor_path: String, cleanup_path: String) {
         }
         log::debug!("cut monitor timeout, file not pasted: {}", monitor_path);
     });
+}
+
+/// 处理多选 Shell 菜单结果
+///
+/// 与单选版本的 handle_shell_menu_result 类似，但处理多个文件。
+fn handle_multi_shell_menu_result(hwnd: HWND, response: super::shell_menu::MultiShellMenuResponse) {
+    use super::shell_menu::ShellMenuResult;
+
+    match response.result {
+        ShellMenuResult::Cancelled | ShellMenuResult::Dismissed => {
+            // 清理所有 staging
+            for sp in &response.staging_paths {
+                if let Some(ref p) = sp {
+                    super::icon_hider::cleanup_staging(p);
+                }
+            }
+        }
+        ShellMenuResult::Completed(_) => {
+            // 注意：不清理 staging！复制操作的文件可能仍在剪贴板上，
+            // 用户后续粘贴时需要 staging 文件存在。
+            // 这与单选版本 handle_shell_menu_result 的行为一致。
+            // 对每个文件检查是否还存在，不存在则从 grid 中移除
+            for file_path in &response.file_paths {
+                remove_grid_item_if_missing_after_shell_menu(hwnd, file_path);
+            }
+        }
+        ShellMenuResult::NeedsRename(_) => {
+            // 多选时不支持重命名（try_windows_crate_multi_context_menu 已排除）
+            // 清理 staging
+            for sp in &response.staging_paths {
+                if let Some(ref p) = sp {
+                    super::icon_hider::cleanup_staging(p);
+                }
+            }
+        }
+        ShellMenuResult::NeedsCutMonitor(_) => {
+            // 为每个文件启动 cut monitor
+            for (i, file_path) in response.file_paths.iter().enumerate() {
+                let staging = response.staging_paths.get(i).and_then(|s| s.as_ref());
+                log::info!(
+                    "[多选菜单][CUT] 启动 cut monitor: staging={:?}, original={}",
+                    staging,
+                    file_path
+                );
+                if let Some(sp) = staging {
+                    start_cut_monitor(
+                        hwnd,
+                        sp.to_string_lossy().to_string(),
+                        file_path.to_string(),
+                    );
+                } else {
+                    start_cut_monitor(hwnd, file_path.to_string(), file_path.to_string());
+                }
+            }
+        }
+        ShellMenuResult::NeedsDelete(_) => {
+            // 删除每个文件的 vault 副本
+            for file_path in &response.file_paths {
+                log::info!("[多选菜单][DELETE] 删除 vault 副本: {}", file_path);
+                super::icon_hider::delete_vault_copy_for(file_path);
+                remove_grid_item_if_missing_after_shell_menu(hwnd, file_path);
+            }
+            // 清理 staging
+            for sp in &response.staging_paths {
+                if let Some(ref p) = sp {
+                    super::icon_hider::cleanup_staging(p);
+                }
+            }
+        }
+    }
 }
 
 /// 格子窗口消息处理过程
@@ -1012,9 +1092,12 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         // ===== 失去焦点：取消名称编辑 =====
         WM_KILLFOCUS => 0,
 
-        // ===== 鼠标右键：弹出上下文菜单 =====
+        // ===== 鼠标右键：弹出上下文菜单（支持多选） =====
         WM_RBUTTONUP => {
             let (click_x, click_y) = content_point_from_lparam(hwnd, lparam);
+
+            // 检查多选状态
+            let multi_count = super::multi_select::count();
 
             let mut file_path: Option<String> = None;
             let mut hit_index: i32 = -1;
@@ -1027,6 +1110,34 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 let dpi = if dpi > 0 { dpi } else { 96 };
                 let hit = grid_hit_test(data, w, click_x, click_y, dpi);
                 if hit >= 0 {
+                    // 多选右键：检查点击的是否是已选中的项
+                    if multi_count > 1 {
+                        let ct = super::multi_select::ContainerType::GridBox;
+                        let cid = super::multi_select::container_id_from_uuid(data.config_id);
+                        let key = super::multi_select::SelectionKey {
+                            container_type: ct,
+                            container_id: cid,
+                            item_index: hit as usize,
+                        };
+
+                        if super::multi_select::is_selected(key) {
+                            // 多选右键：收集所有选中项的路径
+                            let selected_paths = super::grid_window::collect_selected_file_paths();
+                            if !selected_paths.is_empty() {
+                                log::info!(
+                                    "[多选菜单] 右键点击已选中项 {}，多选菜单: {} 个文件",
+                                    hit,
+                                    selected_paths.len()
+                                );
+                                let response =
+                                    show_multi_select_shell_context_menu(hwnd, &selected_paths);
+                                handle_multi_shell_menu_result(hwnd, response);
+                                return 0;
+                            }
+                        }
+                    }
+
+                    // 单选右键：保持现有逻辑
                     data.selected_item = hit;
                     if (hit as usize) < data.items.len() {
                         file_path = Some(data.items[hit as usize].file_path.clone());
@@ -1038,7 +1149,13 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
 
             if let Some(ref path) = file_path {
                 let response = show_shell_context_menu(hwnd, path);
-                handle_shell_menu_result(hwnd, path, hit_index, response.result, response.staging_path);
+                handle_shell_menu_result(
+                    hwnd,
+                    path,
+                    hit_index,
+                    response.result,
+                    response.staging_path,
+                );
             } else {
                 log::info!("[MENU-DEBUG] wnd_proc: 右键点击框空白区域, 调用 show_desktop_context_menu(include_ikun_items=true)");
                 show_desktop_context_menu(hwnd, true); // 显式注入 Ikun 菜单项

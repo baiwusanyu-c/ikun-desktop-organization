@@ -1508,12 +1508,12 @@ pub fn position_icon_at_screen(file_path: &str, screen_x: i32, screen_y: i32) {
         let mut index = None;
         const MAX_RETRIES: u32 = 20;
         const RETRY_INTERVAL_MS: u64 = 50;
-        
+
         for attempt in 0..MAX_RETRIES {
             if attempt > 0 {
                 std::thread::sleep(std::time::Duration::from_millis(RETRY_INTERVAL_MS));
             }
-            
+
             mgr.rebuild_index()?;
             for name in &names {
                 if let Some(idx) = mgr.find_icon_by_name(name) {
@@ -1521,7 +1521,7 @@ pub fn position_icon_at_screen(file_path: &str, screen_x: i32, screen_y: i32) {
                     break;
                 }
             }
-            
+
             if index.is_some() {
                 if attempt > 0 {
                     log::info!(

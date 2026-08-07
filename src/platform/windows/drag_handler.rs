@@ -605,12 +605,18 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
 
         // ★ 不销毁拖拽残影，让它在 OLE 拖拽期间保持存活
         // 隐藏分类框，让 OLE hit-testing 能到达 Explorer
+        // 临时添加 WS_EX_TRANSPARENT 让分类框对 OLE hit-testing 透明，
+        // 同时保持窗口可见（不像 SW_HIDE 那样隐藏窗口）。
+        // WS_EX_TRANSPARENT 使窗口对鼠标输入透明，OLE 的
+        // WindowFromPoint 会穿透到下方的 Explorer 窗口。
         unsafe {
-            ShowWindow(hwnd, SW_HIDE);
+            let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (ex_style | WS_EX_TRANSPARENT) as isize);
         }
         let drop_succeeded = super::ole_dnd::start_box_drag(file_paths, box_drag_data, icon_handle);
         unsafe {
-            ShowWindow(hwnd, SW_SHOWNA);
+            let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (ex_style & !WS_EX_TRANSPARENT) as isize);
         }
 
         // ★ OLE 拖拽完成后销毁残影
@@ -689,13 +695,17 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
         };
 
         // 隐藏分类框，让 OLE hit-testing 能到达 Explorer
+        // 临时添加 WS_EX_TRANSPARENT 让分类框对 OLE hit-testing 透明
+        // 保持窗口可见，不像 SW_HIDE 那样隐藏
         unsafe {
-            ShowWindow(hwnd, SW_HIDE);
+            let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (ex_style | WS_EX_TRANSPARENT) as isize);
         }
         let drop_succeeded =
             super::ole_dnd::start_box_drag(vec![file_path], box_drag_data, icon_handle);
         unsafe {
-            ShowWindow(hwnd, SW_SHOWNA);
+            let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (ex_style & !WS_EX_TRANSPARENT) as isize);
         }
 
         if drop_succeeded {

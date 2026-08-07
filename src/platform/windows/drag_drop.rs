@@ -622,6 +622,211 @@ fn compute_drop_grid_position(
 /// 触发。从 `PENDING_DROP` 读取文件路径，添加到目标分类框，并隐藏桌面图标。
 /// 将非桌面文件复制到用户桌面，返回桌面路径字符串。
 /// 用于模拟原生桌面拖拽行为：从资源管理器拖拽文件到桌面时，Windows 会复制文件。
+/// 检查路径是否来自回收站
+fn is_recycle_bin_path(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    lower.contains("$recycle.bin")
+}
+
+/// 从回收站 $I 文件解析原始路径
+fn parse_recycle_bin_original_path(recycle_path: &str) -> Option<String> {
+    use std::path::Path;
+    let p = Path::new(recycle_path);
+    let file_name = p.file_name()?.to_string_lossy().to_string();
+    if !file_name.starts_with("$R") {
+        return None;
+    }
+    let i_name = format!("$I{}", &file_name[2..]);
+    let i_path = p.parent()?.join(&i_name);
+    if !i_path.exists() {
+        log::warn!("[回收站] $I 文件不存在: {}", i_path.display());
+        return None;
+    }
+    let data = std::fs::read(&i_path).ok()?;
+    if data.len() < 20 {
+        log::warn!("[回收站] $I 文件太短: {} bytes", data.len());
+        return None;
+    }
+    let result = try_parse_i_file(&data);
+    if let Some(ref path) = result {
+        log::info!("[回收站] 成功解析: {} -> {}", recycle_path, path);
+    } else {
+        log::warn!(
+            "[回收站] 解析失败, 文件大小={}, 头部={:02X?}",
+            data.len(),
+            &data[..std::cmp::min(40, data.len())]
+        );
+    }
+    result
+}
+
+/// 解析 $I 文件内容，返回原始路径
+fn try_parse_i_file(data: &[u8]) -> Option<String> {
+    if data.len() < 20 {
+        return None;
+    }
+    if let Some(path) = try_parse_at_offset(data, 16) {
+        return Some(path);
+    }
+    if data.len() >= 28 {
+        if let Some(path) = try_parse_at_offset(data, 24) {
+            return Some(path);
+        }
+    }
+    if data.len() >= 36 {
+        if let Some(path) = try_parse_at_offset(data, 32) {
+            return Some(path);
+        }
+    }
+    scan_for_utf16_path(data)
+}
+
+/// 尝试从指定偏移读取 path_len + UTF-16 路径
+fn try_parse_at_offset(data: &[u8], len_offset: usize) -> Option<String> {
+    if len_offset + 4 > data.len() {
+        return None;
+    }
+    let path_len = u32::from_le_bytes([
+        data[len_offset],
+        data[len_offset + 1],
+        data[len_offset + 2],
+        data[len_offset + 3],
+    ]) as usize;
+    if path_len < 3 || path_len > 32768 {
+        return None;
+    }
+    let start = len_offset + 4;
+    let end = start + path_len * 2;
+    if end > data.len() {
+        return None;
+    }
+    let utf16: Vec<u16> = data[start..end]
+        .chunks(2)
+        .filter_map(|chunk| {
+            if chunk.len() == 2 {
+                Some(u16::from_le_bytes([chunk[0], chunk[1]]))
+            } else {
+                None
+            }
+        })
+        .collect();
+    let path = String::from_utf16_lossy(&utf16)
+        .trim_end_matches('\0')
+        .to_string();
+    if path.contains(":\\") || (path.contains('.') && path.len() >= 5) {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+/// 暴力扫描文件中的 UTF-16LE Windows 路径
+fn scan_for_utf16_path(data: &[u8]) -> Option<String> {
+    if data.len() < 10 {
+        return None;
+    }
+    for i in 0..data.len().saturating_sub(6) {
+        if i + 6 <= data.len()
+            && data[i + 1] == 0
+            && data[i + 2] == 0x3A
+            && data[i + 3] == 0
+            && data[i + 4] == 0x5C
+            && data[i + 5] == 0
+        {
+            let drive_letter = data[i];
+            if drive_letter >= b'A' && drive_letter <= b'Z' {
+                let mut end = i;
+                while end + 1 < data.len() {
+                    let ch = u16::from_le_bytes([data[end], data[end + 1]]);
+                    if ch == 0 {
+                        break;
+                    }
+                    end += 2;
+                }
+                let utf16: Vec<u16> = data[i..end]
+                    .chunks(2)
+                    .filter_map(|chunk| {
+                        if chunk.len() == 2 {
+                            Some(u16::from_le_bytes([chunk[0], chunk[1]]))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                let path = String::from_utf16_lossy(&utf16);
+                if path.len() >= 5 && path.contains('.') {
+                    log::info!("[回收站] brute-force 扫描找到路径 @ offset {}: {}", i, path);
+                    return Some(path);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 从回收站恢复文件到用户桌面
+fn restore_from_recycle_bin_to_desktop(recycle_path: &str) -> Option<String> {
+    use std::path::Path;
+    let original_path = parse_recycle_bin_original_path(recycle_path)?;
+    let original_filename = Path::new(&original_path)
+        .file_name()?
+        .to_string_lossy()
+        .to_string();
+    let desktop = dirs::desktop_dir()?;
+    let mut dest = desktop.join(&original_filename);
+    if dest.exists() {
+        let stem = Path::new(&original_filename)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| original_filename.clone());
+        let ext = Path::new(&original_filename)
+            .extension()
+            .map(|e| format!(".{}", e.to_string_lossy()))
+            .unwrap_or_default();
+        let mut counter = 1;
+        loop {
+            let new_name = format!("{} ({}){}", stem, counter, ext);
+            let new_dest = desktop.join(&new_name);
+            if !new_dest.exists() {
+                dest = new_dest;
+                break;
+            }
+            counter += 1;
+            if counter > 100 {
+                log::warn!("[回收站] 无法生成唯一文件名");
+                return None;
+            }
+        }
+    }
+    match std::fs::copy(recycle_path, &dest) {
+        Ok(_) => {
+            log::info!("[回收站] 恢复文件: {} -> {}", recycle_path, dest.display());
+        }
+        Err(e) => {
+            log::warn!("[回收站] 复制文件失败: {}", e);
+            return None;
+        }
+    }
+    let recycle_p = Path::new(recycle_path);
+    let _ = std::fs::remove_file(recycle_path);
+    if let Some(fname) = recycle_p
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+    {
+        if fname.starts_with("$R") {
+            let i_path = recycle_p
+                .parent()
+                .map(|p| p.join(format!("$I{}", &fname[2..])));
+            if let Some(ip) = i_path {
+                let _ = std::fs::remove_file(&ip);
+                log::info!("[回收站] 已删除 $I 文件: {}", ip.display());
+            }
+        }
+    }
+    super::icon_hider::notify_shell_create(&dest.to_string_lossy());
+    Some(dest.to_string_lossy().to_string())
+}
+
 fn copy_file_to_user_desktop(source_path: &str) -> Option<String> {
     use std::path::Path;
 
@@ -723,10 +928,27 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
         );
 
         // 对于非桌面、非框间拖拽的外部文件：先复制到用户桌面（模拟原生桌面拖拽行为）
+        let is_recycle_bin = !is_box_drag && is_recycle_bin_path(file_path);
         let effective_path = if is_clsid {
             // 虚拟 Shell 对象（回收站、此电脑等）直接使用 CLSID 路径
             log::info!("[OLE-DROP] 虚拟 Shell 对象: {}", file_path);
             file_path.clone()
+        } else if is_recycle_bin {
+            // 回收站文件：恢复到桌面（使用原始文件名）
+            match restore_from_recycle_bin_to_desktop(file_path) {
+                Some(desktop_path) => {
+                    log::info!(
+                        "[OLE-DROP] 回收站文件已恢复到桌面: {} -> {}",
+                        file_path,
+                        desktop_path
+                    );
+                    desktop_path
+                }
+                None => {
+                    log::warn!("[OLE-DROP] 回收站文件恢复失败: {}", file_path);
+                    file_path.clone()
+                }
+            }
         } else if !is_box_drag && !is_desktop_file {
             match copy_file_to_user_desktop(file_path) {
                 Some(desktop_path) => {
@@ -1103,5 +1325,76 @@ mod ole_drop_tests {
         let insert_row = -1;
         let is_insert = insert_col >= 0 && insert_row >= 0;
         assert!(!is_insert);
+    }
+
+    #[test]
+    fn test_is_recycle_bin_path_positive() {
+        assert!(is_recycle_bin_path(
+            r"C:\$Recycle.Bin\S-1-5-21\$RGRKAOP.lnk"
+        ));
+    }
+
+    #[test]
+    fn test_is_recycle_bin_path_negative() {
+        assert!(!is_recycle_bin_path(r"C:\Users\test\Desktop\Chrome.lnk"));
+        assert!(!is_recycle_bin_path(
+            r"C:\Users\test\.ikun_organizer\managed_icons\user__Chrome.lnk"
+        ));
+    }
+
+    #[test]
+    fn test_try_parse_at_offset_valid_v1() {
+        let path = r"C:\Users\test\Desktop\Chrome.lnk";
+        let path_utf16: Vec<u8> = path
+            .encode_utf16()
+            .chain(std::iter::once(0u16))
+            .flat_map(|c| c.to_le_bytes())
+            .collect();
+        let path_len = (path.encode_utf16().count() + 1) as u32;
+        let mut data = vec![0u8; 20 + path_utf16.len()];
+        data[16..20].copy_from_slice(&path_len.to_le_bytes());
+        data[20..20 + path_utf16.len()].copy_from_slice(&path_utf16);
+        let result = try_parse_at_offset(&data, 16);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), path);
+    }
+
+    #[test]
+    fn test_try_parse_at_offset_invalid_length() {
+        let data = vec![0u8; 20];
+        assert!(try_parse_at_offset(&data, 16).is_none());
+    }
+
+    #[test]
+    fn test_try_parse_at_offset_too_short() {
+        let data = vec![0u8; 10];
+        assert!(try_parse_at_offset(&data, 16).is_none());
+    }
+
+    #[test]
+    fn test_scan_for_utf16_path_found() {
+        let path = r"C:\Users\test\Desktop\Chrome.lnk";
+        let mut data = vec![0u8; 100];
+        let path_bytes: Vec<u8> = path
+            .encode_utf16()
+            .chain(std::iter::once(0u16))
+            .flat_map(|c| c.to_le_bytes())
+            .collect();
+        data.extend_from_slice(&path_bytes);
+        let result = scan_for_utf16_path(&data);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), path);
+    }
+
+    #[test]
+    fn test_scan_for_utf16_path_not_found() {
+        let data = vec![0u8; 50];
+        assert!(scan_for_utf16_path(&data).is_none());
+    }
+
+    #[test]
+    fn test_scan_for_utf16_path_too_short() {
+        let data = vec![0u8; 5];
+        assert!(scan_for_utf16_path(&data).is_none());
     }
 }
