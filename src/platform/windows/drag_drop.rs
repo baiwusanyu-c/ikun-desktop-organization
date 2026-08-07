@@ -506,7 +506,7 @@ pub(crate) fn handle_drag_item_added(hwnd: HWND) {
                 let cols = data.cols;
                 let insert_lin = insert_row * cols + insert_col;
 
-                // Materialize all auto-layout positions
+                // 物化所有自动布局位置
                 for (i, item) in data.items.iter_mut().enumerate() {
                     if item.grid_col < 0 {
                         item.grid_col = (i as i32) % cols;
@@ -881,6 +881,23 @@ fn copy_file_to_user_desktop(source_path: &str) -> Option<String> {
     }
 }
 
+/// 处理 OLE 拖拽放置（桌面→框 或 框→框）
+///
+/// 由 `drop_target.rs` 的 `drop_target_drop()` 通过 `PostMessageW(WM_USER_DRAG_DROP)` 触发。
+///
+/// # Insert Mode 行为（插入模式）
+///
+/// 当 `drop.insert_col >= 0 && drop.insert_row >= 0` 时进入插入模式：
+/// 1. **循环前**：一次性计算有效文件数（去重后），物化所有自动布局位置，
+///    将插入位置及之后的现有项右移 N 位（N=有效文件数）
+/// 2. **循环内**：每个文件按 `insert_lin + added` 计算最终位置
+///
+/// **关键修复**：shift 逻辑必须在循环外执行，避免后续迭代错误移位
+/// 之前新增的项，导致多个新项重叠在同一位置。
+///
+/// # Normal Mode 行为（正常模式）
+///
+/// 使用 `base_lin + added` 偏移，每个文件占据不同的 grid cell。
 pub(crate) fn handle_ole_drop(hwnd: HWND) {
     let t0 = std::time::Instant::now();
     let drop = match super::drop_target::take_pending_drop() {
@@ -910,6 +927,42 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
     // 计算基础 grid 位置（第一个文件的位置）
     let (base_col, base_row) = compute_drop_grid_position(hwnd, drop.drop_x, drop.drop_y, data);
     let cols = data.cols;
+
+    // [FIX] 插入模式：循环前一次性将现有项右移 N 位（N=有效文件数）
+    // 修复前 shift 在 per-file 循环内，后续迭代会错误移位之前新增的项，
+    // 导致多个新项重叠在同一位置。
+    let is_insert = drop.insert_col >= 0 && drop.insert_row >= 0;
+    if is_insert {
+        let insert_lin = drop.insert_row * cols + drop.insert_col;
+        // 统计有效文件数（去重后）以确定移位量
+        let valid_count = drop
+            .file_paths
+            .iter()
+            .filter(|fp| !data.items.iter().any(|i| i.file_path == **fp))
+            .count() as i32;
+
+        // 物化所有自动布局位置
+        for (i, item) in data.items.iter_mut().enumerate() {
+            if item.grid_col < 0 {
+                item.grid_col = (i as i32) % cols;
+                item.grid_row = (i as i32) / cols;
+            }
+        }
+
+        // 将插入位置及之后的现有项右移 N 位
+        for item in data.items.iter_mut() {
+            let item_lin = item.grid_row * cols + item.grid_col;
+            if item_lin >= insert_lin {
+                let new_lin = item_lin + valid_count;
+                item.grid_col = new_lin % cols;
+                item.grid_row = new_lin / cols;
+            }
+        }
+        log::info!(
+            "[OLE-DROP-INSERT] 插入位置={}, 有效文件数={}, 已右移现有项",
+            insert_lin, valid_count
+        );
+    }
 
     for file_path in &drop.file_paths {
         // 去重：已存在则跳过
@@ -987,14 +1040,14 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
         };
 
         // 检查是否有插入模式（来自拖拽悬停可视化反馈）
-        let is_insert = drop.insert_col >= 0 && drop.insert_row >= 0;
+        // is_insert 已在循环前计算
         let (final_col, final_row) = if is_insert {
             // 插入模式：使用插入位置 + 偏移
-            let offset_lin = (drop.insert_row * cols + drop.insert_col) + added as i32;
+            let offset_lin = (drop.insert_row * cols + drop.insert_col) + added;
             (offset_lin % cols, offset_lin / cols)
         } else {
             // 正常模式：基础位置 + 偏移（每个文件占据不同的 grid cell）
-            let offset_lin = (base_row * cols + base_col) + added as i32;
+            let offset_lin = (base_row * cols + base_col) + added;
             let col = offset_lin % cols;
             let row = offset_lin / cols;
             log::info!(
@@ -1019,29 +1072,6 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
             drop.insert_row
         );
 
-        if is_insert {
-            // 插入模式：将现有项右移，新项插入到指定位置
-            let cols = data.cols;
-            let insert_lin = drop.insert_row * cols + drop.insert_col;
-
-            // 物化所有自动布局位置
-            for (i, item) in data.items.iter_mut().enumerate() {
-                if item.grid_col < 0 {
-                    item.grid_col = (i as i32) % cols;
-                    item.grid_row = (i as i32) / cols;
-                }
-            }
-
-            // 将插入位置及之后的项右移
-            for item in data.items.iter_mut() {
-                let item_lin = item.grid_row * cols + item.grid_col;
-                if item_lin >= insert_lin {
-                    let new_lin = item_lin + 1;
-                    item.grid_col = new_lin % cols;
-                    item.grid_row = new_lin / cols;
-                }
-            }
-        }
 
         // 外部→框：按统一收纳流程处理桌面图标。
         if !is_box_drag {
@@ -1396,5 +1426,109 @@ mod ole_drop_tests {
     fn test_scan_for_utf16_path_too_short() {
         let data = vec![0u8; 5];
         assert!(scan_for_utf16_path(&data).is_none());
+    }
+
+    // =============================================================================
+    // Insert Mode N位右移逻辑测试（修复多选拖拽重叠 bug）
+    // =============================================================================
+
+    /// 模拟 insert mode 的 N 位右移逻辑（纯逻辑，不依赖 HWND）
+    ///
+    /// 场景：现有 2 项 [A@lin0, B@lin1]，插入 2 个新文件到 insert_lin=1
+    /// 期望：A 保持 lin0，B 右移到 lin3（1+2），为新项腾出 lin1 和 lin2
+    #[test]
+    fn test_insert_mode_shift_by_n_positions() {
+        // 现有项：A@lin0, B@lin1
+        let mut items = vec![(0, 0), (1, 0)]; // (col, row) 线性索引：lin0, lin1
+        let cols = 3;
+        let insert_lin = 1; // 插入到 lin1 位置
+        let valid_count = 2; // 2 个有效新文件
+
+        // 物化位置（已经是物化的，跳过）
+
+        // 右移 N 位
+        for item in items.iter_mut() {
+            let item_lin = item.1 * cols + item.0;
+            if item_lin >= insert_lin {
+                let new_lin = item_lin + valid_count;
+                item.0 = new_lin % cols;
+                item.1 = new_lin / cols;
+            }
+        }
+
+        // 验证：A@lin0 不变，B@lin1 -> lin3（col0, row1）
+        assert_eq!(items[0], (0, 0), "A 应保持 lin0");
+        assert_eq!(items[1], (0, 1), "B 应从 lin1 右移到 lin3（col0, row1）");
+
+        // 新项应占据 lin1 和 lin2
+        let new_item_0_lin = insert_lin + 0; // lin1
+        let new_item_1_lin = insert_lin + 1; // lin2
+        assert_eq!(new_item_0_lin, 1, "第一个新项应在 lin1");
+        assert_eq!(new_item_1_lin, 2, "第二个新项应在 lin2");
+    }
+
+    /// 全部重复文件：valid_count=0，不应移位
+    #[test]
+    fn test_insert_mode_all_duplicates_no_shift() {
+        let mut items = vec![(0, 0), (1, 0), (2, 0)]; // lin0, lin1, lin2
+        let cols = 3;
+        let insert_lin = 1;
+        let valid_count = 0; // 全部重复，无有效新文件
+
+        for item in items.iter_mut() {
+            let item_lin = item.1 * cols + item.0;
+            if item_lin >= insert_lin {
+                let new_lin = item_lin + valid_count;
+                item.0 = new_lin % cols;
+                item.1 = new_lin / cols;
+            }
+        }
+
+        // 验证：所有项位置不变
+        assert_eq!(items, vec![(0, 0), (1, 0), (2, 0)], "全部重复时不应移位");
+    }
+
+    /// 部分重复文件：valid_count=实际有效数
+    #[test]
+    fn test_insert_mode_partial_duplicates() {
+        let mut items = vec![(0, 0), (1, 0), (2, 0)]; // lin0, lin1, lin2
+        let cols = 3;
+        let insert_lin = 1;
+        let valid_count = 1; // 3 个文件中 2 个重复，只有 1 个有效
+
+        for item in items.iter_mut() {
+            let item_lin = item.1 * cols + item.0;
+            if item_lin >= insert_lin {
+                let new_lin = item_lin + valid_count;
+                item.0 = new_lin % cols;
+                item.1 = new_lin / cols;
+            }
+        }
+
+        // 验证：lin0 不变，lin1->lin2, lin2->lin3
+        assert_eq!(items[0], (0, 0), "lin0 不变");
+        assert_eq!(items[1], (2, 0), "lin1 -> lin2");
+        assert_eq!(items[2], (0, 1), "lin2 -> lin3（col0, row1）");
+    }
+
+    /// 边界情况：插入到末尾（insert_lin = items.len()）
+    #[test]
+    fn test_insert_mode_at_end() {
+        let mut items = vec![(0, 0), (1, 0)]; // lin0, lin1
+        let cols = 3;
+        let insert_lin = 2; // 插入到末尾（lin2）
+        let valid_count = 2;
+
+        for item in items.iter_mut() {
+            let item_lin = item.1 * cols + item.0;
+            if item_lin >= insert_lin {
+                let new_lin = item_lin + valid_count;
+                item.0 = new_lin % cols;
+                item.1 = new_lin / cols;
+            }
+        }
+
+        // 验证：所有项位置不变（insert_lin > 所有现有项的 lin）
+        assert_eq!(items, vec![(0, 0), (1, 0)], "插入到末尾时不应移位现有项");
     }
 }
