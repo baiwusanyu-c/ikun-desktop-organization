@@ -449,3 +449,51 @@ GPUI 的 Entity::update() / App::update() 内部使用 RefCell 借用检查。�
 
 
 
+---
+
+## 应用图标规范
+
+### logo.ico 要求
+
+| 属性 | 要求 |
+|------|------|
+| **位置** | 项目根目录 `logo.ico` |
+| **格式** | Windows ICO（多分辨率嵌入） |
+| **必需尺寸** | 16×16, 32×32, 48×48, 64×64, 128×128, 256×256 |
+| **色彩深度** | 32-bit RGBA |
+
+### 为什么需要多分辨率
+
+Windows 在不同场景请求不同尺寸：系统托盘 16×16、标题栏 16-32、右键菜单 16、资源管理器 32-48、Alt+Tab 32-48、高 DPI 缩放需要 64/128/256。单一尺寸会导致 bitmap-stretch 模糊。
+
+### 编译时嵌入机制
+
+- `build.rs` 生成 `.rc` 文件，引用 `1 ICON "logo.ico"`
+- 依次尝试 `windres`（MinGW）→ `rc.exe + cvtres.exe`（MSVC）→ 直接链接 `.res`
+- **资源编译工具不可用时 `panic!` 中断编译**，防止产出无图标的 .exe
+- 编译环境必须有 `windres` 或 `rc.exe`（安装 Rust + MinGW 或 VS Build Tools）
+
+### 运行时加载
+
+- `app_icon.rs` 通过 `LoadIconW(hinstance, MAKEINTRESOURCE(1))` 从嵌入资源加载
+- `get_tray_icon()` → HICON（系统托盘）
+- `get_menu_bitmap()` → HBITMAP（右键菜单）
+- `diagnose_icon_availability()` → 启动时诊断（日志输出 `[app_icon]`）
+
+### 使用图标的模块
+
+| 模块 | 用途 |
+|------|------|
+| `sys_tray.rs` | 系统托盘图标 |
+| `shell_menu.rs` | 右键菜单项 + 桌面注册表菜单 |
+| `grid_window.rs` | 分类框窗口标题栏 |
+
+### 更换图标
+
+1. 替换 `logo.ico`（确保包含 6 个必需尺寸）
+2. `cargo clean` 清除缓存
+3. `cargo build` 重新编译
+
+详细规范见 `.trellis/spec/backend/icon-specification.md`。
+
+---

@@ -1,4 +1,4 @@
-//! Shell 上下文菜单功能
+﻿//! Shell 上下文菜单功能
 //!
 //! 提供文件右键菜单和桌面背景右键菜单的实现。
 //! 使用 Windows Shell COM API 获取真实的系统上下文菜单，
@@ -14,6 +14,12 @@ use super::ffi_imports::*;
 use super::ffi_types::*;
 use anyhow::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Windows Shell 变更通知常量（用于刷新桌面右键菜单缓存）
+/// SHCNE_ASSOCCHANGED: 文件关联已更改，通知 Shell 重新读取关联信息
+const SHCNE_ASSOCCHANGED: u32 = 0x08000000;
+/// SHCNF_IDLIST: dwItem1 和 dwItem2 为 PIDL 指针（null 时表示全局通知）
+const SHCNF_IDLIST: u32 = 0x0000;
 
 /// 用户点击"创建分类框"后设置的原子标志，由应用层轮询并消费
 /// （仅在 COM 失败的回退菜单路径中使用）
@@ -770,7 +776,20 @@ fn show_desktop_fallback_menu(hwnd: HWND) {
 /// 使 Windows 原生桌面右键菜单（包括"显示更多选项"legacy 菜单）显示「创建分类框」选项。
 /// Shell 会自动将注册表项合并到 `QueryContextMenu` 返回的菜单中。
 ///
-/// **必须在程序退出时调用 `cleanup_desktop_registry()` 清理**。
+
+/// 格式化注册表 Icon 值的路径字符串
+///
+/// Windows 注册表 `HKCU\...\shell\<name>\Icon` 值的格式为 `路径,索引`，
+/// **不带引号**（与 `command` 子键的 `(Default)` 值不同，后者需要引号）。
+///
+/// # 参数
+/// - `exe_path` — 可执行文件的绝对路径
+///
+/// # 返回
+/// 格式为 `"<exe_path>,0"` 的字符串（索引 0 表示嵌入图标的第一个资源）
+fn format_registry_icon_path(exe_path: &str) -> String {
+    format!("{},0", exe_path)
+}/// **必须在程序退出时调用 `cleanup_desktop_registry()` 清理**。
 pub fn setup_desktop_registry() {
     log::info!("[MENU-DEBUG] setup_desktop_registry 入口");
     let exe_path = match std::env::current_exe() {
@@ -782,7 +801,7 @@ pub fn setup_desktop_registry() {
     };
 
     // 图标路径：使用可执行文件本身（内嵌 logo.ico 资源）
-    let icon_path = format!("\"{}\",0", exe_path);
+    let icon_path = format_registry_icon_path(&exe_path);
 
     unsafe {
         // [DEBUG] 检查注册表项是否已存在
@@ -915,6 +934,10 @@ pub fn setup_desktop_registry() {
             "注册表: 桌面右键菜单已注册 ({} 项)",
             desktop_registry_menu_items().len()
         );
+
+        // 通知 Windows Shell 刷新关联缓存，确保桌面右键菜单立即显示新图标
+        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, std::ptr::null(), std::ptr::null());
+        log::info!("[MENU-DEBUG] 已发送 SHChangeNotify(SHCNE_ASSOCCHANGED) 刷新 Shell 缓存");
     }
 }
 
@@ -960,6 +983,9 @@ pub fn cleanup_desktop_registry() {
             }
         }
         log::info!("[MENU-DEBUG] 注册表清理完成");
+
+        // 通知 Shell 刷新缓存
+        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, std::ptr::null(), std::ptr::null());
     }
 }
 
@@ -1170,5 +1196,34 @@ mod tests {
 
         // Only Cancelled triggers fallback
         assert!(!should_skip_fallback(&ShellMenuResult::Cancelled));
+    }
+
+    #[test]
+    fn test_format_registry_icon_path_no_quotes() {
+        // Windows 注册表 Icon 值不允许带引号
+        let path = format_registry_icon_path(r"C:\Program Files\app\ikun.exe");
+        assert_eq!(path, r"C:\Program Files\app\ikun.exe,0");
+        assert!(!path.contains('"'), "注册表 Icon 值不应包含引号");
+    }
+
+    #[test]
+    fn test_format_registry_icon_path_simple_path() {
+        let path = format_registry_icon_path(r"D:\tools\ikun_organizer.exe");
+        assert_eq!(path, r"D:\tools\ikun_organizer.exe,0");
+    }
+
+    #[test]
+    fn test_format_registry_icon_path_with_spaces() {
+        // 路径含空格时也不应加引号
+        let path = format_registry_icon_path(r"C:\Users\John Doe\app.exe");
+        assert_eq!(path, r"C:\Users\John Doe\app.exe,0");
+        assert!(!path.starts_with('"'));
+    }
+
+    #[test]
+    fn test_shcne_constants_values() {
+        // SHCNE_ASSOCCHANGED 和 SHCNF_IDLIST 的值必须与 Windows SDK 定义一致
+        assert_eq!(SHCNE_ASSOCCHANGED, 0x08000000_u32);
+        assert_eq!(SHCNF_IDLIST, 0x0000_u32);
     }
 }

@@ -1,4 +1,4 @@
-//! Windows 系统托盘入口。
+﻿//! Windows 系统托盘入口。
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
@@ -89,6 +89,9 @@ pub fn setup_system_tray() -> anyhow::Result<()> {
         return Ok(());
     }
 
+
+    // 启动时诊断嵌入图标的可用性，便于排查另一台电脑上图标缺失问题
+    super::app_icon::diagnose_icon_availability();
     let class_name = wide_null(TRAY_CLASS_NAME);
     let window_name = wide_null("Ikun Organizer Tray");
 

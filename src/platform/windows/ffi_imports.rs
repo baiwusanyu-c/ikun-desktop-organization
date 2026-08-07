@@ -1,4 +1,4 @@
-//! Win32 FFI 函数声明和 Shell COM 类型
+﻿//! Win32 FFI 函数声明和 Shell COM 类型
 
 //!
 
@@ -174,6 +174,8 @@ extern "system" {
     // GDI (icon extraction for D2D conversion)
 
     pub fn GetIconInfo(hIcon: HICON, pIconInfo: *mut ICONINFO) -> i32;
+
+    pub fn DestroyIcon(hIcon: HICON) -> i32;
 
     pub fn GetDIBits(
         hdc: HDC,
