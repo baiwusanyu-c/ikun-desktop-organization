@@ -63,18 +63,25 @@ fn move_file(src: &Path, dst: &Path) -> Result<()> {
 /// 失败时源文件保持不变，调用方可据此保持 UI 与配置不变。
 fn move_public_file(src: &Path, dst: &Path) -> Result<()> {
     use super::ffi_imports::SHFileOperationW;
-    use super::ffi_types::{SHFILEOPSTRUCTW, FO_MOVE, FOF_NOCONFIRMATION, FOF_NOCONFIRMMKDIR};
+    use super::ffi_types::{FOF_NOCONFIRMATION, FOF_NOCONFIRMMKDIR, FO_MOVE, SHFILEOPSTRUCTW};
 
     // 1. 先尝试直接移动（有权限时无需 UAC）
     match std::fs::rename(src, dst) {
         Ok(()) => return Ok(()),
         Err(rename_error) => {
-            log::info!("[MOVE-PUBLIC] rename 失败 ({}), 尝试 SHFileOperationW", rename_error);
+            log::info!(
+                "[MOVE-PUBLIC] rename 失败 ({}), 尝试 SHFileOperationW",
+                rename_error
+            );
         }
     }
 
     // 2. 使用 SHFileOperationW（会弹出 UAC 授权框）
-    log::info!("[MOVE-PUBLIC] 使用 SHFileOperationW: {} -> {}", src.display(), dst.display());
+    log::info!(
+        "[MOVE-PUBLIC] 使用 SHFileOperationW: {} -> {}",
+        src.display(),
+        dst.display()
+    );
 
     let from_wide = make_double_null_wide(src);
     let to_wide = make_double_null_wide(dst);
@@ -1968,12 +1975,13 @@ mod tests {
 
     #[test]
     fn test_shfileop_constants() {
-        use super::super::ffi_types::{FO_MOVE, FO_COPY, FO_DELETE, FOF_NOCONFIRMATION, FOF_NOCONFIRMMKDIR};
+        use super::super::ffi_types::{
+            FOF_NOCONFIRMATION, FOF_NOCONFIRMMKDIR, FO_COPY, FO_DELETE, FO_MOVE,
+        };
         assert_eq!(FO_MOVE, 0x0001);
         assert_eq!(FO_COPY, 0x0002);
         assert_eq!(FO_DELETE, 0x0003);
         assert_eq!(FOF_NOCONFIRMATION, 0x0010);
         assert_eq!(FOF_NOCONFIRMMKDIR, 0x0200);
     }
-
 }

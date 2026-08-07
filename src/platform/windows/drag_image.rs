@@ -70,9 +70,11 @@ pub(crate) unsafe fn create_drag_overlay(
     dpi: u32,
 ) {
     log::info!(
-        "create_drag_overlay called: display_name='{}', OVERLAY_HWND={:?}",
+        "[拖拽残影] create: name='{}', hwnd={:?}, icon_size={}, dpi={}",
         display_name,
-        OVERLAY_HWND
+        OVERLAY_HWND,
+        icon_size,
+        dpi,
     );
     destroy_drag_overlay();
 
@@ -395,8 +397,10 @@ unsafe fn rebuild_drag_overlay_at_dpi(new_dpi: u32) {
 /// 销毁拖拽覆盖窗口
 pub(crate) unsafe fn destroy_drag_overlay() {
     log::info!(
-        "destroy_drag_overlay called: OVERLAY_HWND={:?}",
-        OVERLAY_HWND
+        "[拖拽残影] destroy: hwnd={:?}, hbmp={:?}, multi={}",
+        OVERLAY_HWND,
+        OVERLAY_HBMP,
+        !MULTI_DRAG_ITEMS_STORE.is_empty()
     );
     if !OVERLAY_HWND.is_null() {
         DestroyWindow(OVERLAY_HWND);
@@ -575,10 +579,11 @@ pub(crate) unsafe fn create_drag_overlay_multi(
     dpi: u32,
 ) {
     log::info!(
-        "create_drag_overlay_multi: {} items, source_idx={}, OVERLAY_HWND={:?}",
+        "[拖拽残影] create_multi: {} items, source_idx={}, hwnd={:?}, icon_size={}",
         items.len(),
         drag_source_idx,
-        OVERLAY_HWND
+        OVERLAY_HWND,
+        icon_size,
     );
     destroy_drag_overlay();
     clear_multi_drag_state();

@@ -1,4 +1,4 @@
-﻿//! Win32 FFI 类型定义、C 结构体和常量
+//! Win32 FFI 类型定义、C 结构体和常量
 //!
 //! 本模块包含所有 Win32 FFI 所需的类型别名、结构体定义和常量。
 //! 被 grid_window、win32_ffi、shell_menu、d2d_render 等模块共享使用。
@@ -975,7 +975,6 @@ mod tests {
     }
 }
 pub const DI_NORMAL: u32 = 0x0003;
-
 
 // ===== SHFileOperationW FFI 类型/常量 =====
 

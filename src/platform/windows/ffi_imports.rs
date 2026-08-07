@@ -1107,7 +1107,6 @@ extern "system" {
 
 }
 
-
 // ===== SHFileOperationW (shell32.dll) =====
 
 #[link(name = "shell32")]

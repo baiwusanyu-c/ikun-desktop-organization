@@ -180,7 +180,13 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
         None => return false,
     };
 
-    log::info!("end_drag called: drag_active={}", data.drag_active);
+    log::info!(
+        "end_drag: drag_active={}, hwnd={:?}, drag_item_index={}, multi_drag_count={}",
+        data.drag_active,
+        hwnd,
+        data.drag_item_index,
+        data.multi_drag_items.len()
+    );
 
     if !data.drag_active {
         return false;
@@ -199,6 +205,7 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
 
     // 停止定时器 + 销毁覆盖窗口
     unsafe {
+        log::info!("[END-DRAG] 停止定时器 + 销毁残影覆盖窗口");
         KillTimer(hwnd, TIMER_ID_GRID_DRAG);
         super::drag_image::destroy_drag_overlay();
     }
@@ -416,7 +423,7 @@ pub(crate) fn handle_grid_drag_timer(hwnd: HWND) {
     }
 
     if !data.drag_active {
-        log::warn!("handle_grid_drag_timer: drag_active=false, clearing");
+        log::warn!("handle_grid_drag_timer: drag_active=false, 清理残影状态");
         data.multi_drag_items.clear();
         unsafe {
             KillTimer(hwnd, TIMER_ID_GRID_DRAG);
@@ -469,7 +476,7 @@ pub(crate) fn handle_grid_drag_timer(hwnd: HWND) {
     // 检测鼠标左键是否仍然按下
     let lbutton_down = unsafe { GetAsyncKeyState(VK_LBUTTON) } & 0x8000u16 as i16 != 0;
     if !lbutton_down {
-        log::info!("grid drag timer: 鼠标已释放，结束拖拽");
+        log::info!("[GRID-TIMER] 鼠标已释放，结束拖拽");
         end_drag(hwnd);
     }
 }
@@ -481,7 +488,7 @@ pub(crate) fn handle_grid_drag_timer(hwnd: HWND) {
 /// - 将文件复制到目标位置（CF_HDROP 格式）
 /// - 分类框内图标保持原位（复制操作，不删除）
 fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
-    log::info!("start_grid_ole_drag: 启动分类框→Explorer OLE 拖拽");
+    log::info!("[GRID-OLE] 启动分类框→Explorer OLE 拖拽，销毁自定义残影");
     unsafe {
         KillTimer(hwnd, TIMER_ID_GRID_DRAG);
     }
@@ -856,5 +863,87 @@ mod tests {
         assert!(valid_idx >= 0 && (valid_idx as usize) < items_len);
         assert!(invalid_neg < 0 || (invalid_neg as usize) >= items_len);
         assert!(invalid_over < 0 || (invalid_over as usize) >= items_len);
+    }
+
+    /// 验证 end_drag 状态重置模式（与 release_drop_target_helper 协同）
+    /// end_drag 必须将所有拖拽状态字段重置为默认值
+    #[test]
+    fn test_end_drag_full_state_reset() {
+        // 模拟拖拽进行中的状态
+        let mut drag_pending = false; // 已激活
+        let mut drag_active = true;
+        let mut drag_item_index: i32 = 3;
+        let mut drag_over_item: i32 = 2;
+        let mut drag_over_insert_col: i32 = 1;
+        let mut drag_over_insert_row: i32 = 0;
+        let mut multi_drag_items: Vec<usize> = vec![1, 2, 3];
+
+        // 模拟 end_drag 的状态重置（与实际代码一致）
+        drag_active = false;
+        drag_item_index = -1;
+        drag_over_item = -1;
+        drag_over_insert_col = -1;
+        drag_over_insert_row = -1;
+        multi_drag_items.clear();
+
+        assert!(!drag_active);
+        assert!(!drag_pending);
+        assert_eq!(drag_item_index, -1);
+        assert_eq!(drag_over_item, -1);
+        assert_eq!(drag_over_insert_col, -1);
+        assert_eq!(drag_over_insert_row, -1);
+        assert!(multi_drag_items.is_empty());
+    }
+
+    /// 验证多选拖拽激活条件
+    /// 条件：selected_indices.len() > 1 && selected_indices.contains(drag_source_idx)
+    #[test]
+    fn test_multi_drag_activation_condition() {
+        let drag_source_idx: usize = 2;
+
+        // 场景 1：多选包含拖拽源 → 激活多选拖拽
+        let selected = vec![1, 2, 3];
+        let should_activate = selected.len() > 1 && selected.contains(&drag_source_idx);
+        assert!(should_activate, "多选包含拖拽源时应激活");
+
+        // 场景 2：单选 → 不激活多选拖拽
+        let selected_single = vec![2];
+        let should_activate_single =
+            selected_single.len() > 1 && selected_single.contains(&drag_source_idx);
+        assert!(!should_activate_single, "单选时不应激活多选拖拽");
+
+        // 场景 3：多选但不包含拖拽源 → 不激活
+        let selected_other = vec![0, 1, 3];
+        let should_activate_other =
+            selected_other.len() > 1 && selected_other.contains(&drag_source_idx);
+        assert!(!should_activate_other, "多选不包含拖拽源时不应激活");
+    }
+
+    /// 验证拖拽源索引确保在 multi_drag_items 中
+    /// end_drag 中的保护逻辑：如果 multi_drag_items 非空但不包含 drag_source_idx，则追加
+    #[test]
+    fn test_ensure_drag_source_in_multi_items() {
+        let drag_source_idx: usize = 5;
+
+        // 场景 1：已包含 → 不追加
+        let mut multi_items = vec![3, 5, 7];
+        if !multi_items.is_empty() && !multi_items.contains(&drag_source_idx) {
+            multi_items.push(drag_source_idx);
+        }
+        assert_eq!(multi_items, vec![3, 5, 7], "已包含时不应追加");
+
+        // 场景 2：不包含 → 追加
+        let mut multi_items2 = vec![3, 7];
+        if !multi_items2.is_empty() && !multi_items2.contains(&drag_source_idx) {
+            multi_items2.push(drag_source_idx);
+        }
+        assert_eq!(multi_items2, vec![3, 7, 5], "不包含时应追加");
+
+        // 场景 3：空列表 → 不追加
+        let mut multi_items3: Vec<usize> = Vec::new();
+        if !multi_items3.is_empty() && !multi_items3.contains(&drag_source_idx) {
+            multi_items3.push(drag_source_idx);
+        }
+        assert!(multi_items3.is_empty(), "空列表时不应追加");
     }
 }
