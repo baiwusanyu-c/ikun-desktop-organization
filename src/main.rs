@@ -12,6 +12,7 @@ mod context;
 #[allow(dead_code)]
 mod ipc;
 mod platform;
+mod shared;
 mod plugin;
 #[cfg(feature = "eframe-ui")]
 mod ui;

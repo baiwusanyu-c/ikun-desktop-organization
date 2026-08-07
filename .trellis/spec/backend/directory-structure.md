@@ -1,4 +1,4 @@
-﻿# Directory Structure
+# Directory Structure
 
 > 项目代码组织方式（v2.0 架构）
 
@@ -26,7 +26,16 @@
 src/
 ├── main.rs                    # 入口：初始化日志、DPI/OLE、启动 GPUI 或 legacy eframe
 ├── app.rs                     # legacy eframe::App 控制面板（eframe-ui feature）
-├── context.rs                 # AppContext 核心上下文对象
+├── context.rs                 # AppContext（持有 Box<dyn DesktopManagerTrait> + Box<dyn PlatformService>）
+│
+├── shared/                    # 🆕 跨平台共享逻辑层（从 Windows 提取的平台无关代码）
+│   ├── mod.rs                 #   模块导出
+│   ├── selection.rs           #   全局多选注册表（跨容器选择/锚点/框选）~526行
+│   ├── drag_logic.rs          #   拖拽纯逻辑（compute_drag_over_state/apply_shift_insert）~185行
+│   ├── geometry.rs            #   几何计算（对齐检测/像素边界/等比居中）~325行
+│   ├── layout.rs              #   布局重排逻辑（reflow_positions）~96行
+│   ├── drag_state.rs          #   拖拽生命周期状态机+常量 ~32行
+│   └── types.rs               #   跨平台共享类型定义（Rect/Point/Pixel32）~52行
 │
 ├── gpui_app/                  # Windows 默认 GPUI UI shell
 │   ├── mod.rs                 #   模块导出
@@ -38,8 +47,8 @@ src/
 │   └── settings_view.rs       #   液态玻璃效果设置面板（GPUI 独立窗口）
 │
 ├── platform/                  # 平台抽象层
-│   ├── mod.rs                 #   DesktopManagerTrait + re-exports
-│   ├── types.rs               #   跨平台类型：DesktopIcon, IconInfo, ScreenInfo
+│   ├── mod.rs                 #   DesktopManagerTrait(7方法) + PlatformService(10方法) + 工厂函数 + re-exports
+│   ├── types.rs               #   跨平台类型：DesktopIcon, IconInfo, ScreenInfo, IconData, IconData
 │   ├── windows/
 │   │   ├── mod.rs             #   Windows 平台入口
 │   │   ├── ffi_types.rs       #   Win32 FFI 类型/常量
@@ -52,7 +61,7 @@ src/
 │   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎
 │   │   ├── icon_bitmap.rs     #   图标透明边界与等比居中计算（纯逻辑）
 │   │   ├── grid_window.rs     #   窗口创建/销毁/数据模型/Z-order 管理（push_other_grids_below + 递归抑制）
-│   │   ├── grid_layout.rs     #   布局计算/按钮矩形/命中测试/滚动重排
+│   │   ├── grid_layout.rs     #   布局计算/按钮矩形/命中测试（reflow_items 委托到 shared/layout.rs）
 │   │   ├── monitor_utils.rs   #   显示器查询/窗口定位工具
 │   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc
 │   │   ├── zorder.rs          #   Z-order 层级管理（HWND_BOTTOM + 递归抑制 + 坐标查找）
@@ -62,7 +71,7 @@ src/
 │   │   ├── icon_extract.rs    #   图标提取（内容缩略图/应用 HICON 分流 + .lnk 目标解析）
 │   │   ├── icon_hider.rs      #   图标隐藏/恢复 + managed_icons vault + get_vault_display_names
 │   │   ├── liquid_glass.rs    #   液态玻璃 GPU 渲染器（DXGI + D2D + HLSL）
-│   │   ├── multi_select.rs    #   全局多选状态管理（跨容器选择/锚点/框选）
+│   │   ├── multi_select.rs    #   全局多选 re-export（实际实现在 shared/selection.rs）
 │   │   ├── desktop_utils.rs   #   桌面工具函数（自动排列检测/图标定位）
 ├── rename_editor.rs   #   内联重命名编辑器（独立线程 EDIT 控件 + 异步消息通信） + 删除分类框后还原非管理图标
 │   │   ├── drag_image.rs      #   拖拽残影覆盖窗口（单选/多选图标残影，D2D 渲染 + 跨显示器 DPI 自适应）
@@ -70,7 +79,7 @@ src/
 │   │   ├── drop_target.rs     #   分类框拖放目标（IDropTarget 实现）
 │   │   ├── drag_handler.rs    #   拖拽协调器（拖拽生命周期：阈值检测/位置更新/释放分发）
 │   │   ├── drag_drop.rs       #   拖拽放置操作（同框/跨框/桌面/OLE drop）
-│   │   ├── drag_visual.rs     #   拖拽可视化反馈（插入分隔线/替换高亮 + 纯逻辑函数）
+│   │   ├── drag_visual.rs     #   拖拽可视化反馈（HWND 感知部分，纯逻辑已提取到 shared/drag_logic.rs）
 │   │   ├── icon_manager.rs    #   图标管理器（SysListView32 跨进程操作 + 图像列表提取 + 位置快照/恢复）
 │   │   ├── control_panel_window.rs # 控制面板 Win32 显示/隐藏辅助（托盘优先生命周期）
 │   │   ├── sys_tray.rs        #   系统托盘入口（隐藏消息窗口 + 固定菜单动作队列）
@@ -215,7 +224,7 @@ platform/windows/
 ├── d2d_render.rs      # D2D/DirectWrite 渲染（draw_icon_with_label 统一图标+文本渲染）
 ├── icon_bitmap.rs     # 图标透明边界与等比居中计算（纯逻辑 + 单元测试）
 ├── grid_window.rs     # 窗口创建/销毁/数据模型
-├── grid_layout.rs     # 布局计算/按钮矩形/命中测试/滚动重排
+├── grid_layout.rs     # 布局计算/按钮矩形/命中测试（reflow_items 委托到 shared/layout.rs）
 ├── monitor_utils.rs   # 显示器查询/窗口定位工具
 ├── wnd_proc.rs        # 窗口消息处理
 ├── menu_window.rs     # 自定义分层窗口深色菜单（D2D/DirectWrite）
@@ -224,14 +233,14 @@ platform/windows/
 ├── icon_extract.rs    # 图标提取（内容缩略图/应用 HICON 分流 + .lnk 目标解析）
 ├── icon_hider.rs      # 图标隐藏/恢复 + managed_icons vault + get_vault_display_names
 ├── liquid_glass.rs    # 液态玻璃 GPU 渲染器（DXGI + D2D + HLSL）
-├── multi_select.rs    # 全局多选状态管理（跨容器选择/锚点/框选）
+├── multi_select.rs    # 全局多选 re-export（实际实现在 shared/selection.rs）
 ├── desktop_utils.rs   # 桌面工具函数（自动排列检测/图标定位）
 ├── drag_image.rs      # 拖拽残影覆盖窗口（单选/多选图标残影，跨显示器 DPI 自适应重建）
 ├── ole_dnd.rs         # OLE 拖拽源（IDropSource + IDataObject）
 ├── drop_target.rs     # 分类框拖放目标（IDropTarget）
 ├── drag_handler.rs    # 拖拽协调器（拖拽生命周期：阈值检测/位置更新/释放分发）
 ├── drag_drop.rs       # 拖拽放置操作（同框/跨框/桌面/OLE drop）
-├── drag_visual.rs     # 拖拽可视化反馈（插入分隔线/替换高亮 + 纯逻辑函数）
+├── drag_visual.rs     # 拖拽可视化反馈（HWND 感知部分，纯逻辑已提取到 shared/drag_logic.rs）
 ├── icon_manager.rs    # 图标管理器（SysListView32 跨进程操作 + 图像列表提取）
 ├── control_panel_window.rs # GPUI/eframe 控制面板 Win32 显示/隐藏辅助
 ├── sys_tray.rs        # 系统托盘入口
@@ -278,11 +287,13 @@ app.rs → context, platform, ui（仅 eframe-ui feature）
 context.rs → config, platform, classification, (plugin, box_core)
 ui/ → context (通过参数传递，仅 legacy eframe)
 plugin/ → context (通过参数传递)
+shared/ → (无内部依赖，仅 std + serde + uuid + lazy_static)
+platform/ → shared (允许：平台实现复用共享逻辑)
 box_core/ → config (枚举类型)
 classification/ → platform (仅 DesktopIcon 类型)
 platform/ → (无 UI/业务反向依赖，仅外部 crate 或平台子模块)
 platform/windows/liquid_glass → config (LiquidGlassConfig)
-platform/windows/multi_select → (无内部依赖，纯全局状态)
+platform/windows/multi_select → shared/selection (re-export)
 platform/windows/desktop_overlay/overlay_drop_target → ffi_imports, ole_dnd
 platform/windows/desktop_overlay/overlay_mouse_hook → ffi_imports, zorder
 utils/ → (无内部依赖)
@@ -295,6 +306,9 @@ utils/ → (无内部依赖)
 ❌ box_core/ → platform/   (业务层不直接调用平台 API)
 ❌ config/ → context/       (配置层不依赖上下文)
 ❌ classification/ → ui/   (分类层不依赖 UI)
+❌ shared/ → platform/    (共享层不依赖平台)
+❌ shared/ → ui/          (共享层不依赖 UI)
+❌ shared/ → gpui_app/    (共享层不依赖 GPUI)
 ```
 
 ---
@@ -334,6 +348,7 @@ use crate::ui::control_panel;
 - [ ] 添加必要的 `pub use` 导出
 - [ ] 如果跨平台，定义 Trait 并条件编译实现
 - [ ] 如果是新功能，更新 `src/main.rs` 的 `mod` 声明
+- [ ] 如果是跨平台纯逻辑，放入 shared/ 而非 platform/<os>/
 - [ ] 单文件不超过 1500 行（渲染引擎等复杂模块可适当放宽）
 
 

@@ -98,3 +98,56 @@ pub use multi_select::{
     has_selection, is_selected, remove, selected_in_container, selected_paths_in_container,
     set_anchor, set_range, toggle, ContainerType, SelectionKey,
 };
+
+
+// =============================================================================
+// WindowsPlatformService: implements crate::platform::PlatformService
+// =============================================================================
+
+/// Windows platform service implementation.
+///
+/// Consolidates Windows-specific platform operations into a single struct
+/// that implements the cross-platform PlatformService trait.
+pub struct WindowsPlatformService;
+
+impl crate::platform::PlatformService for WindowsPlatformService {
+    fn get_grid_count(&self) -> usize {
+        grid_window::get_grid_count()
+    }
+
+    fn collect_grid_layout(&self) -> Vec<crate::config::app_config::BoxLayoutData> {
+        grid_window::collect_grid_layout()
+    }
+
+    fn setup_system_tray(&self) -> anyhow::Result<()> {
+        sys_tray::setup_system_tray()
+    }
+
+    fn cleanup_system_tray(&self) {
+        sys_tray::cleanup_system_tray()
+    }
+
+    fn take_pending_tray_action(&self) -> Option<crate::platform::SystemTrayAction> {
+        sys_tray::take_pending_tray_action()
+    }
+
+    fn set_tray_auto_start_state(&self, enabled: bool) {
+        sys_tray::set_tray_auto_start_state(enabled)
+    }
+
+    fn show_control_panel(&self) -> bool {
+        control_panel_window::show_control_panel_window("Desktop Organizer")
+    }
+
+    fn hide_control_panel(&self) -> bool {
+        control_panel_window::hide_control_panel_window("Desktop Organizer")
+    }
+
+    fn set_auto_start(&self, enabled: bool) -> anyhow::Result<()> {
+        crate::utils::platform::set_auto_start(enabled)
+    }
+
+    fn is_auto_start_enabled(&self) -> bool {
+        crate::utils::platform::is_auto_start_enabled()
+    }
+}

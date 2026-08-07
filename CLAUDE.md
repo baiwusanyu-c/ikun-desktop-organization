@@ -1,4 +1,4 @@
-﻿# CLAUDE.md
+# CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **平台支持**：
 - ✅ **Windows 10/11**：主要平台（Shell COM API + Direct2D/DirectWrite 渲染）
-- 🔧 **macOS**：开发中（桌面覆盖窗口 + 分类框渲染 + 图标提取已实现，拖拽/菜单待完善）
+- 📋 **macOS**：待重新实现（已清除旧代码，shared/ 共享层已就绪，待实现 DesktopManagerTrait + PlatformService）
 
 ---
 
@@ -65,6 +65,7 @@ cargo watch -x check             # 自动检查（需 cargo install cargo-watch�
 - **上下文注入**：所有模块通过 `AppContext` 共享状态，替代全局变量
 - **插件扩展边界**：`plugin/` 提供 `Plugin`/`PluginRegistry` 预留接口，当前 GPUI 运行时尚未接入，不支持运行时热拔插；平台渲染与 Shell 集成保留在 `platform/`
 - **统一配置**：单一 `~/.ikun_organizer.json` 管理所有设置，支持导入/导出
+- **共享逻辑层**：`shared/` 存放从 Windows 提取的平台无关逻辑，macOS 重新实现时直接使用
 - **单文件 ≤ 1500 行**：渲染引擎等复杂模块可适当放宽；可独立测试的纯逻辑应拆到小模块，避免继续扩大渲染文件
 
 ### 项目目录结构
@@ -73,7 +74,16 @@ cargo watch -x check             # 自动检查（需 cargo install cargo-watch�
 src/
 ├── main.rs                    # 入口：初始化日志、DPI/OLE、分发 GPUI 或 legacy eframe
 ├── app.rs                     # legacy eframe::App 控制面板（仅 eframe-ui 回退路径）
-├── context.rs                 # AppContext 核心上下文对象
+├── context.rs                 # AppContext（持有 Box<dyn DesktopManagerTrait> + Box<dyn PlatformService>）
+│
+├── shared/                    # 🆕 跨平台共享逻辑层
+│   ├── mod.rs                 #   模块导出
+│   ├── selection.rs           #   全局多选注册表（跨容器选择/锚点/框选）
+│   ├── drag_logic.rs          #   拖拽纯逻辑（拖拽状态计算/shift-insert）
+│   ├── geometry.rs            #   几何计算（对齐检测/像素边界/等比居中）
+│   ├── layout.rs              #   布局重排逻辑（列数变化时图标重映射）
+│   ├── drag_state.rs          #   拖拽生命周期状态机
+│   └── types.rs               #   跨平台共享类型定义
 │
 ├── gpui_app/                  # Windows 默认 GPUI 控制面板与独立弹窗
 │   ├── mod.rs                 #   模块导出
@@ -84,7 +94,7 @@ src/
 │   └── settings_view.rs       #   液态玻璃效果设置面板（GPUI 独立窗口）
 │
 ├── platform/                  # 平台抽象层
-│   ├── mod.rs                 #   DesktopManagerTrait + re-exports
+│   ├── mod.rs                 #   DesktopManagerTrait(7方法) + PlatformService(10方法) + 工厂函数 + re-exports
 │   ├── types.rs               #   跨平台类型：DesktopIcon, IconInfo, ScreenInfo
 │   ├── windows/
 │   │   ├── mod.rs             #   Windows 平台入口
@@ -182,6 +192,28 @@ src/
 build/
 ├── build.rs                   # 嵌入 manifest 到 Windows 可执行文件
 └── app.manifest               # Per-Monitor DPI V2 感知清单
+```
+
+
+### 依赖规则
+
+**允许的依赖方向**：
+```
+gpui_app/ → ui/ (仅 View 层渲染)
+ui/ → box_core/ → platform/
+utils/ 被所有模块依赖
+shared/ → (无内部依赖，仅 std + serde + uuid + lazy_static)
+platform/ → shared (允许：平台实现复用共享逻辑)
+```
+
+**禁止的依赖方向**：
+```
+❌ platform/ 模块之间相互引用
+❌ ui/ → platform/（通过 AppContext 间接调用）
+❌ box_core/ → gpui_app/（绕过平台抽象）
+❌ shared/ → platform/    (共享层不依赖平台)
+❌ shared/ → ui/          (共享层不依赖 UI)
+❌ shared/ → gpui_app/    (共享层不依赖 GPUI)
 ```
 
 ### 核心设计

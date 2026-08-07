@@ -1,26 +1,27 @@
-//! 应用上下文 — 中心状态管理对象
-
-#![allow(dead_code)] // 应用上下文，部分字段/方法在当前构建路径未使用
+//! Application context - central state management object
+#![allow(dead_code)]
 //!
-//! 所有模块通过 `AppContext` 共享状态和配置，替代散落的全局变量。
-//! 这是整个应用的核心依赖注入点。
+//! All modules share state and configuration via AppContext.
+//! This is the core dependency injection point.
 //!
-//! ## 启动流程
-//! 1. `AppConfig::load()` 读取 `~/.ikun_organizer.json`
-//! 2. `AppContext::new()` 注入配置，初始化各子系统
-//! 3. 各模块从 `ctx.config` 读取所需配置
+//! ## Startup flow
+//! 1. AppConfig::load() reads ~/.ikun_organizer.json
+//! 2. AppContext::new() injects config, initializes subsystems
+//! 3. Modules read needed config from ctx.config
 
 use crate::classification::AppClassifier;
 use crate::config::AppConfig;
-use crate::platform::{DesktopManager, DesktopManagerTrait};
+use crate::platform::{
+    create_desktop_manager, create_platform_service, DesktopManagerTrait, PlatformService,
+};
 
-/// 应用运行时状态
+/// Application runtime state
 pub struct AppState {
-    /// 原生桌面图标是否已隐藏
+    /// Whether native desktop icons are hidden
     pub icons_hidden: bool,
-    /// 控制面板是否可见
+    /// Whether control panel is visible
     pub panel_visible: bool,
-    /// 当前状态消息
+    /// Current status message
     pub status_message: String,
 }
 
@@ -34,21 +35,23 @@ impl Default for AppState {
     }
 }
 
-/// 应用上下文（核心依赖注入对象）
+/// Application context (core dependency injection object)
 ///
-/// 所有模块通过此对象访问：
-/// - 统一配置 (`config`) — 来自 `~/.ikun_organizer.json`
-/// - 平台服务 (`desktop_manager`)
-/// - 分类引擎 (`classifier`)
-/// - 运行时状态 (`state`)
+/// All modules access:
+/// - Unified config (config) from ~/.ikun_organizer.json
+/// - Platform services (desktop_manager, platform_service) via trait objects
+/// - Classification engine (classifier)
+/// - Runtime state (state)
 pub struct AppContext {
-    /// 统一配置（JSON，可导入/导出）
+    /// Unified config (JSON, importable/exportable)
     pub config: AppConfig,
-    /// 桌面管理器（平台相关）
-    pub desktop_manager: DesktopManager,
-    /// 应用分类器（使用配置中的兜底规则）
+    /// Desktop manager (platform-specific, via trait object)
+    pub desktop_manager: Box<dyn DesktopManagerTrait>,
+    /// Platform service (tray, auto-start, control panel, via trait object)
+    pub platform_service: Box<dyn PlatformService>,
+    /// App classifier (using fallback rules from config)
     pub classifier: AppClassifier,
-    /// 运行时状态
+    /// Runtime state
     pub state: AppState,
 }
 
@@ -58,7 +61,8 @@ impl Default for AppContext {
         let classifier = AppClassifier::from_config(&config.classification);
         Self {
             config,
-            desktop_manager: DesktopManager,
+            desktop_manager: create_desktop_manager(),
+            platform_service: create_platform_service(),
             classifier,
             state: AppState::default(),
         }
@@ -66,69 +70,124 @@ impl Default for AppContext {
 }
 
 impl AppContext {
-    /// 创建应用上下文（加载配置 + 初始化各子系统）
+    /// Create application context (load config + initialize subsystems)
     ///
-    /// 从 `~/.ikun_organizer.json` 读取配置，文件不存在则使用默认值。
-    /// 配置加载失败时优雅降级，不阻塞应用启动。
+    /// Reads config from ~/.ikun_organizer.json, falls back to defaults.
+    /// Config load failure degrades gracefully, does not block app startup.
     pub fn new() -> anyhow::Result<Self> {
-        // 1. 加载配置
+        // 1. Load config
         let config = AppConfig::load().unwrap_or_else(|e| {
-            log::warn!("加载配置失败: {}，使用默认配置", e);
+            log::warn!("Failed to load config: {}, using defaults", e);
             AppConfig::default()
         });
 
-        log::info!("配置版本: {}", config.version);
-        log::info!("日志级别: {}", config.debug.log_level);
-        log::info!("启动恢复布局: {}", config.general.restore_layout_on_start);
+        log::info!("Config version: {}", config.version);
+        log::info!("Log level: {}", config.debug.log_level);
+        log::info!(
+            "Restore layout on start: {}",
+            config.general.restore_layout_on_start
+        );
 
-        // 初始化全局液态玻璃配置
+        // Initialize global liquid glass config
         #[cfg(target_os = "windows")]
         crate::platform::windows::liquid_glass::update_liquid_glass_config(
             &config.box_style.liquid_glass,
         );
 
-        // 2. 初始化分类器（使用配置中的兜底分类规则）
+        // 2. Initialize classifier (using fallback classification rules)
         let classifier = AppClassifier::from_config(&config.classification);
         log::info!(
-            "初始化分类器，加载 {} 条兜底规则",
+            "Initialized classifier with {} fallback rules",
             config.classification.len()
         );
 
-        // 3. 初始化桌面管理器
-        let desktop_manager = DesktopManager::new().unwrap_or_else(|e| {
-            log::warn!("初始化桌面管理器失败: {}，使用默认值", e);
-            DesktopManager
-        });
+        // 3. Initialize platform services via trait objects
+        let desktop_manager = create_desktop_manager();
+        let platform_service = create_platform_service();
 
         Ok(Self {
             config,
             desktop_manager,
+            platform_service,
             classifier,
             state: AppState::default(),
         })
     }
 
-    /// 保存配置到 `~/.ikun_organizer.json`
+    /// Save config to ~/.ikun_organizer.json
     pub fn save_config(&mut self) -> anyhow::Result<()> {
         self.config.last_modified = chrono::Utc::now();
         self.config.save()
     }
 
-    /// 导出配置到指定路径
+    /// Export config to specified path
     pub fn export_config(&self, path: &std::path::Path) -> anyhow::Result<()> {
         self.config.export_to(path)
     }
 
-    /// 从指定路径导入配置并保存
+    /// Import config from specified path and save
     pub fn import_config(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
         self.config = AppConfig::import_from(path)?;
-        // 重新初始化分类器（使用新配置的兜底规则）
+        // Reinitialize classifier (using new config's fallback rules)
         self.classifier = AppClassifier::from_config(&self.config.classification);
         self.save_config()
     }
 
-    /// 设置状态消息
+    /// Set status message
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.state.status_message = msg.into();
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_app_context_default_creates_valid_state() {
+        let ctx = AppContext::default();
+        assert!(!ctx.state.icons_hidden);
+        assert!(!ctx.state.panel_visible);
+        assert!(ctx.state.status_message.is_empty());
+    }
+
+    #[test]
+    fn test_app_context_default_creates_trait_objects() {
+        let ctx = AppContext::default();
+        // DesktopManager trait object should be able to enumerate icons
+        // (may return empty in test environment, but should not panic)
+        let icons = ctx.desktop_manager.get_desktop_icons();
+        let _ = icons.len();
+    }
+
+    #[test]
+    fn test_app_context_default_platform_service() {
+        let ctx = AppContext::default();
+        // PlatformService should be callable without panic
+        let grid_count = ctx.platform_service.get_grid_count();
+        assert_eq!(grid_count, 0, "No grid windows in test environment");
+    }
+
+    #[test]
+    fn test_app_context_set_status() {
+        let mut ctx = AppContext::default();
+        assert!(ctx.state.status_message.is_empty());
+        ctx.set_status("test message");
+        assert_eq!(ctx.state.status_message, "test message");
+        ctx.set_status("updated");
+        assert_eq!(ctx.state.status_message, "updated");
+    }
+
+    #[test]
+    fn test_app_context_new_loads_config() {
+        let ctx = AppContext::new();
+        assert!(ctx.is_ok(), "AppContext::new() should not fail");
+        let ctx = ctx.unwrap();
+        assert!(!ctx.config.version.is_empty());
+    }
+
+    #[test]
+    fn test_app_context_default_classifier_initialized() {
+        let ctx = AppContext::default();
+        let _ = &ctx.classifier;
     }
 }

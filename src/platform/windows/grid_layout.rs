@@ -15,29 +15,12 @@ use crate::box_core::view_engine::get_view_params;
 /// `A, B` / `_, C`（C 仍然在第 2 列），而不是 `A, B` / `C, _`。
 pub(crate) fn reflow_items(data: &mut super::grid_window::GridWindowData) {
     let new_cols = data.cols;
-    if new_cols <= 0 {
-        return;
-    }
-
-    // 从固定位置推断旧的列数
-    let old_cols = data
-        .items
-        .iter()
-        .filter(|item| item.grid_col >= 0)
-        .map(|item| item.grid_col + 1)
-        .max()
-        .unwrap_or(new_cols);
-    let old_cols = old_cols.max(1);
-
-    for item in &mut data.items {
-        let linear_idx = if item.grid_col >= 0 && item.grid_row >= 0 {
-            item.grid_row * old_cols + item.grid_col
-        } else {
-            // 无固定位置的项保持自动布局
-            continue;
-        };
-        item.grid_col = linear_idx % new_cols;
-        item.grid_row = linear_idx / new_cols;
+    // Extract positions, delegate to shared, write back
+    let mut positions: Vec<(i32, i32)> = data.items.iter().map(|item| (item.grid_col, item.grid_row)).collect();
+    crate::shared::layout::reflow_positions(&mut positions, new_cols);
+    for (item, (col, row)) in data.items.iter_mut().zip(positions.into_iter()) {
+        item.grid_col = col;
+        item.grid_row = row;
     }
 }
 

@@ -1,51 +1,35 @@
-//! 平台抽象层
-
-#![allow(dead_code)] // 平台抽象层，部分在当前构建路径未使用
+//! Platform abstraction layer
+#![allow(dead_code)]
 //!
-//! 提供跨平台的桌面管理接口，通过 trait 统一不同平台的实现。
+//! Cross-platform desktop management interface via trait.
 //!
-//! # 模块结构
-//! - `types`: 跨平台数据类型（DesktopIcon, IconInfo 等）
-//! - `windows`: Windows 平台实现（Shell API, D2D 渲染等）
-//! - `macos`: macOS 平台实现（实验性）
+//! # Architecture
+//! - DesktopManagerTrait: desktop icon management (enum, extract, launch, monitor)
+//! - PlatformService: system tray, auto-start, control panel
+//! - AppContext holds Box<dyn DesktopManagerTrait> + Box<dyn PlatformService>
 
 pub mod types;
 
 #[cfg(windows)]
 pub mod windows;
 
-#[cfg(target_os = "macos")]
-pub mod macos;
-
-// Re-export cross-platform types
 pub use types::*;
 
-/// 系统托盘菜单动作。
-///
-/// 平台层负责把原生托盘菜单事件转换为这些动作，UI 层负责消费并执行具体行为。
+/// System tray menu actions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SystemTrayAction {
-    /// 打开控制面板。
     OpenControlPanel,
-    /// 创建分类框。
     CreateBox,
-    /// 一键 AI 分类（当前仅占位）。
     AiClassify,
-    /// 切换开机自启。
     ToggleAutoStart,
-    /// 退出应用。
     Quit,
 }
 
-// Re-export platform-specific DesktopManager
-#[cfg(target_os = "macos")]
-pub use macos::DesktopManager;
 #[cfg(windows)]
 pub use windows::DesktopManager;
 
-// Re-export platform-specific functions that app.rs uses
 #[cfg(windows)]
-#[allow(unused_imports)] // 部分仅在 eframe-ui feature 路径使用
+#[allow(unused_imports)]
 pub use windows::{
     cleanup_desktop_registry, cleanup_system_tray, clsid_display_name, collect_grid_layout,
     create_grid_window, destroy_all_grid_windows, extract_file_icon,
@@ -60,281 +44,166 @@ pub use windows::{
 };
 
 // =============================================================================
-// macOS 平台导出与 stub 函数
+// Cross-platform Trait definitions
 // =============================================================================
 
-#[cfg(target_os = "macos")]
-pub use macos::get_screen_resolution;
-
-/// macOS 平台 stub 模块（阶段 1 占位实现）
+/// Desktop manager trait (cross-platform).
 ///
-/// 这些函数签名与 Windows 版本完全一致，保证 app.rs 可以跨平台编译。
-/// 后续阶段会逐步实现真正的 macOS 功能。
-#[cfg(target_os = "macos")]
-mod macos_stubs {
-    use crate::config::app_config::{BoxLayoutData, GroupBy, SortMode, ViewMode};
-    use crate::platform::types::DesktopIcon;
-    use std::ffi::c_void;
-    use std::path::PathBuf;
+/// Windows and macOS each implement this trait.
+/// AppContext holds it as Box<dyn DesktopManagerTrait>.
+pub trait DesktopManagerTrait: Send + Sync {
+    /// Enumerate desktop icons
+    fn get_desktop_icons(&self) -> Vec<DesktopIcon>;
 
-    /// 图标句柄（macOS 用 void 指针占位，对应 Windows HICON）
-    pub type HICON = *mut c_void;
+    /// Watch desktop changes
+    fn watch_desktop(&self) -> anyhow::Result<()>;
 
-    /// 文件图标信息（签名与 Windows 一致）
-    pub struct FileIconInfo {
-        pub hicon: HICON,
-        pub display_name: String,
-        pub type_name: String,
-    }
+    /// Extract file icon pixel data
+    fn extract_icon(&self, path: &str) -> anyhow::Result<IconData>;
 
-    /// 分类框文件项（签名与 Windows 一致）
-    pub struct GridFileItem {
-        pub file_path: String,
-        pub display_name: String,
-        pub icon_handle: HICON,
-    }
+    /// Launch file with system default handler
+    fn launch_file(&self, path: &str) -> anyhow::Result<()>;
 
-    /// 分类框创建参数（签名与 Windows 一致）
-    pub struct GridCreateParams {
-        pub id: usize,
-        pub title: String,
-        pub x: i32,
-        pub y: i32,
-        pub width: i32,
-        pub height: i32,
-        pub items: Vec<GridFileItem>,
-        pub view_mode: ViewMode,
-        pub locked: bool,
-        pub sort_mode: SortMode,
-        pub sort_ascending: bool,
-        pub group_by: GroupBy,
-        pub config_id: uuid::Uuid,
-    }
+    /// Get screen resolution (physical pixels)
+    fn get_screen_resolution(&self) -> (i32, i32);
 
-    /// 清理桌面注册表（macOS 无操作）
-    pub fn cleanup_desktop_registry() -> anyhow::Result<()> {
-        log::debug!("macOS: cleanup_desktop_registry (no-op)");
-        Ok(())
-    }
+    /// Get primary monitor DPI
+    fn get_primary_monitor_dpi(&self) -> u32;
 
-    /// 收集网格布局（macOS stub，返回类型与 Windows 一致）
-    pub fn collect_grid_layout() -> Vec<BoxLayoutData> {
-        log::debug!("macOS: collect_grid_layout (stub)");
-        Vec::new()
-    }
-
-    /// 更新格子窗口标题（macOS stub）
-    pub fn update_grid_window_title(_config_id: uuid::Uuid, _new_title: &str) {
-        log::debug!("macOS: update_grid_window_title (stub)");
-    }
-
-    /// 创建分类框窗口（macOS stub）
-    pub fn create_grid_window(_params: GridCreateParams) -> anyhow::Result<()> {
-        log::warn!("macOS: create_grid_window 未实现");
-        Ok(())
-    }
-
-    /// 销毁所有分类框窗口（macOS stub）
-    pub fn destroy_all_grid_windows() {
-        log::debug!("macOS: destroy_all_grid_windows (stub)");
-    }
-
-    /// 提取文件图标（macOS stub，返回类型与 Windows 一致）
-    pub fn extract_file_icon(_path: &str) -> Option<FileIconInfo> {
-        log::debug!("macOS: extract_file_icon (stub)");
-        None
-    }
-
-    /// 获取鼠标所在显示器的工作区域（macOS 实现，返回物理像素坐标）
-    pub fn get_cursor_monitor_work_area_phys() -> (i32, i32, i32, i32) {
-        use cocoa::appkit::NSEvent;
-        use cocoa::base::{id, nil};
-        use cocoa::foundation::NSRect;
-        use objc::{class, msg_send, sel, sel_impl};
-
-        unsafe {
-            let mouse_location: cocoa::foundation::NSPoint =
-                msg_send![class!(NSEvent), mouseLocation];
-            let screens: id = msg_send![class!(NSScreen), screens];
-            let count: usize = msg_send![screens, count];
-
-            for i in 0..count {
-                let screen: id = msg_send![screens, objectAtIndex: i];
-                let frame: NSRect = msg_send![screen, frame];
-                if mouse_location.x >= frame.origin.x
-                    && mouse_location.x < frame.origin.x + frame.size.width
-                    && mouse_location.y >= frame.origin.y
-                    && mouse_location.y < frame.origin.y + frame.size.height
-                {
-                    let visible_frame: NSRect = msg_send![screen, visibleFrame];
-                    let scale: f64 = msg_send![screen, backingScaleFactor];
-                    return (
-                        (visible_frame.origin.x * scale) as i32,
-                        (visible_frame.origin.y * scale) as i32,
-                        (visible_frame.size.width * scale) as i32,
-                        (visible_frame.size.height * scale) as i32,
-                    );
-                }
-            }
-
-            let main_screen: id = msg_send![screens, objectAtIndex: 0];
-            let visible_frame: NSRect = msg_send![main_screen, visibleFrame];
-            let scale: f64 = msg_send![main_screen, backingScaleFactor];
-            (
-                (visible_frame.origin.x * scale) as i32,
-                (visible_frame.origin.y * scale) as i32,
-                (visible_frame.size.width * scale) as i32,
-                (visible_frame.size.height * scale) as i32,
-            )
-        }
-    }
-
-    /// 获取主显示器的工作区域（macOS 实现，返回物理像素坐标）
-    pub fn get_primary_monitor_work_area_phys() -> (i32, i32, i32, i32) {
-        use cocoa::base::nil;
-        use cocoa::foundation::NSRect;
-        use objc::{msg_send, sel, sel_impl};
-
-        unsafe {
-            let screens: cocoa::base::id = msg_send![class!(NSScreen), screens];
-            let count: usize = msg_send![screens, count];
-            if count == 0 {
-                return (0, 0, 1920, 1080);
-            }
-            // 第一个 screen 是主显示器
-            let main_screen: cocoa::base::id = msg_send![screens, objectAtIndex: 0];
-            let visible_frame: NSRect = msg_send![main_screen, visibleFrame];
-            let scale: f64 = msg_send![main_screen, backingScaleFactor];
-            (
-                (visible_frame.origin.x * scale) as i32,
-                (visible_frame.origin.y * scale) as i32,
-                (visible_frame.size.width * scale) as i32,
-                (visible_frame.size.height * scale) as i32,
-            )
-        }
-    }
-
-    /// 获取分类框数量（macOS stub）
-    pub fn get_grid_count() -> usize {
-        0
-    }
-
-    /// 获取主显示器 DPI（macOS stub，Retina 返回 192，普通返回 96）
-    pub fn get_primary_monitor_dpi() -> u32 {
-        use cocoa::base::nil;
-        use objc::{msg_send, sel, sel_impl};
-
-        unsafe {
-            let screen: cocoa::base::id = msg_send![class!(NSScreen), mainScreen];
-            if screen == nil {
-                return 96;
-            }
-            let scale: f64 = msg_send![screen, backingScaleFactor];
-            (scale * 96.0) as u32
-        }
-    }
-
-    /// 图标是否存在于分类框（macOS stub）
-    pub fn icon_exists_for_box(_box_id: &str) -> bool {
-        false
-    }
-
-    /// 原生图标是否隐藏（macOS stub）
-    pub fn native_icons_hidden() -> bool {
-        // macOS: 我们已成功隐藏了 PENDING_FEATURES.md，返回 true 避免循环重试
-        true
-    }
-
-    /// 重新定位窗口（macOS stub）
-    pub fn reposition_window_by_title(_title: &str, _x: i32, _y: i32) {
-        log::debug!("macOS: reposition_window_by_title (stub)");
-    }
-
-    /// 解析图标读取路径（macOS stub，签名与 Windows 一致）
-    pub fn resolve_icon_read_path(logical_path: &str) -> Option<PathBuf> {
-        Some(PathBuf::from(logical_path))
-    }
-
-    /// 恢复所有隐藏图标（macOS stub）
-    pub fn restore_all_hidden_icons() {
-        log::debug!("macOS: restore_all_hidden_icons (stub)");
-    }
-
-    /// 设置桌面注册表（macOS 无操作）
-    pub fn setup_desktop_registry() -> anyhow::Result<()> {
-        log::debug!("macOS: setup_desktop_registry (no-op)");
-        Ok(())
-    }
-
-    /// 获取待创建分类框信号（macOS stub，返回类型与 Windows 一致）
-    pub fn take_pending_create_box() -> bool {
-        false
-    }
-
-    /// 初始化系统托盘（macOS stub，无操作）。
-    pub fn setup_system_tray() -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    /// 清理系统托盘（macOS stub，无操作）。
-    pub fn cleanup_system_tray() {}
-
-    /// 获取待处理的托盘动作（macOS stub）。
-    pub fn take_pending_tray_action() -> Option<super::SystemTrayAction> {
-        None
-    }
-
-    /// 注册托盘动作唤醒器（macOS stub，无操作）。
-    pub fn register_tray_action_waker(_waker: impl Fn() + Send + Sync + 'static) {
-        log::debug!("macOS: register_tray_action_waker (stub)");
-    }
-
-    /// 隐藏控制面板窗口（macOS stub）。
-    pub fn hide_control_panel_window(_title: &str) -> bool {
-        false
-    }
-
-    /// 显示控制面板窗口（macOS stub）。
-    pub fn show_control_panel_window(_title: &str) -> bool {
-        false
-    }
-
-    pub fn setup_global_hotkey(_hotkey_str: &str) -> anyhow::Result<()> {
-        log::debug!("macOS: setup_global_hotkey (no-op)");
-        Ok(())
-    }
-
-    pub fn unregister_global_hotkey() {
-        log::debug!("macOS: unregister_global_hotkey (no-op)");
-    }
-
-    pub fn take_hotkey_toggle() -> bool {
-        false
-    }
-
-    pub fn set_tray_auto_start_state(_enabled: bool) {
-        log::debug!("macOS: set_tray_auto_start_state (no-op)");
-    }
+    /// Get monitor work area at given point (physical pixels)
+    fn get_monitor_work_area(&self, point: (i32, i32)) -> (i32, i32, i32, i32);
 }
 
-#[cfg(target_os = "macos")]
-pub use macos_stubs::{
-    cleanup_desktop_registry, cleanup_system_tray, collect_grid_layout, create_grid_window,
-    destroy_all_grid_windows, extract_file_icon, get_cursor_monitor_work_area_phys, get_grid_count,
-    get_primary_monitor_dpi, get_primary_monitor_work_area_phys, hide_control_panel_window,
-    icon_exists_for_box, reposition_and_resize_window, reposition_window_by_title,
-    resolve_icon_read_path, restore_all_hidden_icons, set_tray_auto_start_state,
-    setup_desktop_registry, setup_global_hotkey, setup_system_tray, show_control_panel_window,
-    take_hotkey_toggle, take_pending_create_box, take_pending_tray_action,
-    unregister_global_hotkey, update_grid_window_title, FileIconInfo, GridCreateParams,
-    GridFileItem, HICON,
-};
+/// Platform service trait (cross-platform).
+///
+/// Consolidates platform-specific free functions into a single trait.
+pub trait PlatformService: Send + Sync {
+    /// Get classification box count
+    fn get_grid_count(&self) -> usize;
 
-/// 桌面管理器 trait（跨平台）
-pub trait DesktopManagerTrait {
-    fn new() -> anyhow::Result<Self>
-    where
-        Self: Sized;
-    fn get_desktop_icons(&self) -> Vec<DesktopIcon>;
-    fn watch_desktop(&self) -> anyhow::Result<()>;
+    /// Collect all box layout data
+    fn collect_grid_layout(&self) -> Vec<crate::config::app_config::BoxLayoutData>;
+
+    /// Setup system tray
+    fn setup_system_tray(&self) -> anyhow::Result<()>;
+
+    /// Cleanup system tray
+    fn cleanup_system_tray(&self);
+
+    /// Get pending tray action
+    fn take_pending_tray_action(&self) -> Option<SystemTrayAction>;
+
+    /// Set tray auto-start state
+    fn set_tray_auto_start_state(&self, enabled: bool);
+
+    /// Show control panel window
+    fn show_control_panel(&self) -> bool;
+
+    /// Hide control panel window
+    fn hide_control_panel(&self) -> bool;
+
+    /// Set auto-start on boot
+    fn set_auto_start(&self, enabled: bool) -> anyhow::Result<()>;
+
+    /// Query auto-start status
+    fn is_auto_start_enabled(&self) -> bool;
+}
+
+// =============================================================================
+// Platform factory functions
+// =============================================================================
+
+/// Create platform-specific DesktopManager instance
+#[cfg(windows)]
+pub fn create_desktop_manager() -> Box<dyn DesktopManagerTrait> {
+    Box::new(
+        DesktopManager::new().unwrap_or_else(|e| {
+            log::warn!("Desktop manager init failed: {}, using default", e);
+            DesktopManager
+        })
+    )
+}
+
+/// Create platform-specific PlatformService instance
+#[cfg(windows)]
+pub fn create_platform_service() -> Box<dyn PlatformService> {
+    Box::new(windows::WindowsPlatformService)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_desktop_manager_returns_trait_object() {
+        let dm = create_desktop_manager();
+        // Should be able to call trait methods without panic
+        let _icons = dm.get_desktop_icons();
+    }
+
+    #[test]
+    fn test_create_platform_service_returns_trait_object() {
+        let ps = create_platform_service();
+        // Grid count should be 0 in test environment
+        assert_eq!(ps.get_grid_count(), 0);
+    }
+
+    #[test]
+    fn test_desktop_manager_screen_resolution() {
+        let dm = create_desktop_manager();
+        let (w, h) = dm.get_screen_resolution();
+        assert!(w > 0, "Screen width should be positive");
+        assert!(h > 0, "Screen height should be positive");
+    }
+
+    #[test]
+    fn test_desktop_manager_dpi() {
+        let dm = create_desktop_manager();
+        let dpi = dm.get_primary_monitor_dpi();
+        assert!(dpi >= 96, "DPI should be at least 96");
+        assert!(dpi <= 600, "DPI should not exceed 600");
+    }
+
+    #[test]
+    fn test_desktop_manager_monitor_work_area() {
+        let dm = create_desktop_manager();
+        let (x, y, w, h) = dm.get_monitor_work_area((0, 0));
+        assert!(w > 0, "Work area width should be positive");
+        assert!(h > 0, "Work area height should be positive");
+    }
+
+    #[test]
+    fn test_system_tray_action_eq() {
+        assert_eq!(SystemTrayAction::OpenControlPanel, SystemTrayAction::OpenControlPanel);
+        assert_ne!(SystemTrayAction::OpenControlPanel, SystemTrayAction::Quit);
+    }
+
+    #[test]
+    fn test_system_tray_action_clone() {
+        let a = SystemTrayAction::CreateBox;
+        let b = a;
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_platform_service_collect_layout() {
+        let ps = create_platform_service();
+        let layouts = ps.collect_grid_layout();
+        // No grid windows in test environment
+        assert!(layouts.is_empty());
+    }
+
+    #[test]
+    fn test_platform_service_auto_start_query() {
+        let ps = create_platform_service();
+        // Just verify it doesn't panic; actual value depends on system state
+        let _enabled = ps.is_auto_start_enabled();
+    }
+
+    #[test]
+    fn test_platform_service_tray_action_none_initially() {
+        let ps = create_platform_service();
+        // No tray action pending in test environment
+        assert!(ps.take_pending_tray_action().is_none());
+    }
 }

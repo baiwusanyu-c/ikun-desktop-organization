@@ -23,24 +23,87 @@ impl Default for DesktopManager {
     }
 }
 
-impl DesktopManagerTrait for DesktopManager {
-    fn new() -> Result<Self> {
-        log::info!("初始化 Windows DesktopManager...");
+impl DesktopManager {
+    /// Create a new DesktopManager instance
+    pub fn new() -> Result<Self> {
+        log::info!("Initializing Windows DesktopManager...");
         Ok(Self)
     }
+}
 
+impl DesktopManagerTrait for DesktopManager {
     fn get_desktop_icons(&self) -> Vec<DesktopIcon> {
-        log::info!("开始获取 Windows 桌面图标...");
-
+        log::info!("Enumerating Windows desktop icons...");
         self.get_desktop_icons_internal().unwrap_or_else(|e| {
-            log::warn!("获取桌面图标失败: {}, 返回空列表", e);
+            log::warn!("Failed to get desktop icons: {}, returning empty list", e);
             Vec::new()
         })
     }
 
     fn watch_desktop(&self) -> Result<()> {
-        log::info!("开始监听桌面变化...");
+        log::info!("Starting desktop change monitoring...");
         Ok(())
+    }
+
+    fn extract_icon(&self, path: &str) -> anyhow::Result<crate::platform::types::IconData> {
+        match super::icon_extract::extract_file_icon(path) {
+            Some(info) => {
+                let _ = info;
+                anyhow::bail!("Pixel-level icon extraction not yet implemented via trait")
+            }
+            None => anyhow::bail!("Failed to extract icon for: {}", path),
+        }
+    }
+
+    fn launch_file(&self, path: &str) -> anyhow::Result<()> {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+
+        let path_wide: Vec<u16> = OsStr::new(path)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        extern "system" {
+            fn ShellExecuteW(
+                hwnd: *mut std::ffi::c_void,
+                operation: *const u16,
+                file: *const u16,
+                parameters: *const u16,
+                directory: *const u16,
+                show_cmd: i32,
+            ) -> isize;
+        }
+
+        let operation: Vec<u16> = "open".encode_utf16().chain(std::iter::once(0)).collect();
+        let result = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                operation.as_ptr(),
+                path_wide.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1,
+            )
+        };
+
+        if result > 32 {
+            Ok(())
+        } else {
+            anyhow::bail!("ShellExecuteW failed for '{}': error code {}", path, result)
+        }
+    }
+
+    fn get_screen_resolution(&self) -> (i32, i32) {
+        super::monitor_utils::get_screen_resolution()
+    }
+
+    fn get_primary_monitor_dpi(&self) -> u32 {
+        super::monitor_utils::get_primary_monitor_dpi()
+    }
+
+    fn get_monitor_work_area(&self, _point: (i32, i32)) -> (i32, i32, i32, i32) {
+        super::monitor_utils::get_primary_monitor_work_area_phys()
     }
 }
 
