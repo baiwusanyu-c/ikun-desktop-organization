@@ -940,6 +940,92 @@ pub fn delete_vault_copy_for(logical_path: &str) {
     }
 }
 
+// =============================================================================
+// Staging: 创建原始文件名的临时副本用于 Shell 操作（避免 user_/public_ 前缀泄漏）
+// =============================================================================
+
+/// 获取 staging 目录路径
+fn get_staging_dir() -> Result<std::path::PathBuf> {
+    let dir = app_data_root()?.join("staging");
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| anyhow::anyhow!("创建 staging 目录失败: {}", e))?;
+    }
+    Ok(dir)
+}
+
+/// 从 vault 文件名还原原始文件名
+fn original_filename_from_vault(logical_path: &str) -> Option<String> {
+    let vault_name = std::path::Path::new(logical_path).file_name()?.to_string_lossy().to_string();
+    let original = if let Some(stripped) = vault_name.strip_prefix(PREFIX_USER) {
+        stripped.to_string()
+    } else if let Some(stripped) = vault_name.strip_prefix(PREFIX_PUBLIC) {
+        stripped.to_string()
+    } else {
+        vault_name
+    };
+    if original.is_empty() { None } else { Some(original) }
+}
+
+/// 检查路径是否是 vault 路径（managed_icons 目录下）
+/// 检查路径是否是 vault 路径（managed_icons 目录下）
+///
+/// 用于判断 Shell 菜单是否需要创建 staging 副本。
+pub fn is_vault_path(path: &str) -> bool {
+    path.contains("managed_icons")
+}
+/// 为 vault 文件创建 staging 副本（原始文件名），用于 Shell 右键菜单操作
+///
+/// 返回 staging 文件路径。如果文件不在 vault 中或创建失败，返回 None。
+/// 调用者负责在使用后调用 `cleanup_staging` 清理。
+pub fn create_staging_for_shell(logical_path: &str) -> Option<std::path::PathBuf> {
+    // 检查是否是 vault 管理的文件
+    let vault_path = vault_path_for(logical_path).ok()?;
+    if !vault_path.exists() {
+        return None; // 不在 vault 中，无需 staging
+    }
+
+    let staging_dir = get_staging_dir().ok()?;
+    let original_name = original_filename_from_vault(logical_path)?;
+    let staging_path = staging_dir.join(&original_name);
+
+    // 清理旧的 staging 文件（如果有）
+    if staging_path.exists() {
+        let _ = std::fs::remove_file(&staging_path);
+    }
+
+    // 复制 vault 文件到 staging（使用原始文件名）
+    match std::fs::copy(&vault_path, &staging_path) {
+        Ok(_) => {
+            log::info!(
+                "[STAGING] 创建 staging 副本: {} -> {}",
+                vault_path.display(),
+                staging_path.display()
+            );
+            Some(staging_path)
+        }
+        Err(e) => {
+            log::warn!("[STAGING] 创建 staging 副本失败: {}", e);
+            None
+        }
+    }
+}
+
+/// 清理 staging 文件
+pub fn cleanup_staging(staging_path: &std::path::Path) {
+    if staging_path.exists() {
+        match std::fs::remove_file(staging_path) {
+            Ok(_) => log::debug!("[STAGING] 已清理: {}", staging_path.display()),
+            Err(e) => log::warn!("[STAGING] 清理失败 {}: {}", staging_path.display(), e),
+        }
+    }
+}
+
+/// 检查 staging 文件是否存在
+pub fn staging_exists(staging_path: &std::path::Path) -> bool {
+    staging_path.exists()
+}
+
 fn rename_public_icon_file(
     logical_path: &str,
     new_path: &Path,
@@ -1983,5 +2069,77 @@ mod tests {
         assert_eq!(FO_DELETE, 0x0003);
         assert_eq!(FOF_NOCONFIRMATION, 0x0010);
         assert_eq!(FOF_NOCONFIRMMKDIR, 0x0200);
+    }
+
+    // ===== Staging 机制单元测试 =====
+
+    #[test]
+    fn test_is_vault_path_with_managed_icons() {
+        assert!(is_vault_path(r"C:\Users\test\.ikun_organizer\managed_icons\user__Chrome.lnk"));
+        assert!(is_vault_path(r"C:\Users\Public\.ikun_organizer\managed_icons\public__Edge.lnk"));
+    }
+
+    #[test]
+    fn test_is_vault_path_non_vault() {
+        assert!(!is_vault_path(r"C:\Users\test\Desktop\Chrome.lnk"));
+        assert!(!is_vault_path(""));
+    }
+
+    #[test]
+    fn test_original_filename_from_vault_user_prefix() {
+        let result = original_filename_from_vault(
+            r"C:\Users\test\.ikun_organizer\managed_icons\user__Chrome.lnk"
+        );
+        assert_eq!(result, Some("Chrome.lnk".to_string()));
+    }
+
+    #[test]
+    fn test_original_filename_from_vault_public_prefix() {
+        let result = original_filename_from_vault(
+            r"C:\Users\Public\.ikun_organizer\managed_icons\public__Edge.lnk"
+        );
+        assert_eq!(result, Some("Edge.lnk".to_string()));
+    }
+
+    #[test]
+    fn test_original_filename_from_vault_no_prefix() {
+        let result = original_filename_from_vault(
+            r"C:\Users\test\.ikun_organizer\managed_icons\SomeFile.lnk"
+        );
+        assert_eq!(result, Some("SomeFile.lnk".to_string()));
+    }
+
+    #[test]
+    fn test_original_filename_from_vault_empty() {
+        assert_eq!(original_filename_from_vault(""), None);
+    }
+
+    #[test]
+    fn test_cleanup_staging_nonexistent() {
+        cleanup_staging(std::path::Path::new(r"C:\nonexistent\staging\test.lnk"));
+    }
+
+    #[test]
+    fn test_cleanup_staging_real_file() {
+        let dir = std::env::temp_dir().join("ikun_staging_test_cleanup");
+        let _ = std::fs::create_dir_all(&dir);
+        let file = dir.join("test.lnk");
+        std::fs::write(&file, "test").unwrap();
+        assert!(file.exists());
+        cleanup_staging(&file);
+        assert!(!file.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_staging_exists() {
+        let dir = std::env::temp_dir().join("ikun_staging_test_exists");
+        let _ = std::fs::create_dir_all(&dir);
+        let file = dir.join("test.lnk");
+        std::fs::write(&file, "test").unwrap();
+        assert!(staging_exists(&file));
+        let _ = std::fs::remove_file(&file);
+        assert!(!staging_exists(&file));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

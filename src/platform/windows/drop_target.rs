@@ -368,6 +368,11 @@ unsafe extern "system" fn drop_target_drag_leave(this: *mut c_void) -> HRESULT {
     S_OK
 }
 
+/// IDropTarget::Drop 实现：处理拖拽放置操作
+///
+/// 从 IDataObject 读取文件路径（CF_HDROP 或 CFSTR_SHELLIDLIST），
+/// 暂存到 PENDING_DROP 队列，通知目标窗口处理。
+/// 包含防御性空指针检查，防止异常输入导致崩溃。
 unsafe extern "system" fn drop_target_drop(
     this: *mut c_void,
     data_obj: *mut c_void,
@@ -375,6 +380,13 @@ unsafe extern "system" fn drop_target_drop(
     pt: i64,
     effect: *mut u32,
 ) -> HRESULT {
+    // 防御性检查：确保指针有效
+    if this.is_null() || data_obj.is_null() || effect.is_null() {
+        log::warn!("[DropTarget] Drop: 空指针被拒绝 (this={:?}, data_obj={:?}, effect={:?})", 
+            this, data_obj, effect);
+        return E_POINTER;
+    }
+    
     let target = this as *mut BoxDropTarget;
 
     // 外部拖拽：通知 IDropTargetHelper Drop 完成并释放
@@ -403,7 +415,7 @@ unsafe extern "system" fn drop_target_drop(
     let drop_x = (pt & 0xFFFFFFFF) as i32;
     let drop_y = (pt >> 32) as i32;
 
-    let box_data = if (*target).custom_format_id != 0 {
+    let box_data = if (*target).custom_format_id != 0 && !data_obj.is_null() {
         read_box_drag_data(data_obj, (*target).custom_format_id)
     } else {
         None

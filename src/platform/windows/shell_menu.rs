@@ -1,4 +1,4 @@
-﻿//! Shell 上下文菜单功能
+//! Shell 上下文菜单功能
 //!
 //! 提供文件右键菜单和桌面背景右键菜单的实现。
 //! 使用 Windows Shell COM API 获取真实的系统上下文菜单，
@@ -14,6 +14,7 @@ use super::ffi_imports::*;
 use super::ffi_types::*;
 use anyhow::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::PathBuf;
 
 /// Windows Shell 变更通知常量（用于刷新桌面右键菜单缓存）
 /// SHCNE_ASSOCCHANGED: 文件关联已更改，通知 Shell 重新读取关联信息
@@ -97,6 +98,12 @@ pub enum ShellMenuResult {
     NeedsDelete(String), // file_path
 }
 
+/// Response from shell context menu, includes result and optional staging path for cleanup
+pub struct ShellMenuResponse {
+    pub result: ShellMenuResult,
+    pub staging_path: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DesktopRegistryMenuItem {
     key_name: &'static str,
@@ -145,7 +152,15 @@ fn should_skip_fallback(result: &ShellMenuResult) -> bool {
     !matches!(result, ShellMenuResult::Cancelled)
 }
 
-pub fn show_shell_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResult {
+/// 显示文件右键 Shell 上下文菜单（分类框内图标代理入口）
+///
+/// 将分类框中的图标右键操作代理到 vault 原始文件上：
+/// 1. 通过 `resolve_shell_menu_path` 将 logical_path 解析为 vault 路径
+/// 2. 直接使用 vault 路径调用 Shell COM API（不导出到桌面，避免产生重复图标）
+/// 3. Shell API (SHParseDisplayName + SHBindToParent + GetUIObjectOf) 可处理任意 NTFS 路径
+///
+/// Public / Non-Public 桌面图标均通过 `resolve_icon_read_path` 统一解析到对应的 vault 路径。
+pub fn show_shell_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResponse {
     log::info!(
         "[MENU-DEBUG] show_shell_context_menu 入口: file_path=\"{}\"",
         file_path
@@ -156,33 +171,32 @@ pub fn show_shell_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResult {
         log::debug!("Shell 菜单路径已解析: {} → {}", file_path, menu_path);
     }
 
-    // If the file is in vault (managed_icons), export it to desktop first
-    // This ensures Shell operations like Cut use the correct filename
-    let menu_path = if menu_path.contains("managed_icons") {
-        log::info!("File is in vault, exporting to desktop for Shell menu");
-        match crate::platform::windows::icon_hider::export_icon(file_path) {
-            Ok((_, desktop_path)) => {
-                let desktop_str = desktop_path.to_string_lossy().to_string();
-                log::info!("Exported to desktop: {}", desktop_str);
-                desktop_str
+    // 检查是否是 vault 路径，如果是则创建 staging 副本（使用原始文件名）
+    let (actual_menu_path, staging_path) = if super::icon_hider::is_vault_path(&menu_path) {
+        match super::icon_hider::create_staging_for_shell(file_path) {
+            Some(staging) => {
+                log::info!("[STAGING] 使用 staging 路径: {}", staging.display());
+                (staging.to_string_lossy().to_string(), Some(staging))
             }
-            Err(e) => {
-                log::warn!("Failed to export for Shell menu: {}", e);
-                menu_path
+            None => {
+                log::debug!("[STAGING] 创建 staging 失败，使用 vault 路径");
+                (menu_path.clone(), None)
             }
         }
     } else {
-        menu_path
+        (menu_path.clone(), None)
     };
 
+    log::debug!("Shell 菜单使用路径: {}", actual_menu_path);
+
     // 尝试使用 windows crate 获取完整 Shell 上下文菜单
-    let result = try_windows_crate_context_menu(hwnd, &menu_path);
+    let result = try_windows_crate_context_menu(hwnd, &actual_menu_path);
     if should_skip_fallback(&result) {
-        // Completed / Dismissed / NeedsRename / NeedsCutMonitor / NeedsDelete → 直接返回
-        return result;
+        return ShellMenuResponse { result, staging_path };
     }
     // 仅当 try_windows_crate_context_menu 未能显示菜单（Cancelled）时才回退
-    show_shell_fallback_menu(hwnd, &menu_path)
+    let fallback_result = show_shell_fallback_menu(hwnd, &actual_menu_path);
+    ShellMenuResponse { result: fallback_result, staging_path }
 }
 
 fn resolve_shell_menu_path(file_path: &str) -> String {
@@ -789,7 +803,8 @@ fn show_desktop_fallback_menu(hwnd: HWND) {
 /// 格式为 `"<exe_path>,0"` 的字符串（索引 0 表示嵌入图标的第一个资源）
 fn format_registry_icon_path(exe_path: &str) -> String {
     format!("{},0", exe_path)
-}/// **必须在程序退出时调用 `cleanup_desktop_registry()` 清理**。
+}
+/// **必须在程序退出时调用 `cleanup_desktop_registry()` 清理**。
 pub fn setup_desktop_registry() {
     log::info!("[MENU-DEBUG] setup_desktop_registry 入口");
     let exe_path = match std::env::current_exe() {
@@ -936,7 +951,12 @@ pub fn setup_desktop_registry() {
         );
 
         // 通知 Windows Shell 刷新关联缓存，确保桌面右键菜单立即显示新图标
-        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, std::ptr::null(), std::ptr::null());
+        SHChangeNotify(
+            SHCNE_ASSOCCHANGED,
+            SHCNF_IDLIST,
+            std::ptr::null(),
+            std::ptr::null(),
+        );
         log::info!("[MENU-DEBUG] 已发送 SHChangeNotify(SHCNE_ASSOCCHANGED) 刷新 Shell 缓存");
     }
 }
@@ -985,7 +1005,12 @@ pub fn cleanup_desktop_registry() {
         log::info!("[MENU-DEBUG] 注册表清理完成");
 
         // 通知 Shell 刷新缓存
-        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, std::ptr::null(), std::ptr::null());
+        SHChangeNotify(
+            SHCNE_ASSOCCHANGED,
+            SHCNF_IDLIST,
+            std::ptr::null(),
+            std::ptr::null(),
+        );
     }
 }
 
@@ -1112,6 +1137,93 @@ mod tests {
         );
 
         assert_eq!(resolved, r"C:\Users\chenzhihui\Desktop\Missing.lnk");
+    }
+
+    // ===== Vault path proxy tests (分类框图标右键代理到 vault) =====
+
+    #[test]
+    fn test_vault_proxy_user_desktop_icon_in_vault() {
+        // 用户桌面图标已分类到框中（logical_path 不在桌面，vault 路径存在）
+        // 应直接返回 vault 路径，不导出到桌面
+        let resolved = resolve_shell_menu_path_with(
+            r"C:\Users\chenzhihui\Desktop\Chrome.lnk",
+            |_| false, // logical_path 不在桌面（已隐藏）
+            |path| {
+                // resolve_icon_read_path 返回 vault 路径
+                if path == r"C:\Users\chenzhihui\Desktop\Chrome.lnk" {
+                    Some(
+                        r"C:\Users\chenzhihui\.ikun_organizer\managed_icons\user__Chrome.lnk"
+                            .to_string(),
+                    )
+                } else {
+                    None
+                }
+            },
+        );
+
+        // 应返回 vault 路径（直接使用，不导出）
+        assert_eq!(
+            resolved,
+            r"C:\Users\chenzhihui\.ikun_organizer\managed_icons\user__Chrome.lnk"
+        );
+    }
+
+    #[test]
+    fn test_vault_proxy_public_desktop_icon_in_vault() {
+        // 公共桌面图标已分类到框中（logical_path 不在桌面，public vault 路径存在）
+        let resolved = resolve_shell_menu_path_with(
+            r"C:\Users\Public\Desktop\Notepad.lnk",
+            |_| false, // logical_path 不在桌面（已隐藏）
+            |path| {
+                // resolve_icon_read_path 返回 public vault 路径
+                if path == r"C:\Users\Public\Desktop\Notepad.lnk" {
+                    Some(
+                        r"C:\Users\Public\.ikun_organizer\managed_icons\public__Notepad.lnk"
+                            .to_string(),
+                    )
+                } else {
+                    None
+                }
+            },
+        );
+
+        // 应返回 public vault 路径
+        assert_eq!(
+            resolved,
+            r"C:\Users\Public\.ikun_organizer\managed_icons\public__Notepad.lnk"
+        );
+    }
+
+    #[test]
+    fn test_vault_proxy_icon_still_on_desktop() {
+        // 图标仍在桌面上（未被隐藏到 vault）
+        // logical_path 存在，应直接使用 logical_path
+        let resolved = resolve_shell_menu_path_with(
+            r"C:\Users\chenzhihui\Desktop\VSCode.lnk",
+            |_| true, // logical_path 在桌面
+            |_| {
+                // vault 路径不存在
+                None
+            },
+        );
+
+        // 应返回原始 logical_path
+        assert_eq!(resolved, r"C:\Users\chenzhihui\Desktop\VSCode.lnk");
+    }
+
+    #[test]
+    fn test_vault_proxy_virtual_shell_object() {
+        // 虚拟 Shell 对象（如回收站、此电脑）
+        // 这些不是真实文件，路径以 ::{ 开头
+        let virtual_path = "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"; // 此电脑
+        let resolved = resolve_shell_menu_path_with(
+            virtual_path,
+            |_| false, // 虚拟对象不 "存在" 于文件系统
+            |_| None,  // 无 vault 路径
+        );
+
+        // 应返回原始虚拟路径
+        assert_eq!(resolved, virtual_path);
     }
     // ===== ShellMenuResult fallback guard tests =====
 

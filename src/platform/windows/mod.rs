@@ -99,7 +99,6 @@ pub use multi_select::{
     set_anchor, set_range, toggle, ContainerType, SelectionKey,
 };
 
-
 // =============================================================================
 // WindowsPlatformService: implements crate::platform::PlatformService
 // =============================================================================

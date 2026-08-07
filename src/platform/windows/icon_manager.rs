@@ -1461,6 +1461,10 @@ pub fn show_icon_on_desktop(file_path: &str, screen_x: i32, screen_y: i32) {
 /// 2. 本函数通过 LVM 设置释放位置（屏幕坐标 → ListView 客户区坐标）
 ///
 /// 失败时仅记录警告，不影响图标已在桌面显示。
+/// 将桌面图标定位到指定屏幕坐标
+///
+/// 通过 SysListView32 跨进程操作将图标移动到目标位置。
+/// 内置重试机制（最多 20 次 × 50ms = 1 秒），等待 Shell 异步创建图标。
 pub fn position_icon_at_screen(file_path: &str, screen_x: i32, screen_y: i32) {
     let t_fn = std::time::Instant::now();
 
@@ -1470,11 +1474,9 @@ pub fn position_icon_at_screen(file_path: &str, screen_x: i32, screen_y: i32) {
 
     let result = (|| -> Result<()> {
         let t_lv = std::time::Instant::now();
-        let listview = find_listview_at_screen_point(POINT {
-            x: screen_x,
-            y: screen_y,
-        })?;
-        log::debug!("[TIMING] find_listview: {:?}", t_lv.elapsed());
+        // 直接使用桌面 SysListView32，不依赖屏幕坐标查找
+        let listview = super::icon_hider::find_desktop_listview()?;
+        log::debug!("[TIMING] find_desktop_listview: {:?}", t_lv.elapsed());
 
         let t_mgr = std::time::Instant::now();
         let mut mgr = DesktopIconManager::with_listview(listview)?;
@@ -1502,18 +1504,42 @@ pub fn position_icon_at_screen(file_path: &str, screen_x: i32, screen_y: i32) {
             anyhow::bail!("无法从路径提取图标名称: {}", file_path);
         }
 
-        // 外部轮询已负责重试，内部只做一次查找，快速失败
+        // 内置重试：等待 Shell 创建图标（最多 20 次 × 50ms = 1 秒）
         let mut index = None;
-        mgr.rebuild_index()?;
-        for name in &names {
-            if let Some(idx) = mgr.find_icon_by_name(name) {
-                index = Some(idx);
+        const MAX_RETRIES: u32 = 20;
+        const RETRY_INTERVAL_MS: u64 = 50;
+        
+        for attempt in 0..MAX_RETRIES {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(RETRY_INTERVAL_MS));
+            }
+            
+            mgr.rebuild_index()?;
+            for name in &names {
+                if let Some(idx) = mgr.find_icon_by_name(name) {
+                    index = Some(idx);
+                    break;
+                }
+            }
+            
+            if index.is_some() {
+                if attempt > 0 {
+                    log::info!(
+                        "[TIMING] 图标在 {} 次重试后找到 ({}ms)",
+                        attempt,
+                        attempt as u64 * RETRY_INTERVAL_MS
+                    );
+                }
                 break;
             }
         }
 
         let index = index.ok_or_else(|| {
-            anyhow::anyhow!("SysListView32 中未找到图标（已尝试名称: {:?}）", names)
+            anyhow::anyhow!(
+                "SysListView32 中未找到图标（已尝试名称: {:?}，重试 {} 次）",
+                names,
+                MAX_RETRIES
+            )
         })?;
 
         let t_show = std::time::Instant::now();

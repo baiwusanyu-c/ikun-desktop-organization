@@ -114,7 +114,7 @@ src/
 │   │   ├── shell_menu.rs      #   Shell 右键菜单 + 桌面背景注册表菜单（覆盖区域含 Ikun 动作，分类框空白处不含）
 │   │   ├── app_icon.rs        #   嵌入 logo.ico 资源加载（托盘/菜单图标）
 │   │   ├── icon_extract.rs    #   图标提取（内容缩略图/应用 HICON 分流 + .lnk 目标解析）
-│   │   ├── icon_hider.rs      #   图标隐藏/恢复（SysListView32）+ managed_icons 仓库（Vault）+ 删除分类框后还原非管理图标 + get_vault_display_names
+│   │   ├── icon_hider.rs      #   图标隐藏/恢复（SysListView32）+ managed_icons 仓库（Vault）+ Staging 机制 + 删除分类框后还原非管理图标 + get_vault_display_names
 │   │   ├── liquid_glass.rs    #   液态玻璃 GPU 渲染器（DXGI + D2D Effect + HLSL Shader）
 │   │   ├── multi_select.rs    #   全局多选状态管理（跨分类框/覆盖区域）
 │   │   ├── desktop_utils.rs   #   桌面工具函数（自动排列检测/图标定位）

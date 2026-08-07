@@ -1,4 +1,4 @@
-﻿/// build.rs - 嵌入应用清单（manifest）和应用图标到 Windows 可执行文件
+/// build.rs - 嵌入应用清单（manifest）和应用图标到 Windows 可执行文件
 ///
 /// 这确保 Windows 识别 Per-Monitor DPI V2 感知声明，
 /// 防止在跨显示器（不同 DPI）移动窗口时做 bitmap-stretch 导致模糊。
@@ -33,7 +33,10 @@ fn embed_manifest() {
         // 兜底：尝试相对路径（兼容旧行为）
         let fallback = Path::new("logo.ico");
         if fallback.exists() {
-            eprintln!("cargo:warning=logo.ico 通过相对路径找到（CARGO_MANIFEST_DIR={} 未包含该文件）", manifest_dir.display());
+            eprintln!(
+                "cargo:warning=logo.ico 通过相对路径找到（CARGO_MANIFEST_DIR={} 未包含该文件）",
+                manifest_dir.display()
+            );
         }
     }
 
@@ -106,15 +109,25 @@ fn embed_manifest() {
         Ok(output) if output.status.success() => {
             println!("cargo:rustc-link-arg={}", obj_path.display());
             emit_rerun_triggers();
-            println!("cargo:warning=windres 编译 .rc 成功: {}", obj_path.display());
+            println!(
+                "cargo:warning=windres 编译 .rc 成功: {}",
+                obj_path.display()
+            );
             return;
         }
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("cargo:warning=windres 编译 .rc 失败 (exit={}): {}", output.status, stderr.trim());
+            eprintln!(
+                "cargo:warning=windres 编译 .rc 失败 (exit={}): {}",
+                output.status,
+                stderr.trim()
+            );
         }
         Err(e) => {
-            eprintln!("cargo:warning=windres 不可用: {}（请安装 MinGW-w64 或确保 windres 在 PATH 中）", e);
+            eprintln!(
+                "cargo:warning=windres 不可用: {}（请安装 MinGW-w64 或确保 windres 在 PATH 中）",
+                e
+            );
         }
     }
 
@@ -141,12 +154,19 @@ fn embed_manifest() {
                 Ok(out) if out.status.success() => {
                     println!("cargo:rustc-link-arg={}", obj_path_msvc.display());
                     emit_rerun_triggers();
-                    println!("cargo:warning=rc.exe + cvtres.exe 编译 .rc 成功: {}", obj_path_msvc.display());
+                    println!(
+                        "cargo:warning=rc.exe + cvtres.exe 编译 .rc 成功: {}",
+                        obj_path_msvc.display()
+                    );
                     return;
                 }
                 Ok(out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr);
-                    eprintln!("cargo:warning=cvtres.exe 失败 (exit={}): {}", out.status, stderr.trim());
+                    eprintln!(
+                        "cargo:warning=cvtres.exe 失败 (exit={}): {}",
+                        out.status,
+                        stderr.trim()
+                    );
                 }
                 Err(e) => {
                     eprintln!("cargo:warning=cvtres.exe 不可用: {}", e);
@@ -155,7 +175,11 @@ fn embed_manifest() {
         }
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("cargo:warning=rc.exe 编译 .rc 失败 (exit={}): {}", output.status, stderr.trim());
+            eprintln!(
+                "cargo:warning=rc.exe 编译 .rc 失败 (exit={}): {}",
+                output.status,
+                stderr.trim()
+            );
         }
         Err(e) => {
             eprintln!("cargo:warning=rc.exe 不可用: {}（请安装 Visual Studio Build Tools 或 Windows SDK）", e);
@@ -174,7 +198,10 @@ fn embed_manifest() {
     emit_rerun_triggers();
     let icon_msg = if has_icon { "和图标" } else { "" };
     eprintln!("cargo:warning=═══════════════════════════════════════════════════");
-    eprintln!("cargo:warning=无法嵌入 manifest{}：windres 和 rc.exe 均不可用！", icon_msg);
+    eprintln!(
+        "cargo:warning=无法嵌入 manifest{}：windres 和 rc.exe 均不可用！",
+        icon_msg
+    );
     eprintln!("cargo:warning=这意味着编译出的 .exe 将没有应用图标和 DPI 声明。");
     eprintln!("cargo:warning=");
     eprintln!("cargo:warning=解决方法（任选其一）：");

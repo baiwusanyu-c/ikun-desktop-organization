@@ -113,6 +113,7 @@ fn handle_shell_menu_result(
     file_path: &str,
     hit_index: i32,
     result: super::shell_menu::ShellMenuResult,
+    staging_path: Option<std::path::PathBuf>,
 ) {
     use super::shell_menu::ShellMenuResult;
 
@@ -189,33 +190,40 @@ fn handle_shell_menu_result(
                 log::error!("Failed to show rename editor");
             }
         }
-        ShellMenuResult::NeedsCutMonitor(path) => {
-            log::info!("starting cut monitor for: {}", path);
-            start_cut_monitor(hwnd, path);
+        ShellMenuResult::NeedsCutMonitor(_staging_path) => {
+            log::info!("[CUT] starting cut monitor: staging={:?}, original={}", staging_path, file_path);
+            if let Some(ref sp) = staging_path {
+                start_cut_monitor(hwnd, sp.to_string_lossy().to_string(), file_path.to_string());
+            } else {
+                start_cut_monitor(hwnd, file_path.to_string(), file_path.to_string());
+            }
         }
-        ShellMenuResult::NeedsDelete(path) => {
-            // Shell moved file to Recycle Bin, delete vault copy and remove from UI
-            super::icon_hider::delete_vault_copy_for(&path);
-            remove_grid_item_if_missing_after_shell_menu(hwnd, &path);
+        ShellMenuResult::NeedsDelete(_staging_path) => {
+            // Shell 已将 staging 文件移入回收站，使用原始 file_path 删除 vault 副本
+            log::info!("[DELETE] 删除 vault 副本: {}", file_path);
+            super::icon_hider::delete_vault_copy_for(file_path);
+            remove_grid_item_if_missing_after_shell_menu(hwnd, file_path);
         }
     }
 }
 
 /// Start cut monitor: background thread checks if file is moved (pasted elsewhere)
-fn start_cut_monitor(hwnd: HWND, logical_path: String) {
+fn start_cut_monitor(hwnd: HWND, monitor_path: String, cleanup_path: String) {
     let hwnd_usize = hwnd as usize;
     std::thread::spawn(move || {
         let hwnd = hwnd_usize as HWND;
         for _ in 0..100 {
             std::thread::sleep(std::time::Duration::from_secs(3));
-            if !super::icon_hider::icon_exists_for_box(&logical_path) {
+            if !std::path::Path::new(&monitor_path).exists() {
+                log::info!("[CUT] 文件已被粘贴移走: {}", monitor_path);
+                super::icon_hider::delete_vault_copy_for(&cleanup_path);
                 unsafe {
                     PostMessageW(hwnd, WM_USER_CUT_FILE_MOVED, 0, 0);
                 }
                 return;
             }
         }
-        log::debug!("cut monitor timeout, file not pasted: {}", logical_path);
+        log::debug!("cut monitor timeout, file not pasted: {}", monitor_path);
     });
 }
 
@@ -1029,8 +1037,8 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             }
 
             if let Some(ref path) = file_path {
-                let result = show_shell_context_menu(hwnd, path);
-                handle_shell_menu_result(hwnd, path, hit_index, result);
+                let response = show_shell_context_menu(hwnd, path);
+                handle_shell_menu_result(hwnd, path, hit_index, response.result, response.staging_path);
             } else {
                 log::info!("[MENU-DEBUG] wnd_proc: 右键点击框空白区域, 调用 show_desktop_context_menu(include_ikun_items=true)");
                 show_desktop_context_menu(hwnd, true); // 显式注入 Ikun 菜单项

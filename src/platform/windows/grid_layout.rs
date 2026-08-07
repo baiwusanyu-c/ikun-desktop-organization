@@ -16,7 +16,11 @@ use crate::box_core::view_engine::get_view_params;
 pub(crate) fn reflow_items(data: &mut super::grid_window::GridWindowData) {
     let new_cols = data.cols;
     // Extract positions, delegate to shared, write back
-    let mut positions: Vec<(i32, i32)> = data.items.iter().map(|item| (item.grid_col, item.grid_row)).collect();
+    let mut positions: Vec<(i32, i32)> = data
+        .items
+        .iter()
+        .map(|item| (item.grid_col, item.grid_row))
+        .collect();
     crate::shared::layout::reflow_positions(&mut positions, new_cols);
     for (item, (col, row)) in data.items.iter_mut().zip(positions.into_iter()) {
         item.grid_col = col;

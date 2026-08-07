@@ -116,12 +116,10 @@ pub trait PlatformService: Send + Sync {
 /// Create platform-specific DesktopManager instance
 #[cfg(windows)]
 pub fn create_desktop_manager() -> Box<dyn DesktopManagerTrait> {
-    Box::new(
-        DesktopManager::new().unwrap_or_else(|e| {
-            log::warn!("Desktop manager init failed: {}, using default", e);
-            DesktopManager
-        })
-    )
+    Box::new(DesktopManager::new().unwrap_or_else(|e| {
+        log::warn!("Desktop manager init failed: {}, using default", e);
+        DesktopManager
+    }))
 }
 
 /// Create platform-specific PlatformService instance
@@ -174,7 +172,10 @@ mod tests {
 
     #[test]
     fn test_system_tray_action_eq() {
-        assert_eq!(SystemTrayAction::OpenControlPanel, SystemTrayAction::OpenControlPanel);
+        assert_eq!(
+            SystemTrayAction::OpenControlPanel,
+            SystemTrayAction::OpenControlPanel
+        );
         assert_ne!(SystemTrayAction::OpenControlPanel, SystemTrayAction::Quit);
     }
 

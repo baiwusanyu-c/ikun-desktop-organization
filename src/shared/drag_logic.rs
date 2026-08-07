@@ -153,7 +153,12 @@ mod tests {
 
     #[test]
     fn test_shift_drag_right_between_b_and_c() {
-        let p = vec![shift_pos(0,0), shift_pos(1,0), shift_pos(2,0), shift_pos(3,0)];
+        let p = vec![
+            shift_pos(0, 0),
+            shift_pos(1, 0),
+            shift_pos(2, 0),
+            shift_pos(3, 0),
+        ];
         let r = apply_shift_insert(&p, 0, 2, 4);
         assert_eq!(r[0], shift_pos(1, 0));
         assert_eq!(r[1], shift_pos(0, 0));
@@ -163,7 +168,12 @@ mod tests {
 
     #[test]
     fn test_shift_drag_left_between_a_and_b() {
-        let p = vec![shift_pos(0,0), shift_pos(1,0), shift_pos(2,0), shift_pos(3,0)];
+        let p = vec![
+            shift_pos(0, 0),
+            shift_pos(1, 0),
+            shift_pos(2, 0),
+            shift_pos(3, 0),
+        ];
         let r = apply_shift_insert(&p, 3, 1, 4);
         assert_eq!(r[0], shift_pos(0, 0));
         assert_eq!(r[1], shift_pos(2, 0));
@@ -173,7 +183,13 @@ mod tests {
 
     #[test]
     fn test_shift_cross_row() {
-        let p = vec![shift_pos(0,0), shift_pos(1,0), shift_pos(2,0), shift_pos(0,1), shift_pos(1,1)];
+        let p = vec![
+            shift_pos(0, 0),
+            shift_pos(1, 0),
+            shift_pos(2, 0),
+            shift_pos(0, 1),
+            shift_pos(1, 1),
+        ];
         let r = apply_shift_insert(&p, 0, 4, 3);
         assert_eq!(r[0], shift_pos(0, 1));
         assert_eq!(r[1], shift_pos(0, 0));

@@ -182,6 +182,35 @@ view.GetItemObject(SVGIO_SELECTION) → IContextMenu
 
 ---
 
+## Vault Staging 机制
+
+分类框中的图标文件存储在 managed_icons/ vault 目录（文件名带 user_/public_ 前缀），
+不直接暴露在桌面。右键菜单操作需要将文件路径传给 Shell API，但直接使用 vault 路径会导致：
+- **删除**：回收站显示 user_Chrome.lnk（泄漏内部前缀）
+- **剪切/复制**：剪贴板包含 vault 路径（粘贴时文件名带前缀）
+
+**解决方案**：在 Shell 操作前创建 staging 副本
+
+```
+vault 文件: ~/.ikun_organizer/managed_icons/user__Chrome.lnk
+                  ↓ fs::copy (原始文件名)
+staging 副本: ~/.ikun_organizer/staging/Chrome.lnk
+                  ↓ Shell 菜单操作（用户看到 Chrome.lnk）
+操作完成 → cleanup_staging() 删除 staging 副本
+```
+
+**关键函数**：
+- icon_hider::create_staging_for_shell(logical_path) → 创建 staging 副本
+- icon_hider::cleanup_staging(staging_path) → 清理 staging 文件
+- icon_hider::is_vault_path(path) → 判断是否需要 staging
+- shell_menu::ShellMenuResponse { result, staging_path } → 携带 staging 路径
+
+**注意事项**：
+- NeedsDelete 和 NeedsCutMonitor 必须使用原始 ile_path（非 staging 路径）进行 vault 清理
+- start_cut_monitor 监控 staging 文件是否存在，粘贴后 staging 消失时触发 vault 清理
+
+---
+
 ## Checklist for Shell API Code Review
 
 - [ ] PIDL 类型正确？（绝对 vs 相对，是否用 SHBindToParent）

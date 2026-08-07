@@ -300,7 +300,12 @@ mod tests {
     }
 
     fn pixel(alpha: u8) -> Pixel32 {
-        Pixel32 { b: 0, g: 0, r: 0, a: alpha }
+        Pixel32 {
+            b: 0,
+            g: 0,
+            r: 0,
+            a: alpha,
+        }
     }
 
     #[test]
