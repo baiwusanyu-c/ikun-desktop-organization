@@ -94,8 +94,15 @@ fn run_tauri_app() -> anyhow::Result<()> {
 
     log::info!("Starting Tauri 2.0 application...");
 
+    // Create the shared runtime BEFORE the builder so it can be registered via
+    // `Builder::manage()`. This guarantees the state is available the moment
+    // any WebView window is created, eliminating the window where a command
+    // could fire before setup() has finished.
+    let runtime = tauri_commands::platform_runtime::new_shared_runtime();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .manage(runtime.clone())
         .invoke_handler(tauri::generate_handler![
             // Config commands
             tauri_commands::get_config,
@@ -132,10 +139,9 @@ fn run_tauri_app() -> anyhow::Result<()> {
         .setup(|app| {
             log::info!("Tauri setup complete");
 
-            // Commands and the platform poller share one AppContext-backed runtime.
+            // Start the platform poller (system tray, hotkey, desktop registry).
+            // The SharedTauriRuntime state is already managed via Builder::manage().
             let app_handle = app.handle().clone();
-            let runtime = tauri_commands::platform_runtime::new_shared_runtime();
-            app.manage(runtime.clone());
             tauri_commands::platform_runtime::start_platform_runtime(app_handle, runtime);
 
             Ok(())
