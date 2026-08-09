@@ -9,14 +9,15 @@
 本项目使用模块化架构设计。每个功能领域都有独立的模块，平台特定代码通过条件编译隔离。
 
 **核心设计原则**：
-- **AppContext 上下文注入**：所有模块通过 `AppContext` 共享状态
-- **GPUI 默认 UI shell（Windows）**：`gpui_app/` 的 View 层只负责渲染和派发命令，业务/平台调用集中在 `AppRuntime`
+- **共享运行时注入**：Tauri Commands、轮询线程和插件通过 `SharedTauriRuntime` 共享唯一 `AppContext`
+- **Tauri 默认 UI shell（Windows）**：`frontend/` 只负责页面，`tauri_commands/` 负责 IPC adapter 与原生编排
+- **GPUI 回退 shell（Windows）**：`gpui_app/` 仅在关闭默认 feature 时使用
 - **legacy eframe 回退**：`app.rs` + `ui/` 仅作为 `eframe-ui` feature 回退路径
 - **平台抽象**：`platform/` 通过 trait 统一接口，各平台独立实现
 - **业务解耦**：`box_core/` 分类框业务逻辑与平台渲染完全分离
-- **插件扩展边界**：`plugin/` 提供 `Plugin`/`PluginRegistry` 预留接口，当前 GPUI 运行时尚未接入；平台渲染与 Shell 集成不作为业务插件注册
+- **插件扩展边界**：`PluginRegistry` 接入 Tauri 生命周期，支持进程内安装/卸载；平台渲染与 Shell 集成不作为业务插件注册
 - **条件编译隔离**：平台特定代码使用 `#[cfg(...)]` 隔离
-- **层次清晰**：UI View → AppRuntime/AppContext → 业务/平台，单向依赖
+- **层次清晰**：Svelte → Tauri Commands → SharedTauriRuntime/AppContext → 业务/平台，单向依赖
 
 ---
 
@@ -24,7 +25,7 @@
 
 ```
 src/
-├── main.rs                    # 入口：初始化日志、DPI/OLE、启动 GPUI 或 legacy eframe
+├── main.rs                    # 入口：默认启动 Tauri，按 feature 分发 legacy UI
 ├── app.rs                     # legacy eframe::App 控制面板（eframe-ui feature）
 ├── context.rs                 # AppContext（持有 Box<dyn DesktopManagerTrait> + Box<dyn PlatformService>）
 │
@@ -37,7 +38,15 @@ src/
 │   ├── drag_state.rs          #   拖拽生命周期状态机+常量 ~32行
 │   └── types.rs               #   跨平台共享类型定义（Rect/Point/Pixel32）~52行
 │
-├── gpui_app/                  # Windows 默认 GPUI UI shell
+├── tauri_commands/            # 默认 Tauri IPC adapter 与运行时
+│   ├── mod.rs                 #   命令导出
+│   ├── app_cmd.rs             #   应用信息与进程控制
+│   ├── box_cmd.rs             #   原生分类框创建/编辑与 pending payload
+│   ├── config_cmd.rs          #   共享 AppContext 配置读写与实时重绘
+│   ├── window_cmd.rs          #   持久 WebView 标签与 hide 生命周期
+│   └── platform_runtime.rs    #   AppContext + PluginRegistry + 原生服务编排
+│
+├── gpui_app/                  # legacy Windows GPUI UI shell
 │   ├── mod.rs                 #   模块导出
 │   ├── app_runtime.rs         #   UI 框架无关运行时/命令层（持有 AppContext）
 │   ├── control_panel.rs       #   GPUI 控制面板视图
@@ -170,8 +179,10 @@ build/
 | **业务层** | `box_core/` | 分类框业务逻辑（排序/视图/分组/布局/交互） |
 | **分类层** | `classification/` | 分类规则匹配、AI 分类 |
 | **配置层** | `config/` | 统一 JSON 配置管理 |
-| **插件层** | `plugin/` | 功能插件注册和分发 |
-| **UI 层（Windows 默认）** | `gpui_app/` | GPUI 控制面板/弹窗 View + AppRuntime 命令调度 |
+| **插件层** | `plugin/` | 进程内功能插件注册、初始化、安装/卸载、定向分发和清理 |
+| **UI adapter（默认）** | `tauri_commands/` | Tauri IPC、共享运行时、持久窗口和原生服务编排 |
+| **前端 UI（默认）** | `frontend/` | Svelte 控制面板与创建/编辑窗口 |
+| **UI 层（Windows legacy）** | `gpui_app/` | GPUI 控制面板/弹窗 View + AppRuntime 命令调度 |
 | **UI 层（legacy）** | `app.rs`, `ui/` | eframe 控制面板回退路径（`eframe-ui` feature） |
 | **工具层** | `utils/` | 通用辅助函数 |
 
@@ -280,13 +291,16 @@ platform/windows/
 **允许的依赖方向**：
 
 ```
-main.rs → 所有模块
-gpui_app/*_view.rs → gpui_app::app_runtime（View 只渲染/派发命令）
-gpui_app::app_runtime → context, platform
+main.rs → tauri_commands, context, platform, plugin
+frontend pages → frontend api adapter（IPC 边界）
+tauri_commands → context, platform, plugin
+tauri_commands::platform_runtime → context, platform, plugin
+gpui_app/*_view.rs → gpui_app::app_runtime（legacy）
+gpui_app::app_runtime → context, platform（legacy）
 app.rs → context, platform, ui（仅 eframe-ui feature）
 context.rs → config, platform, classification, (plugin, box_core)
 ui/ → context (通过参数传递，仅 legacy eframe)
-plugin/ → context (通过参数传递)
+plugin/ → context (仅通过生命周期参数传递)
 shared/ → (无内部依赖，仅 std + serde + uuid + lazy_static)
 platform/ → shared (允许：平台实现复用共享逻辑)
 box_core/ → config (枚举类型)
@@ -303,12 +317,14 @@ utils/ → (无内部依赖)
 
 ```
 ❌ platform/ → ui/         (平台层不依赖 UI)
+❌ platform/ → tauri_commands/ (平台层不依赖 Tauri adapter)
 ❌ box_core/ → platform/   (业务层不直接调用平台 API)
 ❌ config/ → context/       (配置层不依赖上下文)
 ❌ classification/ → ui/   (分类层不依赖 UI)
 ❌ shared/ → platform/    (共享层不依赖平台)
 ❌ shared/ → ui/          (共享层不依赖 UI)
 ❌ shared/ → gpui_app/    (共享层不依赖 GPUI)
+❌ frontend components → invoke (通用组件不得绕过前端 API adapter)
 ```
 
 ---
@@ -342,7 +358,7 @@ use crate::ui::control_panel;
 
 ## Quick Checklist for New Module
 
-- [ ] 确定模块层级（platform/box_core/classification/config/plugin/ui/utils）
+- [ ] 确定模块层级（tauri_commands/platform/box_core/classification/config/plugin/frontend/utils）
 - [ ] 创建 `mod.rs` 入口文件
 - [ ] 定义公开 API（struct/trait/function）
 - [ ] 添加必要的 `pub use` 导出

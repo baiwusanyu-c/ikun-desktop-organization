@@ -1,10 +1,10 @@
 //! Windows 平台模块
 //!
-//! 提供 Windows 平台的桌面管理、窗口管理和渲染功能�?
+//! 提供 Windows 平台的桌面管理、窗口管理和渲染功能。
 //!
-//! # 子模�?
+//! # 子模块
 //! - `ffi_types`: Win32 FFI 类型定义、C 结构体和常量
-//! - `ffi_imports`: Win32 FFI 函数声明�?Shell COM 类型
+//! - `ffi_imports`: Win32 FFI 函数声明、Shell COM 类型
 //! - `desktop_manager`: Windows DesktopManager 实现
 //! - `d2d_render`: Direct2D/DirectWrite 渲染
 //! - `icon_bitmap`: 图标透明边界与等比居中计算
@@ -12,8 +12,8 @@
 //! - `icon_extract`: 文件图标提取
 //! - `icon_hider`: 图标仓库（managed_icons，无需管理员）
 //! - `icon_manager`: 逐图标管理（LVM_SETITEMPOSITION 跨进程操作）
-//! - `shell_menu`: Shell 上下文菜�?+ 注册表管�?
-//! - `sys_tray`: 系统托盘（TODO�?
+//! - `shell_menu`: Shell 上下文菜单 + 注册表管理
+//! - `sys_tray`: 系统托盘
 
 pub mod alignment_guide;
 pub mod app_icon;
@@ -63,7 +63,7 @@ pub use ffi_types::{IkunBoxDragData, IkunDragItemData};
 pub use global_hotkey::{setup_global_hotkey, take_hotkey_toggle, unregister_global_hotkey};
 pub use grid_window::{
     collect_grid_layout, create_grid_window, destroy_all_grid_windows, get_grid_count,
-    update_grid_window_title, GridCreateParams, GridFileItem,
+    rerender_all_grid_windows, update_grid_window_title, GridCreateParams, GridFileItem,
 };
 pub use icon_extract::extract_file_icon;
 #[allow(unused_imports)] // 公共 API 预留

@@ -690,6 +690,39 @@ impl AppRuntime {
         }
         log::info!("开始恢复布局: {} 个分类框", boxes.len());
 
+        // 先隐藏已分类图标，再创建带 Desktop Duplication 快照的分类框。
+        // 首个分类框创建时会建立桌面快照，若顺序相反，玻璃背景会重复显示这些图标。
+        {
+            let mut classified_paths: Vec<String> = Vec::new();
+            for box_data in &boxes {
+                classified_paths.extend(box_data.icon_names.iter().cloned());
+            }
+            if !classified_paths.is_empty() {
+                log::info!("启动: 隐藏 {} 个已分类图标", classified_paths.len());
+                for path in &classified_paths {
+                    match crate::platform::windows::icon_hider::hide_single_icon(path) {
+                        Ok(()) => log::debug!("启动隐藏: '{}'", path),
+                        Err(e) => log::warn!("启动隐藏失败: '{}': {}", path, e),
+                    }
+                }
+                let classified_set: std::collections::HashSet<String> = classified_paths
+                    .iter()
+                    .map(|p| p.replace('/', "\\").to_lowercase())
+                    .collect();
+                self.desktop_positions_snapshot.retain(|name, _| {
+                    let lower = name.to_lowercase();
+                    !classified_set.iter().any(|c| {
+                        lower == *c
+                            || lower.ends_with(&format!("\\{}", c.split('\\').last().unwrap_or("")))
+                    })
+                });
+                log::info!(
+                    "启动隐藏完成，快照剩余 {} 个未分类图标",
+                    self.desktop_positions_snapshot.len()
+                );
+            }
+        }
+
         destroy_all_grid_windows();
 
         let mut created_count = 0;
@@ -761,41 +794,6 @@ impl AppRuntime {
             };
             if create_grid_window(params).is_ok() {
                 created_count += 1;
-            }
-        }
-
-        // 将已分类图标从桌面隐藏（移入仓库），避免同时出现在桌面和分类框
-        {
-            let mut classified_paths: Vec<String> = Vec::new();
-            for box_data in &boxes {
-                for path in &box_data.icon_names {
-                    classified_paths.push(path.clone());
-                }
-            }
-            if !classified_paths.is_empty() {
-                log::info!("启动: 隐藏 {} 个已分类图标", classified_paths.len());
-                for path in &classified_paths {
-                    match crate::platform::windows::icon_hider::hide_single_icon(path) {
-                        Ok(()) => log::debug!("启动隐藏: '{}'", path),
-                        Err(e) => log::warn!("启动隐藏失败: '{}': {}", path, e),
-                    }
-                }
-                // 从快照中移除已分类图标（退出时不需要恢复它们的位置）
-                let classified_set: std::collections::HashSet<String> = classified_paths
-                    .iter()
-                    .map(|p| p.replace('/', "\\").to_lowercase())
-                    .collect();
-                self.desktop_positions_snapshot.retain(|name, _| {
-                    let lower = name.to_lowercase();
-                    !classified_set.iter().any(|c| {
-                        lower == *c
-                            || lower.ends_with(&format!("\\{}", c.split('\\').last().unwrap_or("")))
-                    })
-                });
-                log::info!(
-                    "启动隐藏完成，快照剩余 {} 个未分类图标",
-                    self.desktop_positions_snapshot.len()
-                );
             }
         }
 

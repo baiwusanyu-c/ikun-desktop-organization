@@ -472,7 +472,7 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
             WS_EX_LAYERED | WS_EX_TOOLWINDOW,
             CLASS_NAME.as_ptr(),
             std::ptr::null(),
-            WS_POPUP | WS_VISIBLE | WS_THICKFRAME,
+            WS_POPUP | WS_THICKFRAME,
             initial_x,
             initial_y,
             initial_w,
@@ -607,10 +607,6 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, data_ptr as isize);
     }
 
-    unsafe {
-        ShowWindow(hwnd, SW_SHOW);
-    }
-
     // 创建 tooltip 窗口（仅在有选中项时显示）
     let tooltip_hwnd = create_tooltip_window(hwnd);
     if !tooltip_hwnd.is_null() {
@@ -664,6 +660,8 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
     // 3. 首次渲染（使用 Direct2D + UpdateLayeredWindow）
     render_layered_window(hwnd);
     unsafe {
+        // 先完成首帧再显示窗口，避免桌面捕获尚未就绪时短暂出现黑/透明窗口。
+        ShowWindow(hwnd, SW_SHOW);
         SetTimer(
             hwnd,
             TIMER_ID_LIQUID_GLASS,

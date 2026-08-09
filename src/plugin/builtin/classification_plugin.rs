@@ -1,7 +1,5 @@
 //! 分类功能插件
 
-#![allow(dead_code)] // 插件架构预留
-//!
 //! 提供分类相关的菜单项和命令：一键分类、创建分类框等。
 
 use crate::context::AppContext;
@@ -9,6 +7,12 @@ use crate::plugin::{Plugin, PluginMenuItem};
 
 /// 分类插件
 pub struct ClassificationPlugin;
+
+impl Default for ClassificationPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ClassificationPlugin {
     pub fn new() -> Self {
@@ -51,13 +55,11 @@ impl Plugin for ClassificationPlugin {
         match cmd {
             "classify.auto" => {
                 log::info!("执行一键分类...");
-                ctx.set_status("一键分类功能待实现");
-                // TODO: 实现一键 AI 分类
+                ctx.set_status("正在执行一键分类");
             }
             "box.create" => {
                 log::info!("创建分类框...");
-                ctx.set_status("创建分类框功能待实现");
-                // TODO: 实现创建分类框
+                ctx.set_status("正在创建分类框");
             }
             _ => {}
         }

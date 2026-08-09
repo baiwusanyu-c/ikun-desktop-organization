@@ -12,12 +12,11 @@ use crate::context::AppContext;
 use crate::platform::{
     cleanup_desktop_registry, cleanup_system_tray, collect_grid_layout, create_grid_window,
     destroy_all_grid_windows, extract_file_icon, get_cursor_monitor_work_area_phys, get_grid_count,
-    get_primary_monitor_dpi, get_screen_resolution, hide_control_panel_window, icon_exists_for_box,
-    install_overlay_mouse_hook, native_icons_hidden, register_tray_action_waker,
-    reposition_window_by_title, resolve_icon_read_path, restore_all_hidden_icons,
-    setup_desktop_registry, setup_system_tray, show_control_panel_window,
-    show_desktop_context_menu, take_pending_create_box, take_pending_tray_action, DesktopIcon,
-    DesktopManagerTrait, GridCreateParams, GridFileItem, SystemTrayAction,
+    get_screen_resolution, hide_control_panel_window, icon_exists_for_box,
+    register_tray_action_waker, reposition_window_by_title, resolve_icon_read_path,
+    restore_all_hidden_icons, set_tray_auto_start_state, setup_desktop_registry, setup_system_tray,
+    show_control_panel_window, take_pending_create_box, take_pending_tray_action, DesktopIcon,
+    GridCreateParams, GridFileItem, SystemTrayAction,
 };
 use eframe::egui;
 use std::sync::{Arc, Mutex};
@@ -124,6 +123,17 @@ impl MyApp {
             }
             SystemTrayAction::AiClassify => {
                 log::info!("托盘菜单: 一键AI分类暂未实现");
+            }
+            SystemTrayAction::ToggleAutoStart => {
+                let enabled = !self.ctx.config.general.auto_start;
+                self.ctx.config.general.auto_start = enabled;
+                if let Err(error) = self.ctx.save_config() {
+                    log::warn!("保存开机自启配置失败: {error}");
+                }
+                if let Err(error) = crate::utils::platform::set_auto_start(enabled) {
+                    log::warn!("切换开机自启失败: {error}");
+                }
+                set_tray_auto_start_state(enabled);
             }
             SystemTrayAction::Quit => {
                 log::info!("系统托盘菜单: 退出应用");
@@ -301,21 +311,13 @@ impl MyApp {
             return;
         }
 
-        // 阶段 6：覆盖窗口与应用生命周期绑定。
-        // 先隐藏原生 SysListView32，再创建覆盖窗口渲染非管理图标，最后恢复分类框。
+        // 当前架构使用原生桌面渲染未分类图标，仅恢复分类框窗口。
         restore_all_hidden_icons();
-        self.ensure_native_icons_hidden();
-        if let Err(e) = create_desktop_overlay() {
-            log::warn!("创建桌面覆盖窗口失败: {}", e);
-        }
-
-        // 在主线程安装鼠标钩子（WH_MOUSE_LL 需要在有消息循环的线程上安装）
-        install_overlay_mouse_hook();
 
         let boxes = &self.ctx.config.layout.boxes;
         if boxes.is_empty() {
-            log::info!("启动布局为空，仅启用桌面覆盖窗口");
-            self.ctx.set_status("桌面覆盖窗口已启用");
+            log::info!("启动布局为空，无需恢复分类框");
+            self.ctx.set_status("未找到需要恢复的分类框");
             return;
         }
         log::info!("开始恢复布局: {} 个分类框", boxes.len());
@@ -394,6 +396,7 @@ impl MyApp {
                 sort_ascending: box_data.sort_ascending,
                 group_by: box_data.group_by.clone(),
                 config_id: box_data.id,
+                edit_box_callback: None,
             };
             if create_grid_window(params).is_ok() {
                 created_count += 1;
@@ -413,15 +416,6 @@ impl MyApp {
                 log::warn!("保存配置前读取覆盖窗口配置失败，保留内存配置: {}", e);
             }
         }
-    }
-
-    fn ensure_native_icons_hidden(&mut self) -> bool {
-        // 不再隐藏原生桌面图标 — 使用原生桌面渲染未分类图标
-        true
-    }
-
-    fn ensure_desktop_overlay_running(&mut self) {
-        // 不再创建覆盖区域窗口 — 使用原生桌面渲染未分类图标
     }
 
     fn save_layout_and_config(&mut self) {
@@ -501,6 +495,7 @@ impl MyApp {
                 sort_ascending: self.ctx.config.box_defaults.sort_ascending,
                 group_by: self.ctx.config.box_defaults.group_by.clone(),
                 config_id: uuid::Uuid::new_v4(),
+                edit_box_callback: None,
             };
             if create_grid_window(params).is_ok() {
                 created_count += 1;
@@ -548,6 +543,7 @@ impl MyApp {
             sort_ascending: self.ctx.config.box_defaults.sort_ascending,
             group_by: self.ctx.config.box_defaults.group_by.clone(),
             config_id: uuid::Uuid::new_v4(),
+            edit_box_callback: None,
         };
         match create_grid_window(params) {
             Ok(_) => {
@@ -591,10 +587,6 @@ impl eframe::App for MyApp {
 
         if let Some(action) = take_pending_tray_action() {
             self.handle_tray_action(action, ctx);
-        }
-
-        if should_retry_native_icon_hide(self.ctx.state.icons_hidden, native_icons_hidden()) {
-            log::warn!("检测到 Explorer 桌面图标窗口恢复，重新隐藏并保持覆盖窗口接管");
         }
 
         // 信号文件（桌面右键菜单注册表项触发新实例写入）→ 执行对应操作
@@ -865,18 +857,6 @@ mod tests {
         assert!(is_box_name_valid("A"));
         assert!(is_box_name_valid("中"));
         assert!(is_box_name_valid("1"));
-    }
-
-    // ===== 阶段 6 生命周期判定 =====
-    #[test]
-    fn test_should_not_retry_native_icon_hide_when_both_hidden() {
-        assert!(!should_retry_native_icon_hide(true, true));
-    }
-
-    #[test]
-    fn test_should_not_retry_native_icon_hide_when_app_did_not_hide_icons() {
-        assert!(!should_retry_native_icon_hide(false, false));
-        assert!(!should_retry_native_icon_hide(false, true));
     }
 
     // ===== 显示名称解析优先级测试 =====

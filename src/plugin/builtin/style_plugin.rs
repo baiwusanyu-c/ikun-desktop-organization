@@ -1,7 +1,5 @@
 //! 样式设置插件
 
-#![allow(dead_code)] // 插件架构预留
-//!
 //! 提供样式相关的菜单项和命令：背景色、圆角、图标大小等。
 
 use crate::context::AppContext;
@@ -9,6 +7,12 @@ use crate::plugin::{Plugin, PluginMenuItem};
 
 /// 样式插件
 pub struct StylePlugin;
+
+impl Default for StylePlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl StylePlugin {
     pub fn new() -> Self {

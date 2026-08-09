@@ -3,18 +3,22 @@ name = "ikun_organizer"
 version = "0.1.0"
 edition = "2021"
 authors = ["baiwusanyu"]
-description = "ikun 桌面收纳器 - Desktop Organizer"
+description = "ikun Desktop Organizer"
 license = "MIT"
 build = "build/build.rs"
 
 [dependencies]
 lazy_static = "1.4"
-# ===== GUI 框架 =====
+# ===== GUI frameworks =====
 egui = { version = "0.27", optional = true }
 eframe = { version = "0.27", default-features = false, features = ["glow"], optional = true }
 epaint = { version = "0.27", optional = true }
 
-# ===== 通用库 =====
+# ===== Tauri 2.0 =====
+tauri = { version = "2", optional = true, features = [] }
+tauri-plugin-opener = { version = "2", optional = true }
+
+# ===== Common libraries =====
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
@@ -71,7 +75,12 @@ core-text = "20"
 foreign-types-shared = "0.3"
 block = "0.1"
 libc = "0.2"
-# ===== 开发依赖 =====
+
+# ===== Build Dependencies =====
+[build-dependencies]
+tauri-build = { version = "2", optional = true, features = [] }
+
+# ===== Dev Dependencies =====
 [dev-dependencies]
 tempfile = "3.0"
 
@@ -80,6 +89,6 @@ opt-level = 3
 lto = true
 
 [features]
-default = []
+default = ["tauri-ui"]
 eframe-ui = ["dep:egui", "dep:eframe", "dep:epaint"]
-
+tauri-ui = ["dep:tauri", "dep:tauri-plugin-opener", "dep:tauri-build"]

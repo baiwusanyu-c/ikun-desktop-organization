@@ -36,11 +36,12 @@ pub use windows::{
     get_cursor_monitor_work_area_phys, get_grid_count, get_primary_monitor_dpi,
     get_primary_monitor_work_area_phys, get_screen_resolution, get_vault_display_names,
     hide_control_panel_window, icon_exists_for_box, register_tray_action_waker,
-    reposition_and_resize_window, reposition_window_by_title, resolve_icon_read_path,
-    restore_all_hidden_icons, set_tray_auto_start_state, setup_desktop_registry,
-    setup_global_hotkey, setup_system_tray, show_control_panel_window, show_desktop_context_menu,
-    take_hotkey_toggle, take_pending_create_box, take_pending_tray_action,
-    unregister_global_hotkey, update_grid_window_title, GridCreateParams, GridFileItem,
+    reposition_and_resize_window, reposition_window_by_title, rerender_all_grid_windows,
+    resolve_icon_read_path, restore_all_hidden_icons, set_tray_auto_start_state,
+    setup_desktop_registry, setup_global_hotkey, setup_system_tray, show_control_panel_window,
+    show_desktop_context_menu, take_hotkey_toggle, take_pending_create_box,
+    take_pending_tray_action, unregister_global_hotkey, update_grid_window_title, GridCreateParams,
+    GridFileItem,
 };
 
 // =============================================================================

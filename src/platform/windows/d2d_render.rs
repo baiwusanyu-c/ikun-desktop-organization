@@ -263,8 +263,9 @@ pub fn render_layered_window(hwnd: HWND) {
     unsafe { target.Clear(Some(&transparent)) };
 
     // ===== 绘制液态玻璃背景；GPU 捕获不可用时回退原半透明背景 =====
-    let glass_config = super::liquid_glass::get_liquid_glass_config();
-    let corner_radius = glass_config.corner_radius;
+    let box_style = super::liquid_glass::get_box_style_config();
+    let glass_config = box_style.liquid_glass.clone();
+    let corner_radius = box_style.border_radius;
     let glass_drawn = if glass_config.enabled {
         draw_liquid_glass_background(
             &target,
@@ -280,8 +281,14 @@ pub fn render_layered_window(hwnd: HWND) {
         false
     };
     if !glass_drawn {
-        let fallback_radius = 16.0_f32;
-        let bg_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(1, 1, 1, 38), None) };
+        let fallback_radius = box_style.border_radius;
+        let [red, green, blue] = box_style.background_color;
+        let bg_brush = unsafe {
+            target.CreateSolidColorBrush(
+                &d2d_color(red, green, blue, box_style.background_alpha),
+                None,
+            )
+        };
         if let Ok(ref brush) = bg_brush {
             let rounded_rect = D2D1_ROUNDED_RECT {
                 rect: d2d_rect(
@@ -339,50 +346,47 @@ pub fn render_layered_window(hwnd: HWND) {
     if let Ok(ref tf) = title_format {
         let _ = unsafe { tf.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP) };
 
-        // ===== 正常模式：绘制标题文字 =====
-        let title_text: Vec<u16> = data.title.encode_utf16().collect();
-
         // 锁定按钮区域（标题栏右侧）
         let (btn_x, btn_y, btn_size) = super::grid_layout::lock_btn_rect(w, title_h, dpi);
 
-        // 创建 TextLayout（右侧为锁定按钮预留空间）
-        let text_max_w = (btn_x as f32 - 10.0).max(40.0);
-        let layout = unsafe {
-            target_inner_create_text_layout(
-                &dw_factory,
-                &title_text,
-                tf,
-                text_max_w,
-                title_h as f32,
-                DWRITE_TEXT_ALIGNMENT_LEADING,
-                DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
-            )
-        };
+        if !box_style.icon_only_mode {
+            let title_text: Vec<u16> = data.title.encode_utf16().collect();
+            let text_max_w = (btn_x as f32 - 10.0).max(40.0);
+            let layout = unsafe {
+                target_inner_create_text_layout(
+                    &dw_factory,
+                    &title_text,
+                    tf,
+                    text_max_w,
+                    title_h as f32,
+                    DWRITE_TEXT_ALIGNMENT_LEADING,
+                    DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+                )
+            };
 
-        if let Some(ref layout) = layout {
-            // 阴影描边
-            let shadow_offset = scale_for_dpi(1, dpi) as f32;
-            if let Ok(ref sb) = shadow_brush {
-                for &(dx, dy) in &[
-                    (shadow_offset, 0.0),
-                    (-shadow_offset, 0.0),
-                    (0.0, shadow_offset),
-                    (0.0, -shadow_offset),
-                ] {
-                    let origin = Vector2 {
-                        X: 10.0 + dx,
-                        Y: dy,
-                    };
-                    unsafe {
-                        target.DrawTextLayout(origin, layout, sb, D2D1_DRAW_TEXT_OPTIONS_NONE);
+            if let Some(ref layout) = layout {
+                let shadow_offset = scale_for_dpi(1, dpi) as f32;
+                if let Ok(ref sb) = shadow_brush {
+                    for &(dx, dy) in &[
+                        (shadow_offset, 0.0),
+                        (-shadow_offset, 0.0),
+                        (0.0, shadow_offset),
+                        (0.0, -shadow_offset),
+                    ] {
+                        let origin = Vector2 {
+                            X: 10.0 + dx,
+                            Y: dy,
+                        };
+                        unsafe {
+                            target.DrawTextLayout(origin, layout, sb, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                        }
                     }
                 }
-            }
-            // 主文字（白色）
-            if let Ok(ref wb) = white_brush {
-                let origin = Vector2 { X: 10.0, Y: 0.0 };
-                unsafe {
-                    target.DrawTextLayout(origin, layout, wb, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                if let Ok(ref wb) = white_brush {
+                    let origin = Vector2 { X: 10.0, Y: 0.0 };
+                    unsafe {
+                        target.DrawTextLayout(origin, layout, wb, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                    }
                 }
             }
         }
@@ -616,7 +620,7 @@ pub fn render_layered_window(hwnd: HWND) {
             unsafe { target.CreateSolidColorBrush(&d2d_color(120, 180, 255, 100), None) };
         if let Ok(ref eb) = edge_brush {
             let border_w = scale_for_dpi(3, dpi) as f32;
-            let corner_r = 16.0_f32; // 与背景圆角一致
+            let corner_r = box_style.border_radius;
             let (l, t, r, b) = compute_edge_rect(data.hover_edge, ww, hh, border_w, corner_r);
             unsafe { target.FillRectangle(&d2d_rect(l, t, r, b), eb) };
         }

@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::ffi::{c_void, CStr};
 use std::mem::size_of;
 use std::slice;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
@@ -45,10 +46,12 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
 use super::ffi_types::Pixel32;
-use crate::config::LiquidGlassConfig;
+use crate::config::{BoxStyleConfig, LiquidGlassConfig};
 
 const RETRY_DELAY: Duration = Duration::from_secs(3);
 const MAX_SURFACE_CACHE_ENTRIES: usize = 8;
+static FIRST_FRAME_DIAGNOSTIC_LOGGED: AtomicBool = AtomicBool::new(false);
+static NON_BLACK_FRAME_DIAGNOSTIC_LOGGED: AtomicBool = AtomicBool::new(false);
 
 const STANDARD_MAP: &[u8] = include_bytes!("embedded/standard.jpg");
 const POLAR_MAP: &[u8] = include_bytes!("embedded/polar.jpg");
@@ -244,6 +247,7 @@ struct GlassRenderer {
     surfaces: HashMap<(u32, u32), RenderSurfaces>,
     displacement_maps: [EmbeddedMap; 3],
     light_direction: [f32; 2],
+    startup_black_frames_remaining: u8,
 }
 
 enum GlassState {
@@ -254,13 +258,143 @@ enum GlassState {
 
 thread_local! {
     static GLASS_STATE: RefCell<GlassState> = const { RefCell::new(GlassState::Uninitialized) };
+    static LAST_GOOD_FRAMES: RefCell<HashMap<(i32, i32, i32, i32, i32), Vec<Pixel32>>> = RefCell::new(HashMap::new());
 }
 
 static LIQUID_GLASS_CONFIG: std::sync::OnceLock<std::sync::RwLock<LiquidGlassConfig>> =
     std::sync::OnceLock::new();
+static BOX_STYLE_CONFIG: std::sync::OnceLock<std::sync::RwLock<BoxStyleConfig>> =
+    std::sync::OnceLock::new();
 
 fn get_config_lock() -> &'static std::sync::RwLock<LiquidGlassConfig> {
     LIQUID_GLASS_CONFIG.get_or_init(|| std::sync::RwLock::new(LiquidGlassConfig::default()))
+}
+
+fn get_box_style_lock() -> &'static std::sync::RwLock<BoxStyleConfig> {
+    BOX_STYLE_CONFIG.get_or_init(|| std::sync::RwLock::new(BoxStyleConfig::default()))
+}
+
+/// 更新原生分类框渲染所使用的完整样式快照。
+pub fn update_box_style_config(config: &BoxStyleConfig) {
+    let mut normalized = config.clone();
+    normalized.normalize();
+    update_liquid_glass_config(&normalized.liquid_glass);
+    if let Ok(mut guard) = get_box_style_lock().write() {
+        *guard = normalized;
+    }
+    LAST_GOOD_FRAMES.with(|frames| frames.borrow_mut().clear());
+}
+
+/// 获取原生分类框当前使用的样式快照。
+pub fn get_box_style_config() -> BoxStyleConfig {
+    get_box_style_lock()
+        .read()
+        .map(|guard| guard.clone())
+        .unwrap_or_default()
+}
+
+fn cached_frame(key: (i32, i32, i32, i32, i32)) -> Option<Vec<Pixel32>> {
+    LAST_GOOD_FRAMES.with(|frames| frames.borrow().get(&key).cloned())
+}
+
+fn cache_frame(key: (i32, i32, i32, i32, i32), pixels: &[Pixel32]) {
+    LAST_GOOD_FRAMES.with(|frames| {
+        let mut frames = frames.borrow_mut();
+        frames.insert(key, pixels.to_vec());
+        while frames.len() > MAX_SURFACE_CACHE_ENTRIES {
+            let Some(old_key) = frames.keys().copied().find(|candidate| *candidate != key) else {
+                break;
+            };
+            frames.remove(&old_key);
+        }
+    });
+}
+
+struct FrameStats {
+    averages: [u64; 4],
+    near_black_percent: f64,
+    samples: u64,
+}
+
+fn content_frame_stats(
+    pixels: &[Pixel32],
+    content_width: i32,
+    content_height: i32,
+    padding: i32,
+) -> Option<FrameStats> {
+    let surface_width = (content_width + padding * 2) as usize;
+    let mut sums = [0_u64; 4];
+    let mut samples = 0_u64;
+    let mut near_black = 0_u64;
+    for y in (padding as usize..(padding + content_height) as usize).step_by(8) {
+        for x in (padding as usize..(padding + content_width) as usize).step_by(8) {
+            let pixel = pixels.get(y * surface_width + x)?;
+            sums[0] += pixel.r as u64;
+            sums[1] += pixel.g as u64;
+            sums[2] += pixel.b as u64;
+            sums[3] += pixel.a as u64;
+            if pixel.r <= 8 && pixel.g <= 8 && pixel.b <= 8 && pixel.a >= 200 {
+                near_black += 1;
+            }
+            samples += 1;
+        }
+    }
+    (samples > 0).then(|| FrameStats {
+        averages: [
+            sums[0] / samples,
+            sums[1] / samples,
+            sums[2] / samples,
+            sums[3] / samples,
+        ],
+        near_black_percent: near_black as f64 * 100.0 / samples as f64,
+        samples,
+    })
+}
+
+fn is_dxgi_placeholder(stats: &FrameStats) -> bool {
+    stats.averages[0] <= 2
+        && stats.averages[1] <= 2
+        && stats.averages[2] <= 2
+        && stats.near_black_percent >= 95.0
+}
+
+fn log_first_frame_diagnostic(
+    pixels: &[Pixel32],
+    content_width: i32,
+    content_height: i32,
+    padding: i32,
+) {
+    if NON_BLACK_FRAME_DIAGNOSTIC_LOGGED.load(Ordering::Relaxed) {
+        return;
+    }
+
+    let Some(stats) = content_frame_stats(pixels, content_width, content_height, padding) else {
+        log::warn!("液态玻璃首帧诊断没有取得内容区像素");
+        return;
+    };
+    if !FIRST_FRAME_DIAGNOSTIC_LOGGED.swap(true, Ordering::Relaxed) {
+        log::info!(
+            "液态玻璃首帧像素: avg_rgba=({},{},{},{}), near_black={:.1}%, samples={}",
+            stats.averages[0],
+            stats.averages[1],
+            stats.averages[2],
+            stats.averages[3],
+            stats.near_black_percent,
+            stats.samples
+        );
+    }
+    if stats.near_black_percent < 90.0
+        && !NON_BLACK_FRAME_DIAGNOSTIC_LOGGED.swap(true, Ordering::Relaxed)
+    {
+        log::info!(
+            "液态玻璃动态采集已恢复: avg_rgba=({},{},{},{}), near_black={:.1}%",
+            stats.averages[0],
+            stats.averages[1],
+            stats.averages[2],
+            stats.averages[3],
+            stats.near_black_percent
+        );
+    }
 }
 
 pub fn update_liquid_glass_config(config: &LiquidGlassConfig) {
@@ -278,6 +412,23 @@ pub fn get_liquid_glass_config() -> LiquidGlassConfig {
         .unwrap_or_default()
 }
 
+/// 在显示器/DPI/桌面组成变化后丢弃旧快照，下一次分类框渲染前重新采集。
+pub fn invalidate_desktop_snapshot() {
+    GLASS_STATE.with(|state| {
+        if let Ok(mut state) = state.try_borrow_mut() {
+            if let GlassState::Ready(renderer) = &mut *state {
+                for output in &mut renderer.outputs {
+                    output.desktop_texture = None;
+                    output.desktop_view = None;
+                    output.blurred_texture = None;
+                    output.blurred_view = None;
+                }
+            }
+        }
+    });
+    LAST_GOOD_FRAMES.with(|frames| frames.borrow_mut().clear());
+}
+
 pub fn render_background(
     screen_x: i32,
     screen_y: i32,
@@ -292,6 +443,7 @@ pub fn render_background(
         return None;
     }
 
+    let cache_key = (screen_x, screen_y, content_width, content_height, padding);
     log::debug!(
         "[LG] render_background called: {}x{}+{} padding={}",
         content_width,
@@ -304,11 +456,11 @@ pub fn render_background(
             Ok(s) => s,
             Err(_) => {
                 log::debug!("液态玻璃渲染器当前忙碌，跳过本帧");
-                return None;
+                return cached_frame(cache_key);
             }
         };
         if matches!(&*state, GlassState::Failed { retry_at } if Instant::now() < *retry_at) {
-            return None;
+            return cached_frame(cache_key);
         }
 
         if !matches!(&*state, GlassState::Ready(_)) {
@@ -322,7 +474,7 @@ pub fn render_background(
                     *state = GlassState::Failed {
                         retry_at: Instant::now() + RETRY_DELAY,
                     };
-                    return None;
+                    return cached_frame(cache_key);
                 }
             }
         }
@@ -343,14 +495,15 @@ pub fn render_background(
         ) {
             Ok(pixels) => {
                 log::debug!("[LG] render OK, {} pixels", pixels.len());
+                log_first_frame_diagnostic(&pixels, content_width, content_height, padding);
+                cache_frame(cache_key, &pixels);
                 Some(pixels)
             }
             Err(error) => {
-                log::warn!("液态玻璃帧渲染失败，回退半透明背景: {error:#}");
-                *state = GlassState::Failed {
-                    retry_at: Instant::now() + RETRY_DELAY,
-                };
-                None
+                log::warn!("液态玻璃帧渲染失败，保留上一成功帧: {error:#}");
+                // 单帧捕获失败不应让整个渲染器进入 3 秒回退状态；保留 Ready
+                // 可在下一次定时器 tick 立即重试，避免拖动到新位置时闪黑。
+                cached_frame(cache_key)
             }
         }
     })
@@ -611,6 +764,7 @@ impl GlassRenderer {
                 surfaces: HashMap::new(),
                 displacement_maps: [std_map, pol_map, pro_map],
                 light_direction: [0.0, 0.0],
+                startup_black_frames_remaining: 3,
             })
         }
     }
@@ -636,14 +790,15 @@ impl GlassRenderer {
         }
     }
 
-    fn capture_output(&mut self, index: usize) -> Result<()> {
+    fn capture_output(&mut self, index: usize, timeout_ms: u32) -> Result<()> {
         unsafe {
             let output = &mut self.outputs[index];
             let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
             let mut resource: Option<IDXGIResource> = None;
-            let acquire = output
-                .duplication
-                .AcquireNextFrame(0, &mut frame_info, &mut resource);
+            let acquire =
+                output
+                    .duplication
+                    .AcquireNextFrame(timeout_ms, &mut frame_info, &mut resource);
 
             if let Err(e) = acquire {
                 if e.code() == DXGI_ERROR_WAIT_TIMEOUT {
@@ -661,46 +816,48 @@ impl GlassRenderer {
                 return Err(e.into());
             }
 
-            let Some(resource) = resource else {
-                let _ = output.duplication.ReleaseFrame();
-                return Ok(());
-            };
-            let texture = resource.cast::<ID3D11Texture2D>()?;
-
-            let mut frame_desc = D3D11_TEXTURE2D_DESC::default();
-            texture.GetDesc(&mut frame_desc);
-            output.hdr_active = matches!(
-                frame_desc.Format,
-                DXGI_FORMAT_R10G10B10A2_UNORM | DXGI_FORMAT_R16G16B16A16_FLOAT
-            );
-
-            if output.desktop_texture.is_none() {
-                let mut desc = D3D11_TEXTURE2D_DESC::default();
-                texture.GetDesc(&mut desc);
-                let new_desc = D3D11_TEXTURE2D_DESC {
-                    Usage: D3D11_USAGE_DEFAULT,
-                    BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-                    CPUAccessFlags: 0,
-                    MiscFlags: 0,
-                    ..desc
+            // 所有可能失败的 COM 操作都放在闭包中，确保 Acquire 成功后总会 ReleaseFrame。
+            let capture_result = (|| -> Result<()> {
+                let Some(resource) = resource else {
+                    return Ok(());
                 };
-                let mut new_texture = None;
-                self.device
-                    .CreateTexture2D(&new_desc, None, Some(&mut new_texture))?;
-                let new_texture = new_texture.context("创建桌面纹理未返回对象")?;
-                let mut view = None;
-                self.device
-                    .CreateShaderResourceView(&new_texture, None, Some(&mut view))?;
-                let view = view.context("创建桌面纹理视图未返回对象")?;
-                output.desktop_texture = Some(new_texture);
-                output.desktop_view = Some(view);
-            }
+                let texture = resource.cast::<ID3D11Texture2D>()?;
 
-            if let Some(ref dest) = output.desktop_texture {
-                self.context.CopyResource(dest, &texture);
-            }
+                let mut frame_desc = D3D11_TEXTURE2D_DESC::default();
+                texture.GetDesc(&mut frame_desc);
+                output.hdr_active = matches!(
+                    frame_desc.Format,
+                    DXGI_FORMAT_R10G10B10A2_UNORM | DXGI_FORMAT_R16G16B16A16_FLOAT
+                );
+
+                if output.desktop_texture.is_none() {
+                    let mut desc = D3D11_TEXTURE2D_DESC::default();
+                    texture.GetDesc(&mut desc);
+                    let new_desc = D3D11_TEXTURE2D_DESC {
+                        Usage: D3D11_USAGE_DEFAULT,
+                        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+                        CPUAccessFlags: 0,
+                        MiscFlags: 0,
+                        ..desc
+                    };
+                    let mut new_texture = None;
+                    self.device
+                        .CreateTexture2D(&new_desc, None, Some(&mut new_texture))?;
+                    let new_texture = new_texture.context("创建桌面纹理未返回对象")?;
+                    let mut view = None;
+                    self.device
+                        .CreateShaderResourceView(&new_texture, None, Some(&mut view))?;
+                    let view = view.context("创建桌面纹理视图未返回对象")?;
+                    output.desktop_texture = Some(new_texture);
+                    output.desktop_view = Some(view);
+                }
+                if let Some(destination) = &output.desktop_texture {
+                    self.context.CopyResource(destination, &texture);
+                }
+                Ok(())
+            })();
             let _ = output.duplication.ReleaseFrame();
-            Ok(())
+            capture_result
         }
     }
 
@@ -873,9 +1030,9 @@ impl GlassRenderer {
                 D2D1_INTERPOLATION_MODE_LINEAR,
                 D2D1_COMPOSITE_MODE_SOURCE_COPY,
             );
-            let _ = d2d_context.EndDraw(None, None);
+            let end_draw = d2d_context.EndDraw(None, None);
             d2d_context.SetTarget(None::<&ID2D1Image>);
-            Ok(())
+            end_draw.map_err(Into::into)
         }
     }
 
@@ -972,7 +1129,7 @@ impl GlassRenderer {
             .position(|output| point_in_rect(center_x, center_y, &output.rect))
             .ok_or_else(|| anyhow!("分类框中心不在当前 D3D11 适配器的任何输出中"))?;
 
-        self.capture_output(output_index)?;
+        self.capture_output(output_index, 0)?;
         let blur_sigma = ((if glass_config.over_light { 12.0 } else { 4.0 })
             + glass_config.blur_amount * 32.0)
             * dpi_scale;
@@ -1223,6 +1380,20 @@ impl GlassRenderer {
             if pixels.get(center_index).is_none_or(|pixel| pixel.a == 0) {
                 return Err(anyhow!("液态玻璃 GPU 输出中心像素完全透明"));
             }
+            if self.startup_black_frames_remaining > 0 {
+                if let Some(stats) = content_frame_stats(
+                    &pixels,
+                    content_width as i32,
+                    content_height as i32,
+                    padding as i32,
+                ) {
+                    if is_dxgi_placeholder(&stats) {
+                        self.startup_black_frames_remaining -= 1;
+                        return Err(anyhow!("DXGI 初始化占位黑帧，等待真实桌面画面"));
+                    }
+                    self.startup_black_frames_remaining = 0;
+                }
+            }
             Ok(pixels)
         }
     }
@@ -1231,6 +1402,40 @@ impl GlassRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dxgi_placeholder_detection_rejects_opaque_black_frame() {
+        let pixels = vec![
+            Pixel32 {
+                r: 1,
+                g: 1,
+                b: 1,
+                a: 255,
+            };
+            64
+        ];
+        let stats = content_frame_stats(&pixels, 8, 8, 0).expect("frame stats");
+
+        assert!(is_dxgi_placeholder(&stats));
+        assert_eq!(stats.averages, [1, 1, 1, 255]);
+    }
+
+    #[test]
+    fn dxgi_placeholder_detection_accepts_real_desktop_frame() {
+        let pixels = vec![
+            Pixel32 {
+                r: 171,
+                g: 191,
+                b: 207,
+                a: 254,
+            };
+            64
+        ];
+        let stats = content_frame_stats(&pixels, 8, 8, 0).expect("frame stats");
+
+        assert!(!is_dxgi_placeholder(&stats));
+        assert_eq!(stats.near_black_percent, 0.0);
+    }
 
     #[test]
     fn constants_layout_matches_frosted_liquid_example() {

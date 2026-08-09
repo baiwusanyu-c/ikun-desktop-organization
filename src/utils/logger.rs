@@ -750,9 +750,9 @@ mod tests {
         let dir = make_test_dir("w_append");
         let mut writer = RollingFileWriter::new(dir.clone()).unwrap();
 
-        writer.write(b"line1\n").unwrap();
-        writer.write(b"line2\n").unwrap();
-        writer.write(b"line3\n").unwrap();
+        writer.write_all(b"line1\n").unwrap();
+        writer.write_all(b"line2\n").unwrap();
+        writer.write_all(b"line3\n").unwrap();
         writer.flush().unwrap();
 
         let path = writer.current_path().unwrap();
@@ -780,13 +780,13 @@ mod tests {
         assert_eq!(initial_index, 1, "未满 2MB 应继续使用序号 1");
 
         // 写入 50 字节 → 文件大小变为 MAX - 50，不超过限制
-        writer.write(&vec![b'X'; 50]).unwrap();
+        writer.write_all(&[b'X'; 50]).unwrap();
         writer.flush().unwrap();
         let (_, idx1) = writer.current_date_index().unwrap();
         assert_eq!(idx1, 1, "未超过限制时不应轮转");
 
         // 写入 200 字节 → MAX - 50 + 200 > MAX → 触发轮转到序号 2
-        writer.write(&vec![b'Y'; 200]).unwrap();
+        writer.write_all(&[b'Y'; 200]).unwrap();
         writer.flush().unwrap();
 
         let (_, new_index) = writer.current_date_index().unwrap();
@@ -799,7 +799,7 @@ mod tests {
         assert_eq!(content.len(), 200, "新文件应仅包含轮转后的数据");
 
         // 继续写入应正常追加
-        writer.write(b"more\n").unwrap();
+        writer.write_all(b"more\n").unwrap();
         writer.flush().unwrap();
         let content = fs::read_to_string(&new_path).unwrap();
         assert_eq!(content.len(), 205, "追加写入应正常");
@@ -824,13 +824,13 @@ mod tests {
         assert_eq!(initial_index, 1);
 
         // 写入 1 字节 → 文件大小恰好等于 MAX（条件是 > MAX，不是 >=）→ 不轮转
-        writer.write(b"Z").unwrap();
+        writer.write_all(b"Z").unwrap();
         writer.flush().unwrap();
         let (_, idx_exact) = writer.current_date_index().unwrap();
         assert_eq!(idx_exact, 1, "刚好到达限制时不应轮转");
 
         // 再写入 1 字节 → MAX + 1 > MAX → 触发轮转
-        writer.write(b"A").unwrap();
+        writer.write_all(b"A").unwrap();
         writer.flush().unwrap();
         let (_, idx_over) = writer.current_date_index().unwrap();
         assert_eq!(idx_over, 2, "超过限制后应轮转");
@@ -862,7 +862,7 @@ mod tests {
         let mut writer = RollingFileWriter::new(dir.clone()).unwrap();
 
         writer.flush().unwrap();
-        writer.write(b"data\n").unwrap();
+        writer.write_all(b"data\n").unwrap();
         writer.flush().unwrap();
         writer.flush().unwrap();
         cleanup_test_dir(&dir);
@@ -877,7 +877,7 @@ mod tests {
 
         // 写入 MAX + 10 字节（单次超大写入）
         let big = vec![b'B'; (MAX_LOG_FILE_SIZE + 10) as usize];
-        writer.write(&big).unwrap();
+        writer.write_all(&big).unwrap();
         writer.flush().unwrap();
 
         // 应轮转到下一个序号

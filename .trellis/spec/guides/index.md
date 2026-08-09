@@ -24,6 +24,7 @@ These guides help you **ask the right questions before coding**.
 | [Code Reuse Thinking Guide](./code-reuse-thinking-guide.md) | Identify patterns and reduce duplication | When you notice repeated patterns |
 | [Cross-Layer Thinking Guide](./cross-layer-thinking-guide.md) | Think through data flow across layers | Features spanning multiple layers |
 | [Windows Shell API Guide](./windows-shell-api-guide.md) | Correct Shell/COM API call patterns | Working with IShellFolder, IContextMenu, PIDLs |
+| [Tauri Window Contract](./tauri-window-contract.md) | IPC、共享状态、持久窗口与液态玻璃跨层契约 | 修改 Tauri Commands 或 Svelte 页面 |
 
 ---
 

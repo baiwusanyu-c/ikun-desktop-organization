@@ -1,6 +1,6 @@
-//! Desktop Organizer - 入口
+//! Desktop Organizer - Entry point
 
-// 使用 windows 子系统（无控制台窗口），日志写入文件
+// Windows subsystem (no console window), logs written to file
 #![windows_subsystem = "windows"]
 
 #[cfg(feature = "eframe-ui")]
@@ -18,25 +18,29 @@ mod shared;
 mod ui;
 mod utils;
 
+// Tauri commands module (new for Tauri migration)
+#[cfg(feature = "tauri-ui")]
+mod tauri_commands;
+
 #[cfg(windows)]
+#[cfg(not(feature = "tauri-ui"))]
 mod gpui_app;
 
 fn main() -> anyhow::Result<()> {
     utils::init_logger();
     log::info!("========================================");
-    log::info!("启动 Desktop Organizer (重写版)");
+    log::info!("Starting Desktop Organizer (Rewrite)");
     log::info!("========================================");
 
-    // 设置 Per-Monitor DPI V2 感知（运行时设置，作为 manifest 的补充保障）
-    // 防止 Windows 对窗口做 bitmap-stretch 导致文字和图标模糊
+    // Set Per-Monitor DPI V2 awareness (runtime setting, supplement to manifest)
     #[cfg(target_os = "windows")]
     {
         set_per_monitor_dpi_v2();
         init_ole();
     }
 
-    // 桌面右键菜单注册表项触发：通过信号文件与运行中的实例通信
-    // 写入信号文件后立即退出，运行中的实例轮询检测到信号后执行对应操作
+    // Desktop right-click menu registry trigger: communicate via signal files
+    // Write signal file and exit immediately; running instance polls and acts
     if let Some(arg) = std::env::args().nth(1) {
         let signal_name = match arg.as_str() {
             "--create-box" => Some("ikun_create_box.signal"),
@@ -52,27 +56,107 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Windows 平台使用 GPUI（默认）
-    #[cfg(all(target_os = "windows", not(feature = "eframe-ui")))]
+    // === Tauri 2.0 entry (new migration path) ===
+    #[cfg(feature = "tauri-ui")]
+    {
+        run_tauri_app()?;
+        return Ok(());
+    }
+
+    // Windows platform uses GPUI (legacy default)
+    #[cfg(all(
+        target_os = "windows",
+        not(feature = "eframe-ui"),
+        not(feature = "tauri-ui")
+    ))]
     {
         gpui_app::windows_main::run_gpui_app();
         return Ok(());
     }
 
-    // eframe 回退（仅当启用 eframe-ui feature 时）
+    // eframe fallback (only when eframe-ui feature is enabled)
     #[cfg(feature = "eframe-ui")]
     {
         run_eframe_app()?;
         Ok(())
     }
 
-    #[cfg(not(any(target_os = "windows", feature = "eframe-ui")))]
+    #[cfg(not(any(target_os = "windows", feature = "eframe-ui", feature = "tauri-ui")))]
     {
-        anyhow::bail!("当前平台不支持 GPUI，请使用 Windows");
+        anyhow::bail!("Current platform not supported");
     }
 }
 
-/// 运行 eframe 应用（回退 UI 运行时）
+/// Run Tauri 2.0 application
+#[cfg(feature = "tauri-ui")]
+fn run_tauri_app() -> anyhow::Result<()> {
+    use tauri::Manager;
+
+    log::info!("Starting Tauri 2.0 application...");
+
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![
+            // Config commands
+            tauri_commands::get_config,
+            tauri_commands::load_config,
+            tauri_commands::save_config,
+            tauri_commands::update_theme_color,
+            tauri_commands::update_box_style,
+            tauri_commands::update_liquid_glass,
+            tauri_commands::update_ai_config,
+            tauri_commands::reset_config,
+            tauri_commands::export_config,
+            tauri_commands::import_config,
+            // Box commands
+            tauri_commands::validate_box_name,
+            tauri_commands::create_box,
+            tauri_commands::edit_box,
+            tauri_commands::delete_box,
+            tauri_commands::list_boxes,
+            tauri_commands::get_box,
+            tauri_commands::get_pending_edit_box,
+            // Window commands
+            tauri_commands::show_window,
+            tauri_commands::hide_window,
+            tauri_commands::close_window,
+            tauri_commands::open_url,
+            tauri_commands::check_update,
+            // App commands
+            tauri_commands::get_app_info,
+            tauri_commands::quit_app,
+            tauri_commands::toggle_window,
+            tauri_commands::is_window_visible,
+            tauri_commands::get_screen_resolution,
+        ])
+        .setup(|app| {
+            log::info!("Tauri setup complete");
+
+            // Commands and the platform poller share one AppContext-backed runtime.
+            let app_handle = app.handle().clone();
+            let runtime = tauri_commands::platform_runtime::new_shared_runtime();
+            app.manage(runtime.clone());
+            tauri_commands::platform_runtime::start_platform_runtime(app_handle, runtime);
+
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if tauri_commands::window_cmd::is_persistent_window_label(window.label()) {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    if let Err(error) = window.hide() {
+                        log::warn!("隐藏窗口失败: label={}, error={error}", window.label());
+                    }
+                }
+            }
+        })
+        .run(tauri::generate_context!())
+        .map_err(|e| anyhow::anyhow!("Tauri runtime error: {}", e))?;
+
+    Ok(())
+}
+
+/// Run eframe application (fallback UI runtime)
 #[cfg(feature = "eframe-ui")]
 fn run_eframe_app() -> anyhow::Result<()> {
     use eframe::egui;
@@ -98,7 +182,7 @@ fn run_eframe_app() -> anyhow::Result<()> {
             Box::new(app::MyApp::new(cc))
         }),
     )
-    .map_err(|e| anyhow::anyhow!("eframe 运行失败: {}", e))?;
+    .map_err(|e| anyhow::anyhow!("eframe run failed: {}", e))?;
 
     Ok(())
 }
@@ -116,7 +200,7 @@ fn setup_chinese_fonts(ctx: &eframe::egui::Context) {
 
     for path in &font_paths {
         if let Ok(font_data) = std::fs::read(path) {
-            log::info!("加载中文字体: {}", path);
+            log::info!("Loading Chinese font: {}", path);
             fonts.font_data.insert(
                 "chinese".to_owned(),
                 eframe::egui::FontData::from_owned(font_data),
@@ -134,13 +218,10 @@ fn setup_chinese_fonts(ctx: &eframe::egui::Context) {
             return;
         }
     }
-    log::warn!("未找到中文字体");
+    log::warn!("Chinese font not found");
 }
 
-/// 设置 Per-Monitor DPI V2 感知（运行时调用，作为 manifest 的补充保障）
-///
-/// 确保 Windows 不对格子窗口做 bitmap-stretch，保持文字和图标清晰。
-/// DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+/// Set Per-Monitor DPI V2 awareness
 #[cfg(target_os = "windows")]
 fn set_per_monitor_dpi_v2() {
     use std::ffi::c_void;
@@ -157,16 +238,13 @@ fn set_per_monitor_dpi_v2() {
     let result =
         unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
     if result != 0 {
-        log::info!("已设置 Per-Monitor DPI V2 感知（运行时）");
+        log::info!("Per-Monitor DPI V2 awareness set (runtime)");
     } else {
-        log::warn!("设置 Per-Monitor DPI V2 失败（可能系统版本不支持），依赖 manifest 配置");
+        log::warn!("Failed to set Per-Monitor DPI V2, relying on manifest");
     }
 }
 
-/// 初始化 OLE（拖拽功能必需）
-///
-/// OleInitialize 初始化 COM 单线程单元（STA）并注册 OLE 剪贴板和拖拽子系统。
-/// 必须在 DoDragDrop / RegisterDragDrop 之前调用。
+/// Initialize OLE (required for drag-and-drop)
 #[cfg(target_os = "windows")]
 fn init_ole() {
     extern "system" {
@@ -174,23 +252,14 @@ fn init_ole() {
     }
     let hr = unsafe { OleInitialize(std::ptr::null_mut()) };
     if hr == 0 || hr == 1 {
-        log::info!("OLE 初始化成功");
+        log::info!("OLE initialized successfully");
     } else {
-        log::warn!(
-            "OleInitialize 失败: hr={:#010X}，拖拽功能可能不可用",
-            hr as u32
-        );
+        log::warn!("OleInitialize failed: hr={:#010X}", hr as u32);
     }
-
-    // 检查进程完整性级别（High = 管理员，Medium = 普通用户）
-    // OLE 拖拽到桌面需要与 Explorer.exe 相同的完整性级别
     check_integrity_level();
 }
 
-/// 检查进程完整性级别
-///
-/// 如果应用以管理员权限运行（High Integrity），OLE 拖拽到桌面会失败，
-/// 因为 Explorer.exe 运行在 Medium Integrity，Windows UIPI 阻止跨级别通信。
+/// Check process integrity level
 #[cfg(target_os = "windows")]
 fn check_integrity_level() {
     use std::ffi::c_void;
@@ -222,11 +291,8 @@ fn check_integrity_level() {
     unsafe {
         let mut token: HANDLE = std::ptr::null_mut();
         if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
-            log::warn!("无法获取进程令牌");
             return;
         }
-
-        // 第一次调用获取所需大小
         let mut needed: u32 = 0;
         GetTokenInformation(
             token,
@@ -235,7 +301,6 @@ fn check_integrity_level() {
             0,
             &mut needed,
         );
-
         if needed > 0 {
             let mut buffer = vec![0u8; needed as usize];
             if GetTokenInformation(
@@ -246,11 +311,8 @@ fn check_integrity_level() {
                 &mut needed,
             ) != 0
             {
-                // TOKEN_MANDATORY_LABEL 结构: { PSID Label; DWORD Attributes; }
-                // PSID 是指针（8 bytes on 64-bit），后面跟 Attributes
                 let label_ptr = *(buffer.as_ptr() as *const PSID);
                 if !label_ptr.is_null() {
-                    // SID 的最后一个 DWORD 是 RID（完整性级别）
                     extern "system" {
                         fn GetSidSubAuthorityCount(pSid: PSID) -> *mut u8;
                         fn GetSidSubAuthority(pSid: PSID, nSubAuthority: u32) -> *mut u32;
@@ -259,17 +321,12 @@ fn check_integrity_level() {
                     if count > 0 {
                         let rid = *GetSidSubAuthority(label_ptr, count - 1);
                         if rid >= SECURITY_MANDATORY_HIGH_RID {
-                            log::warn!("⚠️ 进程运行在高完整性级别（管理员权限, RID={:#X}）", rid);
-                            log::warn!("⚠️ OLE 拖拽到桌面将被 Windows UIPI 阻止！");
-                            log::warn!("⚠️ 请关闭管理员权限重新启动应用，或从普通终端运行");
-                        } else {
-                            log::info!("进程完整性级别: 正常 (RID={:#X})", rid);
+                            log::warn!("HIGH integrity (admin) - OLE drag will be blocked by UIPI");
                         }
                     }
                 }
             }
         }
-
         CloseHandle(token);
     }
 }

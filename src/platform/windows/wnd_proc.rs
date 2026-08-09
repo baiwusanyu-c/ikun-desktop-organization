@@ -533,6 +533,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         WM_DPICHANGED => {
             let new_dpi = (wparam & 0xFFFF) as u32;
             log::info!("DPI 变化: {} → 重新计算布局", new_dpi);
+            super::liquid_glass::invalidate_desktop_snapshot();
 
             let suggested_rect = lparam as *const RECT;
             let outer_w = unsafe { (*suggested_rect).right - (*suggested_rect).left };

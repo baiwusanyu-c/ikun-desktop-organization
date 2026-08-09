@@ -91,7 +91,12 @@ impl AppConfig {
                 .map_err(|e| anyhow::anyhow!("无法读取配置文件 {}: {}", path.display(), e))?;
             let mut config: AppConfig = serde_json::from_str(&content)
                 .map_err(|e| anyhow::anyhow!("配置文件格式错误 {}: {}", path.display(), e))?;
-            config.box_style.liquid_glass.normalize();
+            if config.box_style.normalize() {
+                config.last_modified = chrono::Utc::now();
+                if let Err(error) = config.save() {
+                    log::warn!("保存迁移后的分类框样式失败: {error}");
+                }
+            }
             log::info!("加载配置成功: {}", path.display());
             Ok(config)
         } else {
@@ -133,7 +138,7 @@ impl AppConfig {
             std::fs::read_to_string(path).map_err(|e| anyhow::anyhow!("读取配置失败: {}", e))?;
         let mut config: AppConfig = serde_json::from_str(&content)
             .map_err(|e| anyhow::anyhow!("配置文件格式错误: {}", e))?;
-        config.box_style.liquid_glass.normalize();
+        config.box_style.normalize();
         log::info!("导入配置成功: {}", path.display());
         Ok(config)
     }
@@ -199,7 +204,7 @@ impl Default for HotkeyConfig {
 // =============================================================================
 
 /// 分类框默认样式配置
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BoxStyleConfig {
     /// 背景颜色 RGB
@@ -244,6 +249,8 @@ pub struct BoxStyleConfig {
     pub lock_button_visible: bool,
     /// 是否显示关闭按钮
     pub close_button_visible: bool,
+    /// 纯图标模式，开启后隐藏分类框名称
+    pub icon_only_mode: bool,
     /// 液态玻璃效果参数
     pub liquid_glass: LiquidGlassConfig,
 }
@@ -251,7 +258,7 @@ pub struct BoxStyleConfig {
 impl Default for BoxStyleConfig {
     fn default() -> Self {
         Self {
-            background_color: [1, 1, 1],
+            background_color: [255, 255, 255],
             background_alpha: 38,
             border_radius: 16.0,
             border_color: [100, 100, 100, 100],
@@ -272,8 +279,28 @@ impl Default for BoxStyleConfig {
             columns: 0,
             lock_button_visible: true,
             close_button_visible: true,
+            icon_only_mode: false,
             liquid_glass: LiquidGlassConfig::default(),
         }
+    }
+}
+
+impl BoxStyleConfig {
+    /// 统一迁移后的分类框圆角与液态玻璃兼容字段。
+    pub(crate) fn normalize(&mut self) -> bool {
+        let before = self.clone();
+
+        // 旧版把半透明回退背景写成 [1, 1, 1]，视觉上接近纯黑。
+        // Tauri 迁移计划已将默认值改为白色，需要在加载历史配置时同步迁移。
+        if self.background_color == [1, 1, 1] {
+            self.background_color = [255, 255, 255];
+        }
+        self.border_radius = self
+            .border_radius
+            .clamp(0.0, LIQUID_GLASS_CORNER_RADIUS_MAX);
+        self.liquid_glass.normalize();
+        self.liquid_glass.corner_radius = self.border_radius;
+        *self != before
     }
 }
 
@@ -290,7 +317,7 @@ pub const LIQUID_GLASS_ELASTICITY_MAX: f32 = 0.2;
 ///
 /// - 滑块参数通过 LiquidGlassParam 枚举访问
 /// - enabled 和 over_light 为 bool，通过独立方法访问
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LiquidGlassConfig {
     /// 液态玻璃效果开关
@@ -316,12 +343,12 @@ pub struct LiquidGlassConfig {
 impl Default for LiquidGlassConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
-            displacement_scale: 100.0,
-            blur_amount: 0.5,
-            saturation: 1.40,
-            chromatic_offset: 2.0,
-            corner_radius: LIQUID_GLASS_CORNER_RADIUS_MAX,
+            enabled: false,
+            displacement_scale: 50.0,
+            blur_amount: 0.3,
+            saturation: 1.5,
+            chromatic_offset: 5.0,
+            corner_radius: 16.0,
             elasticity: 0.02,
             refraction_mode: 0,
             over_light: false,
@@ -446,6 +473,20 @@ pub struct AiConfig {
     pub timeout_seconds: u32,
     /// 请求失败最大重试次数
     pub max_retries: u32,
+    /// 额外 HTTP 请求头
+    pub headers: HashMap<String, String>,
+    /// 可选 HTTP 代理地址
+    pub proxy_url: String,
+    /// 同时分类的文件数
+    pub concurrency: u32,
+    /// 是否验证 SSL 证书
+    pub verify_ssl: bool,
+    /// 用户提示词模板
+    pub user_prompt_template: String,
+    /// 每批处理的文件数
+    pub batch_size: u32,
+    /// 批次之间的等待时间（毫秒）
+    pub batch_delay_ms: u32,
 }
 
 impl Default for AiConfig {
@@ -460,6 +501,14 @@ impl Default for AiConfig {
             system_prompt: "你是一个桌面图标分类助手，请根据应用名称和路径判断其分类。".to_string(),
             timeout_seconds: 30,
             max_retries: 3,
+            headers: HashMap::new(),
+            proxy_url: String::new(),
+            concurrency: 5,
+            verify_ssl: true,
+            user_prompt_template: "文件名：{filename}\n路径：{filepath}\n分类：{category_name}"
+                .to_string(),
+            batch_size: 10,
+            batch_delay_ms: 500,
         }
     }
 }
@@ -850,6 +899,29 @@ mod tests {
     use super::*;
 
     // ---- Default 值验证 ----
+
+    #[test]
+    fn test_box_style_normalize_migrates_legacy_near_black_background() {
+        let mut style = BoxStyleConfig {
+            background_color: [1, 1, 1],
+            ..BoxStyleConfig::default()
+        };
+
+        assert!(style.normalize());
+        assert_eq!(style.background_color, [255, 255, 255]);
+        assert!(!style.normalize(), "迁移后的配置再次规范化不应产生变化");
+    }
+
+    #[test]
+    fn test_box_style_normalize_preserves_custom_dark_background() {
+        let mut style = BoxStyleConfig {
+            background_color: [2, 2, 2],
+            ..BoxStyleConfig::default()
+        };
+
+        style.normalize();
+        assert_eq!(style.background_color, [2, 2, 2]);
+    }
 
     #[test]
     fn test_app_config_default() {
@@ -1267,12 +1339,12 @@ mod liquid_glass_tests {
     #[test]
     fn test_liquid_glass_config_default_values() {
         let config = LiquidGlassConfig::default();
-        assert!(config.enabled);
-        assert!((config.displacement_scale - 100.0).abs() < f32::EPSILON);
-        assert!((config.blur_amount - 0.5).abs() < f32::EPSILON);
-        assert!((config.saturation - 1.40).abs() < f32::EPSILON);
-        assert!((config.chromatic_offset - 2.0).abs() < f32::EPSILON);
-        assert!((config.corner_radius - LIQUID_GLASS_CORNER_RADIUS_MAX).abs() < f32::EPSILON);
+        assert!(!config.enabled);
+        assert!((config.displacement_scale - 50.0).abs() < f32::EPSILON);
+        assert!((config.blur_amount - 0.3).abs() < f32::EPSILON);
+        assert!((config.saturation - 1.5).abs() < f32::EPSILON);
+        assert!((config.chromatic_offset - 5.0).abs() < f32::EPSILON);
+        assert!((config.corner_radius - 16.0).abs() < f32::EPSILON);
         assert!((config.elasticity - 0.02).abs() < f32::EPSILON);
         assert_eq!(config.refraction_mode, 0);
         assert!(!config.over_light);
@@ -1311,10 +1383,10 @@ mod liquid_glass_tests {
     fn test_liquid_glass_config_bool_accessors() {
         let mut config = LiquidGlassConfig::default();
 
-        // enabled defaults to true
-        assert!(config.enabled);
-        config.enabled = false;
+        // enabled defaults to false
         assert!(!config.enabled);
+        config.enabled = true;
+        assert!(config.enabled);
 
         // over_light defaults to false
         assert!(!config.over_light);
@@ -1400,10 +1472,10 @@ mod liquid_glass_tests {
             serde_json::from_str(old_json).expect("Failed to deserialize old config");
 
         // All new fields should have default values since old JSON doesn't contain them
-        assert!(config.enabled);
-        assert!((config.displacement_scale - 100.0).abs() < f32::EPSILON);
-        assert!((config.blur_amount - 0.5).abs() < f32::EPSILON);
-        assert!((config.saturation - 1.40).abs() < f32::EPSILON);
+        assert!(!config.enabled);
+        assert!((config.displacement_scale - 50.0).abs() < f32::EPSILON);
+        assert!((config.blur_amount - 0.3).abs() < f32::EPSILON);
+        assert!((config.saturation - 1.5).abs() < f32::EPSILON);
         assert_eq!(config.refraction_mode, 0);
         assert!(!config.over_light);
     }

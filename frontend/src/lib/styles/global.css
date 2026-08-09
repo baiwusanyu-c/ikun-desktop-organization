@@ -1,0 +1,102 @@
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  font-size: 13px;
+  color: #1d1d1f;
+  background: transparent;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --primary-color: #14b8a6;
+  --primary-hover: #0d9488;
+  --primary-shadow: rgba(20, 184, 166, 0.3);
+  --primary-glow: rgba(20, 184, 166, 0.15);
+  --color-primary: var(--primary-color);
+  --text-primary: #1d1d1f;
+  --text-secondary: #6e6e73;
+  --text-muted: #86868b;
+  --text-placeholder: #aeaeb2;
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --bg-window: rgba(255, 255, 255, 0.82);
+  --bg-input: rgba(0, 0, 0, 0.04);
+  --bg-group: rgba(0, 0, 0, 0.025);
+  --bg-group-header: rgba(0, 0, 0, 0.025);
+  --bg-button-secondary: rgba(0, 0, 0, 0.06);
+  --color-bg-primary: rgba(255, 255, 255, 0.92);
+  --color-bg-secondary: rgba(255, 255, 255, 0.46);
+  --color-bg-tertiary: rgba(0, 0, 0, 0.08);
+  --border-window: rgba(255, 255, 255, 0.65);
+  --border-input: rgba(0, 0, 0, 0.08);
+  --border-group: rgba(0, 0, 0, 0.05);
+  --border-tab: rgba(0, 0, 0, 0.06);
+  --color-border: rgba(0, 0, 0, 0.1);
+  --glass-blur: 40px;
+  --glass-saturate: 180%;
+  --border-radius-window: 14px;
+  --titlebar-height: 38px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --transition-fast: 150ms ease;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  letter-spacing: 0;
+}
+
+html, body, #app, .app-root {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+body {
+  color: var(--text-primary);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+button, input, textarea, select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+input, textarea, select {
+  border: 1px solid var(--border-input);
+  border-radius: 8px;
+  background: var(--bg-input);
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+input:focus, textarea:focus, select:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 3px var(--primary-glow);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+input::placeholder, textarea::placeholder { color: var(--text-placeholder); }
+:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.32); background-clip: padding-box; }
+::selection { background: var(--primary-glow); }

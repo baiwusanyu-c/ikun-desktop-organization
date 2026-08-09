@@ -1996,7 +1996,7 @@ mod tests {
 
     #[test]
     fn test_parse_vault_empty_after_strip() {
-        // "user__" with nothing after ? empty ? None
+        // "user__" 前缀后没有名称，返回 None。
         let result = parse_vault_display_name("user__");
         assert_eq!(result, None);
     }
@@ -2009,8 +2009,8 @@ mod tests {
 
     #[test]
     fn test_parse_vault_chinese_name() {
-        let result = parse_vault_display_name("user__æ­¤çµè.lnk");
-        assert_eq!(result, Some("æ­¤çµè".to_string()));
+        let result = parse_vault_display_name("user__此电脑.lnk");
+        assert_eq!(result, Some("此电脑".to_string()));
     }
 
     #[test]

@@ -9,26 +9,27 @@
 本项目是一个 Rust 桌面应用，使用模块化架构和 trait-based 跨平台设计。
 
 **核心架构原则**：
-- **Rust + GPUI / egui**：Windows 默认 UI shell 使用 GPUI + gpui-component；legacy `eframe/egui` 仅作为显式 `eframe-ui` feature 回退路径
-- **AppContext 上下文注入**：所有模块通过中心上下文共享状态和配置，GPUI 路径由 `gpui_app::AppRuntime` 持有并调度 `AppContext`
+- **Tauri 2 + Svelte 5 默认 UI**：三个 WebView 只负责 UI；原生分类框保持 Win32 + Direct2D
+- **共享运行时注入**：Tauri Commands、轮询线程和插件共享 `SharedTauriRuntime` 中唯一的 `AppContext`
 - **Trait-based 设计**：跨平台功能通过 trait 统一接口
 - **条件编译**：平台特定代码和 legacy UI 使用 `#[cfg(...)]` 隔离
-- **插件扩展边界**：`Plugin`/`PluginRegistry` 已定义，当前 GPUI 运行时尚未接入；新增平台渲染或 Shell 细节仍留在 `platform/`，不得为追求“插件化”制造反向依赖
+- **插件扩展边界**：`PluginRegistry` 已接入 Tauri 生命周期，支持进程内 trait 插件热安装/卸载；平台渲染和 Shell 细节仍留在 `platform/`
 - **统一配置**：单一 JSON 文件管理所有设置
-- **单向依赖**：UI View → AppRuntime/AppContext → 业务/平台，禁止反向依赖
+- **单向依赖**：Svelte → IPC adapter → SharedTauriRuntime/AppContext → 业务/平台，禁止反向依赖
 
 **架构层次**：
 ```
 UI 层
-  ├── gpui_app/ (Windows 默认) → View 只渲染/派发命令，AppRuntime 持有 AppContext
-  └── app.rs + ui/ (legacy eframe-ui) → eframe 回退路径
-上下文层 (context.rs)           → AppContext 中心依赖注入对象
+  ├── frontend/ (默认) → Svelte 页面与组件
+  ├── tauri_commands/ → IPC adapter、持久窗口策略和原生服务编排
+  └── gpui_app/ + app.rs + ui/ → legacy 回退路径
+运行时层 (platform_runtime.rs)  → SharedTauriRuntime(AppContext + PluginRegistry)
+上下文层 (context.rs)           → 配置、分类器和平台 trait 对象
   ├── 平台层 (platform/)        → 平台抽象 trait + Windows/macOS 实现
   ├── 业务层 (box_core/)        → 分类框业务逻辑（平台无关）
   ├── 分类层 (classification/)  → 分类规则 + AI 分类
   ├── 配置层 (config/)          → 统一 JSON 配置（AppConfig）
   └── 插件层 (plugin/)          → Plugin trait + Registry
-UI 层 (app.rs, ui/)             → egui 控制面板，通过 AppContext 交互
 工具层 (utils/)                 → 日志、DPI、字符串工具
 ```
 
@@ -44,6 +45,7 @@ UI 层 (app.rs, ui/)             → egui 控制面板，通过 AppContext 交�
 | [Quality Guidelines](./quality-guidelines.md) | 禁止模式、必须模式、测试要求 |
 | [Logging Guidelines](./logging-guidelines.md) | 日志级别、中文日志、禁止高频日志 |
 | [Windows Platform Guidelines](./windows-platform-guidelines.md) | WS_EX_LAYERED alpha 行为、坐标系统、D2D 渲染 |
+| [Plugin Architecture](./plugin-architecture.md) | 进程内插件安装、卸载、分发、错误与测试契约 |
 
 ---
 
@@ -64,6 +66,10 @@ UI 层 (app.rs, ui/)             → egui 控制面板，通过 AppContext 交�
 - [ ] 阅读 [Directory Structure](./directory-structure.md) 了解平台特定代码规则
 - [ ] 阅读 [Quality Guidelines](./quality-guidelines.md) 了解条件编译模式
 
+### 插件或 Tauri 运行时
+- [ ] 阅读 [Plugin Architecture](./plugin-architecture.md) 了解生命周期和扩展边界
+- [ ] 阅读 [Tauri Window Contract](../guides/tauri-window-contract.md) 了解共享状态、IPC 与窗口策略
+
 ### Windows Shell / COM API
 - [ ] 阅读 [Windows Shell API Guide](../guides/windows-shell-api-guide.md) 了解正确的 Shell API 调用模式
 - [ ] 确认 PIDL 类型（绝对 vs 相对）、菜单层级（文件夹 vs 背景）、verb 偏移
@@ -74,7 +80,8 @@ UI 层 (app.rs, ui/)             → egui 控制面板，通过 AppContext 交�
 
 | Crate | 用途 |
 |-------|------|
-| `gpui + gpui-component` (Windows) | Windows 默认控制面板和独立创建分类框窗口 |
+| `tauri + tauri-plugin-opener` | 默认 WebView shell、IPC、持久窗口和安全外链 |
+| `gpui + gpui-component` (Windows) | legacy Windows UI 回退路径 |
 | `egui + eframe` | legacy 控制面板回退路径（`eframe-ui` feature） |
 | `anyhow` | 错误处理（统一使用 `anyhow::Result`） |
 | `log + env_logger` | 日志系统 |
@@ -91,8 +98,8 @@ UI 层 (app.rs, ui/)             → egui 控制面板，通过 AppContext 交�
 
 1. **安全优先**：避免 `unsafe`，不使用 `panic/unwrap/expect`
 2. **优雅降级**：关键功能失败时使用默认值，不阻塞应用
-3. **上下文注入**：通过 AppContext 传递依赖；Windows GPUI View 通过 `gpui_app::AppRuntime` 间接访问 AppContext，不直接散落平台调用
-4. **单向依赖**：UI View → AppRuntime/AppContext → 业务/平台，禁止反向依赖
+3. **上下文注入**：默认路径通过 `SharedTauriRuntime` 传递唯一 `AppContext`；命令不得另建配置内存模型
+4. **单向依赖**：Svelte → Tauri Commands → AppContext → 业务/平台，禁止反向依赖
 5. **条件编译**：平台特定代码使用 `#[cfg(...)]` 隔离
 6. **文档完整**：所有公开 API 必须有文档注释
 7. **中文日志**：日志消息使用中文

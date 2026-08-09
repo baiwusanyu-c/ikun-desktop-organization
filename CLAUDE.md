@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **桌面图标智能分类管理工具** — Desktop Organizer
 
-基于 Rust 的跨平台桌面图标智能分类和管理工具。Windows 默认控制面板/弹窗入口已迁移到 **GPUI + gpui-component**，legacy `eframe/egui` 控制面板仅作为显式 `eframe-ui` feature 回退路径保留；分类框与桌面覆盖窗口继续使用平台原生窗口 + Direct2D/DirectWrite 渲染。
+基于 Rust 的跨平台桌面图标智能分类和管理工具。Windows 默认控制面板和创建/编辑弹窗使用 **Tauri 2 + Svelte 5**；GPUI 与 `eframe/egui` 仅保留为显式回退路径。分类框和桌面覆盖窗口继续使用原生 Win32 分层窗口 + Direct2D/DirectWrite 渲染，不进入 WebView。
 
 **核心特性**：智能分类桌面图标、可视化分类框（拖拽/缩放/锁定/样式自定义）、一键 AI 分类、布局记忆持久化、统一 JSON 配置导入导出。
 
@@ -19,8 +19,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 构建和运行
 
 ```bash
-cargo run                        # 开发模式运行（保留控制台窗口）
-RUST_LOG=debug cargo run         # 带调试日志运行（推荐）
+npm --prefix frontend install    # 首次安装前端依赖
+npm --prefix frontend run build  # 构建嵌入式 Svelte 资源
+cargo run                        # 默认 tauri-ui，运行完整应用
+RUST_LOG=debug cargo run         # 带调试日志运行
+cargo run --no-default-features  # legacy GPUI 回退路径（Windows）
 cargo build --release            # 发布构建（无控制台窗口，windows_subsystem="windows"）
 cargo check                      # 快速编译检查
 cargo fmt                        # 格式化
@@ -39,7 +42,9 @@ cargo watch -x check             # 自动检查（需 cargo install cargo-watch�
 
 | Crate | 版本 | 用途 |
 |-------|------|------|
-| gpui / gpui-component | 0.2.2 / 0.5.1 | Windows 默认控制面板与独立创建分类框窗口 |
+| tauri / tauri-plugin-opener | 2.x | 默认 WebView UI shell、IPC、持久窗口与安全外链 |
+| Svelte / Vite / TypeScript | 5.x / 8.x / 6.x | 控制面板、创建/编辑窗口前端 |
+| gpui / gpui-component | 0.2.2 / 0.5.1 | legacy Windows UI 回退路径 |
 | egui / eframe / epaint | 0.27 | legacy 控制面板回退路径（`eframe-ui` feature） |
 | windows | 0.62 | Windows API（Shell COM、Direct2D、DirectWrite、GDI、窗口管理） |
 | cocoa / objc | 0.25 | macOS API（实验性） |
@@ -62,8 +67,9 @@ cargo watch -x check             # 自动检查（需 cargo install cargo-watch�
 
 - **平台抽象**：`platform/` 通过 trait 统一接口，Windows/macOS 各自实现
 - **业务分离**：`box_core/` 分类框业务逻辑与平台渲染完全解耦
-- **上下文注入**：所有模块通过 `AppContext` 共享状态，替代全局变量
-- **插件扩展边界**：`plugin/` 提供 `Plugin`/`PluginRegistry` 预留接口，当前 GPUI 运行时尚未接入，不支持运行时热拔插；平台渲染与 Shell 集成保留在 `platform/`
+- **上下文注入**：Tauri Commands、后台轮询和插件共享唯一 `SharedTauriRuntime`，其内部持有 `AppContext`
+- **插件扩展边界**：`PluginRegistry` 已接入 Tauri 启动/退出，支持进程内 trait 插件的运行时安装、卸载、定向分发和逆序清理；不支持外部动态库 ABI 热加载
+- **插件动作门控**：托盘、原生菜单和第二实例信号触发的插件功能必须先成功分发命令；插件卸载或初始化失败后不得绕过注册表继续执行对应平台动作
 - **统一配置**：单一 `~/.ikun_organizer.json` 管理所有设置，支持导入/导出
 - **共享逻辑层**：`shared/` 存放从 Windows 提取的平台无关逻辑，macOS 重新实现时直接使用
 - **单文件 ≤ 1500 行**：渲染引擎等复杂模块可适当放宽；可独立测试的纯逻辑应拆到小模块，避免继续扩大渲染文件
@@ -72,7 +78,7 @@ cargo watch -x check             # 自动检查（需 cargo install cargo-watch�
 
 ```
 src/
-├── main.rs                    # 入口：初始化日志、DPI/OLE、分发 GPUI 或 legacy eframe
+├── main.rs                    # 入口：默认启动 Tauri，按 feature 分发 legacy UI
 ├── app.rs                     # legacy eframe::App 控制面板（仅 eframe-ui 回退路径）
 ├── context.rs                 # AppContext（持有 Box<dyn DesktopManagerTrait> + Box<dyn PlatformService>）
 │
@@ -85,7 +91,14 @@ src/
 │   ├── drag_state.rs          #   拖拽生命周期状态机
 │   └── types.rs               #   跨平台共享类型定义
 │
-├── gpui_app/                  # Windows 默认 GPUI 控制面板与独立弹窗
+├── tauri_commands/            # Tauri IPC adapter + SharedTauriRuntime
+│   ├── config_cmd.rs          #   通过共享 AppContext 读写统一配置
+│   ├── box_cmd.rs             #   创建/编辑原生分类框
+│   ├── window_cmd.rs          #   持久 WebView 窗口策略与安全外链
+│   ├── app_cmd.rs             #   应用信息与进程控制
+│   └── platform_runtime.rs    #   原生服务编排、插件生命周期和事件轮询
+│
+├── gpui_app/                  # legacy Windows GPUI 回退路径
 │   ├── mod.rs                 #   模块导出
 │   ├── app_runtime.rs         #   UI 框架无关运行时/命令层（AppContext + 平台服务）
 │   ├── control_panel.rs       #   GPUI 控制面板视图
@@ -187,6 +200,8 @@ src/
     └── mod.rs                 #   热键唤醒、单实例检测
 ```
 
+前端位于 `frontend/src/`：`pages/` 负责三个窗口页面，`components/` 存放无业务状态控件，`lib/api/tauri-api.ts` 是唯一 IPC adapter。
+
 **非代码目录**：
 ```
 build/
@@ -199,21 +214,24 @@ build/
 
 **允许的依赖方向**：
 ```
-gpui_app/ → ui/ (仅 View 层渲染)
-ui/ → box_core/ → platform/
-utils/ 被所有模块依赖
+frontend pages → frontend api adapter → Tauri Commands
+tauri_commands → AppContext / plugin / platform
+legacy UI → AppContext
+context → config / classification / platform
+plugin → AppContext（仅通过生命周期参数）
 shared/ → (无内部依赖，仅 std + serde + uuid + lazy_static)
 platform/ → shared (允许：平台实现复用共享逻辑)
 ```
 
 **禁止的依赖方向**：
 ```
-❌ platform/ 模块之间相互引用
-❌ ui/ → platform/（通过 AppContext 间接调用）
-❌ box_core/ → gpui_app/（绕过平台抽象）
+❌ platform/ → tauri_commands/ 或 frontend/
+❌ config/ → context/
+❌ box_core/ → platform/ 或 UI shell
+❌ frontend 组件绕过 tauri-api.ts 散落 invoke
 ❌ shared/ → platform/    (共享层不依赖平台)
 ❌ shared/ → ui/          (共享层不依赖 UI)
-❌ shared/ → gpui_app/    (共享层不依赖 GPUI)
+❌ shared/ → 任意 UI shell
 ```
 
 ### 核心设计
@@ -223,29 +241,30 @@ platform/ → shared (允许：平台实现复用共享逻辑)
 ```rust
 // src/context.rs（实际代码）
 pub struct AppContext {
-    pub config: AppConfig,           // 统一配置（JSON，可导入/导出）
-    pub desktop_manager: DesktopManager, // 平台桌面管理
-    pub classifier: AppClassifier,   // 分类引擎
-    pub state: AppState,             // 运行时状态
-    // TODO: pub box_manager: BoxManager
-    // TODO: pub plugins: PluginRegistry
+    pub config: AppConfig,
+    pub desktop_manager: Box<dyn DesktopManagerTrait>,
+    pub platform_service: Box<dyn PlatformService>,
+    pub classifier: AppClassifier,
+    pub state: AppState,
 }
 ```
 
-所有 UI 层和插件通过 `AppContext` 访问配置、平台服务和分类引擎。`app.rs` 已接入。
+默认路径中 `TauriRuntime` 持有 `AppContext + PluginRegistry`，并由 Tauri `manage()` 注入为 `SharedTauriRuntime = Arc<Mutex<TauriRuntime>>`。配置 Commands 必须更新这一个上下文，禁止每个命令另建内存模型或只写磁盘。
 
 #### 2. 平台抽象
 
 ```rust
 // src/platform/mod.rs（实际代码）
 pub trait DesktopManagerTrait {
-    fn new() -> anyhow::Result<Self> where Self: Sized;
     fn get_desktop_icons(&self) -> Vec<DesktopIcon>;
     fn watch_desktop(&self) -> anyhow::Result<()>;
+    fn extract_icon(&self, path: &str) -> anyhow::Result<IconData>;
+    fn launch_file(&self, path: &str) -> anyhow::Result<()>;
+    // screen / DPI / monitor work-area queries
 }
 ```
 
-当前通过 `DesktopManagerTrait` 抽象桌面图标枚举。渲染/窗口/图标提取通过 `platform::windows::*` 的公共函数直接调用（Windows 专用），后续计划引入 `PlatformService` / `RenderBackend` / `WindowBackend` trait 进一步抽象。
+`DesktopManagerTrait` 抽象桌面图标能力，`PlatformService` 抽象托盘、开机启动和布局收集。Direct2D、DXGI、Shell/COM 和原生分类框仍属于明确的 Windows adapter，不包装成业务插件。
 
 #### 3. 插件系统
 
@@ -256,12 +275,13 @@ pub trait Plugin: Send {
     fn name(&self) -> &str;
     fn init(&mut self, ctx: &mut AppContext) -> anyhow::Result<()>;
     fn menu_items(&self) -> Vec<PluginMenuItem>;
-    fn handle_command(&mut self, cmd: &str, ctx: &mut AppContext) -> anyhow::Result<()>;
+    fn handles_command(&self, command: &str) -> bool;
+    fn handle_command(&mut self, command: &str, ctx: &mut AppContext) -> anyhow::Result<()>;
     fn cleanup(&mut self, ctx: &mut AppContext);
 }
 ```
 
-已定义 `PluginRegistry`（注册/分发/清理），内置 `ClassificationPlugin` + `StylePlugin`。TODO：接入 `AppContext`。
+`PluginRegistry` 拒绝重复插件 ID、空/冲突命令 ID；`install()` 初始化成功后才原子加入，`uninstall()` 清理后移除，`cleanup_all()` 按安装逆序执行。内置 `ClassificationPlugin` 与 `StylePlugin` 在 `TauriRuntime::initialize()` 初始化。详见 `.trellis/spec/backend/plugin-architecture.md`。
 
 #### 4. 统一 JSON 配置
 
@@ -314,7 +334,11 @@ pub trait Plugin: Send {
 ### 依赖关系
 
 ```
-main.rs
+main.rs (Tauri Builder + managed SharedTauriRuntime)
+  ├── tauri_commands/ (IPC adapter + 原生服务编排)
+  │     ├── platform_runtime.rs (AppContext + PluginRegistry)
+  │     ├── config_cmd.rs / box_cmd.rs
+  │     └── window_cmd.rs (持久窗口策略)
   ├── context.rs (AppContext)
   │     ├── config/app_config.rs (AppConfig 统一配置)
   │     ├── platform/ (DesktopManagerTrait + 平台实现)
@@ -322,8 +346,8 @@ main.rs
   │     │     └── macos/ (桌面覆盖窗口 + 分类框渲染 + stub/实验性功能)
   │     ├── box_core/ (分类框业务逻辑 — 平台无关)
   │     ├── classification/ (分类规则 + AI分类)
-  │     └── plugin/ (Plugin trait + Registry)
-  ├── gpui_app/ (Windows 默认 UI shell)
+  ├── plugin/ (进程内热安装/卸载生命周期)
+  ├── gpui_app/ (legacy Windows UI shell)
   │     ├── app_runtime.rs (UI 框架无关命令/运行时层，持有 AppContext)
   │     ├── control_panel.rs (GPUI 控制面板视图)
   │     ├── create_box_dialog.rs (独立 GPUI 创建分类框窗口)
@@ -335,9 +359,9 @@ main.rs
 
 **约束**：
 - `box_core/` 不直接调用 `platform/` — 通过 trait 间接调用
-- `classification/` 不依赖 `platform/` — 纯业务逻辑
-- `ui/` 只通过 `AppContext` 或 `gpui_app::AppRuntime` 与后端交互
-- `gpui_app/` 属于 Windows UI shell：View 层只渲染和派发命令，业务/平台调用集中在 `AppRuntime`
+- Tauri Commands 是 adapter，只通过共享 `TauriRuntime/AppContext` 持有可变配置
+- Svelte 页面只通过 `frontend/src/lib/api/tauri-api.ts` 调用 Rust 命令
+- `gpui_app/` 和 `ui/` 是 legacy 回退，不得成为默认路径的新依赖
 - `platform/` 各平台实现通过 `#[cfg]` 隔离
 
 ---
@@ -373,9 +397,9 @@ main.rs
 
 ---
 
-## GPUI 定时器防崩溃机制
+## Legacy GPUI 定时器防崩溃机制
 
-GPUI 的 Entity::update() / App::update() 内部使用 RefCell 借用检查。当 100ms 异步定时器的 orrow_mut 与渲染循环的 orrow 同时发生时，会触发 double_lease_panic! 导致进程硬崩溃。
+该机制仅适用于 `--no-default-features` 的 GPUI 回退路径，不得复制到默认 Tauri 运行时。GPUI 的 `Entity::update()` / `App::update()` 内部使用借用检查；异步定时器与渲染循环冲突时会触发 panic。
 
 **解决方案**：windows_main.rs 中的 safe_gpui_update() 辅助函数通过 std::panic::catch_unwind 将 panic 降级为可恢复的跳过操作：
 
@@ -462,7 +486,7 @@ GPUI 的 Entity::update() / App::update() 内部使用 RefCell 借用检查。�
 - [ ] 布局持久化
 
 ### 控制台（控制面板）
-- [ ] 键盘快捷键呼出
+- [x] 键盘快捷键呼出
 - [x] 不在任务栏显示（WS_EX_TOOLWINDOW）
 - [x] 仅系统托盘图标（右键菜单：打开面板/创建分类框/AI分类/退出）
 - [x] 分类框风格设置（背景色、圆角、图标大小、文本大小）
@@ -473,8 +497,8 @@ GPUI 的 Entity::update() / App::update() 内部使用 RefCell 借用检查。�
 
 ## 参考
 
-- [egui 文档](https://docs.rs/egui/)
-- [egui 示例](https://github.com/emilk/egui/tree/master/examples)
+- [Tauri 2 文档](https://v2.tauri.app/)
+- [Svelte 5 文档](https://svelte.dev/docs/svelte/overview)
 - [windows-rs](https://github.com/microsoft/windows-rs)
 - [Windows Shell API](https://learn.microsoft.com/en-us/windows/win32/shell/)
 - 架构重构方案：`todo/架构重构.md`

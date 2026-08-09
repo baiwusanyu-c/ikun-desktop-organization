@@ -1,0 +1,66 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
+  "productName": "Desktop Organizer",
+  "version": "0.1.0",
+  "identifier": "com.ikun.organizer",
+  "build": {
+    "frontendDist": "frontend/dist",
+    "beforeBuildCommand": "cd frontend && npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "control-panel",
+        "title": "Desktop Organizer",
+        "url": "/#/control-panel",
+        "width": 560,
+        "height": 680,
+        "minWidth": 480,
+        "minHeight": 500,
+        "resizable": true,
+        "decorations": false,
+        "transparent": true,
+        "visible": false,
+        "alwaysOnTop": false
+      },
+      {
+        "label": "create-box",
+        "title": "Create Category Box",
+        "url": "/#/create-box",
+        "width": 400,
+        "height": 220,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "visible": false,
+        "alwaysOnTop": true
+      },
+      {
+        "label": "edit-box",
+        "title": "Edit Category Box",
+        "url": "/#/edit-box",
+        "width": 400,
+        "height": 220,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "visible": false,
+        "alwaysOnTop": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "tauri/icons/32x32.png",
+      "tauri/icons/128x128.png",
+      "tauri/icons/128x128@2x.png",
+      "tauri/icons/icon.icns",
+      "tauri/icons/icon.ico"
+    ]
+  }
+}

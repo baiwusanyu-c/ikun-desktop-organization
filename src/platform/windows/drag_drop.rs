@@ -960,7 +960,8 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
         }
         log::info!(
             "[OLE-DROP-INSERT] 插入位置={}, 有效文件数={}, 已右移现有项",
-            insert_lin, valid_count
+            insert_lin,
+            valid_count
         );
     }
 
@@ -1071,7 +1072,6 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
             drop.insert_col,
             drop.insert_row
         );
-
 
         // 外部→框：按统一收纳流程处理桌面图标。
         if !is_box_drag {
