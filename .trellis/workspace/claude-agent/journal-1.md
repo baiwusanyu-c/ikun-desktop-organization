@@ -503,3 +503,72 @@ Set show:false in WindowOptions and removed delayed hide logic
 ### Next Steps
 
 - None - task complete
+
+
+## Session 12: 修复液态玻璃效果和退出还原bug
+
+**Date**: 2026-08-10
+**Task**: fix-liquid-glass-exit-bugs
+**Branch**: master
+
+### Summary
+
+成功修复了控制面板中的三个关键bug：
+1. Slider组件精度和显示对齐问题
+2. 液态玻璃折射贴图/亮区减弱折射设置后控制面板底部出现异常空白
+3. 程序退出后分类框收纳的图标未复原到桌面
+
+### Main Changes
+
+#### Bug 1: Slider精度问题 (f6f6ed5)
+- 使用整数运算消除浮点精度漂移
+- 改用 ind:value 确保双向同步
+- 文件: rontend/src/lib/components/Slider.svelte
+
+#### Bug 2: 液态玻璃渲染问题 (f6f6ed5)
+**根本原因**: WebView2中 overflow: hidden + order-radius 创建裁剪蒙版，当DOM因原生input状态变化而重新布局时，WebView2底部合成层更新失败
+
+**解决方案**:
+- 移除 glass.css 中的 ackdrop-filter (消除GPU争用)
+- 在 .glass-fields 添加 contain: content (限制DOM重排影响范围)
+- 在 .content-scroll 添加 ackground: var(--bg-group) (消除透明度差异)
+- 在 .settings 添加 min-height: 100% 和 ackground: #ffffff (填满容器)
+- 移除 liquid_glass.rs 中的帧缓存清空 (避免触发GPU密集型渲染)
+- 移除 config_cmd.rs 中的同步 
+erender_all_grid_windows 调用
+- 将渲染间隔从100ms增加到200ms (降低GPU负载)
+- 文件: glass.css, StyleSettings.svelte, ControlPanel.svelte, liquid_glass.rs, config_cmd.rs, grid_window.rs
+
+#### Bug 3: 退出图标未复原 (ca857bb)
+**根本原因**: Tauri版本缺少GPUI版本的完整退出清理流程
+
+**解决方案**:
+- 在 TauriRuntime 中添加 desktop_positions_snapshot 字段
+- 启动时调用 snapshot_desktop_positions() 快照桌面图标位置
+- 退出时调用 
+estore_desktop_positions() 恢复图标到快照位置
+- 实现重试机制 (500ms, 1s, 1.5s, 2s递增延迟)
+- 修复退出顺序：先执行清理再调用 exit(0)
+- 完整退出流程：保存布局 → 销毁窗口 → 清理托盘 → 还原图标 → 恢复位置 → exit(0)
+- 文件: src/tauri_commands/platform_runtime.rs
+
+### Git Commits
+
+- 6f6ed5 fix(ui): 修复滑块精度和液态玻璃渲染问题
+- ca857bb fix(exit): 修复程序退出后图标未复原到桌面的问题
+- daea7e5 chore(task): add task tracking for liquid glass and exit bugs
+
+### Testing
+
+- [OK] Bug 1: Slider默认值与实际位置一致 ✓
+- [OK] Bug 2: 液态玻璃折射贴图/亮区减弱折射设置后无异常空白 ✓
+- [OK] Bug 3: 程序退出后图标正确还原到桌面 (10个图标成功恢复) ✓
+- [OK] 无崩溃或内存泄漏 ✓
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - all bugs fixed and verified
