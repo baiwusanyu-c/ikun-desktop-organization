@@ -32,6 +32,8 @@ pub struct TauriRuntime {
     pub toggle_panel_requested: bool,
     pub create_box_requested: bool,
     pub ai_classify_requested: bool,
+    /// 启动时快照的桌面图标位置，用于退出时恢复
+    pub desktop_positions_snapshot: std::collections::HashMap<String, (i32, i32)>,
 }
 
 impl TauriRuntime {
@@ -53,6 +55,7 @@ impl TauriRuntime {
             toggle_panel_requested: false,
             create_box_requested: false,
             ai_classify_requested: false,
+            desktop_positions_snapshot: std::collections::HashMap::new(),
         }
     }
 
@@ -84,6 +87,7 @@ impl TauriRuntime {
         crate::tauri_commands::config_cmd::apply_runtime_config(&self.ctx.config);
         // 先恢复并整理桌面图标状态，再创建分类框，确保液态玻璃首个快照不含残留图标层。
         crate::platform::restore_all_hidden_icons();
+        self.snapshot_desktop_positions();
         self.restore_layout(app);
 
         // 4. Desktop icon diagnostics
@@ -123,6 +127,108 @@ impl TauriRuntime {
         self.ctx.classifier =
             crate::classification::AppClassifier::from_config(&config.classification);
         self.ctx.config = config;
+    }
+
+
+    /// 快照当前桌面图标位置（用于退出时恢复）
+    fn snapshot_desktop_positions(&mut self) {
+        log::info!("[TauriRuntime] 开始快照桌面图标位置");
+        self.desktop_positions_snapshot =
+            crate::platform::windows::icon_manager::snapshot_all_desktop_positions();
+        log::info!(
+            "[TauriRuntime] 快照完成，记录了 {} 个图标位置",
+            self.desktop_positions_snapshot.len()
+        );
+    }
+
+    /// 恢复仓库图标到快照的桌面位置
+    fn restore_desktop_positions(&self, vault_display_names: &std::collections::HashSet<String>) {
+        log::info!("[TauriRuntime] 开始恢复桌面图标位置");
+
+        let positions = &self.desktop_positions_snapshot;
+        if positions.is_empty() {
+            log::info!("[TauriRuntime] 没有快照位置，跳过恢复");
+            return;
+        }
+
+        let mut success_count: u32 = 0;
+        let mut fail_count: u32 = 0;
+        let mut pending: Vec<(String, i32, i32)> = Vec::new();
+
+        // 第一次尝试恢复
+        for (name, &(x, y)) in positions {
+            let name_lower = name.to_lowercase();
+            if vault_display_names.contains(&name_lower) {
+                match crate::platform::windows::icon_manager::set_icon_position_by_name(name, x, y) {
+                    Ok(()) => {
+                        success_count += 1;
+                        log::debug!("[TauriRuntime] 恢复图标 '{}' 位置成功", name);
+                    }
+                    Err(e) => {
+                        let msg = format!("{}", e);
+                        if msg.contains("未找到图标") {
+                            log::info!("[TauriRuntime] 图标 '{}' 尚未出现在 SysListView32，加入重试队列", name);
+                            pending.push((name.clone(), x, y));
+                        } else {
+                            log::warn!("[TauriRuntime] 恢复图标 '{}' 位置失败: {e}", name);
+                            fail_count += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 重试队列：递增延迟重试未找到的图标
+        let retry_delays = [500u64, 1000, 1500, 2000];
+        for (attempt, &delay_ms) in retry_delays.iter().enumerate() {
+            if pending.is_empty() {
+                break;
+            }
+            log::info!(
+                "[TauriRuntime] 等待 {}ms 后重试（第 {} 次），剩余 {} 个图标未找到",
+                delay_ms,
+                attempt + 1,
+                pending.len()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+
+            let mut still_pending = Vec::new();
+            for (name, x, y) in &pending {
+                match crate::platform::windows::icon_manager::set_icon_position_by_name(name, *x, *y) {
+                    Ok(()) => {
+                        success_count += 1;
+                        log::info!("[TauriRuntime] 重试成功: '{}' 已找到并恢复位置", name);
+                    }
+                    Err(e) => {
+                        let msg = format!("{}", e);
+                        if msg.contains("未找到图标") {
+                            still_pending.push((name.clone(), *x, *y));
+                        } else {
+                            log::debug!("[TauriRuntime] 重试时恢复图标位置失败: '{}': {}", name, e);
+                        }
+                    }
+                }
+            }
+            pending = still_pending;
+        }
+
+        if !pending.is_empty() {
+            log::warn!(
+                "[TauriRuntime] 以下 {} 个图标始终未在 SysListView32 中找到，无法恢复位置: {}",
+                pending.len(),
+                pending
+                    .iter()
+                    .map(|(n, _, _)| n.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+
+        log::info!(
+            "[TauriRuntime] 桌面图标位置恢复完成: 成功 {}, 失败 {}",
+            success_count,
+            fail_count
+        );
     }
 
     fn dispatch_plugin_command(&mut self, command: &str) -> bool {
@@ -492,7 +598,6 @@ pub fn start_platform_runtime(app: tauri::AppHandle, runtime: SharedTauriRuntime
             if quit {
                 log::info!("[TauriRuntime] Quit requested");
                 running_clone.store(false, Ordering::Relaxed);
-                app_handle.exit(0);
                 break;
             }
 
@@ -543,6 +648,7 @@ pub fn start_platform_runtime(app: tauri::AppHandle, runtime: SharedTauriRuntime
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
 
+        // 先保存布局并清理插件
         if let Ok(mut runtime) = runtime_for_poll.lock() {
             runtime.ctx.config.layout.boxes = crate::platform::collect_grid_layout();
             if let Err(error) = runtime.ctx.config.save() {
@@ -551,9 +657,32 @@ pub fn start_platform_runtime(app: tauri::AppHandle, runtime: SharedTauriRuntime
             let TauriRuntime { ctx, plugins, .. } = &mut *runtime;
             plugins.cleanup_all(ctx);
         }
-        cleanup_desktop_registry();
-        cleanup_system_tray();
+        
+        // 销毁分类框窗口
         destroy_all_grid_windows();
+        
+        // 清理系统托盘和注册表
+        cleanup_system_tray();
+        cleanup_desktop_registry();
+        
+        // 恢复桌面图标：获取仓库中的图标显示名称
+        let vault_display_names = crate::platform::windows::icon_hider::get_vault_display_names();
+        log::info!(
+            "[TauriRuntime] 仓库图标显示名称: {} 个，准备恢复这些图标的位置",
+            vault_display_names.len()
+        );
+        
+        // 恢复所有隐藏的图标到桌面
+        crate::platform::restore_all_hidden_icons();
+        
+        // 等待 Windows 处理图标还原
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        
+        // 恢复图标到快照的位置
+        if let Ok(runtime) = runtime_for_poll.lock() {
+            runtime.restore_desktop_positions(&vault_display_names);
+        }
+        
         log::info!("[TauriRuntime] Cleanup complete");
     });
 }
