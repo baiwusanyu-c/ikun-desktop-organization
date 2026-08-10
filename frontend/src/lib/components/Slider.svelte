@@ -3,13 +3,19 @@
     value?: number; min?: number; max?: number; step?: number; label?: string; suffix?: string;
     digits?: number; disabled?: boolean; onchange?: (value: number) => void;
   } = $props();
-  let progress = $derived(((value - min) / (max - min)) * 100);
+  // Snap to nearest step using integer arithmetic to eliminate floating-point drift
+  let stepDecimals = $derived((String(step).split('.')[1] || '').length);
+  let factor = $derived(Math.pow(10, stepDecimals));
+  let snapped = $derived(
+    Math.round(Math.round((value - min) * factor) / Math.round(step * factor)) * step + min
+  );
+  let progress = $derived(((snapped - min) / (max - min)) * 100);
   let displayValue = $derived(digits === undefined ? String(value) : value.toFixed(digits));
 </script>
 
 <label class="slider" class:disabled>
   {#if label}<span class="slider-header"><span>{label}</span><output>{displayValue}{suffix}</output></span>{/if}
-  <input type="range" {value} {min} {max} {step} {disabled} oninput={(event) => onchange?.(Number(event.currentTarget.value))} style="--progress: {progress}%" />
+  <input type="range" bind:value={value} {min} {max} {step} {disabled} oninput={() => onchange?.(value)} style="--progress: {progress}%" />
 </label>
 
 <style>

@@ -103,7 +103,7 @@
 {/if}
 
 <style>
-  .settings { display: flex; flex-direction: column; gap: 14px; padding: 16px 18px 20px; }
+  .settings { display: flex; flex-direction: column; gap: 14px; padding: 16px 18px 20px; min-height: 100%; background: #ffffff; }
   .group { overflow: visible; }
   header { min-height: 45px; display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border-group); background: var(--bg-group-header); }
   header :global(svg) { color: var(--primary-color); flex: 0 0 auto; }
@@ -111,7 +111,7 @@
   p { margin-top: 2px; color: var(--text-muted); font-size: 11px; line-height: 1.35; }
   .body { padding: 13px 15px; }
   .fields, .glass-fields { display: flex; flex-direction: column; gap: 14px; }
-  .glass-fields { padding-top: 14px; transition: opacity 150ms ease; }
+  .glass-fields { padding-top: 14px; transition: opacity 150ms ease; contain: content; }
   .glass-fields.disabled { opacity: .48; }
   .row { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 13px; font-weight: 500; }
   .color-value { display: flex; align-items: center; gap: 9px; }

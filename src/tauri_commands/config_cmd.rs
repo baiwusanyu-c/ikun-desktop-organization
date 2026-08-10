@@ -45,12 +45,15 @@ fn update_config(
     persist_locked(&mut runtime, config)
 }
 
-/// 将配置推送到原生渲染器，并重绘所有现有分类框。
+/// 将配置推送到原生渲染器。
+///
+/// 注意：不再同步调用 rerender_all_grid_windows，因为它会阻塞 Tauri 事件循环，
+/// 导致 WebView2 窗口底部出现异常空白区域。分类框的 TIMER_ID_LIQUID_GLASS 定时器
+/// 每 200ms 自动调用 render_layered_window，会读取更新后的配置并重新渲染。
 pub fn apply_runtime_config(config: &AppConfig) {
     #[cfg(windows)]
     {
         crate::platform::windows::liquid_glass::update_box_style_config(&config.box_style);
-        crate::platform::rerender_all_grid_windows();
     }
 }
 

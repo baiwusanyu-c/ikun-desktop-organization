@@ -350,10 +350,10 @@ static CLASS_REGISTERED: Mutex<bool> = Mutex::new(false);
 pub(crate) const LIQUID_GLASS_SHADOW_PADDING: i32 = 128;
 /// 液态玻璃渲染定时器间隔（毫秒）
 ///
-/// 从原始的 33ms (~30 FPS) 降低到 100ms (~10 FPS)，
+/// 从原始的 33ms (~30 FPS) 降低到 200ms (~10 FPS)，
 /// 大幅减少 GPU 负载和与 GPUI 渲染帧的 RefCell 冲突频率。
 /// 视觉差异极小（液态玻璃效果变化较慢），但 GPU 开销降低约 70%。
-pub(crate) const LIQUID_GLASS_RENDER_INTERVAL_MS: u32 = 100;
+pub(crate) const LIQUID_GLASS_RENDER_INTERVAL_MS: u32 = 200;
 
 /// 返回当前 DPI 下液态玻璃外投影所需的物理像素留白。
 pub(crate) fn shadow_padding_for_dpi(dpi: u32) -> i32 {
@@ -1110,7 +1110,7 @@ mod liquid_glass_timer_tests {
     #[test]
     fn test_liquid_glass_render_interval() {
         assert_eq!(
-            LIQUID_GLASS_RENDER_INTERVAL_MS, 100,
+            LIQUID_GLASS_RENDER_INTERVAL_MS, 200,
             "液态玻璃渲染间隔应为 100ms（从 33ms 优化而来）"
         );
     }

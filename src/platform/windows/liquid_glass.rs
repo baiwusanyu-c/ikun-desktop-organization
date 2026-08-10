@@ -282,7 +282,10 @@ pub fn update_box_style_config(config: &BoxStyleConfig) {
     if let Ok(mut guard) = get_box_style_lock().write() {
         *guard = normalized;
     }
-    LAST_GOOD_FRAMES.with(|frames| frames.borrow_mut().clear());
+    // 不再清空帧缓存。配置已更新并保存到磁盘，
+    // 缓存会在窗口移动/调整大小时自然失效（cache key 包含屏幕坐标），
+    // 届时新配置会生效。这避免了在用户修改液态玻璃参数时
+    // 触发 GPU 密集型渲染，防止与 WebView2 争用 GPU 资源。
 }
 
 /// 获取原生分类框当前使用的样式快照。

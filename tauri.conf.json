@@ -14,7 +14,7 @@
         "title": "Desktop Organizer",
         "url": "/#/control-panel",
         "width": 560,
-        "height": 680,
+        "height": 720,
         "minWidth": 480,
         "minHeight": 500,
         "resizable": true,
