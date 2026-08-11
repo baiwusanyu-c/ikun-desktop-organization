@@ -13,5 +13,7 @@
 </script>
 
 <main class="app-root">
-  <Router {routes} />
+  <div class="window-shadow">
+    <Router {routes} />
+  </div>
 </main>

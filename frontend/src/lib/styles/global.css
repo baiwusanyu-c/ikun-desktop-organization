@@ -33,6 +33,7 @@
   --glass-blur: 40px;
   --glass-saturate: 180%;
   --border-radius-window: 14px;
+  --window-shadow-inset: 8px;
   --titlebar-height: 38px;
   --space-sm: 8px;
   --space-md: 12px;
@@ -59,6 +60,10 @@ body {
   color: var(--text-primary);
   user-select: none;
   -webkit-user-select: none;
+}
+
+.app-root {
+  padding: var(--window-shadow-inset);
 }
 
 button, input, textarea, select {
