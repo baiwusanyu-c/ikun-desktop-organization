@@ -5,10 +5,11 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  isolation: isolate;
   background: #ffffff;
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  border: none;
   border-radius: var(--border-radius-window);
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.12), 0 8px 24px rgba(0, 0, 0, 0.08), inset 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  clip-path: inset(0 round var(--border-radius-window));
 }
 
 .settings-group, .group {
@@ -23,4 +24,99 @@
   box-shadow: 0 1px 3px var(--primary-shadow);
 }
 
-.primary-button:hover:not(:disabled), .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
+.primary-button:hover:not(:disabled), .btn-primary:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+.dialog-window {
+  box-shadow: none;
+}
+
+.dialog-window .form-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  padding: 10px 20px 12px;
+}
+
+.dialog-window .label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 16px;
+  margin-bottom: 4px;
+}
+
+.dialog-window label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.dialog-window .label-row span {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.dialog-window .label-row span.limit {
+  color: #b45309;
+}
+
+.dialog-window input {
+  width: 100%;
+  height: 38px;
+  padding: 0 12px;
+  font-size: 14px;
+}
+
+.dialog-window input.error {
+  border-color: #ef4444;
+}
+
+.dialog-window .message {
+  min-height: 18px;
+  padding-top: 2px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dialog-window .message.error {
+  color: #dc2626;
+}
+
+.dialog-window footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.dialog-window footer button {
+  height: 34px;
+  min-width: 72px;
+  padding: 0 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dialog-window footer button:disabled {
+  opacity: .48;
+  cursor: not-allowed;
+}
+
+.dialog-window .secondary {
+  color: var(--text-primary);
+  background: var(--bg-button-secondary);
+}
+
+.dialog-window .secondary:hover:not(:disabled) {
+  background: rgba(0, 0, 0, .1);
+}

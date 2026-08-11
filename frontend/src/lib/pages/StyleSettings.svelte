@@ -5,7 +5,7 @@
   import Slider from "$lib/components/Slider.svelte";
   import Toggle from "$lib/components/Toggle.svelte";
   import { updateBoxStyle, updateLiquidGlass, updateThemeColor, type AppConfig, type BoxStyleConfig, type LiquidGlassConfig } from "$lib/api/tauri-api";
-  import { applyThemeColor } from "$lib/utils/color";
+  import { applyThemeColorAcrossWindows } from "$lib/theme";
 
   let { config }: { config: AppConfig } = $props();
   let themeColor = $state("#14b8a6");
@@ -47,7 +47,7 @@
 
   function setThemeColor(color: string) {
     themeColor = color;
-    applyThemeColor(color);
+    applyThemeColorAcrossWindows(color);
     runUpdate(() => updateThemeColor(color));
   }
 

@@ -28,10 +28,11 @@
         "title": "Create Category Box",
         "url": "/#/create-box",
         "width": 400,
-        "height": 220,
+        "height": 176,
         "resizable": false,
         "decorations": false,
         "transparent": true,
+        "shadow": false,
         "visible": false,
         "alwaysOnTop": true
       },
@@ -40,10 +41,11 @@
         "title": "Edit Category Box",
         "url": "/#/edit-box",
         "width": 400,
-        "height": 220,
+        "height": 176,
         "resizable": false,
         "decorations": false,
         "transparent": true,
+        "shadow": false,
         "visible": false,
         "alwaysOnTop": true
       }

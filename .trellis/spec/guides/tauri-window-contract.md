@@ -49,6 +49,9 @@ Rust `on_window_event` 和前端 `installHideOnClose` 双重拦截；托盘/信�
 `StyleSettings.svelte` 与 `AiSettings.svelte` 必须使用 `$state.snapshot(...)` 生成传给 Tauri Command 的普通对象；
 不得对 `$state` 代理直接调用 `structuredClone`，否则 WebView 会抛出 `DataCloneError`，页面因初始化 effect 中断而显示为空。
 
+主题色更新还必须通过 `theme-color-changed` 事件广播到持久的 `create-box` 和 `edit-box` WebView；
+两个窗口重新收到 `window-opened` 时应再次调用 `get_config`，作为事件丢失或外部配置变更时的兜底。
+
 ## DXGI 液态玻璃帧
 
 `src/platform/windows/liquid_glass.rs` 必须持续调用 `AcquireNextFrame` 更新 `desktop_texture`，不能在启动时捕获一次后永久冻结。

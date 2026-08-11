@@ -1,0 +1,4 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend development guide"}
+{"file": ".trellis/spec/frontend/tauri-svelte-architecture.md", "reason": "Svelte 持久窗口与事件生命周期规范"}
+{"file": ".trellis/spec/guides/tauri-window-contract.md", "reason": "跨窗口主题同步与窗口生命周期契约"}

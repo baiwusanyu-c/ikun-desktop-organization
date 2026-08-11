@@ -62,7 +62,7 @@
   .tabs button:hover { color: var(--text-primary); }
   .tabs button.active { color: var(--text-primary); font-weight: 650; }
   .tabs button.active::after { content: ""; position: absolute; left: 14px; right: 14px; bottom: -1px; height: 2px; border-radius: 2px; background: var(--primary-color); }
-  .content-scroll { flex: 1 1 0; min-height: 0; overflow-x: hidden; overflow-y: scroll; overscroll-behavior: contain; background: var(--bg-group);  }
+  .content-scroll { flex: 1 1 0; min-height: 0; overflow-x: hidden; overflow-y: scroll; overscroll-behavior: contain; background: var(--bg-group); }
   .load-state { display: grid; min-height: 180px; place-items: center; color: var(--text-secondary); }
   .load-state.error { color: #b91c1c; padding: 20px; text-align: center; }
 </style>

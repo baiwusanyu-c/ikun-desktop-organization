@@ -81,5 +81,6 @@
     transition: background 150ms ease, color 150ms ease;
   }
   .titlebar-btn:hover { background: rgba(0, 0, 0, 0.06); color: var(--text-primary); }
+  .titlebar-btn.close { border-radius: 0 var(--border-radius-window) 0 0; }
   .titlebar-btn.close:hover { background: #e81123; color: #fff; }
 </style>
