@@ -80,7 +80,7 @@
         <Slider label="圆角调节" value={boxStyle.border_radius} min={0} max={30} step={1} suffix="px" onchange={(value) => setBoxField("border_radius", value)} />
         <div class="row"><span>背景色</span><div class="color-value"><code>{rgbToHex(boxStyle.background_color)}</code><ColorPicker value={rgbToHex(boxStyle.background_color)} onchange={(value) => setBoxField("background_color", hexToRgb(value))} /></div></div>
         <Slider label="透明度" value={Math.round(boxStyle.background_alpha / 255 * 100)} min={0} max={100} suffix="%" onchange={(value) => setBoxField("background_alpha", Math.round(value * 2.55))} />
-        <div class="row"><span>纯图标模式（隐藏分类名称）</span><Toggle checked={boxStyle.icon_only_mode} onchange={(value) => setBoxField("icon_only_mode", value)} /></div>
+        <div class="row"><span>纯图标模式（隐藏图标文本）</span><Toggle checked={boxStyle.icon_only_mode} onchange={(value) => setBoxField("icon_only_mode", value)} /></div>
       </div>
     </section>
 

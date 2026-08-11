@@ -265,7 +265,11 @@ pub fn render_layered_window(hwnd: HWND) {
     // ===== 绘制液态玻璃背景；GPU 捕获不可用时回退原半透明背景 =====
     let box_style = super::liquid_glass::get_box_style_config();
     let glass_config = box_style.liquid_glass.clone();
+    let dpi_scale = dpi as f32 / 96.0;
+    // border_radius 为逻辑像素值；render_background 内部会自行乘以 dpi_scale
     let corner_radius = box_style.border_radius;
+    // D2D 坐标系为物理像素，回退路径需手动缩放以与液态玻璃路径保持一致
+    let fallback_radius = box_style.border_radius * dpi_scale;
     let glass_drawn = if glass_config.enabled {
         draw_liquid_glass_background(
             &target,
@@ -275,13 +279,12 @@ pub fn render_layered_window(hwnd: HWND) {
             h,
             shadow_padding,
             corner_radius,
-            dpi as f32 / 96.0,
+            dpi_scale,
         )
     } else {
         false
     };
     if !glass_drawn {
-        let fallback_radius = box_style.border_radius;
         let [red, green, blue] = box_style.background_color;
         let bg_brush = unsafe {
             target.CreateSolidColorBrush(
@@ -349,44 +352,42 @@ pub fn render_layered_window(hwnd: HWND) {
         // 锁定按钮区域（标题栏右侧）
         let (btn_x, btn_y, btn_size) = super::grid_layout::lock_btn_rect(w, title_h, dpi);
 
-        if !box_style.icon_only_mode {
-            let title_text: Vec<u16> = data.title.encode_utf16().collect();
-            let text_max_w = (btn_x as f32 - 10.0).max(40.0);
-            let layout = unsafe {
-                target_inner_create_text_layout(
-                    &dw_factory,
-                    &title_text,
-                    tf,
-                    text_max_w,
-                    title_h as f32,
-                    DWRITE_TEXT_ALIGNMENT_LEADING,
-                    DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
-                )
-            };
+        let title_text: Vec<u16> = data.title.encode_utf16().collect();
+        let text_max_w = (btn_x as f32 - 10.0).max(40.0);
+        let layout = unsafe {
+            target_inner_create_text_layout(
+                &dw_factory,
+                &title_text,
+                tf,
+                text_max_w,
+                title_h as f32,
+                DWRITE_TEXT_ALIGNMENT_LEADING,
+                DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+            )
+        };
 
-            if let Some(ref layout) = layout {
-                let shadow_offset = scale_for_dpi(1, dpi) as f32;
-                if let Ok(ref sb) = shadow_brush {
-                    for &(dx, dy) in &[
-                        (shadow_offset, 0.0),
-                        (-shadow_offset, 0.0),
-                        (0.0, shadow_offset),
-                        (0.0, -shadow_offset),
-                    ] {
-                        let origin = Vector2 {
-                            X: 10.0 + dx,
-                            Y: dy,
-                        };
-                        unsafe {
-                            target.DrawTextLayout(origin, layout, sb, D2D1_DRAW_TEXT_OPTIONS_NONE);
-                        }
+        if let Some(ref layout) = layout {
+            let shadow_offset = scale_for_dpi(1, dpi) as f32;
+            if let Ok(ref sb) = shadow_brush {
+                for &(dx, dy) in &[
+                    (shadow_offset, 0.0),
+                    (-shadow_offset, 0.0),
+                    (0.0, shadow_offset),
+                    (0.0, -shadow_offset),
+                ] {
+                    let origin = Vector2 {
+                        X: 10.0 + dx,
+                        Y: dy,
+                    };
+                    unsafe {
+                        target.DrawTextLayout(origin, layout, sb, D2D1_DRAW_TEXT_OPTIONS_NONE);
                     }
                 }
-                if let Ok(ref wb) = white_brush {
-                    let origin = Vector2 { X: 10.0, Y: 0.0 };
-                    unsafe {
-                        target.DrawTextLayout(origin, layout, wb, D2D1_DRAW_TEXT_OPTIONS_NONE);
-                    }
+            }
+            if let Ok(ref wb) = white_brush {
+                let origin = Vector2 { X: 10.0, Y: 0.0 };
+                unsafe {
+                    target.DrawTextLayout(origin, layout, wb, D2D1_DRAW_TEXT_OPTIONS_NONE);
                 }
             }
         }
@@ -568,7 +569,11 @@ pub fn render_layered_window(hwnd: HWND) {
 
     // ===== 绘制图标网格（独立方法，参数化设计）=====
     // 通过 view_engine 获取视图参数，layout_calc 计算网格布局
-    let view_params = get_view_params(&data.view_mode, dpi);
+    let mut view_params = get_view_params(&data.view_mode, dpi);
+    // 纯图标模式：隐藏图标下方的文本标签（仅显示图标）
+    if box_style.icon_only_mode {
+        view_params.show_label = false;
+    }
     let grid_layout = calculate_grid(w, title_h, &view_params, dpi);
 
     // 裁剪区域：标题栏下方到窗口底部，防止滚动时图标溢出到标题区域
@@ -620,7 +625,7 @@ pub fn render_layered_window(hwnd: HWND) {
             unsafe { target.CreateSolidColorBrush(&d2d_color(120, 180, 255, 100), None) };
         if let Ok(ref eb) = edge_brush {
             let border_w = scale_for_dpi(3, dpi) as f32;
-            let corner_r = box_style.border_radius;
+            let corner_r = fallback_radius;
             let (l, t, r, b) = compute_edge_rect(data.hover_edge, ww, hh, border_w, corner_r);
             unsafe { target.FillRectangle(&d2d_rect(l, t, r, b), eb) };
         }
