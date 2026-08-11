@@ -1,4 +1,4 @@
-//! Tauri platform runtime
+﻿//! Tauri platform runtime
 //!
 //! Initializes system tray, desktop registry, global hotkeys, and overlay windows.
 //! Bridges native platform events to Tauri WebView windows.
@@ -67,6 +67,13 @@ impl TauriRuntime {
         self.initialized = true;
         log::info!("[TauriRuntime] Initialization started");
 
+
+          // Clear any stale signal files from previous runs
+          let _ = std::fs::remove_file(signal_file_path());
+          let _ = std::fs::remove_file(open_panel_signal_path());
+          let _ = std::fs::remove_file(ai_classify_signal_path());
+          let _ = std::fs::remove_file(quit_signal_path());
+          log::info!("[TauriRuntime] Cleared stale signal files");
         // 1. In-process plugins
         let plugin_report = self.plugins.init_all(&mut self.ctx);
         log::info!(
@@ -658,8 +665,16 @@ pub fn start_platform_runtime(app: tauri::AppHandle, runtime: SharedTauriRuntime
             plugins.cleanup_all(ctx);
         }
         
-        // 销毁分类框窗口
-        destroy_all_grid_windows();
+        // 销毁分类框窗口（必须在主线程中执行）
+        log::info!("[TauriRuntime] 在主线程中销毁分类框窗口");
+        let app_handle_for_destroy = app_handle.clone();
+        let _ = app_handle_for_destroy.run_on_main_thread(move || {
+            log::info!("[TauriRuntime] 主线程: 开始销毁分类框窗口");
+            destroy_all_grid_windows();
+            log::info!("[TauriRuntime] 主线程: 分类框窗口已销毁");
+        });
+        // 等待主线程完成销毁
+        std::thread::sleep(std::time::Duration::from_millis(200));
         
         // 清理系统托盘和注册表
         cleanup_system_tray();
@@ -731,3 +746,4 @@ mod tests {
         assert!(!runtime.ai_classify_requested);
     }
 }
+
