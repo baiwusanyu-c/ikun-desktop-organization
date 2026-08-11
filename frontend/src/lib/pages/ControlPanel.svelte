@@ -7,6 +7,7 @@
   import StyleSettings from "$lib/pages/StyleSettings.svelte";
   import { getConfig, type AppConfig } from "$lib/api/tauri-api";
   import { installHideOnClose } from "$lib/window-lifecycle";
+  import { applyThemeColor } from "$lib/utils/color";
 
   type TabId = "style" | "ai" | "about";
   let activeTab = $state<TabId>("style");
@@ -24,7 +25,7 @@
     getConfig().then((value) => {
       config = value;
       const color = value.ui_theme.light.primary ?? "#14b8a6";
-      document.documentElement.style.setProperty("--primary-color", color);
+      applyThemeColor(color);
     }).catch((error) => { loadError = `无法加载配置: ${String(error)}`; });
     return removeCloseHandler;
   });
