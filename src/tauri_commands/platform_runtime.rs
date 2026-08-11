@@ -699,6 +699,10 @@ pub fn start_platform_runtime(app: tauri::AppHandle, runtime: SharedTauriRuntime
         }
         
         log::info!("[TauriRuntime] Cleanup complete");
+        
+        // 退出 Tauri 应用
+        log::info!("[TauriRuntime] 调用 app_handle.exit(0)");
+        app_handle.exit(0);
     });
 }
 
