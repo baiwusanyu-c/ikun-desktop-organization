@@ -113,6 +113,52 @@ Get-Content ~\.ikun_organizer_log\.ikun_organizer_log_20260722_1 -Tail 50
 
 ---
 
+
+---
+
+## Window Context Logging
+
+Tauri 应用包含三个 WebView 窗口（control-panel, create-box, edit-box），日志系统通过线程局部存储自动标记窗口来源。
+
+### WindowLogGuard
+
+在 Tauri Command 入口使用 RAII Guard 自动管理窗口标签：
+
+```rust
+use crate::utils::WindowLogGuard;
+
+#[tauri::command]
+pub fn get_config(window: tauri::Window, state: ...) -> ... {
+    let _guard = WindowLogGuard::new(window.label());
+    // All log::xxx! calls now include [window:control-panel]
+    ...
+}
+```
+
+### 日志格式
+
+```
+// 有窗口上下文:
+[2026-08-12 14:30:22 INFO config_cmd] [window:control-panel] 加载配置成功
+
+// 无窗口上下文（启动时、后台线程等）:
+[2026-08-12 14:30:22 INFO main] Starting Desktop Organizer
+```
+
+### 前端 IPC 日志
+
+前端 Svelte 页面可通过 `logToRust(level, message)` 将日志上报到 Rust 后端：
+
+```typescript
+import { logToRust } from "$lib/api/tauri-api";
+
+// 在页面中使用
+await logToRust('info', '用户点击了保存按钮');
+await logToRust('error', '表单验证失败: ' + errorMessage);
+```
+
+Rust 端自动标记窗口来源：`[frontend:control-panel]`、`[frontend:create-box]`、`[frontend:edit-box]`。
+
 ## Log Levels
 
 ### 级别定义和使用场景

@@ -1,245 +1,229 @@
-# CLAUDE.md
+﻿# CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## 项目概述
+## 椤圭洰姒傝堪
 
-**桌面图标智能分类管理工具** — Desktop Organizer
+**妗岄潰鍥炬爣鏅鸿兘鍒嗙被绠＄悊宸ュ叿** 鈥?Desktop Organizer
 
-基于 Rust 的跨平台桌面图标智能分类和管理工具。Windows 默认控制面板和创建/编辑弹窗使用 **Tauri 2 + Svelte 5**；GPUI 与 `eframe/egui` 仅保留为显式回退路径。分类框和桌面覆盖窗口继续使用原生 Win32 分层窗口 + Direct2D/DirectWrite 渲染，不进入 WebView。
+鍩轰簬 Rust 鐨勮法骞冲彴妗岄潰鍥炬爣鏅鸿兘鍒嗙被鍜岀鐞嗗伐鍏枫€俉indows 榛樿鎺у埗闈㈡澘鍜屽垱寤?缂栬緫寮圭獥浣跨敤 **Tauri 2 + Svelte 5**锛汫PUI 涓?`eframe/egui` 浠呬繚鐣欎负鏄惧紡鍥為€€璺緞銆傚垎绫绘鍜屾闈㈣鐩栫獥鍙ｇ户缁娇鐢ㄥ師鐢?Win32 鍒嗗眰绐楀彛 + Direct2D/DirectWrite 娓叉煋锛屼笉杩涘叆 WebView銆?
+**鏍稿績鐗规€?*锛氭櫤鑳藉垎绫绘闈㈠浘鏍囥€佸彲瑙嗗寲鍒嗙被妗嗭紙鎷栨嫿/缂╂斁/閿佸畾/鏍峰紡鑷畾涔夛級銆佷竴閿?AI 鍒嗙被銆佸竷灞€璁板繂鎸佷箙鍖栥€佺粺涓€ JSON 閰嶇疆瀵煎叆瀵煎嚭銆?
 
-**核心特性**：智能分类桌面图标、可视化分类框（拖拽/缩放/锁定/样式自定义）、一键 AI 分类、布局记忆持久化、统一 JSON 配置导入导出。
-
-**平台支持**：
-- ✅ **Windows 10/11**：主要平台（Shell COM API + Direct2D/DirectWrite 渲染）
-- 📋 **macOS**：待重新实现（已清除旧代码，shared/ 共享层已就绪，待实现 DesktopManagerTrait + PlatformService）
+**骞冲彴鏀寔**锛?
+- 鉁?**Windows 10/11**锛氫富瑕佸钩鍙帮紙Shell COM API + Direct2D/DirectWrite 娓叉煋锛?
+- 馃搵 **macOS**锛氬緟閲嶆柊瀹炵幇锛堝凡娓呴櫎鏃т唬鐮侊紝shared/ 鍏变韩灞傚凡灏辩华锛屽緟瀹炵幇 DesktopManagerTrait + PlatformService锛?
 
 ---
 
-## 构建和运行
+## 鏋勫缓鍜岃繍琛?
 
 ```bash
-npm --prefix frontend install    # 首次安装前端依赖
-npm --prefix frontend run build  # 构建嵌入式 Svelte 资源
-cargo run                        # 默认 tauri-ui，运行完整应用
-RUST_LOG=debug cargo run         # 带调试日志运行
-cargo run --no-default-features  # legacy GPUI 回退路径（Windows）
-cargo build --release            # 发布构建（无控制台窗口，windows_subsystem="windows"）
-cargo check                      # 快速编译检查
-cargo fmt                        # 格式化
-cargo clippy                     # Lint 检查
-cargo test                       # 运行测试
-cargo watch -x check             # 自动检查（需 cargo install cargo-watch）
+npm --prefix frontend install    # 棣栨瀹夎鍓嶇渚濊禆
+npm --prefix frontend run build  # 鏋勫缓宓屽叆寮?Svelte 璧勬簮
+cargo run                        # 榛樿 tauri-ui锛岃繍琛屽畬鏁村簲鐢?RUST_LOG=debug cargo run         # 甯﹁皟璇曟棩蹇楄繍琛?cargo run --no-default-features  # legacy GPUI 鍥為€€璺緞锛圵indows锛?cargo build --release            # 鍙戝竷鏋勫缓锛堟棤鎺у埗鍙扮獥鍙ｏ紝windows_subsystem="windows"锛?cargo check                      # 蹇€熺紪璇戞鏌?cargo fmt                        # 鏍煎紡鍖?
+cargo clippy                     # Lint 妫€鏌?
+cargo test                       # 杩愯娴嬭瘯
+cargo watch -x check             # 鑷姩妫€鏌ワ紙闇€ cargo install cargo-watch锛?
 ```
 
-**日志级别**：通过 `RUST_LOG` 环境变量控制（`trace` / `debug` / `info` / `warn` / `error`）
+**鏃ュ織绾у埆**锛氶€氳繃 `RUST_LOG` 鐜鍙橀噺鎺у埗锛坄trace` / `debug` / `info` / `warn` / `error`锛?
 
-**控制台窗口**：所有构建均通过 `#![windows_subsystem = "windows"]` 禁用控制台，日志写入 `~/.ikun_organizer_log/` 目录（按日期和序号分文件）
+**鎺у埗鍙扮獥鍙?*锛氭墍鏈夋瀯寤哄潎閫氳繃 `#![windows_subsystem = "windows"]` 绂佺敤鎺у埗鍙帮紝鏃ュ織鍐欏叆 `~/.ikun_organizer_log/` 鐩綍锛堟寜鏃ユ湡鍜屽簭鍙峰垎鏂囦欢锛?
 
 ---
 
-## 技术栈
+## 鎶€鏈爤
 
-| Crate | 版本 | 用途 |
+| Crate | 鐗堟湰 | 鐢ㄩ€?|
 |-------|------|------|
-| tauri / tauri-plugin-opener | 2.x | 默认 WebView UI shell、IPC、持久窗口与安全外链 |
-| Svelte / Vite / TypeScript | 5.x / 8.x / 6.x | 控制面板、创建/编辑窗口前端 |
-| gpui / gpui-component | 0.2.2 / 0.5.1 | legacy Windows UI 回退路径 |
-| egui / eframe / epaint | 0.27 | legacy 控制面板回退路径（`eframe-ui` feature） |
-| windows | 0.62 | Windows API（Shell COM、Direct2D、DirectWrite、GDI、窗口管理） |
-| cocoa / objc | 0.25 | macOS API（实验性） |
-| serde / serde_json | 1.0 | 统一 JSON 配置序列化 |
-| serde_yaml | 0.9 | YAML 分类规则（兼容旧格式） |
-| anyhow | 1.0 | 错误处理 |
-| log / env_logger | 0.4 / 0.11 | 日志系统 |
-| uuid | 1.0 | 分类框 / 图标唯一 ID |
-| chrono | 0.4 | 时间处理 |
-| dirs | 5.0 | 跨平台配置目录 |
-| notify | 6.0 | 文件系统监听（TODO） |
-| lazy_static | 1.0 | 全局静态状态（多选、拖拽等） |
-| windows-numerics | — | D2D 向量/矩阵类型（Vector2 等） |
+| tauri / tauri-plugin-opener | 2.x | 榛樿 WebView UI shell銆両PC銆佹寔涔呯獥鍙ｄ笌瀹夊叏澶栭摼 |
+| Svelte / Vite / TypeScript | 5.x / 8.x / 6.x | 鎺у埗闈㈡澘銆佸垱寤?缂栬緫绐楀彛鍓嶇 |
+| gpui / gpui-component | 0.2.2 / 0.5.1 | legacy Windows UI 鍥為€€璺緞 |
+| egui / eframe / epaint | 0.27 | legacy 鎺у埗闈㈡澘鍥為€€璺緞锛坄eframe-ui` feature锛?|
+| windows | 0.62 | Windows API锛圫hell COM銆丏irect2D銆丏irectWrite銆丟DI銆佺獥鍙ｇ鐞嗭級 |
+| cocoa / objc | 0.25 | macOS API锛堝疄楠屾€э級 |
+| serde / serde_json | 1.0 | 缁熶竴 JSON 閰嶇疆搴忓垪鍖?|
+| serde_yaml | 0.9 | YAML 鍒嗙被瑙勫垯锛堝吋瀹规棫鏍煎紡锛?|
+| anyhow | 1.0 | 閿欒澶勭悊 |
+| log / env_logger | 0.4 / 0.11 | 鏃ュ織绯荤粺 |
+| uuid | 1.0 | 鍒嗙被妗?/ 鍥炬爣鍞竴 ID |
+| chrono | 0.4 | 鏃堕棿澶勭悊 |
+| dirs | 5.0 | 璺ㄥ钩鍙伴厤缃洰褰?|
+| notify | 6.0 | 鏂囦欢绯荤粺鐩戝惉锛圱ODO锛?|
+| lazy_static | 1.0 | 鍏ㄥ眬闈欐€佺姸鎬侊紙澶氶€夈€佹嫋鎷界瓑锛?|
+| windows-numerics | 鈥?| D2D 鍚戦噺/鐭╅樀绫诲瀷锛圴ector2 绛夛級 |
 
 ---
 
-## 架构概述（v2.0）
+## 鏋舵瀯姒傝堪锛坴2.0锛?
 
-### 核心原则
+### 鏍稿績鍘熷垯
 
-- **平台抽象**：`platform/` 通过 trait 统一接口，Windows/macOS 各自实现
-- **业务分离**：`box_core/` 分类框业务逻辑与平台渲染完全解耦
-- **上下文注入**：Tauri Commands、后台轮询和插件共享唯一 `SharedTauriRuntime`，其内部持有 `AppContext`
-- **插件扩展边界**：`PluginRegistry` 已接入 Tauri 启动/退出，支持进程内 trait 插件的运行时安装、卸载、定向分发和逆序清理；不支持外部动态库 ABI 热加载
-- **插件动作门控**：托盘、原生菜单和第二实例信号触发的插件功能必须先成功分发命令；插件卸载或初始化失败后不得绕过注册表继续执行对应平台动作
-- **统一配置**：单一 `~/.ikun_organizer.json` 管理所有设置，支持导入/导出
-- **共享逻辑层**：`shared/` 存放从 Windows 提取的平台无关逻辑，macOS 重新实现时直接使用
-- **单文件 ≤ 1500 行**：渲染引擎等复杂模块可适当放宽；可独立测试的纯逻辑应拆到小模块，避免继续扩大渲染文件
+- **骞冲彴鎶借薄**锛歚platform/` 閫氳繃 trait 缁熶竴鎺ュ彛锛學indows/macOS 鍚勮嚜瀹炵幇
+- **涓氬姟鍒嗙**锛歚box_core/` 鍒嗙被妗嗕笟鍔￠€昏緫涓庡钩鍙版覆鏌撳畬鍏ㄨВ鑰?
+- **涓婁笅鏂囨敞鍏?*锛歍auri Commands銆佸悗鍙拌疆璇㈠拰鎻掍欢鍏变韩鍞竴 `SharedTauriRuntime`锛屽叾鍐呴儴鎸佹湁 `AppContext`
+- **鎻掍欢鎵╁睍杈圭晫**锛歚PluginRegistry` 宸叉帴鍏?Tauri 鍚姩/閫€鍑猴紝鏀寔杩涚▼鍐?trait 鎻掍欢鐨勮繍琛屾椂瀹夎銆佸嵏杞姐€佸畾鍚戝垎鍙戝拰閫嗗簭娓呯悊锛涗笉鏀寔澶栭儴鍔ㄦ€佸簱 ABI 鐑姞杞?- **鎻掍欢鍔ㄤ綔闂ㄦ帶**锛氭墭鐩樸€佸師鐢熻彍鍗曞拰绗簩瀹炰緥淇″彿瑙﹀彂鐨勬彃浠跺姛鑳藉繀椤诲厛鎴愬姛鍒嗗彂鍛戒护锛涙彃浠跺嵏杞芥垨鍒濆鍖栧け璐ュ悗涓嶅緱缁曡繃娉ㄥ唽琛ㄧ户缁墽琛屽搴斿钩鍙板姩浣?- **缁熶竴閰嶇疆**锛氬崟涓€ `~/.ikun_organizer.json` 绠＄悊鎵€鏈夎缃紝鏀寔瀵煎叆/瀵煎嚭
+- **鍏变韩閫昏緫灞?*锛歚shared/` 瀛樻斁浠?Windows 鎻愬彇鐨勫钩鍙版棤鍏抽€昏緫锛宮acOS 閲嶆柊瀹炵幇鏃剁洿鎺ヤ娇鐢?
+- **鍗曟枃浠?鈮?1500 琛?*锛氭覆鏌撳紩鎿庣瓑澶嶆潅妯″潡鍙€傚綋鏀惧锛涘彲鐙珛娴嬭瘯鐨勭函閫昏緫搴旀媶鍒板皬妯″潡锛岄伩鍏嶇户缁墿澶ф覆鏌撴枃浠?
 
-### 项目目录结构
+### 椤圭洰鐩綍缁撴瀯
 
 ```
 src/
-├── main.rs                    # 入口：默认启动 Tauri，按 feature 分发 legacy UI
-├── app.rs                     # legacy eframe::App 控制面板（仅 eframe-ui 回退路径）
-├── context.rs                 # AppContext（持有 Box<dyn DesktopManagerTrait> + Box<dyn PlatformService>）
-│
-├── shared/                    # 🆕 跨平台共享逻辑层
-│   ├── mod.rs                 #   模块导出
-│   ├── selection.rs           #   全局多选注册表（跨容器选择/锚点/框选）
-│   ├── drag_logic.rs          #   拖拽纯逻辑（拖拽状态计算/shift-insert）
-│   ├── geometry.rs            #   几何计算（对齐检测/像素边界/等比居中）
-│   ├── layout.rs              #   布局重排逻辑（列数变化时图标重映射）
-│   ├── drag_state.rs          #   拖拽生命周期状态机
-│   └── types.rs               #   跨平台共享类型定义
-│
-├── tauri_commands/            # Tauri IPC adapter + SharedTauriRuntime
-│   ├── config_cmd.rs          #   通过共享 AppContext 读写统一配置
-│   ├── box_cmd.rs             #   创建/编辑原生分类框
-│   ├── window_cmd.rs          #   持久 WebView 窗口策略与安全外链
-│   ├── app_cmd.rs             #   应用信息与进程控制
-│   └── platform_runtime.rs    #   原生服务编排、插件生命周期和事件轮询
-│
-├── gpui_app/                  # legacy Windows GPUI 回退路径
-│   ├── mod.rs                 #   模块导出
-│   ├── app_runtime.rs         #   UI 框架无关运行时/命令层（AppContext + 平台服务）
-│   ├── control_panel.rs       #   GPUI 控制面板视图
-│   ├── create_box_dialog.rs   #   GPUI 独立“创建分类框”窗口
-│   ├── windows_main.rs        #   GPUI Application 事件循环与轮询调度（safe_gpui_update 防崩溃）
-│   └── settings_view.rs       #   液态玻璃效果设置面板（GPUI 独立窗口）
-│
-├── platform/                  # 平台抽象层
-│   ├── mod.rs                 #   DesktopManagerTrait(7方法) + PlatformService(10方法) + 工厂函数 + re-exports
-│   ├── types.rs               #   跨平台类型：DesktopIcon, IconInfo, ScreenInfo
-│   ├── windows/
-│   │   ├── mod.rs             #   Windows 平台入口
-│   │   ├── ffi_types.rs       #   Win32 FFI 类型/常量
-│   │   ├── ffi_imports.rs     #   Win32 extern "system" 声明
-│   │   ├── desktop_manager.rs #   桌面图标枚举（文件系统 + 虚拟 Shell 对象 CLSID）
-│   │   ├── desktop_overlay/   #   桌面覆盖窗口（渲染未管理图标 + Grid 吸附布局 + 桌面接管生命周期 + 文件监听刷新）
-│   │   │   ├── overlay_mouse_hook.rs # 全局鼠标钩子（WH_MOUSE_LL + 独立线程消息泵，拦截覆盖区域右键）
-│   │   │   ├── overlay_drop_target.rs # OLE 拖放目标（IDropTarget 实现）
-│   │   ├── alignment_guide/   #   对齐参考线（对齐检测 + 动态对比色 + overlay 渲染）
-│   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎（draw_icon_with_label 统一图标+文本渲染）
-│   │   ├── icon_bitmap.rs     #   图标透明边界与等比居中计算（纯逻辑 + 单元测试）
-│   │   ├── grid_window.rs     #   窗口创建/销毁/布局收集/Z-order 管理
-│   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc
-│   │   ├── zorder.rs          #   Z-order 层级管理（分类框低于其他应用窗口 + 坐标查找）
-│   │   ├── menu_window.rs     #   自定义分层窗口深色菜单（D2D/DirectWrite 渲染）
-│   │   ├── shell_menu.rs      #   Shell 右键菜单（单选+多选上下文菜单）+ 桌面背景注册表菜单（覆盖区域含 Ikun 动作）
-│   │   ├── app_icon.rs        #   嵌入 logo.ico 资源加载（托盘/菜单图标）
-│   │   ├── icon_extract.rs    #   图标提取（内容缩略图/应用 HICON 分流 + .lnk 目标解析）
-│   │   ├── icon_hider.rs      #   图标隐藏/恢复（SysListView32）+ managed_icons 仓库（Vault）+ Staging 机制 + 删除分类框后还原非管理图标 + get_vault_display_names
-│   │   ├── liquid_glass.rs    #   液态玻璃 GPU 渲染器（DXGI + D2D Effect + HLSL Shader）
-│   │   ├── multi_select.rs    #   全局多选状态管理（跨分类框/覆盖区域）
-│   │   ├── desktop_utils.rs   #   桌面工具函数（自动排列检测/图标定位）
-│   │   ├── rename_editor.rs   #   内联重命名编辑器（独立线程 EDIT 控件 + 异步消息通信 + 扩展名保留）
-│   │   ├── grid_layout.rs     #   布局计算/按钮矩形/命中测试/滚动重排
-│   │   ├── monitor_utils.rs   #   显示器查询/窗口定位工具
-│   │   ├── drag_image.rs      #   拖拽残影覆盖窗口（单选/多选图标残影，D2D 渲染 + 跨显示器 DPI 自适应）
-│   │   ├── ole_dnd.rs         #   OLE 拖拽源（IDropSource + IDataObject 实现）
-│   │   ├── drop_target.rs     #   分类框拖放目标（IDropTarget 实现）
-│   │   ├── drag_handler.rs    #   拖拽协调器（拖拽生命周期：阈值检测/位置更新/释放分发）
-│   │   ├── drag_drop.rs       #   拖拽放置操作（同框/跨框/桌面/OLE drop）
-│   │   ├── drag_visual.rs     #   拖拽可视化反馈（插入分隔线/替换高亮 + 纯逻辑函数）
-│   │   ├── icon_manager.rs    #   图标管理器（SysListView32 跨进程操作 + 图像列表提取）
-│   │   ├── control_panel_window.rs # 控制面板 Win32 显示/隐藏辅助（托盘优先生命周期）
-│   │   ├── sys_tray.rs        #   系统托盘入口（隐藏消息窗口 + 固定菜单动作队列）
-│   │   └── global_hotkey.rs   #   全局热键（RegisterHotKey + 消息窗口 + 快捷键解析）
-│   └── macos/
-│       ├── mod.rs             #   macOS 平台入口 + stub 函数
-│       ├── desktop_manager.rs #   桌面图标枚举（NSWorkspace + FileManager）
-│       ├── ffi_imports.rs     #   macOS FFI 声明（CoreGraphics 等）
-│       ├── icon_extract.rs    #   图标提取（NSWorkspace iconForFile）
-│       └── desktop_overlay/   #   桌面覆盖窗口
-│           ├── mod.rs             #   模块导出
-│           ├── overlay_window.rs  #   NSWindow 创建/销毁 + 鼠标穿透
-│           ├── overlay_render.rs  #   渲染编排（分类框 + 图标）
-│           ├── box_render.rs      #   分类框渲染（背景/标题/图标网格/标签）
-│           └── icon_layout.rs     #   图标网格布局计算
-│
-├── box_core/                  # 分类框核心业务逻辑（平台无关）
-│   ├── mod.rs                 #   模块导出
-│   ├── box_model.rs           #   ClassificationBox 数据模型 + BoxItem
-│   ├── box_manager.rs         #   分类框管理器（CRUD + 持久化）
-│   ├── sort_engine.rs         #   排序引擎：8 种维度 × 升降序
-│   ├── view_engine.rs         #   视图引擎：8 种视图模式布局参数
-│   ├── group_engine.rs        #   分组引擎：按名称/类型/时间等
-│   ├── layout_calc.rs         #   网格布局计算 + 命中测试
-│   └── interaction.rs         #   交互状态：选中/hover/锁定/拖拽
-│
-├── classification/            # 分类系统
-│   ├── mod.rs                 #   AppClassifier（from_config 从配置创建）
-│   ├── database.rs            #   AppCategoryDB（从配置 CategoryRule 构建）
-│   ├── matcher.rs             #   AppMatcher 通配符匹配算法
-│   └── ai_classifier.rs       #   AI 分类器（TODO：LLM API 调用）
-│
-├── config/                    # 统一配置系统
-│   ├── mod.rs                 #   模块导出
-│   └── app_config.rs          #   统一 JSON 配置结构（AppConfig）+ 单元测试
-│
-├── plugin/                    # 插件系统
-│   ├── mod.rs                 #   Plugin trait + PluginRegistry
-│   └── builtin/
-│       ├── mod.rs             #   register_builtin_plugins()
-│       ├── classification_plugin.rs  #   分类功能插件
-│       └── style_plugin.rs    #   样式设置插件
-│
-├── ui/                        # legacy eframe UI 层（仅 eframe-ui 回退路径）
-│   ├── mod.rs                 #   模块导出
-│   ├── control_panel.rs       #   控制面板主界面
-│   ├── settings_panel.rs      #   设置面板（样式/AI/热键/调试）
-│   └── tray_menu.rs           #   托盘菜单逻辑
-│
-├── utils/                     # 工具层
-│   ├── mod.rs                 #   模块导出
-│   ├── logger.rs              #   日志系统（滚动文件输出 + 自定义宏 + 发行版日志）
-│   ├── platform.rs            #   跨平台工具（开机自启、配置目录）
-│   ├── dpi.rs                 #   DPI 缩放工具
-│   └── string_utils.rs        #   UTF-16 字符串转换
-│
-└── ipc/                       # 进程间通信（TODO 占位）
-    └── mod.rs                 #   热键唤醒、单实例检测
+鈹溾攢鈹€ main.rs                    # 鍏ュ彛锛氶粯璁ゅ惎鍔?Tauri锛屾寜 feature 鍒嗗彂 legacy UI
+鈹溾攢鈹€ app.rs                     # legacy eframe::App 鎺у埗闈㈡澘锛堜粎 eframe-ui 鍥為€€璺緞锛?
+鈹溾攢鈹€ context.rs                 # AppContext锛堟寔鏈?Box<dyn DesktopManagerTrait> + Box<dyn PlatformService>锛?
+鈹?
+鈹溾攢鈹€ shared/                    # 馃啎 璺ㄥ钩鍙板叡浜€昏緫灞?
+鈹?  鈹溾攢鈹€ mod.rs                 #   妯″潡瀵煎嚭
+鈹?  鈹溾攢鈹€ selection.rs           #   鍏ㄥ眬澶氶€夋敞鍐岃〃锛堣法瀹瑰櫒閫夋嫨/閿氱偣/妗嗛€夛級
+鈹?  鈹溾攢鈹€ drag_logic.rs          #   鎷栨嫿绾€昏緫锛堟嫋鎷界姸鎬佽绠?shift-insert锛?
+鈹?  鈹溾攢鈹€ geometry.rs            #   鍑犱綍璁＄畻锛堝榻愭娴?鍍忕礌杈圭晫/绛夋瘮灞呬腑锛?
+鈹?  鈹溾攢鈹€ layout.rs              #   甯冨眬閲嶆帓閫昏緫锛堝垪鏁板彉鍖栨椂鍥炬爣閲嶆槧灏勶級
+鈹?  鈹溾攢鈹€ drag_state.rs          #   鎷栨嫿鐢熷懡鍛ㄦ湡鐘舵€佹満
+鈹?  鈹斺攢鈹€ types.rs               #   璺ㄥ钩鍙板叡浜被鍨嬪畾涔?
+鈹?
+鈹溾攢鈹€ tauri_commands/            # Tauri IPC adapter + SharedTauriRuntime
+鈹?  鈹溾攢鈹€ config_cmd.rs          #   閫氳繃鍏变韩 AppContext 璇诲啓缁熶竴閰嶇疆
+鈹?  鈹溾攢鈹€ box_cmd.rs             #   鍒涘缓/缂栬緫鍘熺敓鍒嗙被妗?鈹?  鈹溾攢鈹€ window_cmd.rs          #   鎸佷箙 WebView 绐楀彛绛栫暐涓庡畨鍏ㄥ閾?鈹?  鈹溾攢鈹€ app_cmd.rs             #   搴旂敤淇℃伅涓庤繘绋嬫帶鍒?鈹?  鈹斺攢鈹€ platform_runtime.rs    #   鍘熺敓鏈嶅姟缂栨帓銆佹彃浠剁敓鍛藉懆鏈熷拰浜嬩欢杞
+鈹?鈹溾攢鈹€ gpui_app/                  # legacy Windows GPUI 鍥為€€璺緞
+鈹?  鈹溾攢鈹€ mod.rs                 #   妯″潡瀵煎嚭
+鈹?  鈹溾攢鈹€ app_runtime.rs         #   UI 妗嗘灦鏃犲叧杩愯鏃?鍛戒护灞傦紙AppContext + 骞冲彴鏈嶅姟锛?
+鈹?  鈹溾攢鈹€ control_panel.rs       #   GPUI 鎺у埗闈㈡澘瑙嗗浘
+鈹?  鈹溾攢鈹€ create_box_dialog.rs   #   GPUI 鐙珛鈥滃垱寤哄垎绫绘鈥濈獥鍙?
+鈹?  鈹溾攢鈹€ windows_main.rs        #   GPUI Application 浜嬩欢寰幆涓庤疆璇㈣皟搴︼紙safe_gpui_update 闃插穿婧冿級
+鈹?  鈹斺攢鈹€ settings_view.rs       #   娑叉€佺幓鐠冩晥鏋滆缃潰鏉匡紙GPUI 鐙珛绐楀彛锛?
+鈹?
+鈹溾攢鈹€ platform/                  # 骞冲彴鎶借薄灞?
+鈹?  鈹溾攢鈹€ mod.rs                 #   DesktopManagerTrait(7鏂规硶) + PlatformService(10鏂规硶) + 宸ュ巶鍑芥暟 + re-exports
+鈹?  鈹溾攢鈹€ types.rs               #   璺ㄥ钩鍙扮被鍨嬶細DesktopIcon, IconInfo, ScreenInfo
+鈹?  鈹溾攢鈹€ windows/
+鈹?  鈹?  鈹溾攢鈹€ mod.rs             #   Windows 骞冲彴鍏ュ彛
+鈹?  鈹?  鈹溾攢鈹€ ffi_types.rs       #   Win32 FFI 绫诲瀷/甯搁噺
+鈹?  鈹?  鈹溾攢鈹€ ffi_imports.rs     #   Win32 extern "system" 澹版槑
+鈹?  鈹?  鈹溾攢鈹€ desktop_manager.rs #   妗岄潰鍥炬爣鏋氫妇锛堟枃浠剁郴缁?+ 铏氭嫙 Shell 瀵硅薄 CLSID锛?
+鈹?  鈹?  鈹溾攢鈹€ desktop_overlay/   #   妗岄潰瑕嗙洊绐楀彛锛堟覆鏌撴湭绠＄悊鍥炬爣 + Grid 鍚搁檮甯冨眬 + 妗岄潰鎺ョ鐢熷懡鍛ㄦ湡 + 鏂囦欢鐩戝惉鍒锋柊锛?
+鈹?  鈹?  鈹?  鈹溾攢鈹€ overlay_mouse_hook.rs # 鍏ㄥ眬榧犳爣閽╁瓙锛圵H_MOUSE_LL + 鐙珛绾跨▼娑堟伅娉碉紝鎷︽埅瑕嗙洊鍖哄煙鍙抽敭锛?
+鈹?  鈹?  鈹?  鈹溾攢鈹€ overlay_drop_target.rs # OLE 鎷栨斁鐩爣锛圛DropTarget 瀹炵幇锛?
+鈹?  鈹?  鈹溾攢鈹€ alignment_guide/   #   瀵归綈鍙傝€冪嚎锛堝榻愭娴?+ 鍔ㄦ€佸姣旇壊 + overlay 娓叉煋锛?
+鈹?  鈹?  鈹溾攢鈹€ d2d_render.rs      #   D2D/DirectWrite 娓叉煋寮曟搸锛坉raw_icon_with_label 缁熶竴鍥炬爣+鏂囨湰娓叉煋锛?
+鈹?  鈹?  鈹溾攢鈹€ icon_bitmap.rs     #   鍥炬爣閫忔槑杈圭晫涓庣瓑姣斿眳涓绠楋紙绾€昏緫 + 鍗曞厓娴嬭瘯锛?
+鈹?  鈹?  鈹溾攢鈹€ grid_window.rs     #   绐楀彛鍒涘缓/閿€姣?甯冨眬鏀堕泦/Z-order 绠＄悊
+鈹?  鈹?  鈹溾攢鈹€ wnd_proc.rs        #   绐楀彛娑堟伅澶勭悊 wnd_proc
+鈹?  鈹?  鈹溾攢鈹€ zorder.rs          #   Z-order 灞傜骇绠＄悊锛堝垎绫绘浣庝簬鍏朵粬搴旂敤绐楀彛 + 鍧愭爣鏌ユ壘锛?
+鈹?  鈹?  鈹溾攢鈹€ menu_window.rs     #   鑷畾涔夊垎灞傜獥鍙ｆ繁鑹茶彍鍗曪紙D2D/DirectWrite 娓叉煋锛?
+鈹?  鈹?  鈹溾攢鈹€ shell_menu.rs      #   Shell 鍙抽敭鑿滃崟锛堝崟閫?澶氶€変笂涓嬫枃鑿滃崟锛? 妗岄潰鑳屾櫙娉ㄥ唽琛ㄨ彍鍗曪紙瑕嗙洊鍖哄煙鍚?Ikun 鍔ㄤ綔锛?
+鈹?  鈹?  鈹溾攢鈹€ app_icon.rs        #   宓屽叆 logo.ico 璧勬簮鍔犺浇锛堟墭鐩?鑿滃崟鍥炬爣锛?
+鈹?  鈹?  鈹溾攢鈹€ icon_extract.rs    #   鍥炬爣鎻愬彇锛堝唴瀹圭缉鐣ュ浘/搴旂敤 HICON 鍒嗘祦 + .lnk 鐩爣瑙ｆ瀽锛?
+鈹?  鈹?  鈹溾攢鈹€ icon_hider.rs      #   鍥炬爣闅愯棌/鎭㈠锛圫ysListView32锛? managed_icons 浠撳簱锛圴ault锛? Staging 鏈哄埗 + 鍒犻櫎鍒嗙被妗嗗悗杩樺師闈炵鐞嗗浘鏍?+ get_vault_display_names
+鈹?  鈹?  鈹溾攢鈹€ liquid_glass.rs    #   娑叉€佺幓鐠?GPU 娓叉煋鍣紙DXGI + D2D Effect + HLSL Shader锛?
+鈹?  鈹?  鈹溾攢鈹€ multi_select.rs    #   鍏ㄥ眬澶氶€夌姸鎬佺鐞嗭紙璺ㄥ垎绫绘/瑕嗙洊鍖哄煙锛?
+鈹?  鈹?  鈹溾攢鈹€ desktop_utils.rs   #   妗岄潰宸ュ叿鍑芥暟锛堣嚜鍔ㄦ帓鍒楁娴?鍥炬爣瀹氫綅锛?
+鈹?  鈹?  鈹溾攢鈹€ rename_editor.rs   #   鍐呰仈閲嶅懡鍚嶇紪杈戝櫒锛堢嫭绔嬬嚎绋?EDIT 鎺т欢 + 寮傛娑堟伅閫氫俊 + 鎵╁睍鍚嶄繚鐣欙級
+鈹?  鈹?  鈹溾攢鈹€ grid_layout.rs     #   甯冨眬璁＄畻/鎸夐挳鐭╁舰/鍛戒腑娴嬭瘯/婊氬姩閲嶆帓
+鈹?  鈹?  鈹溾攢鈹€ monitor_utils.rs   #   鏄剧ず鍣ㄦ煡璇?绐楀彛瀹氫綅宸ュ叿
+鈹?  鈹?  鈹溾攢鈹€ drag_image.rs      #   鎷栨嫿娈嬪奖瑕嗙洊绐楀彛锛堝崟閫?澶氶€夊浘鏍囨畫褰憋紝D2D 娓叉煋 + 璺ㄦ樉绀哄櫒 DPI 鑷€傚簲锛?
+鈹?  鈹?  鈹溾攢鈹€ ole_dnd.rs         #   OLE 鎷栨嫿婧愶紙IDropSource + IDataObject 瀹炵幇锛?
+鈹?  鈹?  鈹溾攢鈹€ drop_target.rs     #   鍒嗙被妗嗘嫋鏀剧洰鏍囷紙IDropTarget 瀹炵幇锛?
+鈹?  鈹?  鈹溾攢鈹€ drag_handler.rs    #   鎷栨嫿鍗忚皟鍣紙鎷栨嫿鐢熷懡鍛ㄦ湡锛氶槇鍊兼娴?浣嶇疆鏇存柊/閲婃斁鍒嗗彂锛?
+鈹?  鈹?  鈹溾攢鈹€ drag_drop.rs       #   鎷栨嫿鏀剧疆鎿嶄綔锛堝悓妗?璺ㄦ/妗岄潰/OLE drop锛?
+鈹?  鈹?  鈹溾攢鈹€ drag_visual.rs     #   鎷栨嫿鍙鍖栧弽棣堬紙鎻掑叆鍒嗛殧绾?鏇挎崲楂樹寒 + 绾€昏緫鍑芥暟锛?
+鈹?  鈹?  鈹溾攢鈹€ icon_manager.rs    #   鍥炬爣绠＄悊鍣紙SysListView32 璺ㄨ繘绋嬫搷浣?+ 鍥惧儚鍒楄〃鎻愬彇锛?
+鈹?  鈹?  鈹溾攢鈹€ control_panel_window.rs # 鎺у埗闈㈡澘 Win32 鏄剧ず/闅愯棌杈呭姪锛堟墭鐩樹紭鍏堢敓鍛藉懆鏈燂級
+鈹?  鈹?  鈹溾攢鈹€ sys_tray.rs        #   绯荤粺鎵樼洏鍏ュ彛锛堥殣钘忔秷鎭獥鍙?+ 鍥哄畾鑿滃崟鍔ㄤ綔闃熷垪锛?
+鈹?  鈹?  鈹斺攢鈹€ global_hotkey.rs   #   鍏ㄥ眬鐑敭锛圧egisterHotKey + 娑堟伅绐楀彛 + 蹇嵎閿В鏋愶級
+鈹?  鈹斺攢鈹€ macos/
+鈹?      鈹溾攢鈹€ mod.rs             #   macOS 骞冲彴鍏ュ彛 + stub 鍑芥暟
+鈹?      鈹溾攢鈹€ desktop_manager.rs #   妗岄潰鍥炬爣鏋氫妇锛圢SWorkspace + FileManager锛?
+鈹?      鈹溾攢鈹€ ffi_imports.rs     #   macOS FFI 澹版槑锛圕oreGraphics 绛夛級
+鈹?      鈹溾攢鈹€ icon_extract.rs    #   鍥炬爣鎻愬彇锛圢SWorkspace iconForFile锛?
+鈹?      鈹斺攢鈹€ desktop_overlay/   #   妗岄潰瑕嗙洊绐楀彛
+鈹?          鈹溾攢鈹€ mod.rs             #   妯″潡瀵煎嚭
+鈹?          鈹溾攢鈹€ overlay_window.rs  #   NSWindow 鍒涘缓/閿€姣?+ 榧犳爣绌块€?
+鈹?          鈹溾攢鈹€ overlay_render.rs  #   娓叉煋缂栨帓锛堝垎绫绘 + 鍥炬爣锛?
+鈹?          鈹溾攢鈹€ box_render.rs      #   鍒嗙被妗嗘覆鏌擄紙鑳屾櫙/鏍囬/鍥炬爣缃戞牸/鏍囩锛?
+鈹?          鈹斺攢鈹€ icon_layout.rs     #   鍥炬爣缃戞牸甯冨眬璁＄畻
+鈹?
+鈹溾攢鈹€ box_core/                  # 鍒嗙被妗嗘牳蹇冧笟鍔￠€昏緫锛堝钩鍙版棤鍏筹級
+鈹?  鈹溾攢鈹€ mod.rs                 #   妯″潡瀵煎嚭
+鈹?  鈹溾攢鈹€ box_model.rs           #   ClassificationBox 鏁版嵁妯″瀷 + BoxItem
+鈹?  鈹溾攢鈹€ box_manager.rs         #   鍒嗙被妗嗙鐞嗗櫒锛圕RUD + 鎸佷箙鍖栵級
+鈹?  鈹溾攢鈹€ sort_engine.rs         #   鎺掑簭寮曟搸锛? 绉嶇淮搴?脳 鍗囬檷搴?
+鈹?  鈹溾攢鈹€ view_engine.rs         #   瑙嗗浘寮曟搸锛? 绉嶈鍥炬ā寮忓竷灞€鍙傛暟
+鈹?  鈹溾攢鈹€ group_engine.rs        #   鍒嗙粍寮曟搸锛氭寜鍚嶇О/绫诲瀷/鏃堕棿绛?
+鈹?  鈹溾攢鈹€ layout_calc.rs         #   缃戞牸甯冨眬璁＄畻 + 鍛戒腑娴嬭瘯
+鈹?  鈹斺攢鈹€ interaction.rs         #   浜や簰鐘舵€侊細閫変腑/hover/閿佸畾/鎷栨嫿
+鈹?
+鈹溾攢鈹€ classification/            # 鍒嗙被绯荤粺
+鈹?  鈹溾攢鈹€ mod.rs                 #   AppClassifier锛坒rom_config 浠庨厤缃垱寤猴級
+鈹?  鈹溾攢鈹€ database.rs            #   AppCategoryDB锛堜粠閰嶇疆 CategoryRule 鏋勫缓锛?
+鈹?  鈹溾攢鈹€ matcher.rs             #   AppMatcher 閫氶厤绗﹀尮閰嶇畻娉?
+鈹?  鈹斺攢鈹€ ai_classifier.rs       #   AI 鍒嗙被鍣紙TODO锛歀LM API 璋冪敤锛?
+鈹?
+鈹溾攢鈹€ config/                    # 缁熶竴閰嶇疆绯荤粺
+鈹?  鈹溾攢鈹€ mod.rs                 #   妯″潡瀵煎嚭
+鈹?  鈹斺攢鈹€ app_config.rs          #   缁熶竴 JSON 閰嶇疆缁撴瀯锛圓ppConfig锛? 鍗曞厓娴嬭瘯
+鈹?
+鈹溾攢鈹€ plugin/                    # 鎻掍欢绯荤粺
+鈹?  鈹溾攢鈹€ mod.rs                 #   Plugin trait + PluginRegistry
+鈹?  鈹斺攢鈹€ builtin/
+鈹?      鈹溾攢鈹€ mod.rs             #   register_builtin_plugins()
+鈹?      鈹溾攢鈹€ classification_plugin.rs  #   鍒嗙被鍔熻兘鎻掍欢
+鈹?      鈹斺攢鈹€ style_plugin.rs    #   鏍峰紡璁剧疆鎻掍欢
+鈹?
+鈹溾攢鈹€ ui/                        # legacy eframe UI 灞傦紙浠?eframe-ui 鍥為€€璺緞锛?
+鈹?  鈹溾攢鈹€ mod.rs                 #   妯″潡瀵煎嚭
+鈹?  鈹溾攢鈹€ control_panel.rs       #   鎺у埗闈㈡澘涓荤晫闈?
+鈹?  鈹溾攢鈹€ settings_panel.rs      #   璁剧疆闈㈡澘锛堟牱寮?AI/鐑敭/璋冭瘯锛?
+鈹?  鈹斺攢鈹€ tray_menu.rs           #   鎵樼洏鑿滃崟閫昏緫
+鈹?
+鈹溾攢鈹€ utils/                     # 宸ュ叿灞?
+鈹?  鈹溾攢鈹€ mod.rs                 #   妯″潡瀵煎嚭
+鈹?  鈹溾攢鈹€ logger.rs              #   鏃ュ織绯荤粺锛堟粴鍔ㄦ枃浠惰緭鍑?+ 鑷畾涔夊畯 + 鍙戣鐗堟棩蹇楋級
+鈹?  鈹溾攢鈹€ platform.rs            #   璺ㄥ钩鍙板伐鍏凤紙寮€鏈鸿嚜鍚€侀厤缃洰褰曪級
+鈹?  鈹溾攢鈹€ dpi.rs                 #   DPI 缂╂斁宸ュ叿
+鈹?  鈹斺攢鈹€ string_utils.rs        #   UTF-16 瀛楃涓茶浆鎹?
+鈹?
+鈹斺攢鈹€ ipc/                       # 杩涚▼闂撮€氫俊锛圱ODO 鍗犱綅锛?    鈹斺攢鈹€ mod.rs                 #   鐑敭鍞ら啋銆佸崟瀹炰緥妫€娴?
 ```
 
-前端位于 `frontend/src/`：`pages/` 负责三个窗口页面，`components/` 存放无业务状态控件，`lib/api/tauri-api.ts` 是唯一 IPC adapter。
-
-**非代码目录**：
+鍓嶇浣嶄簬 `frontend/src/`锛歚pages/` 璐熻矗涓変釜绐楀彛椤甸潰锛宍components/` 瀛樻斁鏃犱笟鍔＄姸鎬佹帶浠讹紝`lib/api/tauri-api.ts` 鏄敮涓€ IPC adapter銆?
+**闈炰唬鐮佺洰褰?*锛?
 ```
 build/
-├── build.rs                   # 嵌入 manifest 到 Windows 可执行文件
-└── app.manifest               # Per-Monitor DPI V2 感知清单
+鈹溾攢鈹€ build.rs                   # 宓屽叆 manifest 鍒?Windows 鍙墽琛屾枃浠?
+鈹斺攢鈹€ app.manifest               # Per-Monitor DPI V2 鎰熺煡娓呭崟
 ```
 
 
-### 依赖规则
+### 渚濊禆瑙勫垯
 
-**允许的依赖方向**：
-```
-frontend pages → frontend api adapter → Tauri Commands
-tauri_commands → AppContext / plugin / platform
-legacy UI → AppContext
-context → config / classification / platform
-plugin → AppContext（仅通过生命周期参数）
-shared/ → (无内部依赖，仅 std + serde + uuid + lazy_static)
-platform/ → shared (允许：平台实现复用共享逻辑)
+**鍏佽鐨勪緷璧栨柟鍚?*锛?```
+frontend pages 鈫?frontend api adapter 鈫?Tauri Commands
+tauri_commands 鈫?AppContext / plugin / platform
+legacy UI 鈫?AppContext
+context 鈫?config / classification / platform
+plugin 鈫?AppContext锛堜粎閫氳繃鐢熷懡鍛ㄦ湡鍙傛暟锛?shared/ 鈫?(鏃犲唴閮ㄤ緷璧栵紝浠?std + serde + uuid + lazy_static)
+platform/ 鈫?shared (鍏佽锛氬钩鍙板疄鐜板鐢ㄥ叡浜€昏緫)
 ```
 
-**禁止的依赖方向**：
+**绂佹鐨勪緷璧栨柟鍚?*锛?
 ```
-❌ platform/ → tauri_commands/ 或 frontend/
-❌ config/ → context/
-❌ box_core/ → platform/ 或 UI shell
-❌ frontend 组件绕过 tauri-api.ts 散落 invoke
-❌ shared/ → platform/    (共享层不依赖平台)
-❌ shared/ → ui/          (共享层不依赖 UI)
-❌ shared/ → 任意 UI shell
+鉂?platform/ 鈫?tauri_commands/ 鎴?frontend/
+鉂?config/ 鈫?context/
+鉂?box_core/ 鈫?platform/ 鎴?UI shell
+鉂?frontend 缁勪欢缁曡繃 tauri-api.ts 鏁ｈ惤 invoke
+鉂?shared/ 鈫?platform/    (鍏变韩灞備笉渚濊禆骞冲彴)
+鉂?shared/ 鈫?ui/          (鍏变韩灞備笉渚濊禆 UI)
+鉂?shared/ 鈫?浠绘剰 UI shell
 ```
 
-### 核心设计
+### 鏍稿績璁捐
 
-#### 1. AppContext — 中心上下文
+#### 1. AppContext 鈥?涓績涓婁笅鏂?
 
 ```rust
-// src/context.rs（实际代码）
+// src/context.rs锛堝疄闄呬唬鐮侊級
 pub struct AppContext {
     pub config: AppConfig,
     pub desktop_manager: Box<dyn DesktopManagerTrait>,
@@ -249,12 +233,11 @@ pub struct AppContext {
 }
 ```
 
-默认路径中 `TauriRuntime` 持有 `AppContext + PluginRegistry`，并由 Tauri `manage()` 注入为 `SharedTauriRuntime = Arc<Mutex<TauriRuntime>>`。配置 Commands 必须更新这一个上下文，禁止每个命令另建内存模型或只写磁盘。
-
-#### 2. 平台抽象
+榛樿璺緞涓?`TauriRuntime` 鎸佹湁 `AppContext + PluginRegistry`锛屽苟鐢?Tauri `manage()` 娉ㄥ叆涓?`SharedTauriRuntime = Arc<Mutex<TauriRuntime>>`銆傞厤缃?Commands 蹇呴』鏇存柊杩欎竴涓笂涓嬫枃锛岀姝㈡瘡涓懡浠ゅ彟寤哄唴瀛樻ā鍨嬫垨鍙啓纾佺洏銆?
+#### 2. 骞冲彴鎶借薄
 
 ```rust
-// src/platform/mod.rs（实际代码）
+// src/platform/mod.rs锛堝疄闄呬唬鐮侊級
 pub trait DesktopManagerTrait {
     fn get_desktop_icons(&self) -> Vec<DesktopIcon>;
     fn watch_desktop(&self) -> anyhow::Result<()>;
@@ -264,9 +247,8 @@ pub trait DesktopManagerTrait {
 }
 ```
 
-`DesktopManagerTrait` 抽象桌面图标能力，`PlatformService` 抽象托盘、开机启动和布局收集。Direct2D、DXGI、Shell/COM 和原生分类框仍属于明确的 Windows adapter，不包装成业务插件。
-
-#### 3. 插件系统
+`DesktopManagerTrait` 鎶借薄妗岄潰鍥炬爣鑳藉姏锛宍PlatformService` 鎶借薄鎵樼洏銆佸紑鏈哄惎鍔ㄥ拰甯冨眬鏀堕泦銆侱irect2D銆丏XGI銆丼hell/COM 鍜屽師鐢熷垎绫绘浠嶅睘浜庢槑纭殑 Windows adapter锛屼笉鍖呰鎴愪笟鍔℃彃浠躲€?
+#### 3. 鎻掍欢绯荤粺
 
 ```rust
 // src/plugin/mod.rs
@@ -281,276 +263,272 @@ pub trait Plugin: Send {
 }
 ```
 
-`PluginRegistry` 拒绝重复插件 ID、空/冲突命令 ID；`install()` 初始化成功后才原子加入，`uninstall()` 清理后移除，`cleanup_all()` 按安装逆序执行。内置 `ClassificationPlugin` 与 `StylePlugin` 在 `TauriRuntime::initialize()` 初始化。详见 `.trellis/spec/backend/plugin-architecture.md`。
+`PluginRegistry` 鎷掔粷閲嶅鎻掍欢 ID銆佺┖/鍐茬獊鍛戒护 ID锛沗install()` 鍒濆鍖栨垚鍔熷悗鎵嶅師瀛愬姞鍏ワ紝`uninstall()` 娓呯悊鍚庣Щ闄わ紝`cleanup_all()` 鎸夊畨瑁呴€嗗簭鎵ц銆傚唴缃?`ClassificationPlugin` 涓?`StylePlugin` 鍦?`TauriRuntime::initialize()` 鍒濆鍖栥€傝瑙?`.trellis/spec/backend/plugin-architecture.md`銆?
+#### 4. 缁熶竴 JSON 閰嶇疆
 
-#### 4. 统一 JSON 配置
+`~/.ikun_organizer.json` 绠＄悊鎵€鏈夎缃紝鏀寔瀵煎叆/瀵煎嚭锛?
 
-`~/.ikun_organizer.json` 管理所有设置，支持导入/导出：
-
-| 配置段 | 内容 |
+| 閰嶇疆娈?| 鍐呭 |
 |--------|------|
-| `general` | 开机自启、语言、单实例、启动恢复布局、启动自动分类 |
-| `hotkeys` | toggle_panel、auto_classify |
-| `box_style` | 背景色/透明度、圆角、字号、图标大小、标题栏、锁定/关闭按钮 |
-| `box_defaults` | 新建分类框默认视图/排序/分组/尺寸 |
-| `ai` | enabled、base_url、api_key、model、temperature、timeout、retries |
-| `classification` | 分类规则列表（AI 失败时的兜底规则） |
-| `layout` | 分类框列表（位置/尺寸/锁定/排序/视图/分组/文件列表/样式覆盖） |
-| `overlay` | 桌面覆盖窗口设置（未管理图标逻辑坐标、图标尺寸、排列方向） |
-| `debug` | log_level、log_to_file、show_fps、render_wireframe |
+| `general` | 寮€鏈鸿嚜鍚€佽瑷€銆佸崟瀹炰緥銆佸惎鍔ㄦ仮澶嶅竷灞€銆佸惎鍔ㄨ嚜鍔ㄥ垎绫?|
+| `hotkeys` | toggle_panel銆乤uto_classify |
+| `box_style` | 鑳屾櫙鑹?閫忔槑搴︺€佸渾瑙掋€佸瓧鍙枫€佸浘鏍囧ぇ灏忋€佹爣棰樻爮銆侀攣瀹?鍏抽棴鎸夐挳 |
+| `box_defaults` | 鏂板缓鍒嗙被妗嗛粯璁よ鍥?鎺掑簭/鍒嗙粍/灏哄 |
+| `ai` | enabled銆乥ase_url銆乤pi_key銆乵odel銆乼emperature銆乼imeout銆乺etries |
+| `classification` | 鍒嗙被瑙勫垯鍒楄〃锛圓I 澶辫触鏃剁殑鍏滃簳瑙勫垯锛?|
+| `layout` | 鍒嗙被妗嗗垪琛紙浣嶇疆/灏哄/閿佸畾/鎺掑簭/瑙嗗浘/鍒嗙粍/鏂囦欢鍒楄〃/鏍峰紡瑕嗙洊锛?|
+| `overlay` | 妗岄潰瑕嗙洊绐楀彛璁剧疆锛堟湭绠＄悊鍥炬爣閫昏緫鍧愭爣銆佸浘鏍囧昂瀵搞€佹帓鍒楁柟鍚戯級 |
+| `debug` | log_level銆乴og_to_file銆乻how_fps銆乺ender_wireframe |
 
-**存储位置**：`~/.ikun_organizer.json`（用户主目录）
+**瀛樺偍浣嶇疆**锛歚~/.ikun_organizer.json`锛堢敤鎴蜂富鐩綍锛?
 
-**布局持久化流程**：
+**甯冨眬鎸佷箙鍖栨祦绋?*锛?
 ```
-保存: collect_grid_layout() → config.layout.boxes → merge_latest_overlay_config() → save() → ~/.ikun_organizer.json
-恢复: load() → restore_layout() → hide_native_icons() → create_desktop_overlay() → create_grid_window()
-删除: 菜单 CMD_DELETE → destroy_grid_window(hwnd) → AppConfig.retain(id != config_id) → save()
+淇濆瓨: collect_grid_layout() 鈫?config.layout.boxes 鈫?merge_latest_overlay_config() 鈫?save() 鈫?~/.ikun_organizer.json
+鎭㈠: load() 鈫?restore_layout() 鈫?hide_native_icons() 鈫?create_desktop_overlay() 鈫?create_grid_window()
+鍒犻櫎: 鑿滃崟 CMD_DELETE 鈫?destroy_grid_window(hwnd) 鈫?AppConfig.retain(id != config_id) 鈫?save()
 ```
 
-**桌面覆盖窗口生命周期（阶段 6/7）**：当 `general.restore_layout_on_start = true` 时，应用启动即接管桌面图标生命周期：先初始化图标仓库并隐藏原生 `SysListView32`，再创建 `DesktopOrgOverlay` 渲染未进入分类框的图标，最后恢复分类框窗口。即使没有保存的分类框，也会创建覆盖窗口以保持桌面接管一致性。覆盖窗口创建后会启动桌面文件监听，监听用户桌面和公共桌面目录；新增、删除、重命名或修改桌面文件时经过约 500ms debounce 后重新枚举并刷新未管理图标。退出或“清除 & 恢复”时按顺序保存布局、销毁分类框、停止桌面文件监听、销毁覆盖窗口、恢复原生图标、将仓库中的图标还原到桌面并清理桌面右键注册表。运行中如果 Explorer 重启导致原生桌面列表句柄失效或重新可见，`native_icons_hidden()` 会触发重新隐藏并保持覆盖窗口运行。
+**妗岄潰瑕嗙洊绐楀彛鐢熷懡鍛ㄦ湡锛堥樁娈?6/7锛?*锛氬綋 `general.restore_layout_on_start = true` 鏃讹紝搴旂敤鍚姩鍗虫帴绠℃闈㈠浘鏍囩敓鍛藉懆鏈燂細鍏堝垵濮嬪寲鍥炬爣浠撳簱骞堕殣钘忓師鐢?`SysListView32`锛屽啀鍒涘缓 `DesktopOrgOverlay` 娓叉煋鏈繘鍏ュ垎绫绘鐨勫浘鏍囷紝鏈€鍚庢仮澶嶅垎绫绘绐楀彛銆傚嵆浣挎病鏈変繚瀛樼殑鍒嗙被妗嗭紝涔熶細鍒涘缓瑕嗙洊绐楀彛浠ヤ繚鎸佹闈㈡帴绠′竴鑷存€с€傝鐩栫獥鍙ｅ垱寤哄悗浼氬惎鍔ㄦ闈㈡枃浠剁洃鍚紝鐩戝惉鐢ㄦ埛妗岄潰鍜屽叕鍏辨闈㈢洰褰曪紱鏂板銆佸垹闄ゃ€侀噸鍛藉悕鎴栦慨鏀规闈㈡枃浠舵椂缁忚繃绾?500ms debounce 鍚庨噸鏂版灇涓惧苟鍒锋柊鏈鐞嗗浘鏍囥€傞€€鍑烘垨鈥滄竻闄?& 鎭㈠鈥濇椂鎸夐『搴忎繚瀛樺竷灞€銆侀攢姣佸垎绫绘銆佸仠姝㈡闈㈡枃浠剁洃鍚€侀攢姣佽鐩栫獥鍙ｃ€佹仮澶嶅師鐢熷浘鏍囥€佸皢浠撳簱涓殑鍥炬爣杩樺師鍒版闈㈠苟娓呯悊妗岄潰鍙抽敭娉ㄥ唽琛ㄣ€傝繍琛屼腑濡傛灉 Explorer 閲嶅惎瀵艰嚧鍘熺敓妗岄潰鍒楄〃鍙ユ焺澶辨晥鎴栭噸鏂板彲瑙侊紝`native_icons_hidden()` 浼氳Е鍙戦噸鏂伴殣钘忓苟淇濇寔瑕嗙洊绐楀彛杩愯銆?
 
-**覆盖窗口位置持久化**：覆盖窗口图标位置保存在 `config.overlay.icon_positions`，键为文件路径，值为 96 DPI 基准逻辑坐标。覆盖窗口拖动图标后仅保存用户拖拽设定的位置（不保存自动布局位置），避免刷新时图标重叠；应用级保存布局前必须先合并磁盘上的最新 `overlay` 配置，避免用旧的内存配置覆盖最新位置。
-**覆盖窗口图标布局**：覆盖窗口使用 Grid 网格布局（overlay_grid.rs），图标拖拽释放时自动吸附到最近的网格格子。若目标格子已有图标则交换位置，新图标加入时自动找第一个空闲格子。所有网格计算通过 overlay_layout_params() 统一参数化，兼容多屏幕不同 DPI/分辨率。初始布局使用纵向优先（列优先），先填满一列再换下一列。收集未管理图标时按 display_name 去重（同一图标可能在用户桌面和公共桌面各有一个 .lnk）。is_managed_icon_path 使用精确文件名匹配（非 ends_with），避免“企业微信”子串误匹配“微信”。分类框删除后通过 restore_unmanaged_vault_icons() 将仓库中不再被管理的图标还原到桌面，再通过 request_desktop_overlay_refresh() 刷新覆盖窗口。
+**瑕嗙洊绐楀彛浣嶇疆鎸佷箙鍖?*锛氳鐩栫獥鍙ｅ浘鏍囦綅缃繚瀛樺湪 `config.overlay.icon_positions`锛岄敭涓烘枃浠惰矾寰勶紝鍊间负 96 DPI 鍩哄噯閫昏緫鍧愭爣銆傝鐩栫獥鍙ｆ嫋鍔ㄥ浘鏍囧悗浠呬繚瀛樼敤鎴锋嫋鎷借瀹氱殑浣嶇疆锛堜笉淇濆瓨鑷姩甯冨眬浣嶇疆锛夛紝閬垮厤鍒锋柊鏃跺浘鏍囬噸鍙狅紱搴旂敤绾т繚瀛樺竷灞€鍓嶅繀椤诲厛鍚堝苟纾佺洏涓婄殑鏈€鏂?`overlay` 閰嶇疆锛岄伩鍏嶇敤鏃х殑鍐呭瓨閰嶇疆瑕嗙洊鏈€鏂颁綅缃€?
+**瑕嗙洊绐楀彛鍥炬爣甯冨眬**锛氳鐩栫獥鍙ｄ娇鐢?Grid 缃戞牸甯冨眬锛坥verlay_grid.rs锛夛紝鍥炬爣鎷栨嫿閲婃斁鏃惰嚜鍔ㄥ惛闄勫埌鏈€杩戠殑缃戞牸鏍煎瓙銆傝嫢鐩爣鏍煎瓙宸叉湁鍥炬爣鍒欎氦鎹綅缃紝鏂板浘鏍囧姞鍏ユ椂鑷姩鎵剧涓€涓┖闂叉牸瀛愩€傛墍鏈夌綉鏍艰绠楅€氳繃 overlay_layout_params() 缁熶竴鍙傛暟鍖栵紝鍏煎澶氬睆骞曚笉鍚?DPI/鍒嗚鲸鐜囥€傚垵濮嬪竷灞€浣跨敤绾靛悜浼樺厛锛堝垪浼樺厛锛夛紝鍏堝～婊′竴鍒楀啀鎹笅涓€鍒椼€傛敹闆嗘湭绠＄悊鍥炬爣鏃舵寜 display_name 鍘婚噸锛堝悓涓€鍥炬爣鍙兘鍦ㄧ敤鎴锋闈㈠拰鍏叡妗岄潰鍚勬湁涓€涓?.lnk锛夈€俰s_managed_icon_path 浣跨敤绮剧‘鏂囦欢鍚嶅尮閰嶏紙闈?ends_with锛夛紝閬垮厤鈥滀紒涓氬井淇♀€濆瓙涓茶鍖归厤鈥滃井淇♀€濄€傚垎绫绘鍒犻櫎鍚庨€氳繃 restore_unmanaged_vault_icons() 灏嗕粨搴撲腑涓嶅啀琚鐞嗙殑鍥炬爣杩樺師鍒版闈紝鍐嶉€氳繃 request_desktop_overlay_refresh() 鍒锋柊瑕嗙洊绐楀彛銆?
 
-**UUID 持久化标识**：每个窗口创建时分配 `config_id: uuid::Uuid`（`GridCreateParams.config_id` → `GridWindowData.config_id`），`collect_grid_layout()` 使用该固定 ID（而非每次 `Uuid::new_v4()`），确保删除操作可按 UUID 精确匹配配置条目。
+**UUID 鎸佷箙鍖栨爣璇?*锛氭瘡涓獥鍙ｅ垱寤烘椂鍒嗛厤 `config_id: uuid::Uuid`锛坄GridCreateParams.config_id` 鈫?`GridWindowData.config_id`锛夛紝`collect_grid_layout()` 浣跨敤璇ュ浐瀹?ID锛堣€岄潪姣忔 `Uuid::new_v4()`锛夛紝纭繚鍒犻櫎鎿嶄綔鍙寜 UUID 绮剧‘鍖归厤閰嶇疆鏉＄洰銆?
 
-**DPI 处理**：配置存储逻辑像素（DPI 96 基准），创建/恢复时 `create_grid_window` 按实际 DPI 缩放，`collect_grid_layout` 反向转换回逻辑像素。
+**DPI 澶勭悊**锛氶厤缃瓨鍌ㄩ€昏緫鍍忕礌锛圖PI 96 鍩哄噯锛夛紝鍒涘缓/鎭㈠鏃?`create_grid_window` 鎸夊疄闄?DPI 缂╂斁锛宍collect_grid_layout` 鍙嶅悜杞崲鍥為€昏緫鍍忕礌銆?
 
-**固定行为（代码硬编码，不可配置）**：
-- 始终显示系统托盘，任务栏不显示
-- 始终记忆窗口位置和尺寸
-- 托盘双击 = 呼出控制面板
-- 托盘右键 = 固定菜单（打开控制面板 / 创建分类框 / 一键AI分类 / 退出）
+**鍥哄畾琛屼负锛堜唬鐮佺‖缂栫爜锛屼笉鍙厤缃級**锛?
+- 濮嬬粓鏄剧ず绯荤粺鎵樼洏锛屼换鍔℃爮涓嶆樉绀?
+- 濮嬬粓璁板繂绐楀彛浣嶇疆鍜屽昂瀵?
+- 鎵樼洏鍙屽嚮 = 鍛煎嚭鎺у埗闈㈡澘
+- 鎵樼洏鍙抽敭 = 鍥哄畾鑿滃崟锛堟墦寮€鎺у埗闈㈡澘 / 鍒涘缓鍒嗙被妗?/ 涓€閿瓵I鍒嗙被 / 閫€鍑猴級
 
-### 渲染架构
+### 娓叉煋鏋舵瀯
 
-- **原生桌面渲染**：未分类图标留在桌面原位由 Windows 渲染，已分类图标移入仓库后自然不显示
-- **图标资源分流**：`platform/windows/icon_extract.rs` 对图片、视频、PDF 等内容文件使用 `IShellItemImageFactory` 缩略图；对 `.lnk`、`.exe` 等应用文件使用 `SHDefExtractIconW`/Shell 图标，避免 Shell 缩略图画布中的额外留白。
-- **图标内容适配**：`platform/windows/icon_bitmap.rs` 负责透明边界与等比居中计算，`d2d_render.rs` 在 HICON 转 D2D 位图时应用该策略；网格尺寸仍由 `box_core::view_engine` 和 `grid_layout` 统一控制。
-- **液态玻璃效果**：通过 DXGI Desktop Duplication 捕获桌面画面，D2D Effect Graph 处理纹理，HLSL Shader 生成预乘 alpha 位图
-- **覆盖区域交互层**：透明分层窗口提供多选、右键菜单、拖拽等交互能力（非渲染层）
+- **鍘熺敓妗岄潰娓叉煋**锛氭湭鍒嗙被鍥炬爣鐣欏湪妗岄潰鍘熶綅鐢?Windows 娓叉煋锛屽凡鍒嗙被鍥炬爣绉诲叆浠撳簱鍚庤嚜鐒朵笉鏄剧ず
+- **鍥炬爣璧勬簮鍒嗘祦**锛歚platform/windows/icon_extract.rs` 瀵瑰浘鐗囥€佽棰戙€丳DF 绛夊唴瀹规枃浠朵娇鐢?`IShellItemImageFactory` 缂╃暐鍥撅紱瀵?`.lnk`銆乣.exe` 绛夊簲鐢ㄦ枃浠朵娇鐢?`SHDefExtractIconW`/Shell 鍥炬爣锛岄伩鍏?Shell 缂╃暐鍥剧敾甯冧腑鐨勯澶栫暀鐧姐€?
+- **鍥炬爣鍐呭閫傞厤**锛歚platform/windows/icon_bitmap.rs` 璐熻矗閫忔槑杈圭晫涓庣瓑姣斿眳涓绠楋紝`d2d_render.rs` 鍦?HICON 杞?D2D 浣嶅浘鏃跺簲鐢ㄨ绛栫暐锛涚綉鏍煎昂瀵镐粛鐢?`box_core::view_engine` 鍜?`grid_layout` 缁熶竴鎺у埗銆?
+- **娑叉€佺幓鐠冩晥鏋?*锛氶€氳繃 DXGI Desktop Duplication 鎹曡幏妗岄潰鐢婚潰锛孌2D Effect Graph 澶勭悊绾圭悊锛孒LSL Shader 鐢熸垚棰勪箻 alpha 浣嶅浘
+- **瑕嗙洊鍖哄煙浜や簰灞?*锛氶€忔槑鍒嗗眰绐楀彛鎻愪緵澶氶€夈€佸彸閿彍鍗曘€佹嫋鎷界瓑浜や簰鑳藉姏锛堥潪娓叉煋灞傦級
 
-### 依赖关系
+### 渚濊禆鍏崇郴
 
 ```
 main.rs (Tauri Builder + managed SharedTauriRuntime)
-  ├── tauri_commands/ (IPC adapter + 原生服务编排)
-  │     ├── platform_runtime.rs (AppContext + PluginRegistry)
-  │     ├── config_cmd.rs / box_cmd.rs
-  │     └── window_cmd.rs (持久窗口策略)
-  ├── context.rs (AppContext)
-  │     ├── config/app_config.rs (AppConfig 统一配置)
-  │     ├── platform/ (DesktopManagerTrait + 平台实现)
-  │     │     ├── windows/ (D2D渲染 + Win32窗口 + Shell/注册表菜单 + GPUI 窗口辅助)
-  │     │     └── macos/ (桌面覆盖窗口 + 分类框渲染 + stub/实验性功能)
-  │     ├── box_core/ (分类框业务逻辑 — 平台无关)
-  │     ├── classification/ (分类规则 + AI分类)
-  ├── plugin/ (进程内热安装/卸载生命周期)
-  ├── gpui_app/ (legacy Windows UI shell)
-  │     ├── app_runtime.rs (UI 框架无关命令/运行时层，持有 AppContext)
-  │     ├── control_panel.rs (GPUI 控制面板视图)
-  │     ├── create_box_dialog.rs (独立 GPUI 创建分类框窗口)
-  │     ├── edit_box_dialog.rs (独立 GPUI 编辑分类框窗口)
-  │     └── windows_main.rs (GPUI 事件循环)
-  ├── app.rs + ui/ (legacy eframe 回退，仅 eframe-ui feature)
-  └── utils/ (日志、DPI、字符串)
+  鈹溾攢鈹€ tauri_commands/ (IPC adapter + 鍘熺敓鏈嶅姟缂栨帓)
+  鈹?    鈹溾攢鈹€ platform_runtime.rs (AppContext + PluginRegistry)
+  鈹?    鈹溾攢鈹€ config_cmd.rs / box_cmd.rs
+  鈹?    鈹斺攢鈹€ window_cmd.rs (鎸佷箙绐楀彛绛栫暐)
+  鈹溾攢鈹€ context.rs (AppContext)
+  鈹?    鈹溾攢鈹€ config/app_config.rs (AppConfig 缁熶竴閰嶇疆)
+  鈹?    鈹溾攢鈹€ platform/ (DesktopManagerTrait + 骞冲彴瀹炵幇)
+  鈹?    鈹?    鈹溾攢鈹€ windows/ (D2D娓叉煋 + Win32绐楀彛 + Shell/娉ㄥ唽琛ㄨ彍鍗?+ GPUI 绐楀彛杈呭姪)
+  鈹?    鈹?    鈹斺攢鈹€ macos/ (妗岄潰瑕嗙洊绐楀彛 + 鍒嗙被妗嗘覆鏌?+ stub/瀹為獙鎬у姛鑳?
+  鈹?    鈹溾攢鈹€ box_core/ (鍒嗙被妗嗕笟鍔￠€昏緫 鈥?骞冲彴鏃犲叧)
+  鈹?    鈹溾攢鈹€ classification/ (鍒嗙被瑙勫垯 + AI鍒嗙被)
+  鈹溾攢鈹€ plugin/ (杩涚▼鍐呯儹瀹夎/鍗歌浇鐢熷懡鍛ㄦ湡)
+  鈹溾攢鈹€ gpui_app/ (legacy Windows UI shell)
+  鈹?    鈹溾攢鈹€ app_runtime.rs (UI 妗嗘灦鏃犲叧鍛戒护/杩愯鏃跺眰锛屾寔鏈?AppContext)
+  鈹?    鈹溾攢鈹€ control_panel.rs (GPUI 鎺у埗闈㈡澘瑙嗗浘)
+  鈹?    鈹溾攢鈹€ create_box_dialog.rs (鐙珛 GPUI 鍒涘缓鍒嗙被妗嗙獥鍙?
+  鈹?    鈹溾攢鈹€ edit_box_dialog.rs (鐙珛 GPUI 缂栬緫鍒嗙被妗嗙獥鍙?
+  鈹?    鈹斺攢鈹€ windows_main.rs (GPUI 浜嬩欢寰幆)
+  鈹溾攢鈹€ app.rs + ui/ (legacy eframe 鍥為€€锛屼粎 eframe-ui feature)
+  鈹斺攢鈹€ utils/ (鏃ュ織銆丏PI銆佸瓧绗︿覆)
 ```
 
-**约束**：
-- `box_core/` 不直接调用 `platform/` — 通过 trait 间接调用
-- Tauri Commands 是 adapter，只通过共享 `TauriRuntime/AppContext` 持有可变配置
-- Svelte 页面只通过 `frontend/src/lib/api/tauri-api.ts` 调用 Rust 命令
-- `gpui_app/` 和 `ui/` 是 legacy 回退，不得成为默认路径的新依赖
-- `platform/` 各平台实现通过 `#[cfg]` 隔离
+**绾︽潫**锛?
+- `box_core/` 涓嶇洿鎺ヨ皟鐢?`platform/` 鈥?閫氳繃 trait 闂存帴璋冪敤
+- Tauri Commands 鏄?adapter锛屽彧閫氳繃鍏变韩 `TauriRuntime/AppContext` 鎸佹湁鍙彉閰嶇疆
+- Svelte 椤甸潰鍙€氳繃 `frontend/src/lib/api/tauri-api.ts` 璋冪敤 Rust 鍛戒护
+- `gpui_app/` 鍜?`ui/` 鏄?legacy 鍥為€€锛屼笉寰楁垚涓洪粯璁よ矾寰勭殑鏂颁緷璧?- `platform/` 鍚勫钩鍙板疄鐜伴€氳繃 `#[cfg]` 闅旂
 
 ---
 
-## Windows 平台技术要点
+## Windows 骞冲彴鎶€鏈鐐?
 
-**渲染管线**：Direct2D + DirectWrite → DIB Section → `UpdateLayeredWindow()`（per-pixel alpha 分层窗口）
+**娓叉煋绠＄嚎**锛欴irect2D + DirectWrite 鈫?DIB Section 鈫?`UpdateLayeredWindow()`锛坧er-pixel alpha 鍒嗗眰绐楀彛锛?
 
-**窗口类型**：`WS_POPUP | WS_EX_LAYERED | WS_EX_TOOLWINDOW`，标题栏拖拽通过 `WM_NCHITTEST → HTCAPTION`，边缘缩放通过 `HTLEFT/HTRIGHT/...`
+**绐楀彛绫诲瀷**锛歚WS_POPUP | WS_EX_LAYERED | WS_EX_TOOLWINDOW`锛屾爣棰樻爮鎷栨嫿閫氳繃 `WM_NCHITTEST 鈫?HTCAPTION`锛岃竟缂樼缉鏀鹃€氳繃 `HTLEFT/HTRIGHT/...`
 
-**标题栏布局**：左侧纯文本名称（无图标、无数量），右侧 🔒/🔓 锁定按钮 + ⋮ "更多"按钮（`Segoe UI Emoji` / `Segoe UI Symbol` 字体）。锁定时整个窗口返回 `HTCLIENT`（禁止拖拽和缩放），未锁定时正常边缘缩放（`hover_edge` 驱动蓝色指示条反馈）。按钮 hover 时显示手型光标 + 半透明背景高亮。
+**鏍囬鏍忓竷灞€**锛氬乏渚х函鏂囨湰鍚嶇О锛堟棤鍥炬爣銆佹棤鏁伴噺锛夛紝鍙充晶 馃敀/馃敁 閿佸畾鎸夐挳 + 鈰?"鏇村"鎸夐挳锛坄Segoe UI Emoji` / `Segoe UI Symbol` 瀛椾綋锛夈€傞攣瀹氭椂鏁翠釜绐楀彛杩斿洖 `HTCLIENT`锛堢姝㈡嫋鎷藉拰缂╂斁锛夛紝鏈攣瀹氭椂姝ｅ父杈圭紭缂╂斁锛坄hover_edge` 椹卞姩钃濊壊鎸囩ず鏉″弽棣堬級銆傛寜閽?hover 鏃舵樉绀烘墜鍨嬪厜鏍?+ 鍗婇€忔槑鑳屾櫙楂樹寒銆?
 
-**分类框名称编辑**：双击标题文字打开 GPUI 编辑对话框（`edit_box_dialog.rs`，样式与"创建分类框"对话框对齐）。通过 `edit_box_callback` 回调传递 `config_id` 和当前名称，支持中文 IME 输入（利用 GPUI 内置的 `Input` 组件）。输入限制 16 字符。Enter 或点击"确定"保存（调用 `AppRuntime::rename_box()` 更新配置和窗口标题），Escape 或点击"取消"关闭。保存时通过 `update_grid_window_title()` 实时更新格子窗口标题。
+**鍒嗙被妗嗗悕绉扮紪杈?*锛氬弻鍑绘爣棰樻枃瀛楁墦寮€ GPUI 缂栬緫瀵硅瘽妗嗭紙`edit_box_dialog.rs`锛屾牱寮忎笌"鍒涘缓鍒嗙被妗?瀵硅瘽妗嗗榻愶級銆傞€氳繃 `edit_box_callback` 鍥炶皟浼犻€?`config_id` 鍜屽綋鍓嶅悕绉帮紝鏀寔涓枃 IME 杈撳叆锛堝埄鐢?GPUI 鍐呯疆鐨?`Input` 缁勪欢锛夈€傝緭鍏ラ檺鍒?16 瀛楃銆侲nter 鎴栫偣鍑?纭畾"淇濆瓨锛堣皟鐢?`AppRuntime::rename_box()` 鏇存柊閰嶇疆鍜岀獥鍙ｆ爣棰橈級锛孍scape 鎴栫偣鍑?鍙栨秷"鍏抽棴銆備繚瀛樻椂閫氳繃 `update_grid_window_title()` 瀹炴椂鏇存柊鏍煎瓙绐楀彛鏍囬銆?
 
-**更多下拉菜单**：点击 ⋮ 按钮弹出自定义分层窗口菜单（`WS_POPUP | WS_EX_LAYERED` + D2D/DirectWrite 渲染），支持 per-pixel alpha 半透明深色背景、圆角、DirectWrite 清晰文字（任意 DPI 不模糊）、无系统阴影。包含删除、排序（8维度+递增/递减）、分组（8维度）、查看（8模式，预留回调接口暂未实现）四个功能组，子菜单自动定位（屏幕边界翻转）。多分类框菜单互斥（全局 `OPEN_MENU_HWND` + `PostMessage` 延迟切换）。菜单打开期间分类框自动锁定。通过 `SetForegroundWindow` + `WM_ACTIVATE(WA_INACTIVE)` 实现点击外部关闭，子菜单使用 `SW_SHOWNOACTIVATE` + `MA_NOACTIVATE` 避免抢焦点。
+**鏇村涓嬫媺鑿滃崟**锛氱偣鍑?鈰?鎸夐挳寮瑰嚭鑷畾涔夊垎灞傜獥鍙ｈ彍鍗曪紙`WS_POPUP | WS_EX_LAYERED` + D2D/DirectWrite 娓叉煋锛夛紝鏀寔 per-pixel alpha 鍗婇€忔槑娣辫壊鑳屾櫙銆佸渾瑙掋€丏irectWrite 娓呮櫚鏂囧瓧锛堜换鎰?DPI 涓嶆ā绯婏級銆佹棤绯荤粺闃村奖銆傚寘鍚垹闄ゃ€佹帓搴忥紙8缁村害+閫掑/閫掑噺锛夈€佸垎缁勶紙8缁村害锛夈€佹煡鐪嬶紙8妯″紡锛岄鐣欏洖璋冩帴鍙ｆ殏鏈疄鐜帮級鍥涗釜鍔熻兘缁勶紝瀛愯彍鍗曡嚜鍔ㄥ畾浣嶏紙灞忓箷杈圭晫缈昏浆锛夈€傚鍒嗙被妗嗚彍鍗曚簰鏂ワ紙鍏ㄥ眬 `OPEN_MENU_HWND` + `PostMessage` 寤惰繜鍒囨崲锛夈€傝彍鍗曟墦寮€鏈熼棿鍒嗙被妗嗚嚜鍔ㄩ攣瀹氥€傞€氳繃 `SetForegroundWindow` + `WM_ACTIVATE(WA_INACTIVE)` 瀹炵幇鐐瑰嚮澶栭儴鍏抽棴锛屽瓙鑿滃崟浣跨敤 `SW_SHOWNOACTIVATE` + `MA_NOACTIVATE` 閬垮厤鎶㈢劍鐐广€?
 
-**锁定状态持久化**：`GridWindowData.locked` ↔ `BoxLayoutData.locked` ↔ `~/.ikun_organizer.json`，保存时 `collect_grid_layout()` 读取实际状态，恢复时 `restore_layout()` 传入 `locked` 参数。
+**閿佸畾鐘舵€佹寔涔呭寲**锛歚GridWindowData.locked` 鈫?`BoxLayoutData.locked` 鈫?`~/.ikun_organizer.json`锛屼繚瀛樻椂 `collect_grid_layout()` 璇诲彇瀹為檯鐘舵€侊紝鎭㈠鏃?`restore_layout()` 浼犲叆 `locked` 鍙傛暟銆?
 
-**窗口层级**：
+**绐楀彛灞傜骇**锛?
 ```
-顶层窗口 > 普通应用 > **分类框窗口** > **桌面覆盖窗口 DesktopOrgOverlay** > 桌面图标 (SysListView32，隐藏) > 壁纸 (Progman/WorkerW)
+椤跺眰绐楀彛 > 鏅€氬簲鐢?> **鍒嗙被妗嗙獥鍙?* > **妗岄潰瑕嗙洊绐楀彛 DesktopOrgOverlay** > 妗岄潰鍥炬爣 (SysListView32锛岄殣钘? > 澹佺焊 (Progman/WorkerW)
 ```
 
-**Shell 右键菜单**：文件菜单使用 `SHParseDisplayName → SHBindToParent → IShellFolder::GetUIObjectOf(IContextMenu)`，桌面背景菜单使用 `IShellFolder → IShellView::GetItemObject(SVGIO_BACKGROUND)` 获取真实 Shell 菜单；`InvokeCommand` 使用 `cmd - FCIDM_SHVIEWFIRST` 作为 verb 偏移，避免绝对/相对 PIDL 混用。COM 菜单链优先使用 `windows` crate 类型，失败时回退到自定义 `ShellExecuteW` 菜单。`ShellMenuResult` 区分 `Cancelled`（菜单未能显示，触发回退）和 `Dismissed`（菜单已显示但用户关闭，不触发回退），避免关闭菜单后误弹回退菜单。
+**Shell 鍙抽敭鑿滃崟**锛氭枃浠惰彍鍗曚娇鐢?`SHParseDisplayName 鈫?SHBindToParent 鈫?IShellFolder::GetUIObjectOf(IContextMenu)`锛屾闈㈣儗鏅彍鍗曚娇鐢?`IShellFolder 鈫?IShellView::GetItemObject(SVGIO_BACKGROUND)` 鑾峰彇鐪熷疄 Shell 鑿滃崟锛沗InvokeCommand` 浣跨敤 `cmd - FCIDM_SHVIEWFIRST` 浣滀负 verb 鍋忕Щ锛岄伩鍏嶇粷瀵?鐩稿 PIDL 娣风敤銆侰OM 鑿滃崟閾句紭鍏堜娇鐢?`windows` crate 绫诲瀷锛屽け璐ユ椂鍥為€€鍒拌嚜瀹氫箟 `ShellExecuteW` 鑿滃崟銆俙ShellMenuResult` 鍖哄垎 `Cancelled`锛堣彍鍗曟湭鑳芥樉绀猴紝瑙﹀彂鍥為€€锛夊拰 `Dismissed`锛堣彍鍗曞凡鏄剧ず浣嗙敤鎴峰叧闂紝涓嶈Е鍙戝洖閫€锛夛紝閬垮厤鍏抽棴鑿滃崟鍚庤寮瑰洖閫€鑿滃崟銆?
 
-**桌面右键动作**：通过 Windows 注册表 (`HKCU\...\Directory\Background\shell\IkunOpenPanel` / `IkunCreateBox` / `IkunAiClassify` / `IkunQuit`) 注入菜单项，Shell 自动合并到 `QueryContextMenu` 结果（覆盖初始菜单和“显示更多选项”legacy 菜单）。程序启动时先清理旧残留再注册，退出时清理，确保不运行时无残留。用户点击时通过命令行参数（如 `--create-box`）写入临时信号文件；运行实例由 `AppRuntime::tick()` 轮询消费后打开 GPUI 控制面板、独立创建分类框窗口、执行 AI 分类或退出。多屏定位通过 Win32 `FindWindowW` + `SetWindowPos` 物理像素坐标实现。
+**妗岄潰鍙抽敭鍔ㄤ綔**锛氶€氳繃 Windows 娉ㄥ唽琛?(`HKCU\...\Directory\Background\shell\IkunOpenPanel` / `IkunCreateBox` / `IkunAiClassify` / `IkunQuit`) 娉ㄥ叆鑿滃崟椤癸紝Shell 鑷姩鍚堝苟鍒?`QueryContextMenu` 缁撴灉锛堣鐩栧垵濮嬭彍鍗曞拰鈥滄樉绀烘洿澶氶€夐」鈥漧egacy 鑿滃崟锛夈€傜▼搴忓惎鍔ㄦ椂鍏堟竻鐞嗘棫娈嬬暀鍐嶆敞鍐岋紝閫€鍑烘椂娓呯悊锛岀‘淇濅笉杩愯鏃舵棤娈嬬暀銆傜敤鎴风偣鍑绘椂閫氳繃鍛戒护琛屽弬鏁帮紙濡?`--create-box`锛夊啓鍏ヤ复鏃朵俊鍙锋枃浠讹紱杩愯瀹炰緥鐢?`AppRuntime::tick()` 杞娑堣垂鍚庢墦寮€ GPUI 鎺у埗闈㈡澘銆佺嫭绔嬪垱寤哄垎绫绘绐楀彛銆佹墽琛?AI 鍒嗙被鎴栭€€鍑恒€傚灞忓畾浣嶉€氳繃 Win32 `FindWindowW` + `SetWindowPos` 鐗╃悊鍍忕礌鍧愭爣瀹炵幇銆?
 
-**虚拟 Shell 对象（CLSID）**：回收站、此电脑、网络、控制面板等虚拟对象通过 `::{CLSID}` 路径标识。`desktop_manager.rs` 维护 `VIRTUAL_SHELL_OBJECTS` 静态列表，`clsid_display_name()` 函数提供大小写不敏感的 CLSID → 中文名称映射。`BoxLayoutData.display_names` 持久化显示名称，恢复布局时 CLSID 路径始终通过 `clsid_display_name()` 解析（不依赖 `display_names` 数组），普通文件路径优先使用 `display_names`。
+**铏氭嫙 Shell 瀵硅薄锛圕LSID锛?*锛氬洖鏀剁珯銆佹鐢佃剳銆佺綉缁溿€佹帶鍒堕潰鏉跨瓑铏氭嫙瀵硅薄閫氳繃 `::{CLSID}` 璺緞鏍囪瘑銆俙desktop_manager.rs` 缁存姢 `VIRTUAL_SHELL_OBJECTS` 闈欐€佸垪琛紝`clsid_display_name()` 鍑芥暟鎻愪緵澶у皬鍐欎笉鏁忔劅鐨?CLSID 鈫?涓枃鍚嶇О鏄犲皠銆俙BoxLayoutData.display_names` 鎸佷箙鍖栨樉绀哄悕绉帮紝鎭㈠甯冨眬鏃?CLSID 璺緞濮嬬粓閫氳繃 `clsid_display_name()` 瑙ｆ瀽锛堜笉渚濊禆 `display_names` 鏁扮粍锛夛紝鏅€氭枃浠惰矾寰勪紭鍏堜娇鐢?`display_names`銆?
 
-**图标提取与项目图标**：`SHDefExtractIconW` 优先提取 128×128 高清图标，`.lnk` 先通过 `IShellLink` + `IPersistFile` 解析目标后提取目标图标，避免快捷方式箭头覆层污染分类框图标。应用项目图标从 `logo.ico` 经 `build.rs` 嵌入可执行文件，供系统托盘和菜单项图标使用。
+**鍥炬爣鎻愬彇涓庨」鐩浘鏍?*锛歚SHDefExtractIconW` 浼樺厛鎻愬彇 128脳128 楂樻竻鍥炬爣锛宍.lnk` 鍏堥€氳繃 `IShellLink` + `IPersistFile` 瑙ｆ瀽鐩爣鍚庢彁鍙栫洰鏍囧浘鏍囷紝閬垮厤蹇嵎鏂瑰紡绠ご瑕嗗眰姹℃煋鍒嗙被妗嗗浘鏍囥€傚簲鐢ㄩ」鐩浘鏍囦粠 `logo.ico` 缁?`build.rs` 宓屽叆鍙墽琛屾枃浠讹紝渚涚郴缁熸墭鐩樺拰鑿滃崟椤瑰浘鏍囦娇鐢ㄣ€?
 
-**DPI 适配**：manifest + 运行时 `SetProcessDpiAwarenessContext(PER_MONITOR_V2)`，`GetDpiForWindow` + `WM_DPICHANGED` 动态响应
-
----
-
-## Legacy GPUI 定时器防崩溃机制
-
-该机制仅适用于 `--no-default-features` 的 GPUI 回退路径，不得复制到默认 Tauri 运行时。GPUI 的 `Entity::update()` / `App::update()` 内部使用借用检查；异步定时器与渲染循环冲突时会触发 panic。
-
-**解决方案**：windows_main.rs 中的 safe_gpui_update() 辅助函数通过 std::panic::catch_unwind 将 panic 降级为可恢复的跳过操作：
-
-- Ok(Ok(T)) — update 成功执行
-- Ok(Err(_)) — GPUI AsyncApp 已释放（应用正在退出），终止定时器
-- Err(RefCellBorrowConflict) — RefCell 借用冲突，跳过本次 tick（continue）
-
-**注意**：定时器间隔已从 50ms 调整为 100ms，液态玻璃渲染定时器从 33ms 调整为 100ms，大幅降低冲突概率。
+**DPI 閫傞厤**锛歮anifest + 杩愯鏃?`SetProcessDpiAwarenessContext(PER_MONITOR_V2)`锛宍GetDpiForWindow` + `WM_DPICHANGED` 鍔ㄦ€佸搷搴?
 
 ---
 
-## 开发规范
+## Legacy GPUI 瀹氭椂鍣ㄩ槻宕╂簝鏈哄埗
 
-### 错误处理
-- 统一使用 `anyhow::Result`
-- 失败时 fallback 到默认值（不阻塞应用）
-- 所有错误必须记录日志
+璇ユ満鍒朵粎閫傜敤浜?`--no-default-features` 鐨?GPUI 鍥為€€璺緞锛屼笉寰楀鍒跺埌榛樿 Tauri 杩愯鏃躲€侴PUI 鐨?`Entity::update()` / `App::update()` 鍐呴儴浣跨敤鍊熺敤妫€鏌ワ紱寮傛瀹氭椂鍣ㄤ笌娓叉煋寰幆鍐茬獊鏃朵細瑙﹀彂 panic銆?
+**瑙ｅ喅鏂规**锛歸indows_main.rs 涓殑 safe_gpui_update() 杈呭姪鍑芥暟閫氳繃 std::panic::catch_unwind 灏?panic 闄嶇骇涓哄彲鎭㈠鐨勮烦杩囨搷浣滐細
 
-### 平台代码
-- 使用 `#[cfg(windows)]` / `#[cfg(target_os = "macos")]` 隔离
-- 通过 trait 统一接口
+- Ok(Ok(T)) 鈥?update 鎴愬姛鎵ц
+- Ok(Err(_)) 鈥?GPUI AsyncApp 宸查噴鏀撅紙搴旂敤姝ｅ湪閫€鍑猴級锛岀粓姝㈠畾鏃跺櫒
+- Err(RefCellBorrowConflict) 鈥?RefCell 鍊熺敤鍐茬獊锛岃烦杩囨湰娆?tick锛坈ontinue锛?
 
-### 代码质量
-- 提交前 `cargo fmt` + `cargo clippy`
-- 所有公开 API 必须有文档注释
-- 单文件不超过 1500 行（渲染引擎等复杂模块可适当放宽）
-
-### 日志
-- 使用 `log::{debug, info, warn, error}`
-- 日志写入 `~/.ikun_organizer_log/` 目录，文件命名：`.ikun_organizer_log_YYYYMMDD_N`（如 `.ikun_organizer_log_20260722_1`）
-- 单文件超过 2MB 自动切换到下一个序号文件
-- 启动时自动清理超过 7 天的日志文件
-- 日志级别通过 `RUST_LOG` 环境变量控制
-- 开发日志宏：`log_debug!`、`log_info!`、`log_warn!`、`log_error!`（自动附加文件/模块信息）
-- 发行版日志宏：`release_info!`、`release_warn!`、`release_error!`（带 `[RELEASE]` 前缀，用于生产环境问题排查，不应作为调试代码删除）
----
-
-## 功能需求（待实现）
-
-### 分类框功能
-- [x] 拖拽移动 + 位置记忆（通过 collect_grid_layout + restore_layout）
-- [x] 边缘拖拽修改尺寸 + 尺寸记忆（同上）
-- [x] 锁定按钮 + 锁定记忆（锁定后不可拖拽/缩放，hover 反馈，状态持久化）
-- [x] "更多"下拉菜单（排序/分组/查看/删除，自定义分层窗口 + D2D/DirectWrite 渲染，删除功能已实现）
-- [x] 分类框名称修改（双击标题文字打开 GPUI 编辑对话框，输入框 + 确定/取消按钮，16字符限制，Enter保存/Esc取消）
-- [x] 图标内联重命名（Shell 右键菜单 F2 → 独立线程 EDIT 控件，预选文件名不含扩展名，异步 PostMessage 结果，扩展名自动保留）
-- [x] 排序方式：名称、类型、修改时间、作者、创建时间、大小、标记、标题 × 递增/递减（引擎已实现，菜单可选）
-- [x] 查看方式：超大、大、中、小、列表、详细信息、平铺、内容（引擎已实现，菜单可选）
-- [x] 分组展示：按名称、类型、修改时间、作者、创建时间、大小、标记、标题（引擎已实现，菜单可选）
-- [x] 拖拽快捷方式到外部桌面 / 外部桌面快捷方式拖入分类框（通过 DesktopOrgOverlay + Vault 无管理员双向移动）
-- [x] 右键功能与原生快捷方式一致（Shell 上下文菜单已实现）
-- [x] 分类框删除（更多菜单 → DestroyWindow + UUID 精确删除配置 + rerender_all 修复分层窗口）
-- [x] 图标 Y 轴滚动（鼠标滚轮 + 半透明滚动条，DPI 自适应，滚动区域裁剪防止溢出标题栏）
-- [x] 窗口层级管理（分类框始终低于其他应用窗口，分类框之间点击的在最前，WM_WINDOWPOSCHANGING + HWND_BOTTOM + 递归抑制）
-- [x] 图标自动重排（窗口尺寸变化时按线性索引重新映射，保持视觉顺序和空位，支持拖拽后固定位置的动态重排）
-- [x] 统一图标样式（覆盖区域和分类框使用相同的 hover/选中背景色和圆角，暗蓝灰色半透明 + 6px 圆角）
-- [x] 统一图标渲染（draw_icon_with_label 公共函数，分类框/覆盖区域/拖拽残影共用，字体/截断/阴影一致）
-- [x] 拖拽可视化反馈（插入分隔线 + 替换高亮，支持同框/跨框/覆盖区域拖拽，shift-insert 替代 swap）
-- [x] 分类框拖拽文件到资源管理器（OLE CF_HDROP 复制到 Explorer，图标保持原位）
-- [x] 液态玻璃效果（GPU 渲染器 + 可配置参数 + 实时调节界面）
-- [x] 多选图标（Ctrl/Shift+点击 + 框选 + 跨容器多选 + 多选右键菜单）
-- [x] 覆盖区域拖拽到资源管理器（OLE CF_HDROP）
-- [x] 分类框多选拖拽到资源管理器
-- [x] 回收站文件拖入分类框（自动恢复原始文件名）
-- [x] 原生桌面图标渲染（移除覆盖区域窗口，直接使用原生桌面）
-- [x] 文件缩略图显示（IShellItemImageFactory）
-- [x] 公共桌面图标支持（Public Desktop vault）
-
-### 桌面右键菜单
-- [x] 打开控制面板（注册表注入 + 信号文件 IPC + GPUI 控制面板显示）
-- [x] 创建桌面分类框（注册表注入 + 信号文件 IPC + 独立 GPUI 创建分类框窗口）
-- [x] 一键 AI 桌面分类（注册表注入 + 信号文件 IPC + 运行时分类入口）
-- [x] 退出桌面分类（注册表注入 + 信号文件 IPC + 清理退出）
-
-### macOS 平台（开发中）
-- [x] 桌面图标枚举（NSWorkspace + FileManager API）
-- [x] 图标提取（NSWorkspace iconForFile + NSImage → CGImage）
-- [x] 桌面覆盖窗口（NSWindow + 透明 + 鼠标穿透）
-- [x] 分类框渲染（圆角背景 + 标题 + 图标网格 + Finder 风格标签）
-- [x] 标签截断（第一行最大前缀 + 第二行中间截断保留扩展名）
-- [ ] 分类框拖拽/缩放
-- [ ] 右键菜单
-- [ ] 图标拖拽到分类框
-- [ ] 布局持久化
-
-### 控制台（控制面板）
-- [x] 键盘快捷键呼出
-- [x] 不在任务栏显示（WS_EX_TOOLWINDOW）
-- [x] 仅系统托盘图标（右键菜单：打开面板/创建分类框/AI分类/退出）
-- [x] 分类框风格设置（背景色、圆角、图标大小、文本大小）
-- [x] AI BaseUrl / API Key 设置
-- [x] 统一配置持久化（~/.ikun_organizer.json）
+**娉ㄦ剰**锛氬畾鏃跺櫒闂撮殧宸蹭粠 50ms 璋冩暣涓?100ms锛屾恫鎬佺幓鐠冩覆鏌撳畾鏃跺櫒浠?33ms 璋冩暣涓?100ms锛屽ぇ骞呴檷浣庡啿绐佹鐜囥€?
 
 ---
 
-## 参考
+## 寮€鍙戣鑼?
 
-- [Tauri 2 文档](https://v2.tauri.app/)
-- [Svelte 5 文档](https://svelte.dev/docs/svelte/overview)
+### 閿欒澶勭悊
+- 缁熶竴浣跨敤 `anyhow::Result`
+- 澶辫触鏃?fallback 鍒伴粯璁ゅ€硷紙涓嶉樆濉炲簲鐢級
+- 鎵€鏈夐敊璇繀椤昏褰曟棩蹇?
+
+### 骞冲彴浠ｇ爜
+- 浣跨敤 `#[cfg(windows)]` / `#[cfg(target_os = "macos")]` 闅旂
+- 閫氳繃 trait 缁熶竴鎺ュ彛
+
+### 浠ｇ爜璐ㄩ噺
+- 鎻愪氦鍓?`cargo fmt` + `cargo clippy`
+- 鎵€鏈夊叕寮€ API 蹇呴』鏈夋枃妗ｆ敞閲?
+- 鍗曟枃浠朵笉瓒呰繃 1500 琛岋紙娓叉煋寮曟搸绛夊鏉傛ā鍧楀彲閫傚綋鏀惧锛?
+
+### 鏃ュ織
+- 浣跨敤 `log::{debug, info, warn, error}`
+- 鏃ュ織鍐欏叆 `~/.ikun_organizer_log/` 鐩綍锛屾枃浠跺懡鍚嶏細`.ikun_organizer_log_YYYYMMDD_N`锛堝 `.ikun_organizer_log_20260722_1`锛?
+- 鍗曟枃浠惰秴杩?2MB 鑷姩鍒囨崲鍒颁笅涓€涓簭鍙锋枃浠?
+- 鍚姩鏃惰嚜鍔ㄦ竻鐞嗚秴杩?7 澶╃殑鏃ュ織鏂囦欢
+- 鏃ュ織绾у埆閫氳繃 `RUST_LOG` 鐜鍙橀噺鎺у埗
+- 寮€鍙戞棩蹇楀畯锛歚log_debug!`銆乣log_info!`銆乣log_warn!`銆乣log_error!`锛堣嚜鍔ㄩ檮鍔犳枃浠?妯″潡淇℃伅锛?
+- 鍙戣鐗堟棩蹇楀畯锛歚release_info!`銆乣release_warn!`銆乣release_error!`锛堝甫 `[RELEASE]` 鍓嶇紑锛岀敤浜庣敓浜х幆澧冮棶棰樻帓鏌ワ紝涓嶅簲浣滀负璋冭瘯浠ｇ爜鍒犻櫎锛?
+- **窗口上下文标记**：Tauri Command 入口使用 WindowLogGuard::new(window.label()) 自动标记窗口来源（[window:control-panel]、[window:create-box]、[window:edit-box]）
+- **前端 IPC 日志**：前端调用 logToRust(level, message) 将日志上报到 Rust 后端，自动标记 [frontend:<window>]
+---
+
+## 鍔熻兘闇€姹傦紙寰呭疄鐜帮級
+
+### 鍒嗙被妗嗗姛鑳?
+- [x] 鎷栨嫿绉诲姩 + 浣嶇疆璁板繂锛堥€氳繃 collect_grid_layout + restore_layout锛?
+- [x] 杈圭紭鎷栨嫿淇敼灏哄 + 灏哄璁板繂锛堝悓涓婏級
+- [x] 閿佸畾鎸夐挳 + 閿佸畾璁板繂锛堥攣瀹氬悗涓嶅彲鎷栨嫿/缂╂斁锛宧over 鍙嶉锛岀姸鎬佹寔涔呭寲锛?
+- [x] "鏇村"涓嬫媺鑿滃崟锛堟帓搴?鍒嗙粍/鏌ョ湅/鍒犻櫎锛岃嚜瀹氫箟鍒嗗眰绐楀彛 + D2D/DirectWrite 娓叉煋锛屽垹闄ゅ姛鑳藉凡瀹炵幇锛?
+- [x] 鍒嗙被妗嗗悕绉颁慨鏀癸紙鍙屽嚮鏍囬鏂囧瓧鎵撳紑 GPUI 缂栬緫瀵硅瘽妗嗭紝杈撳叆妗?+ 纭畾/鍙栨秷鎸夐挳锛?6瀛楃闄愬埗锛孍nter淇濆瓨/Esc鍙栨秷锛?
+- [x] 鍥炬爣鍐呰仈閲嶅懡鍚嶏紙Shell 鍙抽敭鑿滃崟 F2 鈫?鐙珛绾跨▼ EDIT 鎺т欢锛岄閫夋枃浠跺悕涓嶅惈鎵╁睍鍚嶏紝寮傛 PostMessage 缁撴灉锛屾墿灞曞悕鑷姩淇濈暀锛?
+- [x] 鎺掑簭鏂瑰紡锛氬悕绉般€佺被鍨嬨€佷慨鏀规椂闂淬€佷綔鑰呫€佸垱寤烘椂闂淬€佸ぇ灏忋€佹爣璁般€佹爣棰?脳 閫掑/閫掑噺锛堝紩鎿庡凡瀹炵幇锛岃彍鍗曞彲閫夛級
+- [x] 鏌ョ湅鏂瑰紡锛氳秴澶с€佸ぇ銆佷腑銆佸皬銆佸垪琛ㄣ€佽缁嗕俊鎭€佸钩閾恒€佸唴瀹癸紙寮曟搸宸插疄鐜帮紝鑿滃崟鍙€夛級
+- [x] 鍒嗙粍灞曠ず锛氭寜鍚嶇О銆佺被鍨嬨€佷慨鏀规椂闂淬€佷綔鑰呫€佸垱寤烘椂闂淬€佸ぇ灏忋€佹爣璁般€佹爣棰橈紙寮曟搸宸插疄鐜帮紝鑿滃崟鍙€夛級
+- [x] 鎷栨嫿蹇嵎鏂瑰紡鍒板閮ㄦ闈?/ 澶栭儴妗岄潰蹇嵎鏂瑰紡鎷栧叆鍒嗙被妗嗭紙閫氳繃 DesktopOrgOverlay + Vault 鏃犵鐞嗗憳鍙屽悜绉诲姩锛?
+- [x] 鍙抽敭鍔熻兘涓庡師鐢熷揩鎹锋柟寮忎竴鑷达紙Shell 涓婁笅鏂囪彍鍗曞凡瀹炵幇锛?
+- [x] 鍒嗙被妗嗗垹闄わ紙鏇村鑿滃崟 鈫?DestroyWindow + UUID 绮剧‘鍒犻櫎閰嶇疆 + rerender_all 淇鍒嗗眰绐楀彛锛?
+- [x] 鍥炬爣 Y 杞存粴鍔紙榧犳爣婊氳疆 + 鍗婇€忔槑婊氬姩鏉★紝DPI 鑷€傚簲锛屾粴鍔ㄥ尯鍩熻鍓槻姝㈡孩鍑烘爣棰樻爮锛?
+- [x] 绐楀彛灞傜骇绠＄悊锛堝垎绫绘濮嬬粓浣庝簬鍏朵粬搴旂敤绐楀彛锛屽垎绫绘涔嬮棿鐐瑰嚮鐨勫湪鏈€鍓嶏紝WM_WINDOWPOSCHANGING + HWND_BOTTOM + 閫掑綊鎶戝埗锛?
+- [x] 鍥炬爣鑷姩閲嶆帓锛堢獥鍙ｅ昂瀵稿彉鍖栨椂鎸夌嚎鎬х储寮曢噸鏂版槧灏勶紝淇濇寔瑙嗚椤哄簭鍜岀┖浣嶏紝鏀寔鎷栨嫿鍚庡浐瀹氫綅缃殑鍔ㄦ€侀噸鎺掞級
+- [x] 缁熶竴鍥炬爣鏍峰紡锛堣鐩栧尯鍩熷拰鍒嗙被妗嗕娇鐢ㄧ浉鍚岀殑 hover/閫変腑鑳屾櫙鑹插拰鍦嗚锛屾殫钃濈伆鑹插崐閫忔槑 + 6px 鍦嗚锛?
+- [x] 缁熶竴鍥炬爣娓叉煋锛坉raw_icon_with_label 鍏叡鍑芥暟锛屽垎绫绘/瑕嗙洊鍖哄煙/鎷栨嫿娈嬪奖鍏辩敤锛屽瓧浣?鎴柇/闃村奖涓€鑷达級
+- [x] 鎷栨嫿鍙鍖栧弽棣堬紙鎻掑叆鍒嗛殧绾?+ 鏇挎崲楂樹寒锛屾敮鎸佸悓妗?璺ㄦ/瑕嗙洊鍖哄煙鎷栨嫿锛宻hift-insert 鏇夸唬 swap锛?
+- [x] 鍒嗙被妗嗘嫋鎷芥枃浠跺埌璧勬簮绠＄悊鍣紙OLE CF_HDROP 澶嶅埗鍒?Explorer锛屽浘鏍囦繚鎸佸師浣嶏級
+- [x] 娑叉€佺幓鐠冩晥鏋滐紙GPU 娓叉煋鍣?+ 鍙厤缃弬鏁?+ 瀹炴椂璋冭妭鐣岄潰锛?
+- [x] 澶氶€夊浘鏍囷紙Ctrl/Shift+鐐瑰嚮 + 妗嗛€?+ 璺ㄥ鍣ㄥ閫?+ 澶氶€夊彸閿彍鍗曪級
+- [x] 瑕嗙洊鍖哄煙鎷栨嫿鍒拌祫婧愮鐞嗗櫒锛圤LE CF_HDROP锛?
+- [x] 鍒嗙被妗嗗閫夋嫋鎷藉埌璧勬簮绠＄悊鍣?
+- [x] 鍥炴敹绔欐枃浠舵嫋鍏ュ垎绫绘锛堣嚜鍔ㄦ仮澶嶅師濮嬫枃浠跺悕锛?
+- [x] 鍘熺敓妗岄潰鍥炬爣娓叉煋锛堢Щ闄よ鐩栧尯鍩熺獥鍙ｏ紝鐩存帴浣跨敤鍘熺敓妗岄潰锛?
+- [x] 鏂囦欢缂╃暐鍥炬樉绀猴紙IShellItemImageFactory锛?
+- [x] 鍏叡妗岄潰鍥炬爣鏀寔锛圥ublic Desktop vault锛?
+
+### 妗岄潰鍙抽敭鑿滃崟
+- [x] 鎵撳紑鎺у埗闈㈡澘锛堟敞鍐岃〃娉ㄥ叆 + 淇″彿鏂囦欢 IPC + GPUI 鎺у埗闈㈡澘鏄剧ず锛?
+- [x] 鍒涘缓妗岄潰鍒嗙被妗嗭紙娉ㄥ唽琛ㄦ敞鍏?+ 淇″彿鏂囦欢 IPC + 鐙珛 GPUI 鍒涘缓鍒嗙被妗嗙獥鍙ｏ級
+- [x] 涓€閿?AI 妗岄潰鍒嗙被锛堟敞鍐岃〃娉ㄥ叆 + 淇″彿鏂囦欢 IPC + 杩愯鏃跺垎绫诲叆鍙ｏ級
+- [x] 閫€鍑烘闈㈠垎绫伙紙娉ㄥ唽琛ㄦ敞鍏?+ 淇″彿鏂囦欢 IPC + 娓呯悊閫€鍑猴級
+
+### macOS 骞冲彴锛堝紑鍙戜腑锛?
+- [x] 妗岄潰鍥炬爣鏋氫妇锛圢SWorkspace + FileManager API锛?
+- [x] 鍥炬爣鎻愬彇锛圢SWorkspace iconForFile + NSImage 鈫?CGImage锛?
+- [x] 妗岄潰瑕嗙洊绐楀彛锛圢SWindow + 閫忔槑 + 榧犳爣绌块€忥級
+- [x] 鍒嗙被妗嗘覆鏌擄紙鍦嗚鑳屾櫙 + 鏍囬 + 鍥炬爣缃戞牸 + Finder 椋庢牸鏍囩锛?
+- [x] 鏍囩鎴柇锛堢涓€琛屾渶澶у墠缂€ + 绗簩琛屼腑闂存埅鏂繚鐣欐墿灞曞悕锛?
+- [ ] 鍒嗙被妗嗘嫋鎷?缂╂斁
+- [ ] 鍙抽敭鑿滃崟
+- [ ] 鍥炬爣鎷栨嫿鍒板垎绫绘
+- [ ] 甯冨眬鎸佷箙鍖?
+
+### 鎺у埗鍙帮紙鎺у埗闈㈡澘锛?- [x] 閿洏蹇嵎閿懠鍑?- [x] 涓嶅湪浠诲姟鏍忔樉绀猴紙WS_EX_TOOLWINDOW锛?
+- [x] 浠呯郴缁熸墭鐩樺浘鏍囷紙鍙抽敭鑿滃崟锛氭墦寮€闈㈡澘/鍒涘缓鍒嗙被妗?AI鍒嗙被/閫€鍑猴級
+- [x] 鍒嗙被妗嗛鏍艰缃紙鑳屾櫙鑹层€佸渾瑙掋€佸浘鏍囧ぇ灏忋€佹枃鏈ぇ灏忥級
+- [x] AI BaseUrl / API Key 璁剧疆
+- [x] 缁熶竴閰嶇疆鎸佷箙鍖栵紙~/.ikun_organizer.json锛?
+
+---
+
+## 鍙傝€?
+- [Tauri 2 鏂囨。](https://v2.tauri.app/)
+- [Svelte 5 鏂囨。](https://svelte.dev/docs/svelte/overview)
 - [windows-rs](https://github.com/microsoft/windows-rs)
 - [Windows Shell API](https://learn.microsoft.com/en-us/windows/win32/shell/)
-- 架构重构方案：`todo/架构重构.md`
-- 需求 PRD：`todo/desktop-prd.md`
+- 鏋舵瀯閲嶆瀯鏂规锛歚todo/鏋舵瀯閲嶆瀯.md`
+- 闇€姹?PRD锛歚todo/desktop-prd.md`
 
 
 
 ---
 
-## 应用图标规范
+## 搴旂敤鍥炬爣瑙勮寖
 
-### logo.ico 要求
+### logo.ico 瑕佹眰
 
-| 属性 | 要求 |
+| 灞炴€?| 瑕佹眰 |
 |------|------|
-| **位置** | 项目根目录 `logo.ico` |
-| **格式** | Windows ICO（多分辨率嵌入） |
-| **必需尺寸** | 16×16, 32×32, 48×48, 64×64, 128×128, 256×256 |
-| **色彩深度** | 32-bit RGBA |
+| **浣嶇疆** | 椤圭洰鏍圭洰褰?`logo.ico` |
+| **鏍煎紡** | Windows ICO锛堝鍒嗚鲸鐜囧祵鍏ワ級 |
+| **蹇呴渶灏哄** | 16脳16, 32脳32, 48脳48, 64脳64, 128脳128, 256脳256 |
+| **鑹插僵娣卞害** | 32-bit RGBA |
 
-### 为什么需要多分辨率
+### 涓轰粈涔堥渶瑕佸鍒嗚鲸鐜?
 
-Windows 在不同场景请求不同尺寸：系统托盘 16×16、标题栏 16-32、右键菜单 16、资源管理器 32-48、Alt+Tab 32-48、高 DPI 缩放需要 64/128/256。单一尺寸会导致 bitmap-stretch 模糊。
+Windows 鍦ㄤ笉鍚屽満鏅姹備笉鍚屽昂瀵革細绯荤粺鎵樼洏 16脳16銆佹爣棰樻爮 16-32銆佸彸閿彍鍗?16銆佽祫婧愮鐞嗗櫒 32-48銆丄lt+Tab 32-48銆侀珮 DPI 缂╂斁闇€瑕?64/128/256銆傚崟涓€灏哄浼氬鑷?bitmap-stretch 妯＄硦銆?
 
-### 编译时嵌入机制
+### 缂栬瘧鏃跺祵鍏ユ満鍒?
 
-- `build.rs` 生成 `.rc` 文件，引用 `1 ICON "logo.ico"`
-- 依次尝试 `windres`（MinGW）→ `rc.exe + cvtres.exe`（MSVC）→ 直接链接 `.res`
-- **资源编译工具不可用时 `panic!` 中断编译**，防止产出无图标的 .exe
-- 编译环境必须有 `windres` 或 `rc.exe`（安装 Rust + MinGW 或 VS Build Tools）
+- `build.rs` 鐢熸垚 `.rc` 鏂囦欢锛屽紩鐢?`1 ICON "logo.ico"`
+- 渚濇灏濊瘯 `windres`锛圡inGW锛夆啋 `rc.exe + cvtres.exe`锛圡SVC锛夆啋 鐩存帴閾炬帴 `.res`
+- **璧勬簮缂栬瘧宸ュ叿涓嶅彲鐢ㄦ椂 `panic!` 涓柇缂栬瘧**锛岄槻姝骇鍑烘棤鍥炬爣鐨?.exe
+- 缂栬瘧鐜蹇呴』鏈?`windres` 鎴?`rc.exe`锛堝畨瑁?Rust + MinGW 鎴?VS Build Tools锛?
 
-### 运行时加载
+### 杩愯鏃跺姞杞?
 
-- `app_icon.rs` 通过 `LoadIconW(hinstance, MAKEINTRESOURCE(1))` 从嵌入资源加载
-- `get_tray_icon()` → HICON（系统托盘）
-- `get_menu_bitmap()` → HBITMAP（右键菜单）
-- `diagnose_icon_availability()` → 启动时诊断（日志输出 `[app_icon]`）
+- `app_icon.rs` 閫氳繃 `LoadIconW(hinstance, MAKEINTRESOURCE(1))` 浠庡祵鍏ヨ祫婧愬姞杞?
+- `get_tray_icon()` 鈫?HICON锛堢郴缁熸墭鐩橈級
+- `get_menu_bitmap()` 鈫?HBITMAP锛堝彸閿彍鍗曪級
+- `diagnose_icon_availability()` 鈫?鍚姩鏃惰瘖鏂紙鏃ュ織杈撳嚭 `[app_icon]`锛?
 
-### 使用图标的模块
+### 浣跨敤鍥炬爣鐨勬ā鍧?
 
-| 模块 | 用途 |
+| 妯″潡 | 鐢ㄩ€?|
 |------|------|
-| `sys_tray.rs` | 系统托盘图标 |
-| `shell_menu.rs` | 右键菜单项 + 桌面注册表菜单 |
-| `grid_window.rs` | 分类框窗口标题栏 |
+| `sys_tray.rs` | 绯荤粺鎵樼洏鍥炬爣 |
+| `shell_menu.rs` | 鍙抽敭鑿滃崟椤?+ 妗岄潰娉ㄥ唽琛ㄨ彍鍗?|
+| `grid_window.rs` | 鍒嗙被妗嗙獥鍙ｆ爣棰樻爮 |
 
-### 更换图标
+### 鏇存崲鍥炬爣
 
-1. 替换 `logo.ico`（确保包含 6 个必需尺寸）
-2. `cargo clean` 清除缓存
-3. `cargo build` 重新编译
+1. 鏇挎崲 `logo.ico`锛堢‘淇濆寘鍚?6 涓繀闇€灏哄锛?
+2. `cargo clean` 娓呴櫎缂撳瓨
+3. `cargo build` 閲嶆柊缂栬瘧
 
-详细规范见 `.trellis/spec/backend/icon-specification.md`。
+璇︾粏瑙勮寖瑙?`.trellis/spec/backend/icon-specification.md`銆?
 
 ---

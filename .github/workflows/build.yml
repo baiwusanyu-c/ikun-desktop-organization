@@ -1,4 +1,4 @@
-name: Cross-Platform Build
+﻿name: Cross-Platform Build
 
 on:
   push:
@@ -11,13 +11,18 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Cargo
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
@@ -27,38 +32,78 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Install Tauri CLI
+        run: npm install -g @tauri-apps/cli
+
       - name: Build
-        run: cargo build --release
+        run: node scripts/build.mjs --mode release
 
       - name: Test
         run: cargo test
 
       - name: Upload Windows exe
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: ikun-desktop-windows
-          path: target/release/ikun_desktop_organization.exe
+          name: ikun-organizer-windows-exe
+          path: dist/*windows*.exe
+
+      - name: Upload Windows installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: ikun-organizer-windows-installers
+          path: |
+            dist/*setup*.exe
+            dist/*.msi
+            dist/*.zip
 
   build-macos:
     runs-on: macos-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install Tauri CLI
+        run: npm install -g @tauri-apps/cli
+
       - name: Build
-        run: cargo build
+        run: node scripts/build.mjs --mode release
 
       - name: Test
         run: cargo test
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ikun-organizer-macos
+          path: |
+            dist/*.app
+            dist/*.dmg
+            dist/*.zip
 
   lint:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable

@@ -1,4 +1,4 @@
-﻿//! Tauri platform runtime
+//! Tauri platform runtime
 //!
 //! Initializes system tray, desktop registry, global hotkeys, and overlay windows.
 //! Bridges native platform events to Tauri WebView windows.
@@ -22,6 +22,10 @@ use std::sync::{
 
 /// Tauri Commands 与平台轮询线程共享的唯一运行时实例。
 pub type SharedTauriRuntime = Arc<Mutex<TauriRuntime>>;
+
+/// Desktop icon position restore retry delays (milliseconds).
+/// Applied when SysListView32 control is not yet ready after layout changes.
+const DESKTOP_RESTORE_RETRY_DELAYS_MS: [u64; 4] = [500, 1000, 1500, 2000];
 
 /// Shared state for the Tauri runtime
 pub struct TauriRuntime {
@@ -67,13 +71,12 @@ impl TauriRuntime {
         self.initialized = true;
         log::info!("[TauriRuntime] Initialization started");
 
-
-          // Clear any stale signal files from previous runs
-          let _ = std::fs::remove_file(signal_file_path());
-          let _ = std::fs::remove_file(open_panel_signal_path());
-          let _ = std::fs::remove_file(ai_classify_signal_path());
-          let _ = std::fs::remove_file(quit_signal_path());
-          log::info!("[TauriRuntime] Cleared stale signal files");
+        // Clear any stale signal files from previous runs
+        let _ = std::fs::remove_file(signal_file_path());
+        let _ = std::fs::remove_file(open_panel_signal_path());
+        let _ = std::fs::remove_file(ai_classify_signal_path());
+        let _ = std::fs::remove_file(quit_signal_path());
+        log::info!("[TauriRuntime] Cleared stale signal files");
         // 1. In-process plugins
         let plugin_report = self.plugins.init_all(&mut self.ctx);
         log::info!(
@@ -136,7 +139,6 @@ impl TauriRuntime {
         self.ctx.config = config;
     }
 
-
     /// 快照当前桌面图标位置（用于退出时恢复）
     fn snapshot_desktop_positions(&mut self) {
         log::info!("[TauriRuntime] 开始快照桌面图标位置");
@@ -166,7 +168,8 @@ impl TauriRuntime {
         for (name, &(x, y)) in positions {
             let name_lower = name.to_lowercase();
             if vault_display_names.contains(&name_lower) {
-                match crate::platform::windows::icon_manager::set_icon_position_by_name(name, x, y) {
+                match crate::platform::windows::icon_manager::set_icon_position_by_name(name, x, y)
+                {
                     Ok(()) => {
                         success_count += 1;
                         log::debug!("[TauriRuntime] 恢复图标 '{}' 位置成功", name);
@@ -174,7 +177,10 @@ impl TauriRuntime {
                     Err(e) => {
                         let msg = format!("{}", e);
                         if msg.contains("未找到图标") {
-                            log::info!("[TauriRuntime] 图标 '{}' 尚未出现在 SysListView32，加入重试队列", name);
+                            log::info!(
+                                "[TauriRuntime] 图标 '{}' 尚未出现在 SysListView32，加入重试队列",
+                                name
+                            );
                             pending.push((name.clone(), x, y));
                         } else {
                             log::warn!("[TauriRuntime] 恢复图标 '{}' 位置失败: {e}", name);
@@ -186,7 +192,7 @@ impl TauriRuntime {
         }
 
         // 重试队列：递增延迟重试未找到的图标
-        let retry_delays = [500u64, 1000, 1500, 2000];
+        let retry_delays = DESKTOP_RESTORE_RETRY_DELAYS_MS;
         for (attempt, &delay_ms) in retry_delays.iter().enumerate() {
             if pending.is_empty() {
                 break;
@@ -201,7 +207,9 @@ impl TauriRuntime {
 
             let mut still_pending = Vec::new();
             for (name, x, y) in &pending {
-                match crate::platform::windows::icon_manager::set_icon_position_by_name(name, *x, *y) {
+                match crate::platform::windows::icon_manager::set_icon_position_by_name(
+                    name, *x, *y,
+                ) {
                     Ok(()) => {
                         success_count += 1;
                         log::info!("[TauriRuntime] 重试成功: '{}' 已找到并恢复位置", name);
@@ -664,7 +672,7 @@ pub fn start_platform_runtime(app: tauri::AppHandle, runtime: SharedTauriRuntime
             let TauriRuntime { ctx, plugins, .. } = &mut *runtime;
             plugins.cleanup_all(ctx);
         }
-        
+
         // 销毁分类框窗口（必须在主线程中执行）
         log::info!("[TauriRuntime] 在主线程中销毁分类框窗口");
         let app_handle_for_destroy = app_handle.clone();
@@ -675,31 +683,31 @@ pub fn start_platform_runtime(app: tauri::AppHandle, runtime: SharedTauriRuntime
         });
         // 等待主线程完成销毁
         std::thread::sleep(std::time::Duration::from_millis(200));
-        
+
         // 清理系统托盘和注册表
         cleanup_system_tray();
         cleanup_desktop_registry();
-        
+
         // 恢复桌面图标：获取仓库中的图标显示名称
         let vault_display_names = crate::platform::windows::icon_hider::get_vault_display_names();
         log::info!(
             "[TauriRuntime] 仓库图标显示名称: {} 个，准备恢复这些图标的位置",
             vault_display_names.len()
         );
-        
+
         // 恢复所有隐藏的图标到桌面
         crate::platform::restore_all_hidden_icons();
-        
+
         // 等待 Windows 处理图标还原
         std::thread::sleep(std::time::Duration::from_millis(500));
-        
+
         // 恢复图标到快照的位置
         if let Ok(runtime) = runtime_for_poll.lock() {
             runtime.restore_desktop_positions(&vault_display_names);
         }
-        
+
         log::info!("[TauriRuntime] Cleanup complete");
-        
+
         // 退出 Tauri 应用
         log::info!("[TauriRuntime] 调用 app_handle.exit(0)");
         app_handle.exit(0);
@@ -750,4 +758,3 @@ mod tests {
         assert!(!runtime.ai_classify_requested);
     }
 }
-

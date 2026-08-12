@@ -51,6 +51,28 @@ await updateBoxStyle(payload);
 - Bad：X 按钮调用 `close()` 导致 WebView 被销毁。
 - Bad：Rust/TypeScript 配置字段只改一侧。
 
+
+## 窗口样式约定
+
+### `.window-shadow`
+
+`App.svelte` 根节点使用 `.window-shadow` 包裹层实现 CSS drop-shadow，配合 `tauri.conf.json` 的 `"shadow": false` 关闭原生阴影。
+
+### `.dialog-window`
+
+`create-box` 和 `edit-box` 页面使用 `.dialog-window` CSS 类，样式统一定义在 `glass.css` 中。组件页面不内联重复样式。
+
+### 跨窗口主题色同步
+
+`lib/theme.ts` 的 `applyThemeColorAcrossWindows(color)` 通过 Tauri 事件 `theme-color-changed` 广播主题色变更到所有持久 WebView 窗口。
+`installThemeColorSync()` 在页面挂载时注册监听，返回 cleanup 函数在卸载时释放。
+
+`lib/utils/color.ts` 提供 `hexToRgb`、`adjustBrightness`、`applyThemeColor` 工具函数。
+
+## 前端 IPC 日志
+
+`lib/api/tauri-api.ts` 导出 `logToRust(level, message)` 函数，将前端日志上报到 Rust 后端的 `log_message` 命令。
+
 ## 必需检查
 
 ```text

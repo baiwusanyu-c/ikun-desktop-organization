@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+﻿import { invoke } from "@tauri-apps/api/core";
 
 export interface ValidationResult {
   valid: boolean;
@@ -248,4 +248,20 @@ export async function checkUpdate(): Promise<string> {
 
 export async function getAppInfo(): Promise<AppInfo> {
   return invoke<AppInfo>("get_app_info");
+}
+
+
+/**
+ * Send a log message to the Rust backend.
+ * The window label is automatically attached.
+ *
+ * @param level - Log level: "debug" | "info" | "warn" | "error"
+ * @param message - Log message text
+ */
+export async function logToRust(level: "debug" | "info" | "warn" | "error", message: string): Promise<void> {
+  try {
+    await invoke("log_message", { level, message });
+  } catch {
+    // Silently ignore IPC failures to avoid infinite loops
+  }
 }

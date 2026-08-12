@@ -15,6 +15,7 @@
 
 #![allow(dead_code)]
 
+use std::cell::RefCell;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -28,6 +29,64 @@ const LOG_RETENTION_DAYS: u64 = 7;
 
 /// 日志文件名前缀
 const LOG_FILE_PREFIX: &str = ".ikun_organizer_log_";
+
+// =============================================================================
+// Window Context Logging
+// =============================================================================
+
+thread_local! {
+    /// Current window label for log context tagging.
+    static CURRENT_WINDOW: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Set the current log context window label.
+///
+/// Called at the entry of Tauri commands to tag all subsequent log lines
+/// with the originating window (e.g., "control-panel", "create-box", "edit-box").
+pub fn set_log_window(label: &str) {
+    CURRENT_WINDOW.with(|w| *w.borrow_mut() = Some(label.to_string()));
+}
+
+/// Clear the current log context window label.
+pub fn clear_log_window() {
+    CURRENT_WINDOW.with(|w| *w.borrow_mut() = None);
+}
+
+/// Get the current window label (thread-local).
+fn current_window_label() -> Option<String> {
+    CURRENT_WINDOW.with(|w| w.borrow().clone())
+}
+
+/// RAII guard that sets a window log context on creation and clears it on drop.
+///
+/// # Example
+/// ```rust
+/// #[tauri::command]
+/// pub fn get_config(window: tauri::Window, state: ...) -> ... {
+///     let _guard = WindowLogGuard::new(window.label());
+///     // All log::xxx! calls now include [window:control-panel]
+///     ...
+/// }
+/// ```
+pub struct WindowLogGuard {
+    _label: String,
+}
+
+impl WindowLogGuard {
+    /// Create a new guard, setting the window label for the current thread.
+    pub fn new(label: &str) -> Self {
+        set_log_window(label);
+        Self {
+            _label: label.to_string(),
+        }
+    }
+}
+
+impl Drop for WindowLogGuard {
+    fn drop(&mut self) {
+        clear_log_window();
+    }
+}
 
 /// 初始化日志系统（写入文件）
 ///
@@ -65,12 +124,17 @@ pub fn init_logger() {
             env_logger::Builder::from_default_env()
                 .target(env_logger::Target::Pipe(Box::new(writer)))
                 .format(|buf, record| {
+                    let window_tag = match current_window_label() {
+                        Some(label) => format!(" [window:{}]", label),
+                        None => String::new(),
+                    };
                     writeln!(
                         buf,
-                        "[{} {} {}] {}",
+                        "[{} {} {}]{} {}",
                         chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
                         record.level(),
                         record.target(),
+                        window_tag,
                         record.args()
                     )
                 })
@@ -893,5 +957,78 @@ mod tests {
             "新文件应包含完整的超大写入数据"
         );
         cleanup_test_dir(&dir);
+    }
+
+    // =========================================================================
+    // Window Context Logging Tests
+    // =========================================================================
+
+    #[test]
+    fn test_window_context_set_and_get() {
+        set_log_window("control-panel");
+        let label = current_window_label();
+        assert_eq!(label, Some("control-panel".to_string()));
+
+        clear_log_window();
+        let label_after = current_window_label();
+        assert_eq!(label_after, None);
+    }
+
+    #[test]
+    fn test_window_context_thread_isolation() {
+        use std::sync::Arc;
+        use std::thread;
+
+        set_log_window("control-panel");
+
+        let result = Arc::new(Mutex::new(None));
+        let result_clone = result.clone();
+
+        let handle = thread::spawn(move || {
+            let label = current_window_label();
+            *result_clone.lock().unwrap() = label;
+        });
+
+        handle.join().unwrap();
+
+        assert_eq!(current_window_label(), Some("control-panel".to_string()));
+
+        let spawned_label = result.lock().unwrap().clone();
+        assert_eq!(spawned_label, None);
+
+        clear_log_window();
+    }
+
+    #[test]
+    fn test_window_log_guard_cleanup() {
+        {
+            let _guard = WindowLogGuard::new("create-box");
+            assert_eq!(current_window_label(), Some("create-box".to_string()));
+        }
+        assert_eq!(current_window_label(), None);
+    }
+
+    #[test]
+    fn test_window_log_guard_nested() {
+        let _outer = WindowLogGuard::new("control-panel");
+        assert_eq!(current_window_label(), Some("control-panel".to_string()));
+
+        {
+            let _inner = WindowLogGuard::new("edit-box");
+            assert_eq!(current_window_label(), Some("edit-box".to_string()));
+        }
+        assert_eq!(current_window_label(), None);
+    }
+
+    #[test]
+    fn test_window_label_switch() {
+        set_log_window("control-panel");
+        assert_eq!(current_window_label(), Some("control-panel".to_string()));
+
+        set_log_window("create-box");
+        assert_eq!(current_window_label(), Some("create-box".to_string()));
+
+        clear_log_window();
+        assert_eq!(current_window_label(), None);
     }
 }

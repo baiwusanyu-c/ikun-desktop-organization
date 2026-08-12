@@ -135,6 +135,8 @@ fn run_tauri_app() -> anyhow::Result<()> {
             tauri_commands::toggle_window,
             tauri_commands::is_window_visible,
             tauri_commands::get_screen_resolution,
+            // Log commands
+            tauri_commands::log_message,
         ])
         .setup(|app| {
             log::info!("Tauri setup complete");
