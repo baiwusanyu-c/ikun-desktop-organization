@@ -126,7 +126,7 @@ async fn perform_ai_classification_async(
 
 /// 在主线程创建分类框
 fn create_classified_boxes(
-    _app: &tauri::AppHandle,
+    app: &tauri::AppHandle,
     runtime: &SharedTauriRuntime,
     groups: &std::collections::HashMap<String, Vec<crate::platform::DesktopIcon>>,
 ) -> Result<(), String> {
@@ -253,7 +253,9 @@ fn create_classified_boxes(
             sort_ascending: config.box_defaults.sort_ascending,
             group_by: config.box_defaults.group_by.clone(),
             config_id: uuid::Uuid::new_v4(),
-            edit_box_callback: None,
+            edit_box_callback: Some(crate::tauri_commands::box_cmd::edit_box_callback(
+                app.clone(),
+            )),
         };
         
         if let Err(e) = create_grid_window(params) {
