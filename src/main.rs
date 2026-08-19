@@ -1,4 +1,4 @@
-//! Desktop Organizer - Entry point
+﻿//! Desktop Organizer - Entry point
 
 // Windows subsystem (no console window), logs written to file
 #![windows_subsystem = "windows"]
@@ -102,6 +102,7 @@ fn run_tauri_app() -> anyhow::Result<()> {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(runtime.clone())
         .invoke_handler(tauri::generate_handler![
             // Config commands
@@ -137,6 +138,9 @@ fn run_tauri_app() -> anyhow::Result<()> {
             tauri_commands::get_screen_resolution,
             // Log commands
             tauri_commands::log_message,
+            // AI Classification commands
+            tauri_commands::show_ai_classify_dialog,
+            tauri_commands::start_ai_classification,
         ])
         .setup(|app| {
             log::info!("Tauri setup complete");
@@ -338,3 +342,4 @@ fn check_integrity_level() {
         CloseHandle(token);
     }
 }
+

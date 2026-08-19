@@ -17,6 +17,11 @@ epaint = { version = "0.27", optional = true }
 # ===== Tauri 2.0 =====
 tauri = { version = "2", optional = true, features = [] }
 tauri-plugin-opener = { version = "2", optional = true }
+tauri-plugin-dialog = { version = "2", optional = true }
+
+# ===== HTTP / Async =====
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+tokio = { version = "1", features = ["rt", "macros", "time"] }
 
 # ===== Common libraries =====
 serde = { version = "1.0", features = ["derive"] }
@@ -91,4 +96,4 @@ lto = true
 [features]
 default = ["tauri-ui"]
 eframe-ui = ["dep:egui", "dep:eframe", "dep:epaint"]
-tauri-ui = ["dep:tauri", "dep:tauri-plugin-opener", "dep:tauri-build"]
+tauri-ui = ["dep:tauri", "dep:tauri-plugin-opener", "dep:tauri-plugin-dialog", "dep:tauri-build"]

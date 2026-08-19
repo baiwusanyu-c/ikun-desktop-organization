@@ -15,6 +15,8 @@ pub enum ManagedWindow {
     CreateBox,
     /// 编辑分类框对话框。
     EditBox,
+    /// AI 分类对话框。
+    AiClassify,
 }
 
 impl ManagedWindow {
@@ -24,6 +26,7 @@ impl ManagedWindow {
             "control-panel" => Some(Self::ControlPanel),
             "create-box" => Some(Self::CreateBox),
             "edit-box" => Some(Self::EditBox),
+            "ai-classify" => Some(Self::AiClassify),
             _ => None,
         }
     }
@@ -34,6 +37,7 @@ impl ManagedWindow {
             Self::ControlPanel => "control-panel",
             Self::CreateBox => "create-box",
             Self::EditBox => "edit-box",
+            Self::AiClassify => "ai-classify",
         }
     }
 }

@@ -1,4 +1,4 @@
-﻿import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 
 export interface ValidationResult {
   valid: boolean;
@@ -53,22 +53,16 @@ export interface BoxStyleConfig {
 }
 
 export interface AiConfig {
-  enabled: boolean;
   base_url: string;
   api_key: string;
   model: string;
-  max_tokens: number;
-  temperature: number;
-  system_prompt: string;
   timeout_seconds: number;
   max_retries: number;
-  headers: Record<string, string>;
-  proxy_url: string;
-  concurrency: number;
-  verify_ssl: boolean;
-  user_prompt_template: string;
-  batch_size: number;
-  batch_delay_ms: number;
+}
+
+export interface AiClassifyResponse {
+  results: Array<{ name: string; category: string }>;
+  new_categories?: string[];
 }
 
 export interface ThemeColors {

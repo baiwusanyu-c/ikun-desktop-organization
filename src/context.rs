@@ -1,4 +1,4 @@
-//! Application context - central state management object
+﻿//! Application context - central state management object
 #![allow(dead_code)]
 //!
 //! All modules share state and configuration via AppContext.
@@ -9,7 +9,6 @@
 //! 2. AppContext::new() injects config, initializes subsystems
 //! 3. Modules read needed config from ctx.config
 
-use crate::classification::AppClassifier;
 use crate::config::AppConfig;
 use crate::platform::{
     create_desktop_manager, create_platform_service, DesktopManagerTrait, PlatformService,
@@ -40,7 +39,6 @@ impl Default for AppState {
 /// All modules access:
 /// - Unified config (config) from ~/.ikun_organizer.json
 /// - Platform services (desktop_manager, platform_service) via trait objects
-/// - Classification engine (classifier)
 /// - Runtime state (state)
 pub struct AppContext {
     /// Unified config (JSON, importable/exportable)
@@ -49,8 +47,6 @@ pub struct AppContext {
     pub desktop_manager: Box<dyn DesktopManagerTrait>,
     /// Platform service (tray, auto-start, control panel, via trait object)
     pub platform_service: Box<dyn PlatformService>,
-    /// App classifier (using fallback rules from config)
-    pub classifier: AppClassifier,
     /// Runtime state
     pub state: AppState,
 }
@@ -58,12 +54,10 @@ pub struct AppContext {
 impl Default for AppContext {
     fn default() -> Self {
         let config = AppConfig::default();
-        let classifier = AppClassifier::from_config(&config.classification);
         Self {
             config,
             desktop_manager: create_desktop_manager(),
             platform_service: create_platform_service(),
-            classifier,
             state: AppState::default(),
         }
     }
@@ -94,14 +88,7 @@ impl AppContext {
             &config.box_style.liquid_glass,
         );
 
-        // 2. Initialize classifier (using fallback classification rules)
-        let classifier = AppClassifier::from_config(&config.classification);
-        log::info!(
-            "Initialized classifier with {} fallback rules",
-            config.classification.len()
-        );
-
-        // 3. Initialize platform services via trait objects
+        // 2. Initialize platform services via trait objects
         let desktop_manager = create_desktop_manager();
         let platform_service = create_platform_service();
 
@@ -109,7 +96,6 @@ impl AppContext {
             config,
             desktop_manager,
             platform_service,
-            classifier,
             state: AppState::default(),
         })
     }
@@ -128,8 +114,6 @@ impl AppContext {
     /// Import config from specified path and save
     pub fn import_config(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
         self.config = AppConfig::import_from(path)?;
-        // Reinitialize classifier (using new config's fallback rules)
-        self.classifier = AppClassifier::from_config(&self.config.classification);
         self.save_config()
     }
 
@@ -183,11 +167,5 @@ mod tests {
         assert!(ctx.is_ok(), "AppContext::new() should not fail");
         let ctx = ctx.unwrap();
         assert!(!ctx.config.version.is_empty());
-    }
-
-    #[test]
-    fn test_app_context_default_classifier_initialized() {
-        let ctx = AppContext::default();
-        let _ = &ctx.classifier;
     }
 }

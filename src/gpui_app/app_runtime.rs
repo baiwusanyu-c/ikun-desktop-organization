@@ -486,6 +486,13 @@ impl AppRuntime {
     // =================================================================
 
     pub fn perform_auto_classify(&mut self) {
+        // AI 分类仅在 Tauri 模式下可用，GPUI 模式已废弃规则分类
+        log::warn!("AI 分类功能仅在 Tauri 模式下可用");
+        self.ctx.set_status("AI 分类仅在 Tauri 模式下可用");
+        return;
+
+        #[allow(unreachable_code)]
+        {
         let icons = self.ctx.desktop_manager.get_desktop_icons();
         if icons.is_empty() {
             self.ctx.set_status("未找到桌面图标");
@@ -497,11 +504,7 @@ impl AppRuntime {
         let mut office: Vec<DesktopIcon> = Vec::new();
 
         for icon in &icons {
-            match self.ctx.classifier.classify(icon) {
-                Some(cat) if cat.id == "games" => games.push(icon.clone()),
-                Some(cat) if cat.id == "dev" => dev_tools.push(icon.clone()),
-                _ => office.push(icon.clone()),
-            }
+            games.push(icon.clone());
         }
 
         destroy_all_grid_windows();

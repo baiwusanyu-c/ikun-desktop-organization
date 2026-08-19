@@ -1,2 +1,5 @@
 /target
 /gen/schemas
+
+# User config files (contain API Key, must not be committed)
+*ikun_organizer*.json

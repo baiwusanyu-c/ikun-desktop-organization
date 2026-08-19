@@ -1,7 +1,12 @@
 {
   "identifier": "default",
   "description": "Default capabilities for all windows",
-  "windows": ["control-panel", "create-box", "edit-box"],
+  "windows": [
+    "control-panel",
+    "create-box",
+    "edit-box",
+    "ai-classify"
+  ],
   "permissions": [
     "core:default",
     "core:window:default",
@@ -18,6 +23,7 @@
     "core:event:default",
     "core:event:allow-listen",
     "core:event:allow-emit",
-    "opener:allow-open-url"
+    "opener:allow-open-url",
+    "dialog:default"
   ]
 }

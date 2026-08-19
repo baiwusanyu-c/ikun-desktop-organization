@@ -5,11 +5,11 @@
 
 use crate::context::AppContext;
 use crate::platform::{
-    cleanup_desktop_registry, cleanup_system_tray, create_grid_window, destroy_all_grid_windows,
-    extract_file_icon, icon_exists_for_box, resolve_icon_read_path, set_tray_auto_start_state,
-    setup_desktop_registry, setup_global_hotkey, setup_system_tray, take_hotkey_toggle,
-    take_pending_create_box, take_pending_tray_action, GridCreateParams, GridFileItem,
-    SystemTrayAction,
+    cleanup_desktop_registry, cleanup_system_tray, create_desktop_manager, create_grid_window,
+    destroy_all_grid_windows, extract_file_icon, get_primary_monitor_dpi, get_screen_resolution,
+    icon_exists_for_box, resolve_icon_read_path, set_tray_auto_start_state, setup_desktop_registry,
+    setup_global_hotkey, setup_system_tray, take_hotkey_toggle, take_pending_create_box,
+    take_pending_tray_action, GridCreateParams, GridFileItem, SystemTrayAction,
 };
 use crate::plugin::{builtin::register_builtin_plugins, PluginRegistry};
 use crate::tauri_commands::window_cmd::{
@@ -19,6 +19,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
+use tauri::{Emitter, Manager, State};
 
 /// Tauri Commands 与平台轮询线程共享的唯一运行时实例。
 pub type SharedTauriRuntime = Arc<Mutex<TauriRuntime>>;
@@ -132,10 +133,8 @@ impl TauriRuntime {
         log::info!("[TauriRuntime] Initialization complete");
     }
 
-    /// 用新配置替换运行时配置，并同步依赖配置构建的分类器。
+    /// 用新配置替换运行时配置。
     pub fn replace_config(&mut self, config: crate::config::AppConfig) {
-        self.ctx.classifier =
-            crate::classification::AppClassifier::from_config(&config.classification);
         self.ctx.config = config;
     }
 
@@ -269,9 +268,8 @@ impl TauriRuntime {
     }
 
     fn request_auto_classify(&mut self) -> bool {
-        if !self.dispatch_plugin_command("classify.auto") {
-            return false;
-        }
+        // Try to dispatch plugin command, but don't fail if it doesn't work
+        let _ = self.dispatch_plugin_command("classify.auto");
         self.ai_classify_requested = true;
         true
     }
@@ -402,7 +400,7 @@ impl TauriRuntime {
                     return (true, true);
                 }
                 SystemTrayAction::AiClassify => {
-                    log::info!("Tauri 运行时收到一键分类请求");
+                    log::info!("[TauriRuntime] 收到系统托盘一键分类请求");
                     changed |= self.request_auto_classify();
                 }
                 SystemTrayAction::ToggleAutoStart => {
@@ -454,103 +452,6 @@ impl TauriRuntime {
         }
 
         (changed, self.quit_requested)
-    }
-
-    /// 使用现有分类规则重建原生分类框，保持托盘的一键分类行为。
-    fn perform_auto_classify(&mut self, app: &tauri::AppHandle) {
-        let icons = self.ctx.desktop_manager.get_desktop_icons();
-        if icons.is_empty() {
-            log::info!("一键分类跳过：未找到桌面图标");
-            return;
-        }
-
-        #[cfg(windows)]
-        {
-            use crate::platform::{
-                create_grid_window, extract_file_icon, get_primary_monitor_dpi,
-                get_screen_resolution, GridCreateParams, GridFileItem,
-            };
-            let mut groups: [(&str, Vec<crate::platform::DesktopIcon>); 3] = [
-                ("游戏", Vec::new()),
-                ("开发工具", Vec::new()),
-                ("办公", Vec::new()),
-            ];
-            for icon in icons.iter().cloned() {
-                match self.ctx.classifier.classify(&icon) {
-                    Some(category) if category.id == "games" => groups[0].1.push(icon),
-                    Some(category) if category.id == "dev" => groups[1].1.push(icon),
-                    _ => groups[2].1.push(icon),
-                }
-            }
-            for icon in &icons {
-                crate::platform::windows::icon_hider::hide_single_icon(
-                    &icon.path.to_string_lossy(),
-                )
-                .ok();
-            }
-            destroy_all_grid_windows();
-            let (screen_w_phys, screen_h_phys) = get_screen_resolution();
-            let dpi = get_primary_monitor_dpi().max(96);
-            let screen_w = screen_w_phys * 96 / dpi as i32;
-            let screen_h = screen_h_phys * 96 / dpi as i32;
-            let box_w = self.ctx.config.box_defaults.default_width;
-            let box_h = self.ctx.config.box_defaults.default_height;
-            let gap = 20;
-            let start_x = ((screen_w - 3 * box_w - 2 * gap) / 2).max(10);
-            let start_y = (screen_h as f32 * 0.08) as i32;
-            let mut created = 0;
-            for (index, (title, group)) in groups.iter().enumerate() {
-                if group.is_empty() {
-                    continue;
-                }
-                let items = group
-                    .iter()
-                    .map(|icon| {
-                        let path = icon.path.to_string_lossy().to_string();
-                        let hicon = extract_file_icon(&path)
-                            .map(|info| info.hicon)
-                            .unwrap_or(std::ptr::null_mut());
-                        GridFileItem {
-                            file_path: path,
-                            display_name: icon.display_name.clone(),
-                            icon_handle: hicon,
-                            grid_col: -1,
-                            grid_row: -1,
-                        }
-                    })
-                    .collect();
-                let params = GridCreateParams {
-                    id: index,
-                    title: (*title).to_string(),
-                    x: start_x + created * (box_w + gap),
-                    y: start_y,
-                    width: box_w,
-                    height: box_h,
-                    items,
-                    view_mode: self.ctx.config.box_defaults.view_mode.clone(),
-                    locked: false,
-                    sort_mode: self.ctx.config.box_defaults.sort_mode.clone(),
-                    sort_ascending: self.ctx.config.box_defaults.sort_ascending,
-                    group_by: self.ctx.config.box_defaults.group_by.clone(),
-                    config_id: uuid::Uuid::new_v4(),
-                    edit_box_callback: Some(crate::tauri_commands::box_cmd::edit_box_callback(
-                        app.clone(),
-                    )),
-                };
-                if create_grid_window(params).is_ok() {
-                    created += 1;
-                }
-            }
-            self.ctx.config.layout.boxes = crate::platform::collect_grid_layout();
-            if let Err(error) = self.ctx.config.save() {
-                log::warn!("一键分类后保存布局失败: {error}");
-            }
-            log::info!(
-                "一键分类完成: {} 个图标 -> {} 个分类框",
-                icons.len(),
-                created
-            );
-        }
     }
 }
 
@@ -654,8 +555,9 @@ pub fn start_platform_runtime(app: tauri::AppHandle, runtime: SharedTauriRuntime
                 }
 
                 if ai_classify {
-                    if let Ok(mut rt) = runtime_for_poll.lock() {
-                        rt.perform_auto_classify(&app_handle);
+                    log::info!("[TauriRuntime] 显示 AI 分类确认对话框");
+                    if let Err(error) = show_managed_window(&app_handle, ManagedWindow::AiClassify) {
+                        log::warn!("显示 AI 分类对话框失败: {error}");
                     }
                 }
             }
@@ -758,3 +660,4 @@ mod tests {
         assert!(!runtime.ai_classify_requested);
     }
 }
+

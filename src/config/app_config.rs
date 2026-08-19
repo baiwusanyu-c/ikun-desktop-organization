@@ -17,6 +17,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
 
 /// 配置文件名（存放在用户主目录）
@@ -451,64 +452,48 @@ impl Default for BoxDefaultsConfig {
 // AiConfig — AI 分类引擎
 // =============================================================================
 
+
 /// AI 分类引擎配置
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// 所有字段均需用户自行填写，支持任何 OpenAI 兼容的 LLM API。
+/// pi_key 始终为空字符串（禁止硬编码），需用户自行获取。
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AiConfig {
-    /// 是否启用 AI 分类
-    pub enabled: bool,
-    /// API 基础地址
+    /// API 基础地址（必填，如 https://api.openai.com/v1）
     pub base_url: String,
-    /// API 密钥
+    /// API 密钥（用户填写，从不硬编码）
     pub api_key: String,
-    /// 模型名称
+    /// 模型名称（必填，如 gpt-4o-mini）
     pub model: String,
-    /// 最大输出 token 数
-    pub max_tokens: u32,
-    /// 生成温度 0-1
-    pub temperature: f32,
-    /// 系统提示词
-    pub system_prompt: String,
     /// API 请求超时秒数
     pub timeout_seconds: u32,
     /// 请求失败最大重试次数
     pub max_retries: u32,
-    /// 额外 HTTP 请求头
-    pub headers: HashMap<String, String>,
-    /// 可选 HTTP 代理地址
-    pub proxy_url: String,
-    /// 同时分类的文件数
-    pub concurrency: u32,
-    /// 是否验证 SSL 证书
-    pub verify_ssl: bool,
-    /// 用户提示词模板
-    pub user_prompt_template: String,
-    /// 每批处理的文件数
-    pub batch_size: u32,
-    /// 批次之间的等待时间（毫秒）
-    pub batch_delay_ms: u32,
 }
+
+/// 自定义 Debug 实现：脱敏 api_key，防止日志泄露
+impl fmt::Debug for AiConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AiConfig")
+            .field("base_url", &self.base_url)
+            .field("api_key", &"***")
+            .field("model", &self.model)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .field("max_retries", &self.max_retries)
+            .finish()
+    }
+}
+
 
 impl Default for AiConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
-            base_url: "https://api.openai.com/v1".to_string(),
+            base_url: String::new(),
             api_key: String::new(),
-            model: "gpt-4o-mini".to_string(),
-            max_tokens: 2048,
-            temperature: 0.7,
-            system_prompt: "你是一个桌面图标分类助手，请根据应用名称和路径判断其分类。".to_string(),
+            model: String::new(),
             timeout_seconds: 30,
-            max_retries: 3,
-            headers: HashMap::new(),
-            proxy_url: String::new(),
-            concurrency: 5,
-            verify_ssl: true,
-            user_prompt_template: "文件名：{filename}\n路径：{filepath}\n分类：{category_name}"
-                .to_string(),
-            batch_size: 10,
-            batch_delay_ms: 500,
+            max_retries: 2,
         }
     }
 }
@@ -967,10 +952,39 @@ mod tests {
     #[test]
     fn test_ai_default() {
         let ai = AiConfig::default();
-        assert!(!ai.enabled);
-        assert_eq!(ai.model, "gpt-4o-mini");
+        assert!(ai.base_url.is_empty());
+        assert!(ai.api_key.is_empty());
+        assert!(ai.model.is_empty());
         assert_eq!(ai.timeout_seconds, 30);
-        assert_eq!(ai.max_retries, 3);
+        assert_eq!(ai.max_retries, 2);
+    }
+
+
+    #[test]
+    fn test_ai_config_user_override() {
+        let mut ai = AiConfig::default();
+        ai.base_url = "https://my-api.example.com".to_string();
+        ai.model = "my-custom-model".to_string();
+        assert_eq!(ai.base_url, "https://my-api.example.com");
+        assert_eq!(ai.model, "my-custom-model");
+    }
+
+    #[test]
+    fn test_ai_config_debug_redacts_key() {
+        let mut ai = AiConfig::default();
+        ai.api_key = "super-secret-key-12345".to_string();
+        let debug_str = format!("{:?}", ai);
+        assert!(!debug_str.contains("super-secret-key-12345"));
+        assert!(debug_str.contains("***"));
+    }
+
+    #[test]
+    fn test_ai_config_backward_compat() {
+        // 旧配置文件包含已删除字段时不应报错
+        let json_str = r#"{"enabled":true,"base_url":"","api_key":"","model":"","timeout_seconds":30,"max_retries":2,"temperature":0.7,"max_tokens":2048,"system_prompt":"test","headers":{},"proxy_url":"","concurrency":5,"verify_ssl":true,"user_prompt_template":"","batch_size":10,"batch_delay_ms":500}"#;
+        let ai: AiConfig = serde_json::from_str(json_str).expect("should parse with extra fields");
+        assert!(ai.enabled);
+        assert_eq!(ai.timeout_seconds, 30);
     }
 
     #[test]
@@ -1721,3 +1735,4 @@ mod liquid_glass_tests {
         assert!((config.elasticity - LIQUID_GLASS_ELASTICITY_MAX).abs() < f32::EPSILON);
     }
 }
+

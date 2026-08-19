@@ -49,6 +49,19 @@
         "shadow": false,
         "visible": false,
         "alwaysOnTop": true
+      },
+      {
+        "label": "ai-classify",
+        "title": "AI Classification",
+        "url": "/#/ai-classify",
+        "width": 400,
+        "height": 200,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "visible": false,
+        "alwaysOnTop": true
       }
     ],
     "security": {
@@ -57,7 +70,12 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi", "app", "dmg"],
+    "targets": [
+      "nsis",
+      "msi",
+      "app",
+      "dmg"
+    ],
     "icon": [
       "tauri/icons/32x32.png",
       "tauri/icons/128x128.png",
