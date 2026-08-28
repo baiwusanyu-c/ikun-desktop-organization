@@ -1,0 +1,5 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/icon-specification.md", "reason": "托盘图标嵌入与加载规范"}
+{"file": ".trellis/spec/guides/tauri-window-contract.md", "reason": "Tauri 窗口生命周期契约"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "代码质量要求"}
