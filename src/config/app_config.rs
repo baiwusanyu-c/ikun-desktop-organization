@@ -492,8 +492,8 @@ impl Default for AiConfig {
             base_url: String::new(),
             api_key: String::new(),
             model: String::new(),
-            timeout_seconds: 30,
-            max_retries: 2,
+            timeout_seconds: 120,
+            max_retries: 0,
         }
     }
 }
@@ -955,8 +955,8 @@ mod tests {
         assert!(ai.base_url.is_empty());
         assert!(ai.api_key.is_empty());
         assert!(ai.model.is_empty());
-        assert_eq!(ai.timeout_seconds, 30);
-        assert_eq!(ai.max_retries, 2);
+        assert_eq!(ai.timeout_seconds, 120);
+        assert_eq!(ai.max_retries, 0);
     }
 
 
@@ -981,10 +981,10 @@ mod tests {
     #[test]
     fn test_ai_config_backward_compat() {
         // 旧配置文件包含已删除字段时不应报错
-        let json_str = r#"{"enabled":true,"base_url":"","api_key":"","model":"","timeout_seconds":30,"max_retries":2,"temperature":0.7,"max_tokens":2048,"system_prompt":"test","headers":{},"proxy_url":"","concurrency":5,"verify_ssl":true,"user_prompt_template":"","batch_size":10,"batch_delay_ms":500}"#;
+        let json_str = r#"{"enabled":true,"base_url":"","api_key":"","model":"","timeout_seconds":120,"max_retries":2,"temperature":0.7,"max_tokens":2048,"system_prompt":"test","headers":{},"proxy_url":"","concurrency":5,"verify_ssl":true,"user_prompt_template":"","batch_size":10,"batch_delay_ms":500}"#;
         let ai: AiConfig = serde_json::from_str(json_str).expect("should parse with extra fields");
         assert!(ai.enabled);
-        assert_eq!(ai.timeout_seconds, 30);
+        assert_eq!(ai.timeout_seconds, 120);
     }
 
     #[test]

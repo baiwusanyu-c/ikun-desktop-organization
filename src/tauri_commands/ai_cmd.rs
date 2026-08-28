@@ -61,9 +61,7 @@ pub async fn start_ai_classification(
                 app_clone.run_on_main_thread(move || {
                     if let Err(e) = create_classified_boxes(&app_for_create, &runtime_for_create, &groups) {
                         log::error!("创建分类框失败: {e}");
-                        let _ = app_for_create.emit("ai-classification-error", serde_json::json!({
-                            "message": format!("创建分类框失败: {e}")
-                        }));
+                        let _ = app_for_create.emit("ai-classification-error", format!("创建分类框失败: {e}"));
                     } else {
                         let icon_count: usize = groups.values().map(|v| v.len()).sum();
                         let box_count = groups.len();
@@ -76,9 +74,7 @@ pub async fn start_ai_classification(
             }
             Err(e) => {
                 log::error!("[AI] AI 分类失败: {}", e);
-                let _ = app_clone.emit("ai-classification-error", serde_json::json!({
-                    "message": e
-                }));
+                let _ = app_clone.emit("ai-classification-error", format!("{e}"));
             }
         }
     });

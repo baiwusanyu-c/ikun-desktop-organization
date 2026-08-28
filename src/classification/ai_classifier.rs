@@ -142,9 +142,9 @@ impl AiClassifier {
                 {"role": "user", "content": user}
             ],
             "temperature": 0.1,
-            "max_tokens": 1024,
+            "max_tokens": 4096,
             "stream": false,
-            "top_p": 0.7
+            "enable_thinking": false
         });
         
         log::info!("[AI] 请求 URL: {}", url);

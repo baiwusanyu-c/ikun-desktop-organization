@@ -26,6 +26,13 @@
   }
 
   onMount(() => {
+    // 窗口每次显示时重置状态
+    const unsubscribeOpened = listen('window-opened', () => {
+      state = 'confirm';
+      errorMessage = '';
+      resultMessage = '';
+    });
+
     const unsubscribeSuccess = listen('ai-classification-success', () => {
       state = 'success';
       resultMessage = 'AI 分类已完成';
@@ -40,6 +47,7 @@
     });
 
     return () => {
+      unsubscribeOpened.then(fn => fn());
       unsubscribeSuccess.then(fn => fn());
       unsubscribeError.then(fn => fn());
     };
