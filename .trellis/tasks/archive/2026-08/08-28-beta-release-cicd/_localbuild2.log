@@ -1,0 +1,483 @@
+[09:09:45] ============================================================
+[09:09:45] Desktop Organizer Build
+[09:09:45] ============================================================
+[09:09:45] Platform: win32 (x64)
+[09:09:45] Target platform: win
+[09:09:45] Mode: release
+[09:09:45] Installer: yes
+[09:09:45] Frontend: yes
+[09:09:45] 
+[09:09:45] Checking build environment...
+[09:09:45]   rustc: rustc 1.96.0 (ac68faa20 2026-05-25)
+[09:09:46]   node: v24.14.0
+[09:09:47]   npm: 11.9.0
+[09:09:53]   tauri-cli: tauri-cli 2.11.4
+[09:09:53] Environment check passed!
+[09:09:53] 
+[09:09:53] Installing frontend dependencies...
+[09:09:53] > npm --prefix frontend install
+
+up to date, audited 54 packages in 2s
+
+13 packages are looking for funding
+  run `npm fund` for details
+
+1 high severity vulnerability
+
+To address all issues, run:
+  npm audit fix
+
+Run `npm audit` for details.
+[09:09:57] 
+[09:09:57] Building with: npx --yes @tauri-apps/cli@2 build
+[09:09:57] > npx --yes @tauri-apps/cli@2 build
+        Info Looking up installed tauri packages to check mismatched versions...
+     Running beforeBuildCommand `cd frontend && npm run build`
+
+> frontend@0.0.0 build
+> vite build
+
+vite v8.2.1 building client environment for production...
+[2K
+17:10:10 [vite-plugin-svelte] src/lib/pages/AiSettings.svelte:95:9 Unused CSS selector ".row > span"
+https://svelte.dev/e/css_unused_selector
+93:   .body { padding: 13px 15px; }
+94:   .fields { display: flex; flex-direction: column; gap: 9px; }
+95:   label, .row > span { color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+                        ^
+96:   .required { color: #dc2626; }
+97:   input { width: 100%; padding: 8px 10px; }
+17:10:10 [vite-plugin-svelte] src/lib/pages/AiSettings.svelte:98:2 Unused CSS selector ".row"
+https://svelte.dev/e/css_unused_selector
+ 96:   .required { color: #dc2626; }
+ 97:   input { width: 100%; padding: 8px 10px; }
+ 98:   .row { display: flex; align-items: center; justify-content: space-between; min-height: 28px; }
+           ^
+ 99:   .two-column { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+100:   .two-column > div { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+transforming...✓ 3772 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.51 kB │ gzip:  0.33 kB
+dist/assets/index-Blte-AMu.css   16.41 kB │ gzip:  3.77 kB
+dist/assets/index-DG47bD2l.js   103.14 kB │ gzip: 34.85 kB
+
+✓ built in 5.81s
+[PLUGIN_TIMINGS] Your build spent 45% of 5.8s inside plugin hooks (2.6s).
+Measured inside the callback, so queue time is excluded and time the callback itself awaited is not:
+  - vite-plugin-svelte:compile transform (41%, 2.4s, 1701 calls)
+See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling windows-sys v0.61.2
+   Compiling syn v2.0.117
+   Compiling serde_json v1.0.150
+   Compiling aho-corasick v1.1.4
+   Compiling indexmap v2.14.0
+   Compiling smallvec v1.15.1
+   Compiling winnow v0.7.15
+   Compiling log v0.4.32
+   Compiling typenum v1.20.1
+   Compiling crossbeam-utils v0.8.21
+   Compiling bitflags v2.13.0
+   Compiling tracing v0.1.44
+   Compiling uuid v1.23.2
+   Compiling erased-serde v0.4.10
+   Compiling generic-array v0.14.7
+   Compiling crossbeam-channel v0.5.15
+   Compiling regex-automata v0.4.14
+   Compiling cfb v0.7.3
+   Compiling parking_lot_core v0.9.12
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling serde-untagged v0.1.9
+   Compiling parking_lot v0.12.5
+   Compiling getrandom v0.2.17
+   Compiling digest v0.10.7
+   Compiling futures-task v0.3.32
+   Compiling getrandom v0.3.4
+   Compiling infer v0.19.0
+   Compiling sha2 v0.10.9
+   Compiling slab v0.4.12
+   Compiling futures-util v0.3.32
+   Compiling ring v0.17.14
+   Compiling futures-channel v0.3.32
+   Compiling num-traits v0.2.19
+   Compiling rfd v0.16.0
+   Compiling regex v1.12.3
+   Compiling synstructure v0.13.2
+   Compiling darling_core v0.23.0
+   Compiling serde_derive_internals v0.29.1
+   Compiling rustls-webpki v0.103.13
+   Compiling socket2 v0.6.4
+   Compiling mio v1.2.1
+   Compiling zerovec-derive v0.11.3
+   Compiling serde_derive v1.0.228
+   Compiling displaydoc v0.2.6
+   Compiling thiserror-impl v2.0.18
+   Compiling phf_macros v0.13.1
+   Compiling thiserror-impl v1.0.69
+   Compiling zerofrom-derive v0.1.7
+   Compiling yoke-derive v0.8.2
+   Compiling cssparser-macros v0.6.1
+   Compiling derive_more-impl v2.1.1
+   Compiling schemars_derive v0.8.22
+   Compiling windows-interface v0.59.3
+   Compiling windows-implement v0.60.2
+   Compiling tokio v1.52.3
+   Compiling phf v0.13.1
+   Compiling winapi-util v0.1.11
+   Compiling webview2-com-macros v0.8.1
+   Compiling same-file v1.0.6
+   Compiling thiserror v1.0.69
+   Compiling thiserror v2.0.18
+   Compiling zerofrom v0.1.8
+   Compiling serde_spanned v1.1.1
+   Compiling semver v1.0.28
+   Compiling web_atoms v0.2.5
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling darling_macro v0.23.0
+   Compiling markup5ever v0.38.0
+   Compiling toml v1.1.2+spec-1.1.0
+   Compiling cssparser v0.36.0
+   Compiling html5ever v0.38.0
+   Compiling camino v1.2.5
+   Compiling derive_more v2.1.1
+   Compiling yoke v0.8.3
+   Compiling darling v0.23.0
+   Compiling windows-core v0.61.2
+   Compiling rustc_version v0.4.1
+   Compiling toml_datetime v0.7.5+spec-1.1.0
+   Compiling webview2-com-sys v0.38.2
+   Compiling embed-resource v3.0.11
+   Compiling toml v0.9.12+spec-1.1.0
+   Compiling walkdir v2.5.0
+   Compiling tauri-winres v0.3.6
+   Compiling serialize-to-javascript-impl v0.1.2
+   Compiling dirs-sys v0.5.0
+   Compiling softbuffer v0.4.8
+   Compiling windows-core v0.62.2
+   Compiling zerovec v0.11.6
+   Compiling zerotrie v0.2.4
+   Compiling dpi v0.1.2
+   Compiling jsonptr v0.6.3
+   Compiling selectors v0.36.1
+   Compiling serde_with_macros v3.21.0
+   Compiling cargo-platform v0.1.9
+   Compiling indexmap v1.9.3
+   Compiling json-patch v3.0.1
+   Compiling cargo_metadata v0.19.2
+   Compiling plist v1.10.0
+   Compiling tinystr v0.8.3
+   Compiling potential_utf v0.1.5
+   Compiling icu_collections v2.2.0
+   Compiling icu_locale_core v2.2.0
+   Compiling dom_query v0.27.0
+   Compiling cargo_toml v0.22.3
+   Compiling keyboard-types v0.7.0
+   Compiling dirs v6.0.0
+   Compiling icu_provider v2.2.0
+   Compiling serde_repr v0.1.20
+   Compiling hyper v1.10.1
+   Compiling rustls v0.23.41
+   Compiling tower v0.5.3
+   Compiling serialize-to-javascript v0.1.2
+   Compiling serde_with v3.21.0
+   Compiling anstyle-wincon v3.0.11
+   Compiling icu_properties v2.2.0
+   Compiling icu_normalizer v2.2.0
+   Compiling windows-numerics v0.2.0
+   Compiling windows-collections v0.2.0
+   Compiling windows-future v0.2.1
+   Compiling muda v0.19.3
+   Compiling hyper-util v0.1.20
+   Compiling anstyle-query v1.1.5
+   Compiling windows-future v0.3.2
+   Compiling windows v0.61.3
+   Compiling anstream v1.0.0
+   Compiling windows-collections v0.3.2
+   Compiling windows-numerics v0.3.1
+   Compiling serde_urlencoded v0.7.1
+   Compiling idna_adapter v1.2.2
+   Compiling env_filter v1.0.1
+   Compiling idna v1.1.0
+   Compiling windows v0.62.2
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling notify v6.1.1
+   Compiling env_logger v0.11.10
+   Compiling chrono v0.4.45
+   Compiling tokio-rustls v0.26.4
+   Compiling url v2.5.8
+   Compiling hyper-rustls v0.27.9
+   Compiling schemars v0.8.22
+   Compiling urlpattern v0.3.0
+   Compiling tower-http v0.6.11
+   Compiling tauri-utils v2.9.3
+   Compiling reqwest v0.12.28
+   Compiling tauri-build v2.6.3
+   Compiling tauri-plugin v2.6.3
+   Compiling tauri-codegen v2.6.3
+   Compiling tauri v2.11.5
+   Compiling tauri-plugin-fs v2.5.1
+   Compiling tauri-macros v2.6.3
+   Compiling tauri-plugin-dialog v2.7.2
+   Compiling tauri-plugin-opener v2.5.4
+   Compiling ikun_organizer v0.1.0-beta.1 (D:\github-project\ikun_organizer)
+warning: ikun_organizer@0.1.0-beta.1: Embedding app icon: D:/github-project/ikun_organizer/logo.ico
+warning: ikun_organizer@0.1.0-beta.1: embed-resource compiled .rc successfully: D:\github-project\ikun_organizer\target\release\build\ikun_organizer-e03d79994cb21543\out\app.rc
+   Compiling tao v0.35.3
+   Compiling webview2-com v0.38.2
+   Compiling tauri-runtime v2.11.3
+   Compiling wry v0.55.1
+   Compiling tauri-runtime-wry v2.11.4
+warning: constant `DRAG_THRESHOLD` is never used
+ --> src\shared\drag_state.rs:8:11
+  |
+8 | pub const DRAG_THRESHOLD: i32 = 5;
+  |           ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `is_drag_threshold_exceeded` is never used
+  --> src\shared\drag_state.rs:11:8
+   |
+11 | pub fn is_drag_threshold_exceeded(dx: i32, dy: i32) -> bool {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: enum `AlignmentDirection` is never used
+  --> src\shared\geometry.rs:14:10
+   |
+14 | pub enum AlignmentDirection {
+   |          ^^^^^^^^^^^^^^^^^^
+
+warning: struct `AlignmentMatch` is never constructed
+  --> src\shared\geometry.rs:23:12
+   |
+23 | pub struct AlignmentMatch {
+   |            ^^^^^^^^^^^^^^
+
+warning: struct `AlignmentResult` is never constructed
+  --> src\shared\geometry.rs:38:12
+   |
+38 | pub struct AlignmentResult {
+   |            ^^^^^^^^^^^^^^^
+
+warning: constant `DEFAULT_ALIGNMENT_THRESHOLD` is never used
+  --> src\shared\geometry.rs:46:11
+   |
+46 | pub const DEFAULT_ALIGNMENT_THRESHOLD: i32 = 5;
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `detect_alignments` is never used
+  --> src\shared\geometry.rs:49:8
+   |
+49 | pub fn detect_alignments(
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: struct `RectEdges` is never constructed
+  --> src\shared\geometry.rs:68:8
+   |
+68 | struct RectEdges {
+   |        ^^^^^^^^^
+
+warning: associated function `from_rect` is never used
+  --> src\shared\geometry.rs:76:8
+   |
+75 | impl RectEdges {
+   | -------------- associated function in this implementation
+76 |     fn from_rect(rect: &Rect) -> Self {
+   |        ^^^^^^^^^
+
+warning: function `check_horizontal_alignment` is never used
+  --> src\shared\geometry.rs:86:4
+   |
+86 | fn check_horizontal_alignment(
+   |    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `check_vertical_alignment` is never used
+   --> src\shared\geometry.rs:127:4
+    |
+127 | fn check_vertical_alignment(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `visible_pixel_bounds` is never used
+   --> src\shared\geometry.rs:173:8
+    |
+173 | pub fn visible_pixel_bounds(
+    |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `icon_destination_rect` is never used
+   --> src\shared\geometry.rs:209:8
+    |
+209 | pub fn icon_destination_rect(
+    |        ^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `Rect` is never constructed
+ --> src\shared\types.rs:7:12
+  |
+7 | pub struct Rect {
+  |            ^^^^
+
+warning: associated items `new`, `width`, and `height` are never used
+  --> src\shared\types.rs:15:12
+   |
+14 | impl Rect {
+   | --------- associated items in this implementation
+15 |     pub fn new(left: i32, top: i32, right: i32, bottom: i32) -> Self {
+   |            ^^^
+...
+24 |     pub fn width(&self) -> i32 {
+   |            ^^^^^
+...
+28 |     pub fn height(&self) -> i32 {
+   |            ^^^^^^
+
+warning: struct `Point` is never constructed
+  --> src\shared\types.rs:35:12
+   |
+35 | pub struct Point {
+   |            ^^^^^
+
+warning: struct `Pixel32` is never constructed
+  --> src\shared\types.rs:42:12
+   |
+42 | pub struct Pixel32 {
+   |            ^^^^^^^
+
+warning: `ShellExecuteW` redeclared with a different signature
+   --> src\platform\windows\ffi_imports.rs:222:5
+    |
+222 | /     pub fn ShellExecuteW(
+223 | |         hwnd: HWND,
+224 | |
+225 | |         lpOperation: *const u16,
+...   |
+233 | |         nShowCmd: i32,
+234 | |     ) -> HINSTANCE;
+    | |___________________^ this signature doesn't match the previous declaration
+    |
+   ::: src\platform\windows\desktop_manager.rs:68:13
+    |
+ 68 | /             fn ShellExecuteW(
+ 69 | |                 hwnd: *mut std::ffi::c_void,
+ 70 | |                 operation: *const u16,
+ 71 | |                 file: *const u16,
+...   |
+ 74 | |                 show_cmd: i32,
+ 75 | |             ) -> isize;
+    | |_______________________- `ShellExecuteW` previously declared here
+    |
+    = note: expected `unsafe extern "system" fn(*mut c_void, *const u16, *const u16, *const u16, *const u16, i32) -> isize`
+               found `unsafe extern "system" fn(*mut c_void, *const u16, *const u16, *const u16, *const u16, i32) -> *mut c_void`
+    = note: `#[warn(clashing_extern_declarations)]` on by default
+
+warning: `SHGetFileInfoW` redeclared with a different signature
+   --> src\platform\windows\icon_extract.rs:118:5
+    |
+118 | /     fn SHGetFileInfoW(
+119 | |         pszPath: *const u16,
+120 | |         dwFileAttributes: u32,
+121 | |         psfi: *mut SHFILEINFOW,
+122 | |         cbFileInfo: u32,
+123 | |         uFlags: u32,
+124 | |     ) -> usize;
+    | |_______________^ this signature doesn't match the previous declaration
+    |
+   ::: src\platform\windows\drop_target.rs:612:13
+    |
+612 | /             fn SHGetFileInfoW(
+613 | |                 pszPath: *const u8,
+614 | |                 dwFileAttributes: u32,
+615 | |                 psfi: *mut ShellFileInfo,
+616 | |                 cbFileInfo: u32,
+617 | |                 uFlags: u32,
+618 | |             ) -> usize;
+    | |_______________________- `SHGetFileInfoW` previously declared here
+    |
+    = note: expected `unsafe extern "system" fn(*const u8, u32, *mut ShellFileInfo, u32, u32) -> usize`
+               found `unsafe extern "system" fn(*const u16, u32, *mut icon_extract::SHFILEINFOW, u32, u32) -> usize`
+
+warning: `SHParseDisplayName` redeclared with a different signature
+   --> src\platform\windows\icon_extract.rs:145:5
+    |
+145 | /     fn SHParseDisplayName(
+146 | |         pszName: *const u16,
+147 | |         pbc: *mut c_void,
+148 | |         ppidl: *mut *mut ITEMIDLIST,
+149 | |         sfgaoIn: u32,
+150 | |         psfgaoOut: *mut u32,
+151 | |     ) -> HRESULT;
+    | |_________________^ this signature doesn't match the previous declaration
+    |
+   ::: src\platform\windows\ffi_imports.rs:916:5
+    |
+916 | /     pub fn SHParseDisplayName(
+917 | |         pszName: *const u16,
+918 | |
+919 | |         pbc: *mut c_void,
+...   |
+925 | |         psfgaoOut: *mut u32,
+926 | |     ) -> HRESULT;
+    | |_________________- `SHParseDisplayName` previously declared here
+    |
+    = note: expected `unsafe extern "system" fn(*const u16, *mut c_void, *mut *mut ffi_imports::ITEMIDLIST, u32, *mut u32) -> i32`
+               found `unsafe extern "system" fn(*const u16, *mut c_void, *mut *mut icon_extract::ITEMIDLIST, u32, *mut u32) -> i32`
+
+warning: `ILFree` redeclared with a different signature
+   --> src\platform\windows\icon_extract.rs:152:5
+    |
+152 |     fn ILFree(pidl: *mut ITEMIDLIST);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this signature doesn't match the previous declaration
+    |
+   ::: src\platform\windows\ffi_imports.rs:938:5
+    |
+938 |     pub fn ILFree(pidl: *mut ITEMIDLIST);
+    |     ------------------------------------- `ILFree` previously declared here
+    |
+    = note: expected `unsafe extern "system" fn(*mut ffi_imports::ITEMIDLIST)`
+               found `unsafe extern "system" fn(*mut icon_extract::ITEMIDLIST)`
+
+warning: `SHGetFileInfoW` redeclared with a different signature
+    --> src\platform\windows\icon_manager.rs:1641:5
+     |
+1641 | /     fn SHGetFileInfoW(
+1642 | |         pszPath: *const u16,
+1643 | |         dwFileAttributes: u32,
+1644 | |         psfi: *mut SysSHFILEINFOW,
+1645 | |         cbFileInfo: u32,
+1646 | |         uFlags: u32,
+1647 | |     ) -> usize;
+     | |_______________^ this signature doesn't match the previous declaration
+     |
+    ::: src\platform\windows\drop_target.rs:612:13
+     |
+ 612 | /             fn SHGetFileInfoW(
+ 613 | |                 pszPath: *const u8,
+ 614 | |                 dwFileAttributes: u32,
+ 615 | |                 psfi: *mut ShellFileInfo,
+ 616 | |                 cbFileInfo: u32,
+ 617 | |                 uFlags: u32,
+ 618 | |             ) -> usize;
+     | |_______________________- `SHGetFileInfoW` previously declared here
+     |
+     = note: expected `unsafe extern "system" fn(*const u8, u32, *mut ShellFileInfo, u32, u32) -> usize`
+                found `unsafe extern "system" fn(*const u16, u32, *mut SysSHFILEINFOW, u32, u32) -> usize`
+
+warning: `ikun_organizer` (bin "ikun_organizer") generated 22 warnings
+    Finished `release` profile [optimized] target(s) in 14m 19s
+       Built application at: D:\github-project\ikun_organizer\target\release\ikun_organizer.exe
+        Info Patching D:\github-project\ikun_organizer\target\release\ikun_organizer.exe with bundle type information: nsis
+        Warn Failed to add bundler type to the binary: Failed to write binary file changes: `请求的操作无法在使用用户映射区域打开的文件上执行。 (os error 1224)`. Updater plugin may not be able to update this package. This shouldn't normally happen, please report it to https://github.com/tauri-apps/tauri/issues
+        Info Verifying NSIS package
+ Downloading https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.11/nsis-3.11.zip
+        Info validating hash
+        Info extracting NSIS
+ Downloading https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll
+        Info validating hash
+        Info Target: x64
+ Downloading https://go.microsoft.com/fwlink/p/?LinkId=2124703
+     Running makensis to produce D:\github-project\ikun_organizer\target\release\bundle\nsis\Desktop Organizer_0.1.0-beta.1_x64-setup.exe
+        Info Patching D:\github-project\ikun_organizer\target\release\ikun_organizer.exe with bundle type information: msi
+        Info Verifying wix package
+ Downloading https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip

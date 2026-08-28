@@ -1,0 +1,28 @@
+   Compiling ikun_organizer v0.1.0 (D:\github-project\ikun_organizer)
+error: failed to run custom build command for `ikun_organizer v0.1.0 (D:\github-project\ikun_organizer)`
+
+Caused by:
+  process didn't exit successfully: `D:\github-project\ikun_organizer\target\debug\build\ikun_organizer-78853fd3271f1455\build-script-build` (exit code: 101)
+  --- stdout
+  cargo:rerun-if-env-changed=TAURI_CONFIG
+  cargo:rustc-check-cfg=cfg(desktop)
+  cargo:rustc-cfg=desktop
+  cargo:rustc-check-cfg=cfg(mobile)
+  cargo:rerun-if-changed=D:\github-project\ikun_organizer\tauri.conf.json
+  cargo:rustc-env=TAURI_ANDROID_PACKAGE_NAME_APP_NAME=organizer
+  cargo:rustc-env=TAURI_ANDROID_PACKAGE_NAME_PREFIX=com_ikun
+  cargo:rustc-check-cfg=cfg(dev)
+  cargo:rustc-cfg=dev
+  cargo:PERMISSION_FILES_PATH=D:\github-project\ikun_organizer\target\debug\build\ikun_organizer-fc7871eaebd726e5\out\app-manifest\__app__-permission-files
+  cargo:rerun-if-changed=capabilities
+  cargo:rerun-if-env-changed=REMOVE_UNUSED_COMMANDS
+  cargo:rustc-env=TAURI_ENV_TARGET_TRIPLE=x86_64-pc-windows-gnu
+  package.metadata does not exist
+  cargo:rustc-link-arg-bins=D:\github-project\ikun_organizer\target\debug\build\ikun_organizer-fc7871eaebd726e5\out\libresource.a
+
+  --- stderr
+  Final verdict: crate has binaries: true
+
+  thread 'main' (28680) panicked at build\build.rs:26:13:
+  tauri_build 构建失败: 另一个程序正在使用此文件，进程无法访问。 (os error 32)
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

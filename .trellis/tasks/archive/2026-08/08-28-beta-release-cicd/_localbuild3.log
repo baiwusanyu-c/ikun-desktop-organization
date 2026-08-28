@@ -1,0 +1,315 @@
+[09:37:32] ============================================================
+[09:37:32] Desktop Organizer Build
+[09:37:32] ============================================================
+[09:37:32] Platform: win32 (x64)
+[09:37:32] Target platform: win
+[09:37:32] Mode: release
+[09:37:32] Installer: yes
+[09:37:32] Frontend: yes
+[09:37:32] 
+[09:37:32] Checking build environment...
+[09:37:32]   rustc: rustc 1.96.0 (ac68faa20 2026-05-25)
+[09:37:33]   node: v24.14.0
+[09:37:34]   npm: 11.9.0
+[09:37:40]   tauri-cli: tauri-cli 2.11.4
+[09:37:40] Environment check passed!
+[09:37:40] 
+[09:37:40] Installing frontend dependencies...
+[09:37:40] > npm --prefix frontend install
+
+up to date, audited 54 packages in 3s
+
+13 packages are looking for funding
+  run `npm fund` for details
+
+1 high severity vulnerability
+
+To address all issues, run:
+  npm audit fix
+
+Run `npm audit` for details.
+[09:37:44] 
+[09:37:44] Building with: npx --yes @tauri-apps/cli@2 build
+[09:37:44] > npx --yes @tauri-apps/cli@2 build
+        Info Looking up installed tauri packages to check mismatched versions...
+     Running beforeBuildCommand `cd frontend && npm run build`
+
+> frontend@0.0.0 build
+> vite build
+
+vite v8.2.1 building client environment for production...
+[2K
+17:38:07 [vite-plugin-svelte] src/lib/pages/AiSettings.svelte:95:9 Unused CSS selector ".row > span"
+https://svelte.dev/e/css_unused_selector
+93:   .body { padding: 13px 15px; }
+94:   .fields { display: flex; flex-direction: column; gap: 9px; }
+95:   label, .row > span { color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+                        ^
+96:   .required { color: #dc2626; }
+97:   input { width: 100%; padding: 8px 10px; }
+17:38:07 [vite-plugin-svelte] src/lib/pages/AiSettings.svelte:98:2 Unused CSS selector ".row"
+https://svelte.dev/e/css_unused_selector
+ 96:   .required { color: #dc2626; }
+ 97:   input { width: 100%; padding: 8px 10px; }
+ 98:   .row { display: flex; align-items: center; justify-content: space-between; min-height: 28px; }
+           ^
+ 99:   .two-column { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+100:   .two-column > div { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+transforming...✓ 3772 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.51 kB │ gzip:  0.33 kB
+dist/assets/index-Blte-AMu.css   16.41 kB │ gzip:  3.77 kB
+dist/assets/index-DG47bD2l.js   103.14 kB │ gzip: 34.85 kB
+
+✓ built in 9.87s
+[PLUGIN_TIMINGS] Your build spent 34% of 9.9s inside plugin hooks (3.3s).
+Measured inside the callback, so queue time is excluded and time the callback itself awaited is not:
+  - vite-plugin-svelte:compile transform (31%, 3.0s, 1701 calls)
+See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+warning: ikun_organizer@0.1.0-beta.1: Embedding app icon: D:/github-project/ikun_organizer/logo.ico
+warning: ikun_organizer@0.1.0-beta.1: embed-resource compiled .rc successfully: D:\github-project\ikun_organizer\target\release\build\ikun_organizer-e03d79994cb21543\out\app.rc
+   Compiling ikun_organizer v0.1.0-beta.1 (D:\github-project\ikun_organizer)
+warning: constant `DRAG_THRESHOLD` is never used
+ --> src\shared\drag_state.rs:8:11
+  |
+8 | pub const DRAG_THRESHOLD: i32 = 5;
+  |           ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `is_drag_threshold_exceeded` is never used
+  --> src\shared\drag_state.rs:11:8
+   |
+11 | pub fn is_drag_threshold_exceeded(dx: i32, dy: i32) -> bool {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: enum `AlignmentDirection` is never used
+  --> src\shared\geometry.rs:14:10
+   |
+14 | pub enum AlignmentDirection {
+   |          ^^^^^^^^^^^^^^^^^^
+
+warning: struct `AlignmentMatch` is never constructed
+  --> src\shared\geometry.rs:23:12
+   |
+23 | pub struct AlignmentMatch {
+   |            ^^^^^^^^^^^^^^
+
+warning: struct `AlignmentResult` is never constructed
+  --> src\shared\geometry.rs:38:12
+   |
+38 | pub struct AlignmentResult {
+   |            ^^^^^^^^^^^^^^^
+
+warning: constant `DEFAULT_ALIGNMENT_THRESHOLD` is never used
+  --> src\shared\geometry.rs:46:11
+   |
+46 | pub const DEFAULT_ALIGNMENT_THRESHOLD: i32 = 5;
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `detect_alignments` is never used
+  --> src\shared\geometry.rs:49:8
+   |
+49 | pub fn detect_alignments(
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: struct `RectEdges` is never constructed
+  --> src\shared\geometry.rs:68:8
+   |
+68 | struct RectEdges {
+   |        ^^^^^^^^^
+
+warning: associated function `from_rect` is never used
+  --> src\shared\geometry.rs:76:8
+   |
+75 | impl RectEdges {
+   | -------------- associated function in this implementation
+76 |     fn from_rect(rect: &Rect) -> Self {
+   |        ^^^^^^^^^
+
+warning: function `check_horizontal_alignment` is never used
+  --> src\shared\geometry.rs:86:4
+   |
+86 | fn check_horizontal_alignment(
+   |    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `check_vertical_alignment` is never used
+   --> src\shared\geometry.rs:127:4
+    |
+127 | fn check_vertical_alignment(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `visible_pixel_bounds` is never used
+   --> src\shared\geometry.rs:173:8
+    |
+173 | pub fn visible_pixel_bounds(
+    |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `icon_destination_rect` is never used
+   --> src\shared\geometry.rs:209:8
+    |
+209 | pub fn icon_destination_rect(
+    |        ^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `Rect` is never constructed
+ --> src\shared\types.rs:7:12
+  |
+7 | pub struct Rect {
+  |            ^^^^
+
+warning: associated items `new`, `width`, and `height` are never used
+  --> src\shared\types.rs:15:12
+   |
+14 | impl Rect {
+   | --------- associated items in this implementation
+15 |     pub fn new(left: i32, top: i32, right: i32, bottom: i32) -> Self {
+   |            ^^^
+...
+24 |     pub fn width(&self) -> i32 {
+   |            ^^^^^
+...
+28 |     pub fn height(&self) -> i32 {
+   |            ^^^^^^
+
+warning: struct `Point` is never constructed
+  --> src\shared\types.rs:35:12
+   |
+35 | pub struct Point {
+   |            ^^^^^
+
+warning: struct `Pixel32` is never constructed
+  --> src\shared\types.rs:42:12
+   |
+42 | pub struct Pixel32 {
+   |            ^^^^^^^
+
+warning: `ShellExecuteW` redeclared with a different signature
+   --> src\platform\windows\ffi_imports.rs:222:5
+    |
+222 | /     pub fn ShellExecuteW(
+223 | |         hwnd: HWND,
+224 | |
+225 | |         lpOperation: *const u16,
+...   |
+233 | |         nShowCmd: i32,
+234 | |     ) -> HINSTANCE;
+    | |___________________^ this signature doesn't match the previous declaration
+    |
+   ::: src\platform\windows\desktop_manager.rs:68:13
+    |
+ 68 | /             fn ShellExecuteW(
+ 69 | |                 hwnd: *mut std::ffi::c_void,
+ 70 | |                 operation: *const u16,
+ 71 | |                 file: *const u16,
+...   |
+ 74 | |                 show_cmd: i32,
+ 75 | |             ) -> isize;
+    | |_______________________- `ShellExecuteW` previously declared here
+    |
+    = note: expected `unsafe extern "system" fn(*mut c_void, *const u16, *const u16, *const u16, *const u16, i32) -> isize`
+               found `unsafe extern "system" fn(*mut c_void, *const u16, *const u16, *const u16, *const u16, i32) -> *mut c_void`
+    = note: `#[warn(clashing_extern_declarations)]` on by default
+
+warning: `SHGetFileInfoW` redeclared with a different signature
+   --> src\platform\windows\icon_extract.rs:118:5
+    |
+118 | /     fn SHGetFileInfoW(
+119 | |         pszPath: *const u16,
+120 | |         dwFileAttributes: u32,
+121 | |         psfi: *mut SHFILEINFOW,
+122 | |         cbFileInfo: u32,
+123 | |         uFlags: u32,
+124 | |     ) -> usize;
+    | |_______________^ this signature doesn't match the previous declaration
+    |
+   ::: src\platform\windows\drop_target.rs:612:13
+    |
+612 | /             fn SHGetFileInfoW(
+613 | |                 pszPath: *const u8,
+614 | |                 dwFileAttributes: u32,
+615 | |                 psfi: *mut ShellFileInfo,
+616 | |                 cbFileInfo: u32,
+617 | |                 uFlags: u32,
+618 | |             ) -> usize;
+    | |_______________________- `SHGetFileInfoW` previously declared here
+    |
+    = note: expected `unsafe extern "system" fn(*const u8, u32, *mut ShellFileInfo, u32, u32) -> usize`
+               found `unsafe extern "system" fn(*const u16, u32, *mut icon_extract::SHFILEINFOW, u32, u32) -> usize`
+
+warning: `SHParseDisplayName` redeclared with a different signature
+   --> src\platform\windows\icon_extract.rs:145:5
+    |
+145 | /     fn SHParseDisplayName(
+146 | |         pszName: *const u16,
+147 | |         pbc: *mut c_void,
+148 | |         ppidl: *mut *mut ITEMIDLIST,
+149 | |         sfgaoIn: u32,
+150 | |         psfgaoOut: *mut u32,
+151 | |     ) -> HRESULT;
+    | |_________________^ this signature doesn't match the previous declaration
+    |
+   ::: src\platform\windows\ffi_imports.rs:916:5
+    |
+916 | /     pub fn SHParseDisplayName(
+917 | |         pszName: *const u16,
+918 | |
+919 | |         pbc: *mut c_void,
+...   |
+925 | |         psfgaoOut: *mut u32,
+926 | |     ) -> HRESULT;
+    | |_________________- `SHParseDisplayName` previously declared here
+    |
+    = note: expected `unsafe extern "system" fn(*const u16, *mut c_void, *mut *mut ffi_imports::ITEMIDLIST, u32, *mut u32) -> i32`
+               found `unsafe extern "system" fn(*const u16, *mut c_void, *mut *mut icon_extract::ITEMIDLIST, u32, *mut u32) -> i32`
+
+warning: `ILFree` redeclared with a different signature
+   --> src\platform\windows\icon_extract.rs:152:5
+    |
+152 |     fn ILFree(pidl: *mut ITEMIDLIST);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this signature doesn't match the previous declaration
+    |
+   ::: src\platform\windows\ffi_imports.rs:938:5
+    |
+938 |     pub fn ILFree(pidl: *mut ITEMIDLIST);
+    |     ------------------------------------- `ILFree` previously declared here
+    |
+    = note: expected `unsafe extern "system" fn(*mut ffi_imports::ITEMIDLIST)`
+               found `unsafe extern "system" fn(*mut icon_extract::ITEMIDLIST)`
+
+warning: `SHGetFileInfoW` redeclared with a different signature
+    --> src\platform\windows\icon_manager.rs:1641:5
+     |
+1641 | /     fn SHGetFileInfoW(
+1642 | |         pszPath: *const u16,
+1643 | |         dwFileAttributes: u32,
+1644 | |         psfi: *mut SysSHFILEINFOW,
+1645 | |         cbFileInfo: u32,
+1646 | |         uFlags: u32,
+1647 | |     ) -> usize;
+     | |_______________^ this signature doesn't match the previous declaration
+     |
+    ::: src\platform\windows\drop_target.rs:612:13
+     |
+ 612 | /             fn SHGetFileInfoW(
+ 613 | |                 pszPath: *const u8,
+ 614 | |                 dwFileAttributes: u32,
+ 615 | |                 psfi: *mut ShellFileInfo,
+ 616 | |                 cbFileInfo: u32,
+ 617 | |                 uFlags: u32,
+ 618 | |             ) -> usize;
+     | |_______________________- `SHGetFileInfoW` previously declared here
+     |
+     = note: expected `unsafe extern "system" fn(*const u8, u32, *mut ShellFileInfo, u32, u32) -> usize`
+                found `unsafe extern "system" fn(*const u16, u32, *mut SysSHFILEINFOW, u32, u32) -> usize`
+
+warning: `ikun_organizer` (bin "ikun_organizer") generated 22 warnings
+    Finished `release` profile [optimized] target(s) in 9m 48s
+       Built application at: D:\github-project\ikun_organizer\target\release\ikun_organizer.exe
+        Info Patching D:\github-project\ikun_organizer\target\release\ikun_organizer.exe with bundle type information: nsis
+        Info Target: x64
+     Running makensis to produce D:\github-project\ikun_organizer\target\release\bundle\nsis\Desktop Organizer_0.1.0-beta.1_x64-setup.exe
+        Info Patching D:\github-project\ikun_organizer\target\release\ikun_organizer.exe with bundle type information: msi
+        Info Verifying wix package
+ Downloading https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip

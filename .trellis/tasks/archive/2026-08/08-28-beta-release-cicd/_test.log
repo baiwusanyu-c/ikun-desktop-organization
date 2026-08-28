@@ -1,0 +1,792 @@
+   Compiling ikun_organizer v0.1.0-beta.1 (D:\github-project\ikun_organizer)
+warning: ikun_organizer@0.1.0-beta.1: Embedding app icon: D:/github-project/ikun_organizer/logo.ico
+warning: ikun_organizer@0.1.0-beta.1: embed-resource compiled .rc successfully: D:\github-project\ikun_organizer\target\debug\build\ikun_organizer-91f55e0994a84a47\out\app.rc
+warning: value assigned to `drag_pending` is never read
+   --> src\platform\windows\drag_handler.rs:842:32
+    |
+842 |         let mut drag_pending = true;
+    |                                ^^^^ this value is reassigned later and never used
+...
+850 |         drag_pending = false;
+    |         -------------------- `drag_pending` is overwritten here before the previous value is read
+    |
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `drag_active` is never read
+   --> src\platform\windows\drag_handler.rs:843:31
+    |
+843 |         let mut drag_active = true;
+    |                               ^^^^ this value is reassigned later and never used
+...
+851 |         drag_active = false;
+    |         ------------------- `drag_active` is overwritten here before the previous value is read
+
+warning: value assigned to `drag_item_index` is never read
+   --> src\platform\windows\drag_handler.rs:844:40
+    |
+844 |         let mut drag_item_index: i32 = 3;
+    |                                        ^ this value is reassigned later and never used
+...
+852 |         drag_item_index = -1;
+    |         -------------------- `drag_item_index` is overwritten here before the previous value is read
+
+warning: value assigned to `drag_over_item` is never read
+   --> src\platform\windows\drag_handler.rs:845:39
+    |
+845 |         let mut drag_over_item: i32 = 2;
+    |                                       ^ this value is reassigned later and never used
+...
+853 |         drag_over_item = -1;
+    |         ------------------- `drag_over_item` is overwritten here before the previous value is read
+
+warning: value assigned to `drag_over_insert_col` is never read
+   --> src\platform\windows\drag_handler.rs:846:45
+    |
+846 |         let mut drag_over_insert_col: i32 = 1;
+    |                                             ^ this value is reassigned later and never used
+...
+854 |         drag_over_insert_col = -1;
+    |         ------------------------- `drag_over_insert_col` is overwritten here before the previous value is read
+
+warning: value assigned to `drag_over_insert_row` is never read
+   --> src\platform\windows\drag_handler.rs:847:45
+    |
+847 |         let mut drag_over_insert_row: i32 = 0;
+    |                                             ^ this value is reassigned later and never used
+...
+855 |         drag_over_insert_row = -1;
+    |         ------------------------- `drag_over_insert_row` is overwritten here before the previous value is read
+
+warning: value assigned to `drag_active` is never read
+   --> src\platform\windows\drag_handler.rs:884:31
+    |
+884 |         let mut drag_active = true;
+    |                               ^^^^ this value is reassigned later and never used
+...
+892 |         drag_active = false;
+    |         ------------------- `drag_active` is overwritten here before the previous value is read
+
+warning: value assigned to `drag_item_index` is never read
+   --> src\platform\windows\drag_handler.rs:885:40
+    |
+885 |         let mut drag_item_index: i32 = 3;
+    |                                        ^ this value is reassigned later and never used
+...
+893 |         drag_item_index = -1;
+    |         -------------------- `drag_item_index` is overwritten here before the previous value is read
+
+warning: value assigned to `drag_over_item` is never read
+   --> src\platform\windows\drag_handler.rs:886:39
+    |
+886 |         let mut drag_over_item: i32 = 2;
+    |                                       ^ this value is reassigned later and never used
+...
+894 |         drag_over_item = -1;
+    |         ------------------- `drag_over_item` is overwritten here before the previous value is read
+
+warning: value assigned to `drag_over_insert_col` is never read
+   --> src\platform\windows\drag_handler.rs:887:45
+    |
+887 |         let mut drag_over_insert_col: i32 = 1;
+    |                                             ^ this value is reassigned later and never used
+...
+895 |         drag_over_insert_col = -1;
+    |         ------------------------- `drag_over_insert_col` is overwritten here before the previous value is read
+
+warning: value assigned to `drag_over_insert_row` is never read
+   --> src\platform\windows\drag_handler.rs:888:45
+    |
+888 |         let mut drag_over_insert_row: i32 = 0;
+    |                                             ^ this value is reassigned later and never used
+...
+896 |         drag_over_insert_row = -1;
+    |         ------------------------- `drag_over_insert_row` is overwritten here before the previous value is read
+
+warning: field `direction` is never read
+  --> src\shared\geometry.rs:25:9
+   |
+23 | pub struct AlignmentMatch {
+   |            -------------- field in this struct
+24 |     /// 对齐方向
+25 |     pub direction: AlignmentDirection,
+   |         ^^^^^^^^^
+   |
+   = note: `AlignmentMatch` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `DEFAULT_ALIGNMENT_THRESHOLD` is never used
+  --> src\shared\geometry.rs:46:11
+   |
+46 | pub const DEFAULT_ALIGNMENT_THRESHOLD: i32 = 5;
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `Point` is never constructed
+  --> src\shared\types.rs:35:12
+   |
+35 | pub struct Point {
+   |            ^^^^^
+
+warning: fields `b`, `g`, and `r` are never read
+  --> src\shared\types.rs:43:9
+   |
+42 | pub struct Pixel32 {
+   |            ------- fields in this struct
+43 |     pub b: u8,
+   |         ^
+44 |     pub g: u8,
+   |         ^
+45 |     pub r: u8,
+   |         ^
+   |
+   = note: `Pixel32` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: `ShellExecuteW` redeclared with a different signature
+   --> src\platform\windows\ffi_imports.rs:222:5
+    |
+222 | /     pub fn ShellExecuteW(
+223 | |         hwnd: HWND,
+224 | |
+225 | |         lpOperation: *const u16,
+...   |
+233 | |         nShowCmd: i32,
+234 | |     ) -> HINSTANCE;
+    | |___________________^ this signature doesn't match the previous declaration
+    |
+   ::: src\platform\windows\desktop_manager.rs:68:13
+    |
+ 68 | /             fn ShellExecuteW(
+ 69 | |                 hwnd: *mut std::ffi::c_void,
+ 70 | |                 operation: *const u16,
+ 71 | |                 file: *const u16,
+...   |
+ 74 | |                 show_cmd: i32,
+ 75 | |             ) -> isize;
+    | |_______________________- `ShellExecuteW` previously declared here
+    |
+    = note: expected `unsafe extern "system" fn(*mut c_void, *const u16, *const u16, *const u16, *const u16, i32) -> isize`
+               found `unsafe extern "system" fn(*mut c_void, *const u16, *const u16, *const u16, *const u16, i32) -> *mut c_void`
+    = note: `#[warn(clashing_extern_declarations)]` on by default
+
+warning: `SHGetFileInfoW` redeclared with a different signature
+   --> src\platform\windows\icon_extract.rs:118:5
+    |
+118 | /     fn SHGetFileInfoW(
+119 | |         pszPath: *const u16,
+120 | |         dwFileAttributes: u32,
+121 | |         psfi: *mut SHFILEINFOW,
+122 | |         cbFileInfo: u32,
+123 | |         uFlags: u32,
+124 | |     ) -> usize;
+    | |_______________^ this signature doesn't match the previous declaration
+    |
+   ::: src\platform\windows\drop_target.rs:612:13
+    |
+612 | /             fn SHGetFileInfoW(
+613 | |                 pszPath: *const u8,
+614 | |                 dwFileAttributes: u32,
+615 | |                 psfi: *mut ShellFileInfo,
+616 | |                 cbFileInfo: u32,
+617 | |                 uFlags: u32,
+618 | |             ) -> usize;
+    | |_______________________- `SHGetFileInfoW` previously declared here
+    |
+    = note: expected `unsafe extern "system" fn(*const u8, u32, *mut ShellFileInfo, u32, u32) -> usize`
+               found `unsafe extern "system" fn(*const u16, u32, *mut icon_extract::SHFILEINFOW, u32, u32) -> usize`
+
+warning: `SHParseDisplayName` redeclared with a different signature
+   --> src\platform\windows\icon_extract.rs:145:5
+    |
+145 | /     fn SHParseDisplayName(
+146 | |         pszName: *const u16,
+147 | |         pbc: *mut c_void,
+148 | |         ppidl: *mut *mut ITEMIDLIST,
+149 | |         sfgaoIn: u32,
+150 | |         psfgaoOut: *mut u32,
+151 | |     ) -> HRESULT;
+    | |_________________^ this signature doesn't match the previous declaration
+    |
+   ::: src\platform\windows\ffi_imports.rs:916:5
+    |
+916 | /     pub fn SHParseDisplayName(
+917 | |         pszName: *const u16,
+918 | |
+919 | |         pbc: *mut c_void,
+...   |
+925 | |         psfgaoOut: *mut u32,
+926 | |     ) -> HRESULT;
+    | |_________________- `SHParseDisplayName` previously declared here
+    |
+    = note: expected `unsafe extern "system" fn(*const u16, *mut c_void, *mut *mut ffi_imports::ITEMIDLIST, u32, *mut u32) -> i32`
+               found `unsafe extern "system" fn(*const u16, *mut c_void, *mut *mut icon_extract::ITEMIDLIST, u32, *mut u32) -> i32`
+
+warning: `ILFree` redeclared with a different signature
+   --> src\platform\windows\icon_extract.rs:152:5
+    |
+152 |     fn ILFree(pidl: *mut ITEMIDLIST);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this signature doesn't match the previous declaration
+    |
+   ::: src\platform\windows\ffi_imports.rs:938:5
+    |
+938 |     pub fn ILFree(pidl: *mut ITEMIDLIST);
+    |     ------------------------------------- `ILFree` previously declared here
+    |
+    = note: expected `unsafe extern "system" fn(*mut ffi_imports::ITEMIDLIST)`
+               found `unsafe extern "system" fn(*mut icon_extract::ITEMIDLIST)`
+
+warning: `SHGetFileInfoW` redeclared with a different signature
+    --> src\platform\windows\icon_manager.rs:1641:5
+     |
+1641 | /     fn SHGetFileInfoW(
+1642 | |         pszPath: *const u16,
+1643 | |         dwFileAttributes: u32,
+1644 | |         psfi: *mut SysSHFILEINFOW,
+1645 | |         cbFileInfo: u32,
+1646 | |         uFlags: u32,
+1647 | |     ) -> usize;
+     | |_______________^ this signature doesn't match the previous declaration
+     |
+    ::: src\platform\windows\drop_target.rs:612:13
+     |
+ 612 | /             fn SHGetFileInfoW(
+ 613 | |                 pszPath: *const u8,
+ 614 | |                 dwFileAttributes: u32,
+ 615 | |                 psfi: *mut ShellFileInfo,
+ 616 | |                 cbFileInfo: u32,
+ 617 | |                 uFlags: u32,
+ 618 | |             ) -> usize;
+     | |_______________________- `SHGetFileInfoW` previously declared here
+     |
+     = note: expected `unsafe extern "system" fn(*const u8, u32, *mut ShellFileInfo, u32, u32) -> usize`
+                found `unsafe extern "system" fn(*const u16, u32, *mut SysSHFILEINFOW, u32, u32) -> usize`
+
+warning: `ikun_organizer` (bin "ikun_organizer" test) generated 20 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 55.52s
+     Running unittests src\main.rs (target\debug\deps\ikun_organizer-8616025c32c5a406.exe)
+
+running 523 tests
+test config::app_config::liquid_glass_tests::test_elasticity_default_value ... ok
+test config::app_config::liquid_glass_tests::test_elasticity_max_constant_value ... ok
+test config::app_config::liquid_glass_tests::test_elasticity_set_param_clamps_negative ... ok
+test config::app_config::liquid_glass_tests::test_elasticity_set_param_clamps_to_max ... ok
+test config::app_config::liquid_glass_tests::test_elasticity_boundary_values ... ok
+test config::app_config::liquid_glass_tests::test_elasticity_set_param_accepts_valid_range ... ok
+test config::app_config::liquid_glass_tests::test_liquid_glass_config_bool_accessors ... ok
+test config::app_config::liquid_glass_tests::test_liquid_glass_config_default_values ... ok
+test config::app_config::liquid_glass_tests::test_liquid_glass_config_set_and_get_param ... ok
+test config::app_config::liquid_glass_tests::test_liquid_glass_config_backward_compatibility ... ok
+test config::app_config::liquid_glass_tests::test_liquid_glass_normalizes_legacy_corner_radius ... ok
+test classification::ai_classifier::tests::test_parse_response_missing_icons ... ok
+test classification::ai_classifier::tests::test_parse_response_malformed_json ... ok
+test classification::ai_classifier::tests::test_parse_response_valid ... ok
+test config::app_config::liquid_glass_tests::test_liquid_glass_param_ranges_match_example_controls ... ok
+test classification::ai_classifier::tests::test_parse_response_new_categories ... ok
+test config::app_config::liquid_glass_tests::test_normalize_clamps_corner_radius_over_max ... ok
+test config::app_config::liquid_glass_tests::test_liquid_glass_param_enum_coverage ... ok
+test classification::ai_classifier::tests::test_build_prompt_format ... ok
+test config::app_config::liquid_glass_tests::test_liquid_glass_config_serialization ... ok
+test config::app_config::liquid_glass_tests::test_normalize_clamps_elasticity_over_max ... ok
+test config::app_config::liquid_glass_tests::test_normalize_clamps_negative_elasticity ... ok
+test config::app_config::liquid_glass_tests::test_saturation_lower_bound_is_one ... ok
+test config::app_config::liquid_glass_tests::test_normalize_preserves_valid_elasticity ... ok
+test config::app_config::liquid_glass_tests::test_set_param_refraction_mode_rounds_and_clamps ... ok
+test config::app_config::liquid_glass_tests::test_set_param_clamps_over_max_values ... ok
+test config::app_config::liquid_glass_tests::test_set_param_clamps_negative_values ... ok
+test config::app_config::tests::test_ai_config_backward_compat ... ok
+test config::app_config::tests::test_ai_config_debug_redacts_key ... ok
+test config::app_config::tests::test_ai_default ... ok
+test config::app_config::tests::test_ai_config_user_override ... ok
+test config::app_config::tests::test_box_defaults_default ... ok
+test config::app_config::tests::test_app_config_default ... ok
+test config::app_config::tests::test_box_layout_retain_by_uuid_duplicate_name_different_id ... ok
+test config::app_config::tests::test_box_layout_data_display_names_backward_compat ... ok
+test config::app_config::tests::test_box_layout_data_display_names_serialization ... ok
+test config::app_config::tests::test_box_layout_data_roundtrip ... ok
+test config::app_config::tests::test_box_layout_retain_by_uuid_no_match_keeps_all ... ok
+test config::app_config::tests::test_box_style_default ... ok
+test config::app_config::tests::test_box_layout_retain_by_uuid_removes_exact_one ... ok
+test config::app_config::tests::test_debug_default ... ok
+test config::app_config::tests::test_box_style_normalize_preserves_custom_dark_background ... ok
+test config::app_config::tests::test_box_style_normalize_migrates_legacy_near_black_background ... ok
+test config::app_config::tests::test_default_categories_not_empty ... ok
+test config::app_config::tests::test_app_config_roundtrip ... ok
+test config::app_config::tests::test_empty_json_uses_all_defaults ... ok
+test config::app_config::tests::test_view_mode_serde_snake_case ... ok
+test config::app_config::tests::test_hotkey_default ... ok
+test config::app_config::tests::test_partial_general_falls_back ... ok
+test config::app_config::tests::test_sort_mode_serde_snake_case ... ok
+test config::app_config::tests::test_partial_json_falls_back_to_default ... ok
+test config::app_config::tests::test_overlay_config_default ... ok
+test config::app_config::tests::test_style_overrides_partial_deserialization ... ok
+test config::app_config::tests::test_partial_json_uses_overlay_default ... ok
+test config::app_config::tests::test_group_by_serde_snake_case ... ok
+test context::tests::test_app_context_default_creates_valid_state ... ok
+test context::tests::test_app_context_default_platform_service ... ok
+test config::app_config::tests::test_overlay_config_roundtrip_preserves_icon_positions ... ok
+test context::tests::test_app_context_set_status ... ok
+test platform::tests::test_platform_service_tray_action_none_initially ... ok
+test platform::tests::test_platform_service_collect_layout ... ok
+test config::app_config::tests::test_config_path_in_home_dir ... ok
+test platform::tests::test_desktop_manager_dpi ... ok
+test platform::tests::test_create_platform_service_returns_trait_object ... ok
+test platform::tests::test_desktop_manager_monitor_work_area ... ok
+test platform::tests::test_system_tray_action_eq ... ok
+test platform::tests::test_platform_service_auto_start_query ... ok
+test platform::tests::test_system_tray_action_clone ... ok
+test platform::windows::alignment_guide::alignment_detect::tests::test_bottom_to_top_alignment ... ok
+test platform::windows::alignment_guide::alignment_detect::tests::test_empty_others ... ok
+test platform::windows::alignment_guide::alignment_detect::tests::test_left_alignment ... ok
+test platform::windows::alignment_guide::alignment_detect::tests::test_line_endpoints_horizontal ... ok
+test platform::windows::alignment_guide::alignment_detect::tests::test_line_endpoints_vertical ... ok
+test platform::windows::alignment_guide::alignment_detect::tests::test_multiple_alignments ... ok
+test platform::windows::alignment_guide::alignment_detect::tests::test_threshold_boundary ... ok
+test platform::windows::alignment_guide::alignment_detect::tests::test_top_alignment ... ok
+test platform::windows::alignment_guide::alignment_detect::tests::test_multiple_boxes_alignment ... ok
+test context::tests::test_app_context_new_loads_config ... ok
+test platform::windows::alignment_guide::guide_overlay::tests::test_relative_luminance_black ... ok
+test platform::windows::alignment_guide::guide_overlay::tests::test_relative_luminance_white ... ok
+test platform::windows::alignment_guide::guide_overlay::tests::test_relative_luminance_gray ... ok
+test platform::windows::alignment_guide::alignment_detect::tests::test_outside_threshold ... ok
+test platform::windows::alignment_guide::alignment_detect::tests::test_no_alignment ... ok
+test platform::windows::alignment_guide::alignment_detect::tests::test_right_to_left_alignment ... ok
+test platform::windows::alignment_guide::alignment_detect::tests::test_snap_threshold ... ok
+test platform::windows::alignment_guide::guide_overlay::tests::test_relative_luminance_green_bias ... ok
+test platform::windows::alignment_guide::guide_overlay::tests::test_sample_grid_size_is_positive ... ok
+test platform::tests::test_desktop_manager_screen_resolution ... ok
+test platform::windows::alignment_guide::guide_overlay::tests::test_sample_grid_size_sufficient ... ok
+test platform::windows::app_icon::tests::test_app_icon_resource_id ... ok
+test platform::windows::app_icon::tests::test_cached_icon_send ... ok
+test platform::windows::app_icon::tests::test_cleanup_icons_no_panic_on_empty ... ok
+test platform::windows::app_icon::tests::test_cleanup_is_idempotent ... ok
+test config::app_config::tests::test_export_import_roundtrip ... ok
+test platform::windows::control_panel_window::position_tests::test_centered_window_position_enforces_default_minimum_size ... ok
+test platform::windows::control_panel_window::position_tests::test_centered_window_position_uses_current_window_size ... ok
+test platform::windows::control_panel_window::tests::test_wide_null_terminates ... ok
+test platform::windows::d2d_render::tests::test_edge_rect_bottom_edge ... ok
+test platform::windows::d2d_render::tests::test_edge_rect_negative_edge ... ok
+test platform::windows::d2d_render::tests::test_edge_rect_left_edge ... ok
+test platform::windows::d2d_render::tests::test_edge_rect_no_edge ... ok
+test platform::windows::d2d_render::tests::test_edge_rect_right_edge ... ok
+test platform::windows::d2d_render::tests::test_edge_rect_small_window ... ok
+test platform::windows::d2d_render::tests::test_edge_rect_invalid_edge ... ok
+test platform::windows::d2d_render::tests::test_edge_rect_avoids_corners ... ok
+test platform::windows::d2d_render::tests::test_edge_rect_top_edge ... ok
+test platform::windows::d2d_render::tests::test_edge_rect_with_dpi_scaled_border ... ok
+test platform::windows::desktop_manager::tests::test_clsid_display_name_case_insensitive ... ok
+test platform::windows::d2d_render::tests::test_edge_rect_within_bounds ... ok
+test platform::windows::desktop_manager::tests::test_clsid_display_name_known_clsids ... ok
+test platform::windows::desktop_manager::tests::test_clsid_display_name_non_clsid_path ... ok
+test platform::windows::desktop_manager::tests::test_clsid_display_name_unknown ... ok
+test platform::windows::desktop_manager::tests::test_shortcut_detection_logic ... ok
+test platform::windows::desktop_manager::tests::test_virtual_shell_objects_have_valid_clsids ... ok
+test platform::windows::drag_drop::ole_drop_tests::test_compute_drop_grid_position_outside_grid ... ok
+test platform::windows::desktop_utils::tests::test_is_desktop_auto_arrange_does_not_panic ... ok
+test platform::windows::drag_drop::ole_drop_tests::test_compute_drop_grid_position_basic ... ok
+test platform::windows::drag_drop::ole_drop_tests::test_copy_file_to_user_desktop_handles_missing_source ... ok
+test platform::windows::drag_drop::ole_drop_tests::test_copy_file_to_user_desktop_nonexistent_source ... ok
+test platform::windows::drag_drop::ole_drop_tests::test_compute_drop_grid_position_valid_grid ... ok
+test platform::windows::drag_drop::ole_drop_tests::test_insert_mode_all_duplicates_no_shift ... ok
+test platform::windows::drag_drop::ole_drop_tests::test_insert_mode_partial_duplicates ... ok
+test platform::windows::drag_drop::ole_drop_tests::test_insert_mode_logic ... ok
+test platform::windows::drag_drop::ole_drop_tests::test_is_recycle_bin_path_negative ... ok
+test platform::windows::drag_drop::ole_drop_tests::test_insert_mode_at_end ... ok
+test platform::windows::drag_drop::ole_drop_tests::test_insert_mode_shift_by_n_positions ... ok
+test platform::windows::drag_drop::ole_drop_tests::test_scan_for_utf16_path_not_found ... ok
+test platform::windows::drag_drop::ole_drop_tests::test_is_recycle_bin_path_positive ... ok
+test platform::windows::drag_drop::ole_drop_tests::test_scan_for_utf16_path_found ... ok
+test platform::windows::drag_drop::tests::test_compute_drop_grid_position_negative_coordinates ... ok
+test platform::windows::drag_drop::ole_drop_tests::test_try_parse_at_offset_invalid_length ... ok
+test platform::windows::drag_drop::ole_drop_tests::test_try_parse_at_offset_too_short ... ok
+test platform::windows::drag_drop::tests::test_compute_drop_grid_position_basic ... ok
+test platform::windows::drag_drop::ole_drop_tests::test_try_parse_at_offset_valid_v1 ... ok
+test platform::windows::drag_drop::ole_drop_tests::test_scan_for_utf16_path_too_short ... ok
+test platform::windows::alignment_guide::tests::test_moving_window_tracking ... ok
+test platform::windows::drag_drop::tests::test_compute_drop_grid_position_outside_grid ... ok
+test platform::windows::drag_drop::tests::tests::test_resolve_drag_item_read_path_falls_back_to_logical_path ... ok
+test platform::windows::drag_handler::tests::test_drag_item_index_bounds_check ... ok
+test platform::windows::drag_drop::tests::tests::test_resolve_drag_item_read_path_uses_resolved_vault_path ... ok
+test platform::windows::drag_handler::tests::test_drag_state_reset_pattern ... ok
+test platform::windows::drag_handler::tests::test_drag_threshold_exceeded ... ok
+test platform::windows::drag_handler::tests::test_drag_threshold_not_exceeded ... ok
+test platform::windows::drag_handler::tests::test_ensure_drag_source_in_multi_items ... ok
+test platform::windows::drag_handler::tests::test_external_window_detection_non_null_target_skips_check ... ok
+test platform::windows::drag_handler::tests::test_external_window_detection_null_target_triggers_check ... ok
+test platform::windows::drag_handler::tests::test_end_drag_full_state_reset ... ok
+test platform::windows::app_icon::tests::test_get_tray_icon_returns_none_when_resource_unavailable ... ok
+test platform::windows::drag_image::test_icon_offset_calculation ... ok
+test platform::windows::drag_handler::tests::test_ikun_box_drag_data_construction ... ok
+test platform::windows::drag_handler::tests::test_ikun_drag_item_data_serialization ... ok
+test platform::windows::drag_handler::tests::test_multi_drag_activation_condition ... ok
+test platform::windows::app_icon::tests::test_get_menu_bitmap_returns_none_when_resource_unavailable ... ok
+test platform::windows::drag_image::test_dpi_cache_check_frequency ... ok
+test platform::windows::drag_image::test_drag_timer_interval ... ok
+test platform::windows::drag_image::tests::test_compute_hotzone_offset_small_cells ... ok
+test platform::windows::drag_image::test_icon_offset_with_odd_difference ... ok
+test platform::windows::drag_image::tests::test_compute_hotzone_offset_source_at_bottom_right ... ok
+test platform::windows::drag_image::tests::test_compute_hotzone_offset_source_at_origin ... ok
+test platform::windows::drag_image::tests::test_compute_hotzone_offset_with_min_offset ... ok
+test platform::windows::drag_image::tests::test_compute_item_pixel_position_full_cell_icon ... ok
+test platform::windows::drag_image::tests::test_compute_multi_drag_layout_horizontal_line ... ok
+test platform::windows::drag_image::tests::test_compute_item_pixel_position_top_left ... ok
+test platform::windows::drag_image::tests::test_compute_multi_drag_layout_2x2_rectangle ... ok
+test platform::windows::drag_image::tests::test_compute_multi_drag_layout_empty ... ok
+test platform::windows::drag_image::tests::test_drag_label_height_with_label ... ok
+test platform::windows::drag_image::tests::test_compute_item_pixel_position_offset_cell ... ok
+test platform::windows::drag_image::tests::test_compute_multi_drag_layout_l_shape ... ok
+test platform::windows::drag_image::tests::test_compute_multi_drag_layout_single_item ... ok
+test platform::windows::drag_image::tests::test_compute_multi_drag_layout_vertical_line ... ok
+test platform::windows::drag_image::tests::test_drag_icon_gap_no_label ... ok
+test platform::windows::drag_image::tests::test_drag_icon_gap_with_label ... ok
+test platform::windows::drag_image::tests::test_drag_label_height_no_label ... ok
+test platform::windows::drag_image::tests::test_compute_multi_drag_layout_sparse ... ok
+test platform::windows::drag_image::tests::test_scale_dpi_lower_dpi ... ok
+test platform::windows::drag_image::tests::test_scale_dpi_no_accumulation_error ... ok
+test platform::windows::drag_image::tests::test_scale_dpi_same_dpi ... ok
+test platform::windows::drop_target::helper_lifecycle_tests::test_drag_enter_releases_old_helper ... ok
+test platform::windows::drag_image::tests::test_scale_dpi_higher_dpi ... ok
+test platform::windows::drag_image::tests::test_scale_dpi_zero_original ... ok
+test platform::windows::drop_target::helper_lifecycle_tests::test_box_drag_hover_state_transitions ... ok
+test platform::windows::drag_image::tests::test_scale_dpi_roundtrip ... ok
+test platform::windows::drop_target::helper_lifecycle_tests::test_helper_cleared_after_release_pattern ... ok
+test platform::windows::drop_target::helper_lifecycle_tests::test_initial_helper_is_null ... ok
+test platform::windows::drop_target::pending_drop_tests::test_pending_drop_no_insert_mode ... ok
+test platform::windows::drop_target::pending_drop_tests::test_pending_drop_with_insert_state ... ok
+test platform::windows::drop_target::pending_drop_tests::test_take_pending_drop_empty ... ok
+test platform::windows::drop_target::pending_drop_tests::test_take_pending_drop_with_data ... ok
+test platform::windows::drop_target::helper_lifecycle_tests::test_release_call_order_invariant ... ok
+test platform::windows::ffi_types::tests::test_colorref_black ... ok
+test platform::windows::ffi_types::tests::test_colorref_blue ... ok
+test platform::windows::ffi_types::tests::test_colorref_green ... ok
+test platform::windows::ffi_types::tests::test_colorref_mixed ... ok
+test platform::windows::ffi_types::tests::test_colorref_red ... ok
+test platform::windows::ffi_types::tests::test_colorref_white ... ok
+test platform::windows::ffi_types::tests::test_colorref_is_const ... ok
+test platform::windows::ffi_types::tests::test_edit_mode_constants ... ok
+test platform::windows::ffi_types::tests::test_hwnd_constants ... ok
+test platform::windows::ffi_types::tests::test_idc_ibeam_cursor_id ... ok
+test platform::windows::ffi_types::tests::test_menu_constants ... ok
+test platform::windows::ffi_types::tests::test_menu_item_builder ... ok
+test platform::windows::ffi_types::tests::test_windowpos_no_zorder_flag ... ok
+test platform::windows::ffi_types::tests::test_windowpos_struct ... ok
+test platform::windows::ffi_types::tests::test_zorder_constants ... ok
+test platform::windows::global_hotkey::tests::test_parse_virtual_key_function_keys ... ok
+test platform::windows::global_hotkey::tests::test_parse_hotkey_case_insensitive ... ok
+test platform::windows::global_hotkey::tests::test_parse_hotkey_ctrl_alt_d ... ok
+test platform::windows::global_hotkey::tests::test_parse_hotkey_ctrl_shift_f1 ... ok
+test platform::windows::global_hotkey::tests::test_parse_hotkey_invalid ... ok
+test platform::windows::global_hotkey::tests::test_parse_hotkey_with_spaces ... ok
+test platform::windows::global_hotkey::tests::test_parse_virtual_key_digits ... ok
+test platform::windows::global_hotkey::tests::test_parse_virtual_key_letters ... ok
+test platform::windows::global_hotkey::tests::test_parse_virtual_key_special_keys ... ok
+test platform::windows::global_hotkey::tests::test_take_hotkey_toggle_consumes ... ok
+test platform::windows::global_hotkey::tests::test_take_hotkey_toggle_default_false ... ok
+test platform::windows::grid_layout::tests::test_reflow_items_2cols_to_4cols ... ok
+test platform::windows::grid_layout::tests::test_reflow_items_4cols_to_2cols_with_empty_space ... ok
+test platform::windows::grid_layout::tests::test_reflow_items_all_auto_layout ... ok
+test platform::windows::grid_window::liquid_glass_timer_tests::test_liquid_glass_render_interval ... ok
+test platform::windows::grid_window::liquid_glass_timer_tests::test_liquid_glass_render_interval_maximum ... ok
+test platform::windows::grid_window::tests::shadow_padding_preserves_content_rect_at_96_dpi ... ok
+test platform::windows::grid_layout::tests::test_reflow_items_invalid_cols ... ok
+test platform::windows::grid_window::liquid_glass_timer_tests::test_liquid_glass_render_interval_minimum ... ok
+test platform::windows::grid_layout::tests::test_reflow_items_preserves_auto_layout ... ok
+test platform::windows::grid_layout::tests::test_reflow_items_empty_list ... ok
+test platform::windows::grid_window::tests::shadow_padding_scales_with_dpi ... ok
+test platform::windows::grid_window::tests::test_grid_create_params_config_id_field ... ok
+test platform::windows::grid_window::tests::test_grid_create_params_locked_field ... ok
+test platform::windows::grid_window::tests::test_grid_window_data_config_id_field ... ok
+test platform::windows::grid_window::tests::test_lock_btn_rect_at_144dpi ... ok
+test platform::windows::grid_window::tests::test_lock_btn_rect_at_192dpi ... ok
+test platform::windows::grid_window::tests::test_lock_btn_rect_at_96dpi ... ok
+test platform::windows::grid_window::tests::test_lock_btn_rect_narrow_window ... ok
+test platform::windows::icon_bitmap::tests::icon_destination_rect_centers_portrait_content ... ok
+test platform::windows::icon_bitmap::tests::icon_destination_rect_handles_invalid_size ... ok
+test platform::windows::icon_bitmap::tests::icon_destination_rect_preserves_aspect_ratio_and_centers ... ok
+test platform::windows::icon_bitmap::tests::visible_pixel_bounds_keeps_antialiased_edge_pixels ... ok
+test platform::windows::icon_bitmap::tests::visible_pixel_bounds_rejects_invalid_dimensions ... ok
+test platform::windows::icon_bitmap::tests::visible_pixel_bounds_removes_transparent_padding ... ok
+test platform::windows::icon_bitmap::tests::visible_pixel_bounds_keeps_full_canvas_icon ... ok
+test platform::windows::icon_extract::thumbnail_tests::test_extract_file_thumbnail_empty_path ... ok
+test platform::windows::icon_extract::thumbnail_tests::test_thumbnail_to_hicon_null_input ... ok
+test platform::windows::icon_bitmap::tests::visible_pixel_bounds_returns_none_for_empty_canvas ... ok
+test platform::windows::icon_hider::tests::test_cleanup_staging_nonexistent ... ok
+test platform::windows::icon_extract::thumbnail_tests::test_should_skip_padded_shell_thumbnails_for_app_files ... ok
+test platform::windows::icon_hider::tests::test_is_vault_path_non_vault ... ok
+test platform::windows::icon_extract::thumbnail_tests::test_extract_file_thumbnail_nonexistent_file ... ok
+test platform::windows::icon_hider::tests::test_logical_path_from_vault_name_no_prefix ... ok
+test platform::windows::icon_hider::tests::test_logical_path_from_vault_name_public ... ok
+test platform::windows::icon_hider::tests::test_make_double_null_wide_chinese_path ... ok
+test platform::windows::icon_hider::tests::test_make_double_null_wide_empty_path ... ok
+test platform::windows::icon_hider::tests::test_is_vault_path_with_managed_icons ... ok
+test platform::windows::icon_hider::tests::test_make_double_null_wide_length ... ok
+test platform::windows::icon_hider::tests::test_make_double_null_wide_ascii_path ... ok
+test platform::windows::icon_hider::tests::test_logical_path_from_vault_name_user ... ok
+test platform::windows::icon_hider::tests::test_original_filename_from_vault_no_prefix ... ok
+test platform::windows::icon_hider::tests::test_original_filename_from_vault_user_prefix ... ok
+test platform::windows::icon_hider::tests::test_original_filename_from_vault_empty ... ok
+test platform::windows::icon_hider::tests::test_original_filename_from_vault_public_prefix ... ok
+test platform::windows::icon_hider::tests::test_parse_vault_case_insensitive_result ... ok
+test platform::windows::icon_hider::tests::test_parse_vault_chinese_name ... ok
+test platform::windows::icon_hider::tests::test_parse_vault_empty_after_strip ... ok
+test platform::windows::icon_hider::tests::test_parse_vault_empty_string ... ok
+test platform::windows::icon_hider::tests::test_parse_vault_no_lnk_extension ... ok
+test platform::windows::icon_hider::tests::test_parse_vault_no_prefix ... ok
+test platform::windows::icon_hider::tests::test_parse_vault_public_prefix_lnk ... ok
+test platform::windows::icon_hider::tests::test_parse_vault_uppercase_lnk ... ok
+test platform::windows::icon_hider::tests::test_parse_vault_user_prefix_lnk ... ok
+test platform::windows::icon_hider::tests::test_public_desktop_path_is_case_insensitive ... ok
+test platform::windows::icon_hider::tests::test_public_desktop_export_to_public ... ok
+test platform::windows::icon_hider::tests::test_shfileop_constants ... ok
+test platform::windows::icon_hider::tests::test_public_vault_root_is_outside_desktop ... ok
+test platform::windows::icon_hider::tests::test_public_vault_path_does_not_use_user_vault ... ok
+test platform::windows::icon_hider::tests::test_user_desktop_path_detection ... ok
+test platform::windows::icon_hider::tests::test_vault_roundtrip_public ... ok
+test platform::windows::icon_hider::tests::test_vault_filename_public_desktop ... ok
+test platform::windows::icon_hider::tests::test_vault_roundtrip_user ... ok
+test platform::windows::icon_hider::tests::test_vault_filename_user_desktop ... ok
+test platform::windows::icon_hider::tests::test_vault_filename_unknown_path ... ok
+test platform::windows::icon_manager::tests::test_custom_message_values ... ok
+test platform::windows::icon_manager::tests::test_drag_threshold ... ok
+test platform::windows::icon_manager::tests::test_drag_item_info_clone ... ok
+test platform::windows::icon_manager::tests::test_lvif_image_constant ... ok
+test platform::windows::icon_manager::tests::test_hidden_icon_constants ... ok
+test platform::windows::icon_hider::tests::test_user_vault_path_remains_in_user_home ... ok
+test platform::windows::icon_manager::tests::test_extract_icon_from_listview_negative_index ... ok
+test platform::windows::icon_manager::tests::test_lvitemw_size_64bit ... ok
+test platform::windows::icon_manager::tests::test_lvm_constants ... ok
+test platform::windows::icon_manager::tests::test_lvm_getimagelist_constant ... ok
+test platform::windows::icon_manager::tests::test_process_memory_constants ... ok
+test platform::windows::liquid_glass::tests::constants_layout_matches_frosted_liquid_example ... ok
+test platform::windows::liquid_glass::tests::dxgi_placeholder_detection_accepts_real_desktop_frame ... ok
+test platform::windows::liquid_glass::tests::shader_includes_all_example_refraction_modes ... ok
+test platform::windows::liquid_glass::tests::dxgi_placeholder_detection_rejects_opaque_black_frame ... ok
+test platform::windows::liquid_glass::tests::test_constants_structure_has_elasticity_fields ... ok
+test platform::windows::liquid_glass::tests::test_cursor_in_window_boundary_top_left ... ok
+test platform::windows::liquid_glass::tests::shader_renders_outer_shadow_into_padded_surface ... ok
+test platform::windows::icon_hider::tests::test_restore_icons_from_empty_dir ... ok
+test platform::windows::icon_hider::tests::test_cleanup_staging_real_file ... ok
+test platform::windows::liquid_glass::tests::test_cursor_in_window_boundary_bottom_right ... ok
+test platform::windows::liquid_glass::tests::test_cursor_in_window_detection_inside ... ok
+test platform::windows::liquid_glass::tests::test_cursor_in_window_detection_outside ... ok
+test platform::windows::liquid_glass::tests::test_shader_uses_elasticity_and_mouse_offset ... ok
+test platform::windows::menu_window::tests::test_build_menu_items_structure ... ok
+test platform::windows::menu_window::tests::test_calculate_item_rects ... ok
+test platform::windows::menu_window::tests::test_calculate_menu_size ... ok
+test platform::windows::menu_window::tests::test_command_id_ranges_no_overlap ... ok
+test platform::windows::menu_window::tests::test_calculate_menu_size_dpi_scaling ... ok
+test platform::windows::menu_window::tests::test_handle_menu_command_delete_returns_true ... ok
+test platform::windows::menu_window::tests::test_handle_menu_command_non_delete_returns_false ... ok
+test platform::windows::menu_window::tests::test_handle_menu_command_view_no_state_change ... ok
+test platform::windows::menu_window::tests::test_handle_menu_command_group_changes_state ... ok
+test platform::windows::icon_hider::tests::test_staging_exists ... ok
+test platform::windows::menu_window::tests::test_hit_test_disabled_item ... ok
+test platform::windows::menu_window::tests::test_hit_test_item ... ok
+test platform::windows::menu_window::tests::test_handle_menu_command_sort_changes_state ... ok
+test platform::windows::menu_window::tests::test_menu_group_checked_state ... ok
+test platform::windows::menu_window::tests::test_menu_item_builder_chaining ... ok
+test platform::windows::menu_window::tests::test_sort_checked_state ... ok
+test platform::windows::menu_window::tests::test_view_items_enabled ... ok
+test platform::windows::monitor_utils::tests::test_fallback_work_area ... ok
+test platform::windows::monitor_utils::tests::test_get_primary_monitor_work_area_valid ... ok
+test platform::windows::monitor_utils::tests::test_get_primary_monitor_dpi_returns_valid ... ok
+test platform::windows::monitor_utils::tests::test_get_virtual_desktop_bounds_valid ... ok
+test platform::windows::monitor_utils::tests::test_get_screen_resolution_returns_positive ... ok
+test platform::windows::ole_dnd::tests::test_dropfiles_size ... ok
+test platform::windows::ole_dnd::tests::test_formatetc_size ... ok
+test platform::windows::ole_dnd::tests::test_hresult_constants ... ok
+test platform::windows::ole_dnd::tests::test_iid_constants ... ok
+test platform::windows::ole_dnd::tests::test_ikun_drag_item_data_single_item ... ok
+test platform::windows::ole_dnd::tests::test_ikun_box_drag_data_serde ... ok
+test platform::windows::ole_dnd::tests::test_ole_constants ... ok
+test platform::windows::ole_dnd::tests::test_stgmedium_size ... ok
+test platform::windows::ole_dnd::tests::test_global_alloc_constants ... ok
+test platform::windows::rename_editor::tests::test_build_rename_case_sensitive_extension ... ok
+test platform::windows::rename_editor::tests::test_build_rename_cjk_stem ... ok
+test platform::windows::icon_hider::tests::test_restore_icons_skips_subdirectories ... ok
+test platform::windows::rename_editor::tests::test_build_rename_different_extension_typed ... ok
+test platform::windows::rename_editor::tests::test_build_rename_multiple_dots_in_old ... ok
+test platform::windows::rename_editor::tests::test_build_rename_lnk_shortcut ... ok
+test platform::windows::rename_editor::tests::test_display_name_cjk ... ok
+test platform::windows::rename_editor::tests::test_build_rename_no_double_append ... ok
+test platform::windows::rename_editor::tests::test_build_rename_preserves_extension ... ok
+test platform::windows::rename_editor::tests::test_build_rename_no_extension_in_old ... ok
+test platform::windows::rename_editor::tests::test_build_rename_user_types_correct_ext_for_multi_dot ... ok
+test platform::windows::rename_editor::tests::test_display_name_dotfile ... ok
+test platform::windows::rename_editor::tests::test_display_name_empty_path ... ok
+test platform::windows::rename_editor::tests::test_display_name_multiple_dots ... ok
+test platform::windows::rename_editor::tests::test_display_name_regular_file ... ok
+test platform::windows::rename_editor::tests::test_display_name_no_extension ... ok
+test platform::windows::rename_editor::tests::test_stem_len_cjk_filename ... ok
+test platform::windows::rename_editor::tests::test_stem_len_cjk_filename_no_extension ... ok
+test platform::windows::rename_editor::tests::test_stem_len_dotfile ... ok
+test platform::windows::rename_editor::tests::test_stem_len_empty_string ... ok
+test platform::windows::rename_editor::tests::test_stem_len_multiple_dots ... ok
+test platform::windows::rename_editor::tests::test_stem_len_no_extension ... ok
+test platform::windows::icon_manager::tests::test_snapshot_positions_data_structure ... ok
+test platform::windows::shell_menu::tests::test_all_variants_cover_fallback_guard ... ok
+test platform::windows::rename_editor::tests::test_stem_len_regular_file ... ok
+test platform::windows::rename_editor::tests::test_stem_len_trailing_dot ... ok
+test platform::windows::shell_menu::tests::test_desktop_registry_menu_items_cover_all_signal_actions ... ok
+test platform::windows::shell_menu::tests::test_desktop_registry_menu_text_is_localized ... ok
+test platform::windows::shell_menu::tests::test_dismissed_is_distinct_from_cancelled ... ok
+test platform::windows::shell_menu::tests::test_format_registry_icon_path_no_quotes ... ok
+test platform::windows::shell_menu::tests::test_format_registry_icon_path_simple_path ... ok
+test platform::windows::shell_menu::tests::test_format_registry_icon_path_with_spaces ... ok
+test platform::windows::shell_menu::tests::test_group_by_parent_empty ... ok
+test platform::windows::shell_menu::tests::test_group_by_parent_all_different ... ok
+test platform::windows::shell_menu::tests::test_group_by_parent_mixed_dirs ... ok
+test platform::windows::shell_menu::tests::test_group_by_parent_single_dir ... ok
+test platform::windows::shell_menu::tests::test_pending_create_box_set_then_take ... ok
+test platform::windows::shell_menu::tests::test_resolve_shell_menu_path_falls_back_to_logical_path ... ok
+test platform::windows::shell_menu::tests::test_pending_create_box_take_is_idempotent ... ok
+test platform::windows::shell_menu::tests::test_resolve_shell_menu_path_keeps_existing_logical_path ... ok
+test platform::windows::shell_menu::tests::test_should_skip_fallback_returns_true_for_dismissed ... ok
+test platform::windows::shell_menu::tests::test_shcne_constants_values ... ok
+test platform::windows::shell_menu::tests::test_should_skip_fallback_returns_true_for_completed ... ok
+test platform::windows::shell_menu::tests::test_resolve_shell_menu_path_uses_vault_when_logical_path_missing ... ok
+test platform::windows::shell_menu::tests::test_should_skip_fallback_returns_true_for_needs_cut_monitor ... ok
+test platform::windows::shell_menu::tests::test_should_skip_fallback_returns_false_for_cancelled ... ok
+test platform::windows::shell_menu::tests::test_should_skip_fallback_returns_true_for_needs_delete ... ok
+test platform::windows::shell_menu::tests::test_vault_proxy_icon_still_on_desktop ... ok
+test platform::windows::shell_menu::tests::test_should_skip_fallback_returns_true_for_needs_rename ... ok
+test platform::windows::shell_menu::tests::test_take_pending_create_box_default_is_false ... ok
+test platform::windows::shell_menu::tests::test_vault_proxy_public_desktop_icon_in_vault ... ok
+test platform::windows::shell_menu::tests::test_vault_proxy_user_desktop_icon_in_vault ... ok
+test platform::windows::shell_menu::tests::test_vault_proxy_virtual_shell_object ... ok
+test platform::windows::sys_tray::tests::test_action_to_u8_mapping ... ok
+test platform::windows::sys_tray::tests::test_copy_wide_truncates_and_terminates ... ok
+test platform::windows::icon_extract::thumbnail_tests::test_extract_file_icon_still_works ... ok
+test platform::windows::sys_tray::tests::test_pending_action_keeps_latest_menu_command ... ok
+test platform::windows::sys_tray::tests::test_pending_action_round_trip_and_clears ... ok
+test platform::windows::sys_tray::tests::test_set_pending_action_wakes_registered_consumer ... ok
+test platform::windows::zorder::tests::test_drag_in_progress_default_false ... ok
+test platform::windows::sys_tray::tests::test_tray_auto_start_state_default ... ok
+test platform::windows::sys_tray::tests::test_wide_null_terminates ... ok
+test platform::windows::zorder::tests::test_drag_flag_independent_of_zorder_suppressing ... ok
+test platform::windows::sys_tray::tests::test_set_tray_auto_start_state ... ok
+test platform::windows::zorder::tests::test_find_grid_window_at_point_empty_list ... ok
+test platform::windows::zorder::tests::test_find_grid_window_at_point_negative_coords ... ok
+test platform::windows::zorder::tests::test_push_other_grids_below_empty_list ... ok
+test platform::windows::zorder::tests::test_find_grid_window_at_point_no_crash_at_origin ... ok
+test platform::windows::zorder::tests::test_set_drag_in_progress_toggle ... ok
+test platform::windows::zorder::tests::test_push_other_grids_below_with_zorder_suppressed ... ok
+test platform::windows::zorder::tests::test_with_zorder_suppressed_sets_and_clears ... ok
+test platform::windows::zorder::tests::test_zorder_suppressing_default_false ... ok
+test platform::windows::zorder::tests::test_with_zorder_suppressed_clears_on_panic ... ok
+test plugin::tests::cleanup_runs_in_reverse_initialization_order ... ok
+test plugin::tests::duplicate_plugin_and_command_ids_are_rejected ... ok
+test plugin::tests::failed_runtime_install_is_atomic ... ok
+test plugin::tests::runtime_install_dispatch_and_uninstall_follow_lifecycle ... ok
+test shared::drag_logic::tests::test_drag_over_center_replace_with_item ... ok
+test shared::drag_logic::tests::test_drag_over_center_empty_cell ... ok
+test shared::drag_logic::tests::test_drag_over_exact_threshold_boundary ... ok
+test shared::drag_logic::tests::test_drag_over_just_above_right_threshold ... ok
+test shared::drag_logic::tests::test_drag_over_just_below_left_threshold ... ok
+test shared::drag_logic::tests::test_drag_over_left_zone_insert ... ok
+test shared::drag_logic::tests::test_drag_over_right_zone_insert ... ok
+test shared::drag_logic::tests::test_drag_over_right_zone_last_col_replace ... ok
+test shared::drag_logic::tests::test_shift_drag_left_between_a_and_b ... ok
+test shared::drag_logic::tests::test_shift_cross_row ... ok
+test shared::drag_logic::tests::test_shift_single_item ... ok
+test shared::drag_logic::tests::test_shift_drag_right_between_b_and_c ... ok
+test platform::windows::zorder::tests::test_find_external_window_at_point_no_crash_at_origin ... ok
+test platform::windows::zorder::tests::test_find_external_window_at_point_off_screen ... ok
+test platform::windows::zorder::tests::test_find_external_window_at_point_negative_coords ... ok
+test shared::drag_logic::tests::test_shift_two_items_right ... ok
+test shared::drag_state::tests::test_exceeded ... ok
+test shared::drag_logic::tests::test_shift_same_position_noop ... ok
+test shared::drag_state::tests::test_negative_delta ... ok
+test shared::drag_state::tests::test_not_exceeded ... ok
+test shared::geometry::tests::icon_destination_rect_centers_portrait_content ... ok
+test shared::geometry::tests::icon_destination_rect_handles_invalid_size ... ok
+test shared::geometry::tests::icon_destination_rect_preserves_aspect_ratio_and_centers ... ok
+test shared::geometry::tests::test_exact_alignment ... ok
+test shared::geometry::tests::test_empty_others ... ok
+test shared::geometry::tests::test_line_endpoints_horizontal ... ok
+test shared::geometry::tests::test_left_edge_alignment ... ok
+test shared::geometry::tests::test_multiple_alignments ... ok
+test shared::geometry::tests::test_no_alignment ... ok
+test shared::geometry::tests::test_top_edge_alignment ... ok
+test shared::geometry::tests::visible_pixel_bounds_keeps_antialiased_edge_pixels ... ok
+test shared::geometry::tests::visible_pixel_bounds_keeps_full_canvas_icon ... ok
+test shared::geometry::tests::visible_pixel_bounds_rejects_invalid_dimensions ... ok
+test shared::geometry::tests::visible_pixel_bounds_returns_none_for_empty_canvas ... ok
+test shared::geometry::tests::visible_pixel_bounds_removes_transparent_padding ... ok
+test shared::layout::tests::test_reflow_4cols_to_2cols ... ok
+test shared::layout::tests::test_reflow_invalid_cols ... ok
+test shared::layout::tests::test_reflow_2cols_to_4cols ... ok
+test shared::layout::tests::test_reflow_empty ... ok
+test shared::layout::tests::test_reflow_preserves_auto_layout ... ok
+test shared::selection::tests::test_add_range_preserves_existing ... ok
+test shared::layout::tests::test_reflow_single_col ... ok
+test shared::layout::tests::test_reflow_all_auto ... ok
+test shared::selection::tests::test_add_range_visual ... ok
+test shared::selection::tests::test_count_in_container ... ok
+test shared::selection::tests::test_clear_resets_everything ... ok
+test platform::windows::icon_manager::tests::test_snapshot_all_desktop_positions_returns_empty_on_failure ... ok
+test shared::selection::tests::test_container_id_from_uuid_consistency ... ok
+test shared::selection::tests::test_anchor_management ... ok
+test shared::selection::tests::test_container_id_from_uuid_uses_high_bits ... ok
+test shared::selection::tests::test_duplicate_add_is_idempotent ... ok
+test shared::selection::tests::test_has_selection ... ok
+test shared::selection::tests::test_marquee_container ... ok
+test shared::selection::tests::test_remove_nonexistent_is_safe ... ok
+test shared::selection::tests::test_set_range_basic ... ok
+test shared::selection::tests::test_set_range_clears_previous ... ok
+test shared::selection::tests::test_set_range_reversed ... ok
+test shared::types::tests::test_rect_default ... ok
+test shared::selection::tests::test_set_range_visual ... ok
+test shared::types::tests::test_rect_dimensions ... ok
+test tauri_commands::window_cmd::tests::persistent_window_labels_round_trip ... ok
+test tauri_commands::window_cmd::tests::unknown_window_label_is_rejected ... ok
+test tauri_commands::window_cmd::tests::external_url_policy_accepts_only_http_and_https ... ok
+test utils::logger::tests::test_extract_date_invalid_empty_suffix ... ok
+test tauri_commands::platform_runtime::tests::new_runtime_registers_builtin_plugins_before_initialization ... ok
+test tauri_commands::platform_runtime::tests::replace_config_updates_the_shared_context ... ok
+test tauri_commands::app_cmd::tests::quit_request_uses_runtime_cleanup_path ... ok
+test tauri_commands::platform_runtime::tests::unplugged_classification_plugin_blocks_owned_runtime_actions ... ok
+test utils::logger::tests::test_extract_date_invalid_long_date ... ok
+test utils::logger::tests::test_extract_date_invalid_no_underscore_after_date ... ok
+test utils::logger::tests::test_extract_date_invalid_no_prefix ... ok
+test utils::logger::tests::test_extract_date_invalid_non_digit_date ... ok
+test utils::logger::tests::test_extract_date_invalid_short_date ... ok
+test utils::logger::tests::test_extract_date_valid_large_index ... ok
+test utils::logger::tests::test_extract_date_valid_multi_digit_index ... ok
+test utils::logger::tests::test_extract_date_valid_single_digit_index ... ok
+test utils::logger::tests::test_cleanup_handles_nonexistent_dir ... ok
+test utils::logger::tests::test_find_next_index_nonexistent_dir ... ok
+test utils::logger::tests::test_cleanup_handles_empty_dir ... ok
+test utils::logger::tests::test_get_log_dir_contains_name ... ok
+test platform::windows::icon_hider::tests::test_restore_icons_handles_rename_failure_gracefully ... ok
+test utils::logger::tests::test_window_context_set_and_get ... ok
+test utils::logger::tests::test_get_log_dir_is_absolute ... ok
+test utils::logger::tests::test_find_next_index_empty_dir ... ok
+test platform::windows::icon_hider::tests::test_restore_icons_cleans_vault_when_desktop_exists ... ok
+test utils::logger::tests::test_window_log_guard_cleanup ... ok
+test utils::logger::tests::test_window_label_switch ... ok
+test utils::logger::tests::test_window_context_thread_isolation ... ok
+test utils::logger::tests::test_window_log_guard_nested ... ok
+test utils::logger::tests::test_cleanup_keeps_recent_files ... ok
+test utils::logger::tests::test_find_next_index_ignores_other_dates ... ok
+test utils::logger::tests::test_cleanup_removes_old_files ... ok
+test utils::logger::tests::test_find_next_index_ignores_non_log_files ... ok
+test utils::logger::tests::test_cleanup_ignores_non_log_files ... ok
+test utils::logger::tests::test_find_next_index_one_file_under_limit ... ok
+test utils::platform::tests::test_set_auto_start_idempotent ... ok
+test utils::platform::tests::test_set_auto_start_toggle ... ok
+test utils::logger::tests::test_find_next_index_one_file_over_limit ... ok
+test utils::logger::tests::test_writer_creates_file_on_init ... ok
+test utils::platform::tests::test_startup_approved_follows_auto_start ... ok
+test utils::logger::tests::test_find_next_index_multiple_files_last_over_limit ... ok
+test utils::logger::tests::test_find_next_index_multiple_files_last_under_limit ... ok
+test utils::logger::tests::test_writer_empty_write ... ok
+test utils::logger::tests::test_writer_flush_is_safe ... ok
+test utils::logger::tests::test_writer_oversized_single_write ... ok
+test utils::logger::tests::test_writer_basic_write ... ok
+test utils::logger::tests::test_writer_multiple_writes_append ... ok
+test utils::logger::tests::test_writer_exact_size_limit ... ok
+test platform::windows::icon_manager::tests::test_set_icon_position_by_name_returns_error_for_nonexistent ... ok
+test utils::logger::tests::test_writer_size_rotation ... ok
+test context::tests::test_app_context_default_creates_trait_objects ... ok
+test platform::tests::test_create_desktop_manager_returns_trait_object ... ok
+
+test result: ok. 523 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+

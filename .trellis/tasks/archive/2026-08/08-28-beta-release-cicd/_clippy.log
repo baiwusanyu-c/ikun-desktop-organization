@@ -1,0 +1,60 @@
+   Compiling ikun_organizer v0.1.0 (D:\github-project\ikun_organizer)
+error: empty line after doc comment
+  --> build\build.rs:13:1
+   |
+13 | / /// 也能成功嵌入图标与清单。
+14 | |
+   | |_^
+15 |   fn main() {
+   |   ------- the comment documents this function
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#empty_line_after_doc_comments
+   = note: `-D clippy::empty-line-after-doc-comments` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::empty_line_after_doc_comments)]`
+   = help: if the empty line is unintentional, remove it
+help: if the comment should document the crate use an inner doc comment
+   |
+ 1 ~ //! build.rs - 将应用清单与图标嵌入 Windows 可执行文件，
+ 2 ~ //! 并集成 Tauri 2.0 构建流程。
+ 3 ~ //!
+ 4 ~ //! 确保 Windows 识别 Per-Monitor DPI V2 感知，
+ 5 ~ //! 防止窗口跨不同 DPI 显示器移动时被 bitmap-stretch。
+ 6 ~ //!
+ 7 ~ //! 同时将 `logo.ico` 以资源 ID=1 ICON 嵌入，供系统托盘与窗口标题栏使用。
+ 8 ~ //!
+ 9 ~ //! 资源编译统一使用 embed-resource crate（与 tauri-build 相同的资源编译器发现机制）：
+10 ~ //! - MSVC 目标：PATH 中的 rc.exe / Windows SDK 注册表（KitsRoot10 等）/ vswhom 探测
+11 ~ //! - GNU 目标：PATH 中的 windres（含交叉前缀与 llvm-windres）
+12 ~ //! 保证在 rc.exe / windres 不在 PATH 的机器上（如仅安装 VS Build Tools 的电脑）
+13 ~ //! 也能成功嵌入图标与清单。
+   |
+
+error: doc list item without indentation
+  --> build\build.rs:12:5
+   |
+12 | /// 保证在 rc.exe / windres 不在 PATH 的机器上（如仅安装 VS Build Tools 的电脑）
+   |     ^
+   |
+   = help: if this is supposed to be its own paragraph, add a blank line
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#doc_lazy_continuation
+   = note: `-D clippy::doc-lazy-continuation` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::doc_lazy_continuation)]`
+help: indent this line
+   |
+12 | ///   保证在 rc.exe / windres 不在 PATH 的机器上（如仅安装 VS Build Tools 的电脑）
+   |     ++
+
+error: doc list item without indentation
+  --> build\build.rs:13:5
+   |
+13 | /// 也能成功嵌入图标与清单。
+   |     ^
+   |
+   = help: if this is supposed to be its own paragraph, add a blank line
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#doc_lazy_continuation
+help: indent this line
+   |
+13 | ///   也能成功嵌入图标与清单。
+   |     ++
+
+error: could not compile `ikun_organizer` (build script) due to 3 previous errors

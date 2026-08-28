@@ -1,0 +1,2011 @@
+   Compiling ikun_organizer v0.1.0-beta.1 (D:\github-project\ikun_organizer)
+warning: ikun_organizer@0.1.0-beta.1: Embedding app icon: D:/github-project/ikun_organizer/logo.ico
+warning: ikun_organizer@0.1.0-beta.1: embed-resource compiled .rc successfully: D:\github-project\ikun_organizer\target\debug\build\ikun_organizer-89f82838a6e0becf\out\app.rc
+error: empty line after doc comment
+   --> src\platform\windows\alignment_guide\guide_overlay.rs:196:1
+    |
+196 | / /// �ο�����ɫ����͸����ɫ (rgba: 0, 120, 255, 200)
+197 | |
+    | |_^
+198 |   /// �ο��߿��
+199 |   const GUIDE_LINE_WIDTH: f32 = 3.0;
+    |   ---------------------- the comment documents this constant item
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#empty_line_after_doc_comments
+    = note: `-D clippy::empty-line-after-doc-comments` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::empty_line_after_doc_comments)]`
+    = help: if the empty line is unintentional, remove it
+help: if the documentation should include the empty line include it in the comment
+    |
+197 | ///
+    |
+
+error: unused doc comment
+  --> src\platform\windows\drop_target.rs:60:1
+   |
+60 | / /// 框→框移动：暂存待添加项信息队列（含释放坐标）
+61 | | /// 支持多选拖拽时批量入队，每次 take 取出队头元素
+   | |_-------------------------------------------------^
+   |   |
+   |   rustdoc does not generate documentation for macro invocations
+   |
+   = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+   = note: `-D unused-doc-comments` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_doc_comments)]`
+
+error: empty line after outer attribute
+  --> src\platform\windows\ffi_imports.rs:19:1
+   |
+19 | / #[allow(dead_code)]
+20 | |
+   | |_^
+21 |   extern "system" {
+   |   - the attribute applies to this extern block
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#empty_line_after_outer_attr
+   = note: `-D clippy::empty-line-after-outer-attr` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::empty_line_after_outer_attr)]`
+   = help: if the empty line is unintentional, remove it
+
+error: empty line after outer attribute
+   --> src\platform\windows\ffi_imports.rs:650:1
+    |
+650 | / #[allow(dead_code)]
+651 | |
+    | |_^
+652 |   pub const COINIT_APARTMENTTHREADED: u32 = 0x2;
+    |   ---------------------------------- the attribute applies to this constant item
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#empty_line_after_outer_attr
+    = help: if the empty line is unintentional, remove it
+
+error: empty line after outer attribute
+   --> src\platform\windows\ffi_imports.rs:678:1
+    |
+678 | / #[repr(C)]
+679 | |
+    | |_^
+680 |   pub struct ITEMIDLIST {
+    |   --------------------- the attribute applies to this struct
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#empty_line_after_outer_attr
+    = help: if the empty line is unintentional, remove it
+
+error: empty lines after doc comment
+   --> src\platform\windows\ffi_imports.rs:684:1
+    |
+684 | / /// IShellFolder vtable
+685 | |
+686 | | #[repr(C)]
+687 | | #[allow(non_snake_case)]
+688 | |
+    | |_^
+689 |   pub struct IShellFolderVtbl {
+    |   --------------------------- the comment documents this struct
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#empty_line_after_doc_comments
+    = help: if the empty lines are unintentional, remove them
+
+error: empty line after outer attribute
+   --> src\platform\windows\ffi_imports.rs:789:1
+    |
+789 | / #[repr(C)]
+790 | |
+    | |_^
+791 |   pub struct IShellFolder {
+    |   ----------------------- the attribute applies to this struct
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#empty_line_after_outer_attr
+    = help: if the empty line is unintentional, remove it
+
+error: empty lines after doc comment
+   --> src\platform\windows\ffi_imports.rs:795:1
+    |
+795 | / /// IContextMenu vtable
+796 | |
+797 | | #[repr(C)]
+798 | | #[allow(non_snake_case)]
+799 | |
+    | |_^
+800 |   pub struct IContextMenuVtbl {
+    |   --------------------------- the comment documents this struct
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#empty_line_after_doc_comments
+    = help: if the empty lines are unintentional, remove them
+
+error: empty line after outer attribute
+   --> src\platform\windows\ffi_imports.rs:817:1
+    |
+817 | / #[repr(C)]
+818 | |
+    | |_^
+819 |   pub struct IContextMenu {
+    |   ----------------------- the attribute applies to this struct
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#empty_line_after_outer_attr
+    = help: if the empty line is unintentional, remove it
+
+error: empty lines after doc comment
+   --> src\platform\windows\ffi_imports.rs:823:1
+    |
+823 | / /// IContextMenu2 vtable
+824 | |
+825 | | #[repr(C)]
+826 | | #[allow(non_snake_case)]
+827 | |
+    | |_^
+828 |   pub struct IContextMenu2Vtbl {
+    |   ---------------------------- the comment documents this struct
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#empty_line_after_doc_comments
+    = help: if the empty lines are unintentional, remove them
+
+error: empty line after outer attribute
+   --> src\platform\windows\ffi_imports.rs:847:1
+    |
+847 | / #[repr(C)]
+848 | |
+    | |_^
+849 |   pub struct IContextMenu2 {
+    |   ------------------------ the attribute applies to this struct
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#empty_line_after_outer_attr
+    = help: if the empty line is unintentional, remove it
+
+error: empty lines after doc comment
+   --> src\platform\windows\ffi_imports.rs:853:1
+    |
+853 | / /// IContextMenu3 vtable
+854 | |
+855 | | #[repr(C)]
+856 | | #[allow(non_snake_case)]
+857 | |
+    | |_^
+858 |   pub struct IContextMenu3Vtbl {
+    |   ---------------------------- the comment documents this struct
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#empty_line_after_doc_comments
+    = help: if the empty lines are unintentional, remove them
+
+error: empty line after outer attribute
+   --> src\platform\windows\ffi_imports.rs:880:1
+    |
+880 | / #[repr(C)]
+881 | |
+    | |_^
+882 |   pub struct IContextMenu3 {
+    |   ------------------------ the attribute applies to this struct
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#empty_line_after_outer_attr
+    = help: if the empty line is unintentional, remove it
+
+error: empty lines after doc comment
+   --> src\platform\windows\ffi_imports.rs:886:1
+    |
+886 | / /// CMINVOKECOMMANDINFO（匹配 Windows 64-bit C 布局，40 字节）
+887 | |
+888 | | #[repr(C)]
+889 | |
+    | |_^
+890 |   pub struct CMINVOKECOMMANDINFO {
+    |   ------------------------------ the comment documents this struct
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#empty_line_after_doc_comments
+    = help: if the empty lines are unintentional, remove them
+
+error: empty line after doc comment
+   --> src\platform\windows\ffi_imports.rs:946:1
+    |
+946 | / /// Shell 菜单命令 ID 起始值（预留 1–99 给自定义菜单项，0 为 TrackPopupMenu "无选择" 返回值）
+947 | |
+    | |_^
+948 |   pub const FCIDM_SHVIEWFIRST: u32 = 0x0064; // 100
+    |   --------------------------- the comment documents this constant item
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#empty_line_after_doc_comments
+    = help: if the empty line is unintentional, remove it
+
+error: empty lines after doc comment
+   --> src\platform\windows\ffi_imports.rs:978:1
+    |
+978 | / /// IShellItem vtable（继承 IUnknown）
+979 | |
+980 | | #[repr(C)]
+981 | | #[allow(non_snake_case)]
+982 | |
+    | |_^
+983 |   pub struct IShellItemVtbl {
+    |   ------------------------- the comment documents this struct
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#empty_line_after_doc_comments
+    = help: if the empty lines are unintentional, remove them
+
+error: empty line after outer attribute
+    --> src\platform\windows\ffi_imports.rs:1012:1
+     |
+1012 | / #[repr(C)]
+1013 | |
+     | |_^
+1014 |   pub struct IShellItem {
+     |   --------------------- the attribute applies to this struct
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#empty_line_after_outer_attr
+     = help: if the empty line is unintentional, remove it
+
+error: empty line after outer attribute
+    --> src\platform\windows\ffi_imports.rs:1032:1
+     |
+1032 | / #[link(name = "shell32")]
+1033 | |
+     | |_^
+1034 |   extern "system" {
+     |   - the attribute applies to this extern block
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#empty_line_after_outer_attr
+     = help: if the empty line is unintentional, remove it
+
+error: empty line after outer attribute
+    --> src\platform\windows\ffi_imports.rs:1050:1
+     |
+1050 | / #[link(name = "comctl32")]
+1051 | |
+     | |_^
+1052 |   extern "system" {
+     |   - the attribute applies to this extern block
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#empty_line_after_outer_attr
+     = help: if the empty line is unintentional, remove it
+
+error: empty line after outer attribute
+    --> src\platform\windows\ffi_imports.rs:1086:1
+     |
+1086 | / #[link(name = "imm32")]
+1087 | |
+     | |_^
+1088 |   extern "system" {
+     |   - the attribute applies to this extern block
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#empty_line_after_outer_attr
+     = help: if the empty line is unintentional, remove it
+
+error: empty line after doc comment
+    --> src\platform\windows\shell_menu.rs:1121:1
+     |
+1121 | / ///
+1122 | |
+     | |_^
+...
+1133 |   fn format_registry_icon_path(exe_path: &str) -> String {
+     |   ---------------------------- the comment documents this function
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#empty_line_after_doc_comments
+     = help: if the empty line is unintentional, remove it
+help: if the documentation should include the empty line include it in the comment
+     |
+1122 | ///
+     |
+
+error: unused imports: `is_desktop_auto_arrange_enabled` and `position_icon_at_screen as position_icon_on_desktop`
+  --> src\platform\windows\mod.rs:53:5
+   |
+53 |     is_desktop_auto_arrange_enabled, position_icon_at_screen as position_icon_on_desktop,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error: duplicated attribute
+  --> src\platform\windows\mod.rs:70:9
+   |
+70 | #[allow(unused_imports)] // 公共 API 预留
+   |         ^^^^^^^^^^^^^^
+   |
+note: first defined here
+  --> src\platform\windows\mod.rs:69:9
+   |
+69 | #[allow(unused_imports)] // 公共 API 预留
+   |         ^^^^^^^^^^^^^^
+help: remove this attribute
+  --> src\platform\windows\mod.rs:70:9
+   |
+70 | #[allow(unused_imports)] // 公共 API 预留
+   |         ^^^^^^^^^^^^^^
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#duplicated_attributes
+   = note: `-D clippy::duplicated-attributes` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::duplicated_attributes)]`
+
+error: using tabs in doc comments is not recommended
+  --> src\shared\mod.rs:11:8
+   |
+11 | //! - \    ypes\: 跨平台共享类型定义
+   |        ^^^^ help: consider using four spaces per tab
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#tabs_in_doc_comments
+   = note: `-D clippy::tabs-in-doc-comments` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::tabs_in_doc_comments)]`
+
+error: unreachable pattern
+    --> src\platform\windows\wnd_proc.rs:1506:9
+     |
+1480 |         WM_USER_DRAG_OVER_UPDATE => {
+     |         ------------------------ matches all the relevant values
+...
+1506 |         WM_USER_DEFERRED_POSITION_ICON => {
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no value can reach this
+     |
+     = note: `-D unreachable-patterns` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unreachable_patterns)]`
+
+error: unused variable: `category`
+   --> src\tauri_commands\ai_cmd.rs:295:10
+    |
+295 |     for (category, icons) in &filtered_groups {
+    |          ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_category`
+    |
+    = note: `-D unused-variables` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_variables)]`
+
+error: constant `DRAG_THRESHOLD` is never used
+ --> src\shared\drag_state.rs:8:11
+  |
+8 | pub const DRAG_THRESHOLD: i32 = 5;
+  |           ^^^^^^^^^^^^^^
+  |
+  = note: `-D dead-code` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: function `is_drag_threshold_exceeded` is never used
+  --> src\shared\drag_state.rs:11:8
+   |
+11 | pub fn is_drag_threshold_exceeded(dx: i32, dy: i32) -> bool {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: enum `AlignmentDirection` is never used
+  --> src\shared\geometry.rs:14:10
+   |
+14 | pub enum AlignmentDirection {
+   |          ^^^^^^^^^^^^^^^^^^
+
+error: struct `AlignmentMatch` is never constructed
+  --> src\shared\geometry.rs:23:12
+   |
+23 | pub struct AlignmentMatch {
+   |            ^^^^^^^^^^^^^^
+
+error: struct `AlignmentResult` is never constructed
+  --> src\shared\geometry.rs:38:12
+   |
+38 | pub struct AlignmentResult {
+   |            ^^^^^^^^^^^^^^^
+
+error: constant `DEFAULT_ALIGNMENT_THRESHOLD` is never used
+  --> src\shared\geometry.rs:46:11
+   |
+46 | pub const DEFAULT_ALIGNMENT_THRESHOLD: i32 = 5;
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function `detect_alignments` is never used
+  --> src\shared\geometry.rs:49:8
+   |
+49 | pub fn detect_alignments(
+   |        ^^^^^^^^^^^^^^^^^
+
+error: struct `RectEdges` is never constructed
+  --> src\shared\geometry.rs:68:8
+   |
+68 | struct RectEdges {
+   |        ^^^^^^^^^
+
+error: associated function `from_rect` is never used
+  --> src\shared\geometry.rs:76:8
+   |
+75 | impl RectEdges {
+   | -------------- associated function in this implementation
+76 |     fn from_rect(rect: &Rect) -> Self {
+   |        ^^^^^^^^^
+
+error: function `check_horizontal_alignment` is never used
+  --> src\shared\geometry.rs:86:4
+   |
+86 | fn check_horizontal_alignment(
+   |    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function `check_vertical_alignment` is never used
+   --> src\shared\geometry.rs:127:4
+    |
+127 | fn check_vertical_alignment(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function `visible_pixel_bounds` is never used
+   --> src\shared\geometry.rs:173:8
+    |
+173 | pub fn visible_pixel_bounds(
+    |        ^^^^^^^^^^^^^^^^^^^^
+
+error: function `icon_destination_rect` is never used
+   --> src\shared\geometry.rs:209:8
+    |
+209 | pub fn icon_destination_rect(
+    |        ^^^^^^^^^^^^^^^^^^^^^
+
+error: struct `Rect` is never constructed
+ --> src\shared\types.rs:7:12
+  |
+7 | pub struct Rect {
+  |            ^^^^
+
+error: associated items `new`, `width`, and `height` are never used
+  --> src\shared\types.rs:15:12
+   |
+14 | impl Rect {
+   | --------- associated items in this implementation
+15 |     pub fn new(left: i32, top: i32, right: i32, bottom: i32) -> Self {
+   |            ^^^
+...
+24 |     pub fn width(&self) -> i32 {
+   |            ^^^^^
+...
+28 |     pub fn height(&self) -> i32 {
+   |            ^^^^^^
+
+error: struct `Point` is never constructed
+  --> src\shared\types.rs:35:12
+   |
+35 | pub struct Point {
+   |            ^^^^^
+
+error: struct `Pixel32` is never constructed
+  --> src\shared\types.rs:42:12
+   |
+42 | pub struct Pixel32 {
+   |            ^^^^^^^
+
+error: this `impl` can be derived
+  --> src\box_core\box_manager.rs:16:1
+   |
+16 | / impl Default for BoxManager {
+17 | |     fn default() -> Self {
+18 | |         Self { boxes: Vec::new() }
+19 | |     }
+20 | | }
+   | |_^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#derivable_impls
+   = note: `-D clippy::derivable-impls` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::derivable_impls)]`
+help: replace the manual implementation with a derive attribute
+   |
+11 + #[derive(Default)]
+12 | pub struct BoxManager {
+   |
+
+error: value assigned to `drag_pending` is never read
+   --> src\platform\windows\drag_handler.rs:842:32
+    |
+842 |         let mut drag_pending = true;
+    |                                ^^^^ this value is reassigned later and never used
+...
+850 |         drag_pending = false;
+    |         -------------------- `drag_pending` is overwritten here before the previous value is read
+    |
+    = note: `-D unused-assignments` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_assignments)]`
+
+error: value assigned to `drag_active` is never read
+   --> src\platform\windows\drag_handler.rs:843:31
+    |
+843 |         let mut drag_active = true;
+    |                               ^^^^ this value is reassigned later and never used
+...
+851 |         drag_active = false;
+    |         ------------------- `drag_active` is overwritten here before the previous value is read
+
+error: value assigned to `drag_item_index` is never read
+   --> src\platform\windows\drag_handler.rs:844:40
+    |
+844 |         let mut drag_item_index: i32 = 3;
+    |                                        ^ this value is reassigned later and never used
+...
+852 |         drag_item_index = -1;
+    |         -------------------- `drag_item_index` is overwritten here before the previous value is read
+
+error: value assigned to `drag_over_item` is never read
+   --> src\platform\windows\drag_handler.rs:845:39
+    |
+845 |         let mut drag_over_item: i32 = 2;
+    |                                       ^ this value is reassigned later and never used
+...
+853 |         drag_over_item = -1;
+    |         ------------------- `drag_over_item` is overwritten here before the previous value is read
+
+error: value assigned to `drag_over_insert_col` is never read
+   --> src\platform\windows\drag_handler.rs:846:45
+    |
+846 |         let mut drag_over_insert_col: i32 = 1;
+    |                                             ^ this value is reassigned later and never used
+...
+854 |         drag_over_insert_col = -1;
+    |         ------------------------- `drag_over_insert_col` is overwritten here before the previous value is read
+
+error: value assigned to `drag_over_insert_row` is never read
+   --> src\platform\windows\drag_handler.rs:847:45
+    |
+847 |         let mut drag_over_insert_row: i32 = 0;
+    |                                             ^ this value is reassigned later and never used
+...
+855 |         drag_over_insert_row = -1;
+    |         ------------------------- `drag_over_insert_row` is overwritten here before the previous value is read
+
+error: variable does not need to be mutable
+   --> src\platform\windows\drag_handler.rs:883:13
+    |
+883 |         let mut drag_pending = false; // 已激活
+    |             ----^^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `-D unused-mut` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_mut)]`
+
+error: value assigned to `drag_active` is never read
+   --> src\platform\windows\drag_handler.rs:884:31
+    |
+884 |         let mut drag_active = true;
+    |                               ^^^^ this value is reassigned later and never used
+...
+892 |         drag_active = false;
+    |         ------------------- `drag_active` is overwritten here before the previous value is read
+
+error: value assigned to `drag_item_index` is never read
+   --> src\platform\windows\drag_handler.rs:885:40
+    |
+885 |         let mut drag_item_index: i32 = 3;
+    |                                        ^ this value is reassigned later and never used
+...
+893 |         drag_item_index = -1;
+    |         -------------------- `drag_item_index` is overwritten here before the previous value is read
+
+error: value assigned to `drag_over_item` is never read
+   --> src\platform\windows\drag_handler.rs:886:39
+    |
+886 |         let mut drag_over_item: i32 = 2;
+    |                                       ^ this value is reassigned later and never used
+...
+894 |         drag_over_item = -1;
+    |         ------------------- `drag_over_item` is overwritten here before the previous value is read
+
+error: value assigned to `drag_over_insert_col` is never read
+   --> src\platform\windows\drag_handler.rs:887:45
+    |
+887 |         let mut drag_over_insert_col: i32 = 1;
+    |                                             ^ this value is reassigned later and never used
+...
+895 |         drag_over_insert_col = -1;
+    |         ------------------------- `drag_over_insert_col` is overwritten here before the previous value is read
+
+error: value assigned to `drag_over_insert_row` is never read
+   --> src\platform\windows\drag_handler.rs:888:45
+    |
+888 |         let mut drag_over_insert_row: i32 = 0;
+    |                                             ^ this value is reassigned later and never used
+...
+896 |         drag_over_insert_row = -1;
+    |         ------------------------- `drag_over_insert_row` is overwritten here before the previous value is read
+
+error: unused variable: `restored`
+   --> src\platform\windows\drag_image.rs:874:13
+    |
+874 |         let restored = scale_dpi(scaled, 96, 96);
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_restored`
+    |
+    = note: `-D unused-variables` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_variables)]`
+
+error: unused variable: `more_size`
+   --> src\platform\windows\grid_window.rs:990:25
+    |
+990 |         let (more_x, _, more_size) = more_btn_rect(win_w, title_h, dpi);
+    |                         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_more_size`
+
+error: unused variable: `more_size`
+    --> src\platform\windows\grid_window.rs:1002:25
+     |
+1002 |         let (more_x, _, more_size) = more_btn_rect(win_w, title_h, dpi);
+     |                         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_more_size`
+
+error: unused variable: `btn_size`
+    --> src\platform\windows\grid_window.rs:1013:29
+     |
+1013 |         let (btn_x, _btn_y, btn_size) = lock_btn_rect(win_w, title_h, dpi);
+     |                             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_btn_size`
+
+error: this `impl` can be derived
+   --> src\config\app_config.rs:852:1
+    |
+852 | / impl Default for UiThemeConfig {
+853 | |     fn default() -> Self {
+854 | |         Self {
+855 | |             light: ThemeColors::default(),
+...   |
+859 | | }
+    | |_^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#derivable_impls
+help: replace the manual implementation with a derive attribute
+    |
+823 + #[derive(Default)]
+824 | pub struct UiThemeConfig {
+    |
+
+error: this `impl` can be derived
+   --> src\config\app_config.rs:861:1
+    |
+861 | / impl Default for ThemeColors {
+862 | |     fn default() -> Self {
+863 | |         Self {
+864 | |             background: None,
+...   |
+874 | | }
+    | |_^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#derivable_impls
+help: replace the manual implementation with a derive attribute
+    |
+833 + #[derive(Default)]
+834 | pub struct ThemeColors {
+    |
+
+error: this `impl` can be derived
+  --> src\context.rs:27:1
+   |
+27 | / impl Default for AppState {
+28 | |     fn default() -> Self {
+29 | |         Self {
+30 | |             icons_hidden: false,
+...  |
+35 | | }
+   | |_^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#derivable_impls
+help: replace the manual implementation with a derive attribute
+   |
+18 + #[derive(Default)]
+19 | pub struct AppState {
+   |
+
+error: casting raw pointers to the same type and constness is unnecessary (`*mut std::ffi::c_void` -> `*mut std::ffi::c_void`)
+   --> src\platform\windows\app_icon.rs:131:52
+    |
+131 |                 windows::Win32::Foundation::HANDLE(icon_info.hbm_color as *mut c_void),
+    |                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `icon_info.hbm_color`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#unnecessary_cast
+    = note: `-D clippy::unnecessary-cast` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::unnecessary_cast)]`
+
+error: this function has too many arguments (8/7)
+   --> src\platform\windows\d2d_render.rs:694:1
+    |
+694 | / fn draw_liquid_glass_background(
+695 | |     target: &ID2D1DCRenderTarget,
+696 | |     screen_x: i32,
+697 | |     screen_y: i32,
+...   |
+702 | |     dpi_scale: f32,
+703 | | ) -> bool {
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#too_many_arguments
+    = note: `-D clippy::too-many-arguments` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::too_many_arguments)]`
+
+error: this function has too many arguments (19/7)
+   --> src\platform\windows\d2d_render.rs:788:1
+    |
+788 | / pub fn render_icon_grid(
+789 | |     target: &ID2D1DCRenderTarget,
+790 | |     dw_factory: &IDWriteFactory,
+791 | |     _wic_factory: &IWICImagingFactory,
+...   |
+807 | |     marquee: Option<(i32, i32, i32, i32)>,
+808 | | ) {
+    | |_^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#too_many_arguments
+
+error: this `map_or` can be simplified
+   --> src\platform\windows\d2d_render.rs:839:16
+    |
+839 |               || multi_select_container_type.map_or(false, |ct| {
+    |  ________________^
+840 | |                 super::multi_select::is_selected(super::multi_select::SelectionKey {
+841 | |                     container_type: ct,
+842 | |                     container_id: multi_select_container_id,
+843 | |                     item_index: i,
+844 | |                 })
+845 | |             });
+    | |______________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#unnecessary_map_or
+    = note: `-D clippy::unnecessary-map-or` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::unnecessary_map_or)]`
+help: use `is_some_and` instead
+    |
+839 -             || multi_select_container_type.map_or(false, |ct| {
+839 +             || multi_select_container_type.is_some_and(|ct| {
+    |
+
+error: derefed type is same as origin
+    --> src\platform\windows\d2d_render.rs:1237:30
+     |
+1237 |         if let Some(cache) = icon_bitmap_cache.as_deref_mut() {
+     |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `icon_bitmap_cache`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#needless_option_as_deref
+     = note: `-D clippy::needless-option-as-deref` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_option_as_deref)]`
+
+error: this function has too many arguments (14/7)
+    --> src\platform\windows\d2d_render.rs:1294:1
+     |
+1294 | / pub fn draw_icon_with_label(
+1295 | |     target: &ID2D1DCRenderTarget,
+1296 | |     dw_factory: &IDWriteFactory,
+1297 | |     wic_factory: Option<&IWICImagingFactory>,
+...    |
+1308 | |     apply_ellipsis: bool,
+1309 | | ) {
+     | |_^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#too_many_arguments
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+    --> src\platform\windows\d2d_render.rs:1311:9
+     |
+1311 |         &target,
+     |         ^^^^^^^ help: change this to: `target`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#needless_borrow
+     = note: `-D clippy::needless-borrow` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_borrow)]`
+
+error: this function has too many arguments (8/7)
+    --> src\platform\windows\d2d_render.rs:1472:1
+     |
+1472 | / pub fn render_drag_overlay_bitmap(
+1473 | |     icon_handle: HICON,
+1474 | |     icon_size: i32,
+1475 | |     display_name: &str,
+...    |
+1480 | |     dpi: u32,
+1481 | | ) -> HBITMAP {
+     | |____________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#too_many_arguments
+
+error: name `HWND` contains a capitalized acronym
+  --> src\platform\windows\desktop_utils.rs:21:6
+   |
+21 | type HWND = *mut c_void;
+   |      ^^^^ help: consider making the acronym lowercase, except the initial letter: `Hwnd`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#upper_case_acronyms
+   = note: `-D clippy::upper-case-acronyms` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::upper_case_acronyms)]`
+
+error: manual `!RangeInclusive::contains` implementation
+   --> src\platform\windows\drag_drop.rs:695:8
+    |
+695 |     if path_len < 3 || path_len > 32768 {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use: `!(3..=32768).contains(&path_len)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#manual_range_contains
+    = note: `-D clippy::manual-range-contains` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::manual_range_contains)]`
+
+error: manual `RangeInclusive::contains` implementation
+   --> src\platform\windows\drag_drop.rs:737:16
+    |
+737 |             if drive_letter >= b'A' && drive_letter <= b'Z' {
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use: `(b'A'..=b'Z').contains(&drive_letter)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#manual_range_contains
+
+error: unused variable: `y`
+   --> src\platform\windows\monitor_utils.rs:253:17
+    |
+253 |         let (x, y, w, h) = get_primary_monitor_work_area_phys();
+    |                 ^ help: if this is intentional, prefix it with an underscore: `_y`
+
+error: unused variable: `x`
+   --> src\platform\windows\monitor_utils.rs:271:14
+    |
+271 |         let (x, y, w, h) = get_virtual_desktop_bounds();
+    |              ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+error: unused variable: `y`
+   --> src\platform\windows\monitor_utils.rs:271:17
+    |
+271 |         let (x, y, w, h) = get_virtual_desktop_bounds();
+    |                 ^ help: if this is intentional, prefix it with an underscore: `_y`
+
+error: very complex type used. Consider factoring parts into `type` definitions
+  --> src\platform\windows\drop_target.rs:63:34
+   |
+63 |     static ref PENDING_ADD_ITEM: Mutex<std::collections::VecDeque<(String, String, i32, i32, i32, i32)>> =
+   |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#type_complexity
+   = note: `-D clippy::type-complexity` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: manual creation of a dangling pointer
+   --> src\platform\windows\ffi_types.rs:229:31
+    |
+229 | pub const HWND_BOTTOM: HWND = 1isize as *mut c_void;
+    |                               ^^^^^^^^^^^^^^^^^^^^^ help: use: `std::ptr::dangling_mut::<c_void>()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#manual_dangling_ptr
+    = note: `-D clippy::manual-dangling-ptr` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::manual_dangling_ptr)]`
+
+error: explicit call to `.into_iter()` in function argument accepting `IntoIterator`
+   --> src\platform\windows\grid_layout.rs:25:57
+    |
+ 25 |     for (item, (col, row)) in data.items.iter_mut().zip(positions.into_iter()) {
+    |                                                         ^^^^^^^^^^^^^^^^^^^^^
+    |
+note: this parameter accepts any `IntoIterator`, so you don't need to call `.into_iter()`
+   --> C:\Users\chenzhihui\.rustup\toolchains\stable-x86_64-pc-windows-gnu\lib/rustlib/src/rust\library\core\src\iter\traits\iterator.rs:634:12
+    |
+634 |         U: IntoIterator,
+    |            ^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#useless_conversion
+    = note: `-D clippy::useless-conversion` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::useless_conversion)]`
+help: consider removing the `.into_iter()`
+    |
+ 25 -     for (item, (col, row)) in data.items.iter_mut().zip(positions.into_iter()) {
+ 25 +     for (item, (col, row)) in data.items.iter_mut().zip(positions) {
+    |
+
+error: very complex type used. Consider factoring parts into `type` definitions
+   --> src\platform\windows\grid_window.rs:111:28
+    |
+111 |     pub edit_box_callback: Option<Box<dyn Fn(uuid::Uuid, &str) + Send + Sync>>,
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#type_complexity
+
+error: very complex type used. Consider factoring parts into `type` definitions
+   --> src\platform\windows\grid_window.rs:150:35
+    |
+150 |     pub(crate) edit_box_callback: Option<Box<dyn Fn(uuid::Uuid, &str) + Send + Sync>>,
+    |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#type_complexity
+
+error: name `HICON` contains a capitalized acronym
+  --> src\platform\windows\icon_extract.rs:12:6
+   |
+12 | type HICON = *mut c_void;
+   |      ^^^^^ help: consider making the acronym lowercase, except the initial letter: `Hicon`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#upper_case_acronyms
+
+error: name `HRESULT` contains a capitalized acronym
+  --> src\platform\windows\icon_extract.rs:13:6
+   |
+13 | type HRESULT = i32;
+   |      ^^^^^^^ help: consider making the acronym lowercase, except the initial letter: `Hresult`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#upper_case_acronyms
+
+error: name `ITEMIDLIST` contains a capitalized acronym
+  --> src\platform\windows\icon_extract.rs:97:8
+   |
+97 | struct ITEMIDLIST {
+   |        ^^^^^^^^^^ help: consider making the acronym lowercase, except the initial letter: `Itemidlist`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#upper_case_acronyms
+
+error: name `SHFILEINFOW` contains a capitalized acronym
+   --> src\platform\windows\icon_extract.rs:103:12
+    |
+103 | pub struct SHFILEINFOW {
+    |            ^^^^^^^^^^^ help: consider making the acronym lowercase, except the initial letter: `Shfileinfow`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#upper_case_acronyms
+
+error: the function `CreateIconIndirect` doesn't need a mutable reference
+   --> src\platform\windows\icon_extract.rs:513:52
+    |
+513 |     let hicon_result = unsafe { CreateIconIndirect(&mut icon_info) };
+    |                                                    ^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#unnecessary_mut_passed
+    = note: `-D clippy::unnecessary-mut-passed` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::unnecessary_mut_passed)]`
+help: remove this `mut`
+    |
+513 -     let hicon_result = unsafe { CreateIconIndirect(&mut icon_info) };
+513 +     let hicon_result = unsafe { CreateIconIndirect(&icon_info) };
+    |
+
+error: name `HWND` contains a capitalized acronym
+   --> src\platform\windows\icon_hider.rs:129:6
+    |
+129 | type HWND = *mut c_void;
+    |      ^^^^ help: consider making the acronym lowercase, except the initial letter: `Hwnd`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#upper_case_acronyms
+
+error: name `SHELLEXECUTEINFOW` contains a capitalized acronym
+   --> src\platform\windows\icon_hider.rs:395:12
+    |
+395 |     struct SHELLEXECUTEINFOW {
+    |            ^^^^^^^^^^^^^^^^^ help: consider making the acronym lowercase, except the initial letter: `Shellexecuteinfow`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#upper_case_acronyms
+
+error: unused variable: `x`
+   --> src\platform\mod.rs:169:14
+    |
+169 |         let (x, y, w, h) = dm.get_monitor_work_area((0, 0));
+    |              ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+error: unused variable: `y`
+   --> src\platform\mod.rs:169:17
+    |
+169 |         let (x, y, w, h) = dm.get_monitor_work_area((0, 0));
+    |                 ^ help: if this is intentional, prefix it with an underscore: `_y`
+
+error: you seem to want to iterate on a map's values
+   --> src\platform\windows\icon_manager.rs:371:28
+    |
+371 |         for (_, &index) in &self.name_to_index {
+    |                            ^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#for_kv_map
+    = note: `-D clippy::for-kv-map` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::for_kv_map)]`
+help: use the corresponding method
+    |
+371 -         for (_, &index) in &self.name_to_index {
+371 +         for &index in self.name_to_index.values() {
+    |
+
+error: casting raw pointers to the same type and constness is unnecessary (`*mut std::ffi::c_void` -> `*mut std::ffi::c_void`)
+    --> src\platform\windows\icon_manager.rs:1799:24
+     |
+1799 |             let himl = image_list.as_raw() as *mut std::ffi::c_void;
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `image_list.as_raw()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#unnecessary_cast
+
+error: initializer for `thread_local` value can be made `const`
+   --> src\platform\windows\liquid_glass.rs:259:1
+    |
+259 | / thread_local! {
+260 | |     static GLASS_STATE: RefCell<GlassState> = const { RefCell::new(GlassState::Uninitialized) };
+261 | |     static LAST_GOOD_FRAMES: RefCell<HashMap<(i32, i32, i32, i32, i32), Vec<Pixel32>>> = RefCell::new(HashMap::new());
+262 | | }
+    | |_^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#missing_const_for_thread_local
+    = note: `-D clippy::missing-const-for-thread-local` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::missing_const_for_thread_local)]`
+
+error: very complex type used. Consider factoring parts into `type` definitions
+   --> src\platform\windows\liquid_glass.rs:261:30
+    |
+261 |     static LAST_GOOD_FRAMES: RefCell<HashMap<(i32, i32, i32, i32, i32), Vec<Pixel32>>> = RefCell::new(HashMap::new());
+    |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#type_complexity
+
+error: this function has too many arguments (8/7)
+   --> src\platform\windows\liquid_glass.rs:435:1
+    |
+435 | / pub fn render_background(
+436 | |     screen_x: i32,
+437 | |     screen_y: i32,
+438 | |     content_width: i32,
+...   |
+443 | |     glass_config: &LiquidGlassConfig,
+444 | | ) -> Option<Vec<Pixel32>> {
+    | |_________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#too_many_arguments
+
+error: this function has too many arguments (9/7)
+   --> src\platform\windows\liquid_glass.rs:867:5
+    |
+867 | /     fn blur_output_impl(
+868 | |         device: &ID3D11Device,
+869 | |         d2d_context: &ID2D1DeviceContext,
+870 | |         output: &mut CaptureOutput,
+...   |
+876 | |         lens_h: i32,
+877 | |     ) -> Result<()> {
+    | |___________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#too_many_arguments
+
+error: this function has too many arguments (9/7)
+    --> src\platform\windows\liquid_glass.rs:1115:5
+     |
+1115 | /     fn render(
+1116 | |         &mut self,
+1117 | |         screen_x: i32,
+1118 | |         screen_y: i32,
+...    |
+1124 | |         glass_config: &LiquidGlassConfig,
+1125 | |     ) -> Result<Vec<Pixel32>> {
+     | |_____________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#too_many_arguments
+
+error: this function has too many arguments (13/7)
+    --> src\platform\windows\liquid_glass.rs:1207:5
+     |
+1207 | /     fn render_view(
+1208 | |         &mut self,
+1209 | |         blurred_view: &ID3D11ShaderResourceView,
+1210 | |         output_rect: WinRect,
+...    |
+1220 | |         cursor_in_window: bool,
+1221 | |     ) -> Result<Vec<Pixel32>> {
+     | |_____________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#too_many_arguments
+
+error: this `if` can be collapsed into the outer `match`
+   --> src\platform\windows\menu_window.rs:802:21
+    |
+802 | /                     if data.hovered_index >= 0 && (data.hovered_index as usize) < data.items.len() {
+803 | |                         let item = &data.items[data.hovered_index as usize];
+804 | |                         if item.has_submenu() {
+805 | |                             open_submenu(hwnd, data, data.hovered_index);
+...   |
+809 | |                     }
+    | |_____________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#collapsible_match
+    = note: `-D clippy::collapsible-match` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_match)]`
+help: collapse nested if block
+    |
+800 ~                 VK_RIGHT | VK_RETURN
+801 |                     // 展开子菜单或确认
+802 ~                     if data.hovered_index >= 0 && (data.hovered_index as usize) < data.items.len() => {
+803 |                         let item = &data.items[data.hovered_index as usize];
+...
+808 |                         }
+809 ~                     }
+    |
+
+error: manual `Range::contains` implementation
+    --> src\platform\windows\menu_window.rs:1378:15
+     |
+1378 |     } else if cmd >= CMD_SORT_BASE && cmd < CMD_SORT_BASE + 8 {
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use: `(CMD_SORT_BASE..CMD_SORT_BASE + 8).contains(&cmd)`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#manual_range_contains
+
+error: manual `Range::contains` implementation
+    --> src\platform\windows\menu_window.rs:1397:15
+     |
+1397 |     } else if cmd >= CMD_GROUP_BASE && cmd < CMD_GROUP_BASE + 8 {
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use: `(CMD_GROUP_BASE..CMD_GROUP_BASE + 8).contains(&cmd)`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#manual_range_contains
+
+error: manual `Range::contains` implementation
+    --> src\platform\windows\menu_window.rs:1410:15
+     |
+1410 |     } else if cmd >= CMD_VIEW_BASE && cmd < CMD_VIEW_BASE + 8 {
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use: `(CMD_VIEW_BASE..CMD_VIEW_BASE + 8).contains(&cmd)`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#manual_range_contains
+
+error: name `POINT` contains a capitalized acronym
+   --> src\platform\windows\monitor_utils.rs:282:12
+    |
+282 |     struct POINT {
+    |            ^^^^^ help: consider making the acronym lowercase, except the initial letter: `Point`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#upper_case_acronyms
+
+error: name `HMONITOR` contains a capitalized acronym
+   --> src\platform\windows\monitor_utils.rs:287:10
+    |
+287 |     type HMONITOR = *mut c_void;
+    |          ^^^^^^^^ help: consider making the acronym lowercase, except the initial letter: `Hmonitor`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#upper_case_acronyms
+
+error: doc list item without indentation
+   --> src\platform\windows\ole_dnd.rs:838:5
+    |
+838 | /// 返回 true 表示 drop 成功 (DRAGDROP_S_DROP)，false 表示取消
+    |     ^
+    |
+    = help: if this is supposed to be its own paragraph, add a blank line
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#doc_lazy_continuation
+    = note: `-D clippy::doc-lazy-continuation` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::doc_lazy_continuation)]`
+help: indent this line
+    |
+838 | ///   返回 true 表示 drop 成功 (DRAGDROP_S_DROP)，false 表示取消
+    |     ++
+
+error: unnecessary `if let` since only the `Some` variant of the iterator element is used
+   --> src\platform\windows\shell_menu.rs:269:9
+    |
+269 | /         for sp in &staging_paths {
+270 | |             if let Some(ref p) = sp {
+271 | |                 super::icon_hider::cleanup_staging(p);
+272 | |             }
+273 | |         }
+    | |_________^
+    |
+help: try `.flatten()` and remove the `if let` statement in the for loop
+   --> src\platform\windows\shell_menu.rs:270:13
+    |
+270 | /             if let Some(ref p) = sp {
+271 | |                 super::icon_hider::cleanup_staging(p);
+272 | |             }
+    | |_____________^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#manual_flatten
+    = note: `-D clippy::manual-flatten` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::manual_flatten)]`
+help: try
+    |
+269 ~         for ref p in staging_paths.iter().flatten() {
+270 +             super::icon_hider::cleanup_staging(p);
+271 +         }
+    |
+
+error: the loop variable `i` is used to index `full_pidls`
+   --> src\platform\windows\shell_menu.rs:393:18
+    |
+393 |         for i in 1..full_pidls.len() {
+    |                  ^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#needless_range_loop
+    = note: `-D clippy::needless-range-loop` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_range_loop)]`
+help: consider using an iterator and enumerate()
+    |
+393 -         for i in 1..full_pidls.len() {
+393 +         for (i, <item>) in full_pidls.iter().enumerate().skip(1) {
+    |
+
+error: unused variable: `category`
+   --> src\tauri_commands\ai_cmd.rs:295:10
+    |
+295 |     for (category, icons) in &filtered_groups {
+    |          ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_category`
+
+error: initializer for `thread_local` value can be made `const`
+  --> src\platform\windows\wnd_proc.rs:43:1
+   |
+43 | / thread_local! {
+44 | |     static IN_DRAG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+45 | |     static IN_MOVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };  // 区分拖拽移动和边缘缩放
+46 | |     static PROPOSED_X: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
+47 | |     static PROPOSED_Y: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
+48 | | }
+   | |_^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#missing_const_for_thread_local
+
+error: unnecessary `if let` since only the `Some` variant of the iterator element is used
+   --> src\platform\windows\wnd_proc.rs:249:13
+    |
+249 | /             for sp in &response.staging_paths {
+250 | |                 if let Some(ref p) = sp {
+251 | |                     super::icon_hider::cleanup_staging(p);
+252 | |                 }
+253 | |             }
+    | |_____________^
+    |
+help: try `.flatten()` and remove the `if let` statement in the for loop
+   --> src\platform\windows\wnd_proc.rs:250:17
+    |
+250 | /                 if let Some(ref p) = sp {
+251 | |                     super::icon_hider::cleanup_staging(p);
+252 | |                 }
+    | |_________________^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#manual_flatten
+help: try
+    |
+249 ~             for ref p in response.staging_paths.iter().flatten() {
+250 +                 super::icon_hider::cleanup_staging(p);
+251 +             }
+    |
+
+error: unnecessary `if let` since only the `Some` variant of the iterator element is used
+   --> src\platform\windows\wnd_proc.rs:267:13
+    |
+267 | /             for sp in &response.staging_paths {
+268 | |                 if let Some(ref p) = sp {
+269 | |                     super::icon_hider::cleanup_staging(p);
+270 | |                 }
+271 | |             }
+    | |_____________^
+    |
+help: try `.flatten()` and remove the `if let` statement in the for loop
+   --> src\platform\windows\wnd_proc.rs:268:17
+    |
+268 | /                 if let Some(ref p) = sp {
+269 | |                     super::icon_hider::cleanup_staging(p);
+270 | |                 }
+    | |_________________^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#manual_flatten
+help: try
+    |
+267 ~             for ref p in response.staging_paths.iter().flatten() {
+268 +                 super::icon_hider::cleanup_staging(p);
+269 +             }
+    |
+
+error: unnecessary `if let` since only the `Some` variant of the iterator element is used
+   --> src\platform\windows\wnd_proc.rs:301:13
+    |
+301 | /             for sp in &response.staging_paths {
+302 | |                 if let Some(ref p) = sp {
+303 | |                     super::icon_hider::cleanup_staging(p);
+304 | |                 }
+305 | |             }
+    | |_____________^
+    |
+help: try `.flatten()` and remove the `if let` statement in the for loop
+   --> src\platform\windows\wnd_proc.rs:302:17
+    |
+302 | /                 if let Some(ref p) = sp {
+303 | |                     super::icon_hider::cleanup_staging(p);
+304 | |                 }
+    | |_________________^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#manual_flatten
+help: try
+    |
+301 ~             for ref p in response.staging_paths.iter().flatten() {
+302 +                 super::icon_hider::cleanup_staging(p);
+303 +             }
+    |
+
+error: some ranges overlap
+    --> src\platform\windows\wnd_proc.rs:1480:9
+     |
+1480 |         WM_USER_DRAG_OVER_UPDATE => {
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+note: overlaps with this
+    --> src\platform\windows\wnd_proc.rs:1506:9
+     |
+1506 |         WM_USER_DEFERRED_POSITION_ICON => {
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#match_overlapping_arm
+     = note: `-D clippy::match-overlapping-arm` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::match_overlapping_arm)]`
+
+error: the loop variable `vo_idx` is only used to index `visual_order`
+   --> src\platform\windows\wnd_proc.rs:884:43
+    |
+884 | ...                   for vo_idx in lo_vo..=hi_vo {
+    |                                     ^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#needless_range_loop
+help: consider using an iterator
+    |
+884 -                             for vo_idx in lo_vo..=hi_vo {
+884 +                             for <item> in visual_order.iter().take(hi_vo + 1).skip(lo_vo) {
+    |
+
+error: initializer for `thread_local` value can be made `const`
+  --> src\platform\windows\zorder.rs:23:1
+   |
+23 | / thread_local! {
+24 | |     static ZORDER_SUPPRESSING: Cell<bool> = const { Cell::new(false) };
+25 | | }
+   | |_^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#missing_const_for_thread_local
+
+error: initializer for `thread_local` value can be made `const`
+  --> src\platform\windows\zorder.rs:30:1
+   |
+30 | / thread_local! {
+31 | |     static DRAG_IN_PROGRESS: Cell<bool> = const { Cell::new(false) };
+32 | | }
+   | |_^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#missing_const_for_thread_local
+
+error: initializer for `thread_local` value can be made `const`
+  --> src\utils\logger.rs:37:1
+   |
+37 | / thread_local! {
+38 | |     /// Current window label for log context tagging.
+39 | |     static CURRENT_WINDOW: RefCell<Option<String>> = const { RefCell::new(None) };
+40 | | }
+   | |_^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#missing_const_for_thread_local
+
+error: useless use of `format!`
+  --> src\tauri_commands\ai_cmd.rs:92:67
+   |
+92 |                 let _ = app_clone.emit("ai-classification-error", format!("{e}"));
+   |                                                                   ^^^^^^^^^^^^^^ help: consider using `.to_string()`: `e.to_string()`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#useless_format
+   = note: `-D clippy::useless-format` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::useless_format)]`
+
+error: very complex type used. Consider factoring parts into `type` definitions
+  --> src\tauri_commands\box_cmd.rs:94:52
+   |
+94 | pub fn edit_box_callback(app: tauri::AppHandle) -> Box<dyn Fn(Uuid, &str) + Send + Sync + 'static> {
+   |                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#type_complexity
+
+error: unneeded `return` statement
+   --> src\tauri_commands\box_cmd.rs:210:9
+    |
+210 |         return Ok(created);
+    |         ^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#needless_return
+    = note: `-D clippy::needless-return` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_return)]`
+help: remove `return`
+    |
+210 -         return Ok(created);
+210 +         Ok(created)
+    |
+
+error: unneeded `return` statement
+  --> src\main.rs:65:9
+   |
+65 |         return Ok(());
+   |         ^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#needless_return
+help: remove `return`
+   |
+65 -         return Ok(());
+65 +         Ok(())
+   |
+
+error: name `HANDLE` contains a capitalized acronym
+   --> src\main.rs:306:10
+    |
+306 |     type HANDLE = *mut c_void;
+    |          ^^^^^^ help: consider making the acronym lowercase, except the initial letter: `Handle`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#upper_case_acronyms
+
+error: name `PSID` contains a capitalized acronym
+   --> src\main.rs:307:10
+    |
+307 |     type PSID = *mut c_void;
+    |          ^^^^ help: consider making the acronym lowercase, except the initial letter: `Psid`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#upper_case_acronyms
+
+error: creating a shared reference to mutable static
+  --> src\platform\windows\drag_image.rs:75:9
+   |
+75 |         OVERLAY_HWND,
+   |         ^^^^^^^^^^^^ shared reference to mutable static
+   |
+   = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+   = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+   = note: `-D static-mut-refs` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(static_mut_refs)]`
+
+error: creating a shared reference to mutable static
+   --> src\platform\windows\drag_image.rs:401:9
+    |
+401 |         OVERLAY_HWND,
+    |         ^^^^^^^^^^^^ shared reference to mutable static
+    |
+    = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+
+error: creating a shared reference to mutable static
+   --> src\platform\windows\drag_image.rs:402:9
+    |
+402 |         OVERLAY_HBMP,
+    |         ^^^^^^^^^^^^ shared reference to mutable static
+    |
+    = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+
+error: creating a shared reference to mutable static
+   --> src\platform\windows\drag_image.rs:403:10
+    |
+403 |         !MULTI_DRAG_ITEMS_STORE.is_empty()
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ shared reference to mutable static
+    |
+    = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+
+error: creating a shared reference to mutable static
+   --> src\platform\windows\drag_image.rs:585:9
+    |
+585 |         OVERLAY_HWND,
+    |         ^^^^^^^^^^^^ shared reference to mutable static
+    |
+    = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+
+error: creating a shared reference to mutable static
+   --> src\platform\windows\drag_image.rs:824:9
+    |
+824 |         MULTI_DRAG_ITEMS_STORE.len(),
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ shared reference to mutable static
+    |
+    = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+
+error: creating a mutable reference to mutable static
+   --> src\platform\windows\drag_image.rs:838:5
+    |
+838 |     MULTI_DRAG_ITEMS_STORE.clear();
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ mutable reference to mutable static
+    |
+    = note: mutable references to mutable statics are dangerous; it's undefined behavior if any other pointer to the static is used or if any other reference is created for the static while the mutable reference lives
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+
+error: unused `std::result::Result` that must be used
+  --> src\tauri_commands\ai_cmd.rs:68:17
+   |
+68 | /                 app_clone
+69 | |                     .run_on_main_thread(move || {
+70 | |                         if let Err(e) =
+71 | |                             create_classified_boxes(&app_for_create, &runtime_for_create, &groups)
+...  |
+87 | |                     })
+88 | |                     .map_err(|e| log::error!("调度到主线程失败: {e}"));
+   | |______________________________________________________________________^
+   |
+   = note: this `Result` may be an `Err` variant, which should be handled
+   = note: `-D unused-must-use` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_must_use)]`
+help: use `let _ = ...` to ignore the resulting value
+   |
+68 |                 let _ = app_clone
+   |                 +++++++
+
+error: `ShellExecuteW` redeclared with a different signature
+   --> src\platform\windows\ffi_imports.rs:222:5
+    |
+222 | /     pub fn ShellExecuteW(
+223 | |         hwnd: HWND,
+224 | |
+225 | |         lpOperation: *const u16,
+...   |
+233 | |         nShowCmd: i32,
+234 | |     ) -> HINSTANCE;
+    | |___________________^ this signature doesn't match the previous declaration
+    |
+   ::: src\platform\windows\desktop_manager.rs:68:13
+    |
+ 68 | /             fn ShellExecuteW(
+ 69 | |                 hwnd: *mut std::ffi::c_void,
+ 70 | |                 operation: *const u16,
+ 71 | |                 file: *const u16,
+...   |
+ 74 | |                 show_cmd: i32,
+ 75 | |             ) -> isize;
+    | |_______________________- `ShellExecuteW` previously declared here
+    |
+    = note: expected `unsafe extern "system" fn(*mut std::ffi::c_void, *const u16, *const u16, *const u16, *const u16, i32) -> isize`
+               found `unsafe extern "system" fn(*mut std::ffi::c_void, *const u16, *const u16, *const u16, *const u16, i32) -> *mut std::ffi::c_void`
+    = note: `-D clashing-extern-declarations` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clashing_extern_declarations)]`
+
+error: `SHGetFileInfoW` redeclared with a different signature
+   --> src\platform\windows\icon_extract.rs:118:5
+    |
+118 | /     fn SHGetFileInfoW(
+119 | |         pszPath: *const u16,
+120 | |         dwFileAttributes: u32,
+121 | |         psfi: *mut SHFILEINFOW,
+122 | |         cbFileInfo: u32,
+123 | |         uFlags: u32,
+124 | |     ) -> usize;
+    | |_______________^ this signature doesn't match the previous declaration
+    |
+   ::: src\platform\windows\drop_target.rs:612:13
+    |
+612 | /             fn SHGetFileInfoW(
+613 | |                 pszPath: *const u8,
+614 | |                 dwFileAttributes: u32,
+615 | |                 psfi: *mut ShellFileInfo,
+616 | |                 cbFileInfo: u32,
+617 | |                 uFlags: u32,
+618 | |             ) -> usize;
+    | |_______________________- `SHGetFileInfoW` previously declared here
+    |
+    = note: expected `unsafe extern "system" fn(*const u8, u32, *mut platform::windows::drop_target::read_shell_idlist_paths::ShellFileInfo, u32, u32) -> usize`
+               found `unsafe extern "system" fn(*const u16, u32, *mut platform::windows::icon_extract::SHFILEINFOW, u32, u32) -> usize`
+
+error: `SHParseDisplayName` redeclared with a different signature
+   --> src\platform\windows\icon_extract.rs:145:5
+    |
+145 | /     fn SHParseDisplayName(
+146 | |         pszName: *const u16,
+147 | |         pbc: *mut c_void,
+148 | |         ppidl: *mut *mut ITEMIDLIST,
+149 | |         sfgaoIn: u32,
+150 | |         psfgaoOut: *mut u32,
+151 | |     ) -> HRESULT;
+    | |_________________^ this signature doesn't match the previous declaration
+    |
+   ::: src\platform\windows\ffi_imports.rs:916:5
+    |
+916 | /     pub fn SHParseDisplayName(
+917 | |         pszName: *const u16,
+918 | |
+919 | |         pbc: *mut c_void,
+...   |
+925 | |         psfgaoOut: *mut u32,
+926 | |     ) -> HRESULT;
+    | |_________________- `SHParseDisplayName` previously declared here
+    |
+    = note: expected `unsafe extern "system" fn(*const u16, *mut std::ffi::c_void, *mut *mut platform::windows::ffi_imports::ITEMIDLIST, u32, *mut u32) -> i32`
+               found `unsafe extern "system" fn(*const u16, *mut std::ffi::c_void, *mut *mut platform::windows::icon_extract::ITEMIDLIST, u32, *mut u32) -> i32`
+
+error: field `direction` is never read
+  --> src\shared\geometry.rs:25:9
+   |
+23 | pub struct AlignmentMatch {
+   |            -------------- field in this struct
+24 |     /// 对齐方向
+25 |     pub direction: AlignmentDirection,
+   |         ^^^^^^^^^
+   |
+   = note: `AlignmentMatch` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+   = note: `-D dead-code` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: fields `b`, `g`, and `r` are never read
+  --> src\shared\types.rs:43:9
+   |
+42 | pub struct Pixel32 {
+   |            ------- fields in this struct
+43 |     pub b: u8,
+   |         ^
+44 |     pub g: u8,
+   |         ^
+45 |     pub r: u8,
+   |         ^
+   |
+   = note: `Pixel32` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+error: `ILFree` redeclared with a different signature
+   --> src\platform\windows\icon_extract.rs:152:5
+    |
+152 |     fn ILFree(pidl: *mut ITEMIDLIST);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this signature doesn't match the previous declaration
+    |
+   ::: src\platform\windows\ffi_imports.rs:938:5
+    |
+938 |     pub fn ILFree(pidl: *mut ITEMIDLIST);
+    |     ------------------------------------- `ILFree` previously declared here
+    |
+    = note: expected `unsafe extern "system" fn(*mut platform::windows::ffi_imports::ITEMIDLIST)`
+               found `unsafe extern "system" fn(*mut platform::windows::icon_extract::ITEMIDLIST)`
+
+error: `SHGetFileInfoW` redeclared with a different signature
+    --> src\platform\windows\icon_manager.rs:1774:5
+     |
+1774 | /     fn SHGetFileInfoW(
+1775 | |         pszPath: *const u16,
+1776 | |         dwFileAttributes: u32,
+1777 | |         psfi: *mut SysSHFILEINFOW,
+1778 | |         cbFileInfo: u32,
+1779 | |         uFlags: u32,
+1780 | |     ) -> usize;
+     | |_______________^ this signature doesn't match the previous declaration
+     |
+    ::: src\platform\windows\drop_target.rs:612:13
+     |
+ 612 | /             fn SHGetFileInfoW(
+ 613 | |                 pszPath: *const u8,
+ 614 | |                 dwFileAttributes: u32,
+ 615 | |                 psfi: *mut ShellFileInfo,
+ 616 | |                 cbFileInfo: u32,
+ 617 | |                 uFlags: u32,
+ 618 | |             ) -> usize;
+     | |_______________________- `SHGetFileInfoW` previously declared here
+     |
+     = note: expected `unsafe extern "system" fn(*const u8, u32, *mut platform::windows::drop_target::read_shell_idlist_paths::ShellFileInfo, u32, u32) -> usize`
+                found `unsafe extern "system" fn(*const u16, u32, *mut platform::windows::icon_manager::SysSHFILEINFOW, u32, u32) -> usize`
+
+warning: ikun_organizer@0.1.0-beta.1: Embedding app icon: D:/github-project/ikun_organizer/logo.ico
+warning: ikun_organizer@0.1.0-beta.1: embed-resource compiled .rc successfully: D:\github-project\ikun_organizer\target\debug\build\ikun_organizer-89f82838a6e0becf\out\app.rc
+error: could not compile `ikun_organizer` (bin "ikun_organizer") due to 118 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: field assignment outside of initializer for an instance created with Default::default()
+   --> src\config\app_config.rs:963:9
+    |
+963 |         ai.base_url = "https://my-api.example.com".to_string();
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: consider initializing the variable with `config::app_config::AiConfig { base_url: "https://my-api.example.com".to_string(), model: "my-custom-model".to_string(), ..Default::default() }` and removing relevant reassignments
+   --> src\config\app_config.rs:962:9
+    |
+962 |         let mut ai = AiConfig::default();
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#field_reassign_with_default
+    = note: `-D clippy::field-reassign-with-default` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::field_reassign_with_default)]`
+
+error: field assignment outside of initializer for an instance created with Default::default()
+   --> src\config\app_config.rs:972:9
+    |
+972 |         ai.api_key = "super-secret-key-12345".to_string();
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: consider initializing the variable with `config::app_config::AiConfig { api_key: "super-secret-key-12345".to_string(), ..Default::default() }` and removing relevant reassignments
+   --> src\config\app_config.rs:971:9
+    |
+971 |         let mut ai = AiConfig::default();
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#field_reassign_with_default
+
+error: this assertion has a constant value
+   --> src\platform\windows\alignment_guide\guide_overlay.rs:697:9
+    |
+697 | /         assert!(
+698 | |             SAMPLE_GRID_SIZE > 1,
+699 | |             "Grid size must be > 1 to avoid division by zero in sampling loop"
+700 | |         );
+    | |_________^
+    |
+    = help: consider moving this into a const block: `const { assert!(..) }`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#assertions_on_constants
+    = note: `-D clippy::assertions-on-constants` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assertions_on_constants)]`
+
+error: module has the same name as its containing module
+    --> src\platform\windows\drag_drop.rs:1140:5
+     |
+1140 | /     mod tests {
+1141 | |         use super::*;
+1142 | |
+1143 | |         #[test]
+...    |
+1165 | |     }
+     | |_____^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#module_inception
+     = note: `-D clippy::module-inception` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::module_inception)]`
+
+error: this operation has no effect
+    --> src\platform\windows\drag_drop.rs:1464:30
+     |
+1464 |         let new_item_0_lin = insert_lin + 0; // lin1
+     |                              ^^^^^^^^^^^^^^ help: consider reducing it to: `insert_lin`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#identity_op
+     = note: `-D clippy::identity-op` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::identity_op)]`
+
+error: casting to the same type is unnecessary (`i32` -> `i32`)
+   --> src\platform\windows\drag_handler.rs:764:23
+    |
+764 |         assert!(dx <= DRAG_THRESHOLD as i32);
+    |                       ^^^^^^^^^^^^^^^^^^^^^ help: try: `DRAG_THRESHOLD`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#unnecessary_cast
+
+error: casting to the same type is unnecessary (`i32` -> `i32`)
+   --> src\platform\windows\drag_handler.rs:765:23
+    |
+765 |         assert!(dy <= DRAG_THRESHOLD as i32);
+    |                       ^^^^^^^^^^^^^^^^^^^^^ help: try: `DRAG_THRESHOLD`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#unnecessary_cast
+
+error: casting to the same type is unnecessary (`i32` -> `i32`)
+   --> src\platform\windows\drag_handler.rs:776:22
+    |
+776 |         assert!(dx > DRAG_THRESHOLD as i32);
+    |                      ^^^^^^^^^^^^^^^^^^^^^ help: try: `DRAG_THRESHOLD`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#unnecessary_cast
+
+error: casting to the same type is unnecessary (`i32` -> `i32`)
+   --> src\platform\windows\drag_handler.rs:777:22
+    |
+777 |         assert!(dy > DRAG_THRESHOLD as i32);
+    |                      ^^^^^^^^^^^^^^^^^^^^^ help: try: `DRAG_THRESHOLD`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#unnecessary_cast
+
+error: manual implementation of `.is_multiple_of()`
+    --> src\platform\windows\drag_image.rs:1132:12
+     |
+1132 |         if frame_count % 8 == 0 {
+     |            ^^^^^^^^^^^^^^^^^^^^ help: replace with: `frame_count.is_multiple_of(8)`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#manual_is_multiple_of
+     = note: `-D clippy::manual-is-multiple-of` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::manual_is_multiple_of)]`
+
+error: calls to `push` immediately after creation
+   --> src\platform\windows\drop_target.rs:943:9
+    |
+943 | /         let mut call_order: Vec<&str> = Vec::new();
+944 | |
+945 | |         // 正确的释放顺序
+946 | |         call_order.push("drag_leave"); // 通知 Shell 拖拽已离开
+947 | |         call_order.push("show_false"); // 隐藏残影图像
+948 | |         call_order.push("release"); // 释放 COM 对象
+    | |___________________________________^ help: consider using the `vec![]` macro: `let call_order: Vec<&str> = vec![..];`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#vec_init_then_push
+    = note: `-D clippy::vec-init-then-push` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::vec_init_then_push)]`
+
+error: items after a test module
+    --> src\platform\windows\ffi_types.rs:829:1
+     |
+ 829 | mod tests {
+     | ^^^^^^^^^
+...
+ 977 | pub const DI_NORMAL: u32 = 0x0003;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 984 | pub struct SHFILEOPSTRUCTW {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 996 | pub const FO_MOVE: u32 = 0x0001;
+     | ^^^^^^^^^^^^^^^^^^^^^^
+ 997 | pub const FO_COPY: u32 = 0x0002;
+     | ^^^^^^^^^^^^^^^^^^^^^^
+ 998 | pub const FO_DELETE: u32 = 0x0003;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1001 | pub const FOF_NOCONFIRMATION: u16 = 0x0010;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+1002 | pub const FOF_NOCONFIRMMKDIR: u16 = 0x0200;
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#items_after_test_module
+     = note: `-D clippy::items-after-test-module` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::items_after_test_module)]`
+
+error: this assertion has a constant value
+    --> src\platform\windows\grid_window.rs:1121:9
+     |
+1121 | /         assert!(
+1122 | |             LIQUID_GLASS_RENDER_INTERVAL_MS >= 50,
+1123 | |             "渲染间隔不应低于 50ms，避免过高 GPU 负载"
+1124 | |         );
+     | |_________^
+     |
+     = help: consider moving this into a const block: `const { assert!(..) }`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#assertions_on_constants
+
+error: this assertion has a constant value
+    --> src\platform\windows\grid_window.rs:1130:9
+     |
+1130 | /         assert!(
+1131 | |             LIQUID_GLASS_RENDER_INTERVAL_MS <= 200,
+1132 | |             "渲染间隔不应超过 200ms，避免视觉卡顿"
+1133 | |         );
+     | |_________^
+     |
+     = help: consider moving this into a const block: `const { assert!(..) }`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#assertions_on_constants
+
+error: this operation has no effect
+  --> src\platform\windows\icon_bitmap.rs:89:16
+   |
+89 |         pixels[1 * 4 + 1] = pixel(1);
+   |                ^^^^^ help: consider reducing it to: `4`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#identity_op
+
+error: items after a test module
+    --> src\platform\windows\icon_manager.rs:1620:1
+     |
+1620 |   mod tests {
+     |   ^^^^^^^^^
+...
+1754 |   const SHGFI_SYSICONINDEX: u32 = 0x00000400;
+     |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+1755 |   const SHGFI_SMALLICON: u32 = 0x00000001;
+     |   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+1756 |   const ILD_TRANSPARENT: u32 = 0x00000001;
+     |   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1759 |   struct SysSHFILEINFOW {
+     |   ^^^^^^^^^^^^^^^^^^^^^
+...
+1767 |   impl Default for SysSHFILEINFOW {
+     |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1773 | / extern "system" {
+1774 | |     fn SHGetFileInfoW(
+1775 | |         pszPath: *const u16,
+1776 | |         dwFileAttributes: u32,
+...    |
+1781 | |     fn ImageList_GetIcon(himl: *mut std::ffi::c_void, i: i32, flags: u32) -> *mut std::ffi::c_void;
+1782 | | }
+     | |_^
+...
+1789 |   fn get_shell_image_list() -> Option<*mut std::ffi::c_void> {
+     |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1816 |   pub fn extract_icon_from_listview(image_index: i32) -> Option<super::icon_extract::FileIconInfo> {
+     |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#items_after_test_module
+     = help: move the items to before the test module was defined
+
+error: this assertion has a constant value
+    --> src\platform\windows\icon_manager.rs:1639:9
+     |
+1639 |         assert!(HIDDEN_ICON_X < 0, "隐藏 X 坐标应为负值");
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: consider moving this into a const block: `const { assert!(..) }`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#assertions_on_constants
+
+error: this assertion has a constant value
+    --> src\platform\windows\icon_manager.rs:1640:9
+     |
+1640 |         assert!(HIDDEN_ICON_Y < 0, "隐藏 Y 坐标应为负值");
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: consider moving this into a const block: `const { assert!(..) }`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#assertions_on_constants
+
+error: this assertion has a constant value
+    --> src\platform\windows\icon_manager.rs:1665:9
+     |
+1665 |         assert!(WM_USER_DRAG_ITEM_REMOVED > WM_APP);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: consider moving this into a const block: `const { assert!(..) }`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#assertions_on_constants
+
+error: this assertion has a constant value
+    --> src\platform\windows\icon_manager.rs:1666:9
+     |
+1666 |         assert!(WM_USER_DRAG_ITEM_ADDED > WM_APP);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: consider moving this into a const block: `const { assert!(..) }`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#assertions_on_constants
+
+error: this assertion has a constant value
+    --> src\platform\windows\menu_window.rs:1485:9
+     |
+1485 |         assert!(CMD_DELETE < CMD_SORT_BASE);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: consider moving this into a const block: `const { assert!(..) }`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#assertions_on_constants
+
+error: this assertion has a constant value
+    --> src\platform\windows\menu_window.rs:1486:9
+     |
+1486 |         assert!(CMD_SORT_BASE + 8 <= CMD_SORT_ASC);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: consider moving this into a const block: `const { assert!(..) }`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#assertions_on_constants
+
+error: this assertion has a constant value
+    --> src\platform\windows\menu_window.rs:1487:9
+     |
+1487 |         assert!(CMD_SORT_ASC < CMD_SORT_DESC);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: consider moving this into a const block: `const { assert!(..) }`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#assertions_on_constants
+
+error: this assertion has a constant value
+    --> src\platform\windows\menu_window.rs:1488:9
+     |
+1488 |         assert!(CMD_SORT_DESC < CMD_GROUP_BASE);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: consider moving this into a const block: `const { assert!(..) }`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#assertions_on_constants
+
+error: this assertion has a constant value
+    --> src\platform\windows\menu_window.rs:1489:9
+     |
+1489 |         assert!(CMD_GROUP_BASE + 8 <= CMD_VIEW_BASE);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: consider moving this into a const block: `const { assert!(..) }`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#assertions_on_constants
+
+error: this assertion has a constant value
+    --> src\platform\windows\menu_window.rs:1490:9
+     |
+1490 |         assert!(CMD_VIEW_BASE + 8 < 1000);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: consider moving this into a const block: `const { assert!(..) }`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#assertions_on_constants
+
+error: items after a test module
+   --> src\platform\windows\monitor_utils.rs:234:1
+    |
+234 | mod tests {
+    | ^^^^^^^^^
+...
+278 | pub fn dpi_at_screen_point(screen_x: i32, screen_y: i32) -> u32 {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#items_after_test_module
+    = help: move the items to before the test module was defined
+
+error: this operation has no effect
+   --> src\shared\geometry.rs:325:16
+    |
+325 |         pixels[1 * 4 + 1] = pixel(1);
+    |                ^^^^^ help: consider reducing it to: `4`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#identity_op
+
+error: useless use of `vec!`
+    --> src\platform\windows\drag_drop.rs:1442:25
+     |
+1442 |         let mut items = vec![(0, 0), (1, 0)]; // (col, row) 线性索引：lin0, lin1
+     |                         ^^^^^^^^^^^^^^^^^^^^ help: you can use an array directly: `[(0, 0), (1, 0)]`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#useless_vec
+     = note: `-D clippy::useless-vec` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::useless_vec)]`
+
+error: useless use of `vec!`
+    --> src\platform\windows\drag_drop.rs:1494:25
+     |
+1494 |         let mut items = vec![(0, 0), (1, 0), (2, 0)]; // lin0, lin1, lin2
+     |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: you can use an array directly: `[(0, 0), (1, 0), (2, 0)]`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#useless_vec
+
+error: useless use of `vec!`
+   --> src\platform\windows\drag_handler.rs:915:24
+    |
+915 |         let selected = vec![1, 2, 3];
+    |                        ^^^^^^^^^^^^^ help: you can use an array directly: `[1, 2, 3]`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#useless_vec
+
+error: useless use of `vec!`
+   --> src\platform\windows\drag_handler.rs:920:31
+    |
+920 |         let selected_single = vec![2];
+    |                               ^^^^^^^ help: you can use an array directly: `[2]`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#useless_vec
+
+error: useless use of `vec!`
+   --> src\platform\windows\drag_handler.rs:926:30
+    |
+926 |         let selected_other = vec![0, 1, 3];
+    |                              ^^^^^^^^^^^^^ help: you can use an array directly: `[0, 1, 3]`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.96.0/index.html#useless_vec
+
+warning: ikun_organizer@0.1.0-beta.1: Embedding app icon: D:/github-project/ikun_organizer/logo.ico
+warning: ikun_organizer@0.1.0-beta.1: embed-resource compiled .rc successfully: D:\github-project\ikun_organizer\target\debug\build\ikun_organizer-89f82838a6e0becf\out\app.rc
+error: could not compile `ikun_organizer` (bin "ikun_organizer" test) due to 159 previous errors

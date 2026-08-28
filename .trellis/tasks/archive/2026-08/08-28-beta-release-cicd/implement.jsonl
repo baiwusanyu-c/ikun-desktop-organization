@@ -1,0 +1,7 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend development guide"}
+{"file": "scripts/build.mjs", "reason": "需要增加 --platform 参数的构建脚本"}
+{"file": ".github/workflows/build.yml", "reason": "需要完善的CI工作流"}
+{"file": "tauri.conf.json", "reason": "版本号需同步"}
+{"file": "Cargo.toml", "reason": "版本号需同步"}

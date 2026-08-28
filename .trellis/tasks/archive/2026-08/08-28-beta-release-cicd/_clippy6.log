@@ -1,0 +1,99 @@
+   Compiling ikun_organizer v0.1.0-beta.1 (D:\github-project\ikun_organizer)
+warning: ikun_organizer@0.1.0-beta.1: Embedding app icon: D:/github-project/ikun_organizer/logo.ico
+warning: ikun_organizer@0.1.0-beta.1: embed-resource compiled .rc successfully: D:\github-project\ikun_organizer\target\debug\build\ikun_organizer-89f82838a6e0becf\out\app.rc
+error: unused doc comment
+  --> src\platform\windows\drop_target.rs:60:1
+   |
+60 | / /// 框→框移动：暂存待添加项信息队列（含释放坐标）
+61 | | /// 支持多选拖拽时批量入队，每次 take 取出队头元素
+   | |_-------------------------------------------------^
+   |   |
+   |   rustdoc does not generate documentation for macro invocations
+   |
+   = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+   = note: `-D unused-doc-comments` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_doc_comments)]`
+
+error: creating a shared reference to mutable static
+   --> src\platform\windows\drag_image.rs:401:9
+    |
+401 |         OVERLAY_HWND,
+    |         ^^^^^^^^^^^^ shared reference to mutable static
+    |
+    = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+    = note: `-D static-mut-refs` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(static_mut_refs)]`
+
+error: creating a shared reference to mutable static
+   --> src\platform\windows\drag_image.rs:402:9
+    |
+402 |         OVERLAY_HBMP,
+    |         ^^^^^^^^^^^^ shared reference to mutable static
+    |
+    = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+
+error: creating a shared reference to mutable static
+   --> src\platform\windows\drag_image.rs:403:10
+    |
+403 |         !MULTI_DRAG_ITEMS_STORE.is_empty()
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ shared reference to mutable static
+    |
+    = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+
+error: creating a shared reference to mutable static
+   --> src\platform\windows\drag_image.rs:585:9
+    |
+585 |         OVERLAY_HWND,
+    |         ^^^^^^^^^^^^ shared reference to mutable static
+    |
+    = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+
+error: creating a shared reference to mutable static
+   --> src\platform\windows\drag_image.rs:824:9
+    |
+824 |         MULTI_DRAG_ITEMS_STORE.len(),
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ shared reference to mutable static
+    |
+    = note: shared references to mutable statics are dangerous; it's undefined behavior if the static is mutated or if a mutable reference is created for it while the shared reference lives
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+
+error: creating a mutable reference to mutable static
+   --> src\platform\windows\drag_image.rs:838:5
+    |
+838 |     MULTI_DRAG_ITEMS_STORE.clear();
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ mutable reference to mutable static
+    |
+    = note: mutable references to mutable statics are dangerous; it's undefined behavior if any other pointer to the static is used or if any other reference is created for the static while the mutable reference lives
+    = note: for more information, see <https://doc.rust-lang.org/edition-guide/rust-2024/static-mut-references.html>
+
+error: unused `std::result::Result` that must be used
+  --> src\tauri_commands\ai_cmd.rs:68:17
+   |
+68 | /                 app_clone
+69 | |                     .run_on_main_thread(move || {
+70 | |                         if let Err(e) =
+71 | |                             create_classified_boxes(&app_for_create, &runtime_for_create, &groups)
+...  |
+87 | |                     })
+88 | |                     .map_err(|e| log::error!("调度到主线程失败: {e}"));
+   | |______________________________________________________________________^
+   |
+   = note: this `Result` may be an `Err` variant, which should be handled
+   = note: `-D unused-must-use` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_must_use)]`
+help: use `let _ = ...` to ignore the resulting value
+   |
+68 |                 let _ = app_clone
+   |                 +++++++
+
+warning: ikun_organizer@0.1.0-beta.1: Embedding app icon: D:/github-project/ikun_organizer/logo.ico
+warning: ikun_organizer@0.1.0-beta.1: embed-resource compiled .rc successfully: D:\github-project\ikun_organizer\target\debug\build\ikun_organizer-89f82838a6e0becf\out\app.rc
+error: could not compile `ikun_organizer` (bin "ikun_organizer") due to 8 previous errors
+warning: build failed, waiting for other jobs to finish...
+warning: ikun_organizer@0.1.0-beta.1: Embedding app icon: D:/github-project/ikun_organizer/logo.ico
+warning: ikun_organizer@0.1.0-beta.1: embed-resource compiled .rc successfully: D:\github-project\ikun_organizer\target\debug\build\ikun_organizer-89f82838a6e0becf\out\app.rc
+error: could not compile `ikun_organizer` (bin "ikun_organizer" test) due to 8 previous errors

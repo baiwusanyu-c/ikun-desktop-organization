@@ -1,0 +1,94 @@
+[08:45:39] ============================================================
+[08:45:39] Desktop Organizer Build
+[08:45:39] ============================================================
+[08:45:39] Platform: win32 (x64)
+[08:45:39] Target platform: win
+[08:45:39] Mode: release
+[08:45:39] Installer: yes
+[08:45:39] Frontend: yes
+[08:45:39] 
+[08:45:39] Checking build environment...
+[08:45:39]   rustc: rustc 1.96.0 (ac68faa20 2026-05-25)
+[08:45:40]   node: v24.14.0
+[08:45:41]   npm: 11.9.0
+[08:45:46]   tauri-cli: tauri-cli 2.11.4
+[08:45:46] Environment check passed!
+[08:45:46] 
+[08:45:46] Installing frontend dependencies...
+[08:45:46] > npm --prefix frontend install
+
+up to date, audited 54 packages in 2s
+
+13 packages are looking for funding
+  run `npm fund` for details
+
+1 high severity vulnerability
+
+To address all issues, run:
+  npm audit fix
+
+Run `npm audit` for details.
+[08:45:49] 
+[08:45:49] Building with: npx --yes @tauri-apps/cli@2 build
+[08:45:49] > npx --yes @tauri-apps/cli@2 build
+        Info Looking up installed tauri packages to check mismatched versions...
+     Running beforeBuildCommand `cd frontend && npm run build`
+
+> frontend@0.0.0 build
+> vite build
+
+vite v8.2.1 building client environment for production...
+[2K
+16:46:03 [vite-plugin-svelte] src/lib/pages/AiSettings.svelte:95:9 Unused CSS selector ".row > span"
+https://svelte.dev/e/css_unused_selector
+93:   .body { padding: 13px 15px; }
+94:   .fields { display: flex; flex-direction: column; gap: 9px; }
+95:   label, .row > span { color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+                        ^
+96:   .required { color: #dc2626; }
+97:   input { width: 100%; padding: 8px 10px; }
+16:46:03 [vite-plugin-svelte] src/lib/pages/AiSettings.svelte:98:2 Unused CSS selector ".row"
+https://svelte.dev/e/css_unused_selector
+ 96:   .required { color: #dc2626; }
+ 97:   input { width: 100%; padding: 8px 10px; }
+ 98:   .row { display: flex; align-items: center; justify-content: space-between; min-height: 28px; }
+           ^
+ 99:   .two-column { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+100:   .two-column > div { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+transforming...✓ 3772 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.51 kB │ gzip:  0.33 kB
+dist/assets/index-Blte-AMu.css   16.41 kB │ gzip:  3.77 kB
+dist/assets/index-DG47bD2l.js   103.14 kB │ gzip: 34.85 kB
+
+✓ built in 6.97s
+[PLUGIN_TIMINGS] Your build spent 40% of 7.0s inside plugin hooks (2.8s).
+Measured inside the callback, so queue time is excluded and time the callback itself awaited is not:
+  - vite-plugin-svelte:compile transform (35%, 2.5s, 1701 calls)
+See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+   Compiling tauri v2.11.5
+   Compiling tauri-plugin-fs v2.5.1
+   Compiling tauri-macros v2.6.3
+   Compiling tauri-plugin-dialog v2.7.2
+   Compiling tauri-plugin-opener v2.5.4
+   Compiling gpui v0.2.2
+   Compiling ikun_organizer v0.1.0-beta.1 (D:\github-project\ikun_organizer)
+error: failed to run custom build command for `gpui v0.2.2`
+
+Caused by:
+  process didn't exit successfully: `D:\github-project\ikun_organizer\target\release\build\gpui-15667a100e05feba\build-script-build` (exit code: 101)
+  --- stdout
+  cargo::rustc-check-cfg=cfg(gles)
+  cargo:rerun-if-changed=C:\Users\chenzhihui\.cargo\registry\src\rsproxy.cn-e3de039b2554c837\gpui-0.2.2\src/platform/windows/shaders.hlsl
+
+  --- stderr
+
+  thread 'main' (1488) panicked at C:\Users\chenzhihui\.cargo\registry\src\rsproxy.cn-e3de039b2554c837\gpui-0.2.2\build.rs:356:9:
+  Failed to find fxc.exe
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+warning: build failed, waiting for other jobs to finish...
+failed to build app: failed to build app
+       Error failed to build app: failed to build app
+[09:00:02] ERROR: Command failed (exit 1): npx --yes @tauri-apps/cli@2 build
