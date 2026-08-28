@@ -5,11 +5,11 @@
 
 use crate::context::AppContext;
 use crate::platform::{
-    cleanup_desktop_registry, cleanup_system_tray, create_desktop_manager, create_grid_window,
-    destroy_all_grid_windows, extract_file_icon, get_primary_monitor_dpi, get_screen_resolution,
-    icon_exists_for_box, resolve_icon_read_path, set_tray_auto_start_state, setup_desktop_registry,
-    setup_global_hotkey, setup_system_tray, take_hotkey_toggle, take_pending_create_box,
-    take_pending_tray_action, GridCreateParams, GridFileItem, SystemTrayAction,
+    cleanup_desktop_registry, cleanup_system_tray, create_grid_window, destroy_all_grid_windows,
+    extract_file_icon, icon_exists_for_box, resolve_icon_read_path, set_tray_auto_start_state,
+    setup_desktop_registry, setup_global_hotkey, setup_system_tray, take_hotkey_toggle,
+    take_pending_create_box, take_pending_tray_action, GridCreateParams, GridFileItem,
+    SystemTrayAction,
 };
 use crate::plugin::{builtin::register_builtin_plugins, PluginRegistry};
 use crate::tauri_commands::window_cmd::{
@@ -19,7 +19,6 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
-use tauri::{Emitter, Manager, State};
 
 /// Tauri Commands 与平台轮询线程共享的唯一运行时实例。
 pub type SharedTauriRuntime = Arc<Mutex<TauriRuntime>>;
@@ -127,7 +126,9 @@ impl TauriRuntime {
         {
             let auto_start = self.ctx.config.general.auto_start;
             set_tray_auto_start_state(auto_start);
-            let _ = crate::utils::platform::set_auto_start(auto_start);
+            if let Err(error) = crate::utils::platform::set_auto_start(auto_start) {
+                log::warn!("启动时同步开机自启注册表失败: {error}");
+            }
         }
 
         log::info!("[TauriRuntime] Initialization complete");
@@ -268,8 +269,10 @@ impl TauriRuntime {
     }
 
     fn request_auto_classify(&mut self) -> bool {
-        // Try to dispatch plugin command, but don't fail if it doesn't work
-        let _ = self.dispatch_plugin_command("classify.auto");
+        // AI 分类归属分类插件；插件卸载后阻断该动作（与 request_create_box 一致）
+        if !self.dispatch_plugin_command("classify.auto") {
+            return false;
+        }
         self.ai_classify_requested = true;
         true
     }
@@ -556,7 +559,8 @@ pub fn start_platform_runtime(app: tauri::AppHandle, runtime: SharedTauriRuntime
 
                 if ai_classify {
                     log::info!("[TauriRuntime] 显示 AI 分类确认对话框");
-                    if let Err(error) = show_managed_window(&app_handle, ManagedWindow::AiClassify) {
+                    if let Err(error) = show_managed_window(&app_handle, ManagedWindow::AiClassify)
+                    {
                         log::warn!("显示 AI 分类对话框失败: {error}");
                     }
                 }
@@ -660,4 +664,3 @@ mod tests {
         assert!(!runtime.ai_classify_requested);
     }
 }
-

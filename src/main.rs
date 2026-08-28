@@ -28,6 +28,8 @@ mod gpui_app;
 
 fn main() -> anyhow::Result<()> {
     utils::init_logger();
+    #[cfg(windows)]
+    log_boot_context();
     log::info!("========================================");
     log::info!("Starting Desktop Organizer (Rewrite)");
     log::info!("========================================");
@@ -87,10 +89,36 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
+/// 记录开机上下文诊断日志。
+///
+/// 输出系统已运行时长与可执行文件路径；若系统运行时长小于 180 秒，
+/// 提示本次启动可能由开机自启触发，便于排查“设置了自启却没有启动”的问题：
+/// - 开机后日志文件中存在该行 → Windows 已拉起程序，问题在程序内部；
+/// - 不存在该行 → Windows 未拉起程序，问题在注册表/安全软件。
+#[cfg(windows)]
+fn log_boot_context() {
+    extern "system" {
+        fn GetTickCount64() -> u64;
+    }
+
+    let uptime_s = unsafe { GetTickCount64() } / 1000;
+    if let Ok(exe) = std::env::current_exe() {
+        log::info!(
+            "[autostart] 启动上下文: 系统已运行 {}s, exe={}",
+            uptime_s,
+            exe.display()
+        );
+    } else {
+        log::info!("[autostart] 启动上下文: 系统已运行 {}s, exe=未知", uptime_s);
+    }
+    if uptime_s < 180 {
+        log::info!("[autostart] 系统运行时长小于 180s，本次启动可能由开机自启触发");
+    }
+}
+
 /// Run Tauri 2.0 application
 #[cfg(feature = "tauri-ui")]
 fn run_tauri_app() -> anyhow::Result<()> {
-    use tauri::Manager;
 
     log::info!("Starting Tauri 2.0 application...");
 

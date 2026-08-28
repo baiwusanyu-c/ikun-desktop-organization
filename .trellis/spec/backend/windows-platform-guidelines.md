@@ -1539,3 +1539,27 @@ KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER);
 - `src/platform/windows/icon_extract.rs` -- Thumbnail extraction + HICON conversion
 - `src/platform/windows/d2d_render.rs` -- Text trimming for icon labels
 
+## 开机自启（Registry Run）健壮性
+
+### 写入规则
+
+- Run 键值必须**用双引号包裹 exe 路径**：Run 值按命令行解析，含空格路径不加引号会启动失败。
+- 开启自启时同时写 `HKCU\\...\\Explorer\\StartupApproved\\Run` 启用标记
+  （REG_BINARY 12 字节，首字节 `0x02`）；任务管理器/启动影响评估/安全软件可能写入
+  `0x03` 禁用标记，导致“设置了自启却不启动”。关闭自启时删除该标记。
+- 每次启动都按配置重新同步 Run 值（自愈），保证 exe 路径迁移后注册表跟随更新。
+
+### 排查手段
+
+- `main.rs::log_boot_context` 启动时记录系统运行时长与 exe 路径；
+  时长 < 180s 提示“可能由开机自启触发”。
+- 开机后检查 `~/.ikun_organizer_log/`：有启动日志 → Windows 已拉起（问题在程序内）；
+  无日志 → Windows 未拉起（检查 Run 值路径是否存在、StartupApproved 标记、安全软件）。
+
+### 测试纪律
+
+- **禁止让单元测试污染真实 Run 键**：操作注册表的测试必须在结束时把
+  Run 值恢复到测试前的原始字节（见 `utils/platform.rs` 测试的
+  `read_run_value` / `restore_run_value`）。历史教训：测试把临时
+  `cargo test` 二进制路径写入 Run 键，重建后路径失效，造成开机自启“时灵时不灵”。
+- 操作真实注册表的测试必须用静态锁串行化，避免并行竞争。

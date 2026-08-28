@@ -18,6 +18,19 @@
         </application>
     </compatibility>
 
+    <!-- Common Controls v6：启用现代视觉样式（tauri 默认 manifest 已并入本文件） -->
+    <dependency>
+        <dependentAssembly>
+            <assemblyIdentity
+                type="win32"
+                name="Microsoft.Windows.Common-Controls"
+                version="6.0.0.0"
+                processorArchitecture="*"
+                publicKeyToken="6595b64144ccf1df"
+                language="*" />
+        </dependentAssembly>
+    </dependency>
+
     <!-- 关键：声明 Per-Monitor DPI V2 感知，防止 Windows 对窗口做 bitmap-stretch -->
     <asmv3:application>
         <asmv3:windowsSettings>

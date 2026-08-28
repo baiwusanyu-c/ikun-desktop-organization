@@ -57,6 +57,10 @@ pub fn show_managed_window(app: &tauri::AppHandle, target: ManagedWindow) -> Res
     let window = app
         .get_webview_window(label)
         .ok_or_else(|| format!("窗口不存在: '{label}'"))?;
+    // 默认位置：主屏幕水平垂直居中（每次显示前重置，保证弹窗居中契约）
+    if let Err(error) = center_on_primary_monitor(app, &window) {
+        log::warn!("窗口主屏幕居中失败: {label}: {error}");
+    }
     window
         .show()
         .map_err(|error| format!("显示窗口失败: {label}: {error}"))?;
@@ -67,6 +71,33 @@ pub fn show_managed_window(app: &tauri::AppHandle, target: ManagedWindow) -> Res
         .emit("window-opened", ())
         .map_err(|error| format!("发送窗口打开事件失败: {label}: {error}"))?;
     Ok(())
+}
+
+/// 将窗口在主屏幕内水平垂直居中（物理像素坐标）。
+///
+/// 所有 Tauri 绘制的弹窗默认位置为主屏幕正中：
+/// 使用主屏幕 position + size 与窗口 outer_size 计算物理坐标，
+/// 不依赖 OS 的默认级联摆放，多显示器环境下也固定在主屏幕。
+fn center_on_primary_monitor(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+) -> Result<(), String> {
+    let monitor = app
+        .primary_monitor()
+        .map_err(|error| format!("获取主屏幕失败: {error}"))?
+        .ok_or_else(|| "主屏幕不存在".to_string())?;
+    let monitor_pos = monitor.position();
+    let monitor_size = monitor.size();
+    let window_size = window
+        .outer_size()
+        .map_err(|error| format!("读取窗口尺寸失败: {error}"))?;
+    let x = monitor_pos.x + (monitor_size.width as i32 - window_size.width as i32) / 2;
+    let y = monitor_pos.y + (monitor_size.height as i32 - window_size.height as i32) / 2;
+    window
+        .set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(
+            x, y,
+        )))
+        .map_err(|error| format!("设置窗口位置失败: {error}"))
 }
 
 /// 隐藏持久窗口而不销毁 WebView。

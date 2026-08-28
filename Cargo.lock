@@ -4054,6 +4054,7 @@ dependencies = [
  "dirs 5.0.1",
  "eframe",
  "egui",
+ "embed-resource",
  "env_logger",
  "epaint",
  "foreign-types-shared",

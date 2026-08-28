@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 12
-- **Last Active**: 2026-08-10
+- **Total Sessions**: 13
+- **Last Active**: 2026-08-28
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~505 | Active |
+| `journal-1.md` | ~643 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 13 | 2026-08-28 | 修复托盘图标/弹窗居中/开机自启三个 bug | - | `master` |
 | 11 | 2026-07-15 | 修复分类框删除后图标消失bug | - | `master` |
 | 10 | 2026-07-13 | 修复副屏拖拽闪烁+分类框位置+grid_window拆分 | - | `master` |
 | 9 | 2026-07-13 | 修复副屏拖拽闪烁和分类框位置错误 | - | `master` |

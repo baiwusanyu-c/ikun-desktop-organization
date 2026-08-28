@@ -35,6 +35,17 @@
 `EditBoxPayload` 的字段固定为 `{ config_id: string, current_name: string }`。
 双击原生分类框标题后，Rust 先写入 pending，再发送 `edit-box-opened` 事件；编辑页先注册监听，再读取 pending，以覆盖首次事件竞态。
 
+## 窗口居中契约
+
+所有 Tauri 绘制的弹窗（`control-panel`、`create-box`、`edit-box`、`ai-classify`）
+默认位置必须是**主屏幕水平垂直居中**：
+
+- `tauri.conf.json` 中每个窗口设置 `center: true`，保证创建时即居中。
+- `window_cmd.rs::center_on_primary_monitor` 使用 `app.primary_monitor()` 的
+  position + size 与 `window.outer_size()`（均为物理像素）计算居中坐标。
+- `show_managed_window` 在每次 `show()` 前调用居中，保证“默认位置”契约；
+  居中失败只记 `warn!`，不阻断显示。
+
 ## 窗口生命周期
 
 `control-panel`、`create-box`、`edit-box` 的关闭都必须是 `prevent_close + hide`，不能调用 `close()`。

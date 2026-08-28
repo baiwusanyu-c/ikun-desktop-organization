@@ -1,18 +1,19 @@
-﻿//! 项目图标加载与管理
+//! 项目图标加载与管理
 //!
 //! 从编译时嵌入的 `.ico` 资源中加载项目图标，提供：
 //! - HICON（系统托盘图标）
 //! - HBITMAP（菜单项图标）
 //!
-//! 图标通过 `build.rs` 从项目根目录的 `logo.ico` 嵌入到可执行文件中。
-//! 替换 `logo.ico` 文件后重新编译即可更换图标。
+//! 图标通过 `build.rs`（embed-resource）从项目根目录的 `logo.ico` 嵌入到
+//! 可执行文件中（资源 ID=1）。tauri-build 也会把 `logo.ico` 以资源 ID=32512
+//! 嵌入，作为加载回退链的第二环。替换 `logo.ico` 文件后重新编译即可更换图标。
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 
 use std::ffi::c_void;
 use std::sync::Mutex;
 
-use windows::Win32::UI::WindowsAndMessaging::{CopyImage, LoadIconW, GDI_IMAGE_TYPE};
+use windows::Win32::UI::WindowsAndMessaging::{CopyImage, LoadImageW, GDI_IMAGE_TYPE, IMAGE_FLAGS};
 
 use super::ffi_imports::*;
 use super::ffi_types::*;
@@ -20,6 +21,12 @@ use crate::{release_error, release_info, release_warn};
 
 /// 嵌入资源的图标 ID（与 build.rs 中 .rc 文件的资源 ID 一致）
 const APP_ICON_RESOURCE_ID: u16 = 1;
+
+/// tauri-build 嵌入的窗口图标资源 ID（window_icon_path 默认 ID），作为回退
+const TAURI_ICON_RESOURCE_ID: u16 = 32512;
+
+/// IMAGE_ICON 常量（GDI_IMAGE_TYPE）
+const IMAGE_ICON_TYPE: GDI_IMAGE_TYPE = GDI_IMAGE_TYPE(1);
 
 /// 缓存的项目图标状态
 struct CachedIcon {
@@ -34,12 +41,13 @@ unsafe impl Send for CachedIcon {}
 
 static CACHED_ICON: Mutex<Option<CachedIcon>> = Mutex::new(None);
 
-/// 从可执行文件嵌入资源中加载 HICON
+/// 从可执行文件嵌入资源中按指定尺寸加载 HICON
 ///
-/// 使用 `LoadIconW` 从当前进程模块的嵌入资源（resource ID=1）加载图标。
-/// 如果嵌入资源不存在（例如编译时 windres/rc.exe 不可用导致图标未嵌入），
+/// 使用 `LoadImageW` 从当前进程模块的嵌入资源加载图标，
+/// 回退链：ID=1（build.rs 嵌入）→ ID=32512（tauri-build 嵌入）。
+/// 如果嵌入资源不存在（例如编译时资源编译器不可用导致图标未嵌入），
 /// 此函数会返回 `None` 并记录 `warn!` 级别日志以便排查问题。
-fn load_icon_from_resource(_size: i32) -> Option<HICON> {
+fn load_icon_from_resource(size: i32) -> Option<HICON> {
     use windows::Win32::Foundation::HMODULE;
 
     let hmodule = unsafe { GetModuleHandleW(std::ptr::null()) };
@@ -53,42 +61,53 @@ fn load_icon_from_resource(_size: i32) -> Option<HICON> {
 
     let hinstance: windows::Win32::Foundation::HINSTANCE = HMODULE(hmodule as _).into();
 
-    // MAKEINTRESOURCE(1) 对应 .rc 中的资源 ID
-    let hicon = unsafe {
-        LoadIconW(
-            Some(hinstance),
-            windows::core::PCWSTR(APP_ICON_RESOURCE_ID as usize as *const u16),
-        )
-    };
+    for resource_id in [APP_ICON_RESOURCE_ID, TAURI_ICON_RESOURCE_ID] {
+        let result = unsafe {
+            LoadImageW(
+                Some(hinstance),
+                windows::core::PCWSTR(resource_id as usize as *const u16),
+                IMAGE_ICON_TYPE,
+                size,
+                size,
+                IMAGE_FLAGS(0),
+            )
+        };
 
-    match hicon {
-        Ok(handle) if !handle.is_invalid() => {
-            log::info!(
-                "[app_icon] 嵌入图标加载成功 (resource ID={}, hicon={:?})",
-                APP_ICON_RESOURCE_ID,
-                handle.0
-            );
-            Some(handle.0 as HICON)
-        }
-        Ok(_) => {
-            log::warn!(
-                "[app_icon] 嵌入图标资源不存在 (resource ID={})。\
-                 请确认：1) logo.ico 存在于项目根目录 2) 编译时 windres 或 rc.exe 可用 \
-                 3) 重新执行 cargo build（建议先 cargo clean 清除缓存）",
-                APP_ICON_RESOURCE_ID
-            );
-            None
-        }
-        Err(e) => {
-            log::warn!(
-                "[app_icon] LoadIconW 失败 (resource ID={}): {:?}。\
-                 可能原因：图标资源未嵌入到 .exe（检查 build.rs 输出中的 warning）",
-                APP_ICON_RESOURCE_ID,
-                e
-            );
-            None
+        match result {
+            Ok(handle) if !handle.is_invalid() => {
+                log::info!(
+                    "[app_icon] 嵌入图标加载成功 (resource ID={}, size={}x{}, hicon={:?})",
+                    resource_id,
+                    size,
+                    size,
+                    handle.0
+                );
+                return Some(handle.0);
+            }
+            Ok(_) => {
+                log::debug!(
+                    "[app_icon] 嵌入图标资源不存在 (resource ID={})，尝试下一回退",
+                    resource_id
+                );
+            }
+            Err(e) => {
+                log::debug!(
+                    "[app_icon] LoadImageW 失败 (resource ID={}): {:?}",
+                    resource_id,
+                    e
+                );
+            }
         }
     }
+
+    log::warn!(
+        "[app_icon] 嵌入图标加载失败 (ID={} 与 ID={})。\
+         请确认：1) logo.ico 存在于项目根目录 2) 编译时资源编译器（rc.exe/windres）可用 \
+         3) 重新执行 cargo build（建议先 cargo clean 清除缓存）",
+        APP_ICON_RESOURCE_ID,
+        TAURI_ICON_RESOURCE_ID
+    );
+    None
 }
 
 /// 将 HICON 转换为 HBITMAP（用于菜单项图标）
@@ -113,7 +132,7 @@ fn icon_to_bitmap(hicon: HICON) -> HBITMAP {
                 GDI_IMAGE_TYPE(0), // IMAGE_BITMAP
                 0,
                 0,
-                windows::Win32::UI::WindowsAndMessaging::IMAGE_FLAGS(0),
+                IMAGE_FLAGS(0),
             )
         };
         match copy {
@@ -238,33 +257,46 @@ pub fn diagnose_icon_availability() {
     }
     release_info!("[app_icon] 模块句柄: {:?}", hmodule);
 
-    // 2. 尝试查找图标资源（FindResource 检查资源是否存在）
+    // 2. 依次尝试查找图标资源（ID=1 项目嵌入，ID=32512 tauri 嵌入）
     let hinstance: windows::Win32::Foundation::HINSTANCE = HMODULE(hmodule as _).into();
-    let hicon = unsafe {
-        LoadIconW(
-            Some(hinstance),
-            windows::core::PCWSTR(APP_ICON_RESOURCE_ID as usize as *const u16),
-        )
-    };
+    let mut found_any = false;
+    for resource_id in [APP_ICON_RESOURCE_ID, TAURI_ICON_RESOURCE_ID] {
+        let result = unsafe {
+            LoadImageW(
+                Some(hinstance),
+                windows::core::PCWSTR(resource_id as usize as *const u16),
+                IMAGE_ICON_TYPE,
+                24,
+                24,
+                IMAGE_FLAGS(0),
+            )
+        };
+        match result {
+            Ok(handle) if !handle.is_invalid() => {
+                release_info!(
+                    "[app_icon] ✓ 图标资源已嵌入且加载成功 (resource ID={}, hicon={:?})",
+                    resource_id,
+                    handle.0
+                );
+                found_any = true;
+                unsafe {
+                    DestroyIcon(handle.0);
+                }
+            }
+            _ => {
+                release_warn!("[app_icon] ✗ 图标资源未找到 (resource ID={})", resource_id);
+            }
+        }
+    }
 
-    match hicon {
-        Ok(handle) if !handle.is_invalid() => {
-            release_info!(
-                "[app_icon] ✓ 图标资源已嵌入且加载成功 (resource ID={}, hicon={:?})",
-                APP_ICON_RESOURCE_ID,
-                handle.0
-            );
-        }
-        _ => {
-            release_warn!(
-                "[app_icon] ✗ 图标资源未找到！可能的原因：\n\
-                 1. 编译时 windres / rc.exe 不可用，图标未嵌入到 .exe\n\
-                 2. logo.ico 文件在编译时不存在于项目根目录\n\
-                 3. .rc 编译出错但被静默忽略\n\
-                 建议：执行 `cargo clean` 后重新 `cargo build`，\
-                 观察编译输出中是否有 build.rs 的 warning。"
-            );
-        }
+    if !found_any {
+        release_warn!(
+            "[app_icon] ✗ 所有图标资源均未找到！可能的原因：\n\
+             1. 编译时资源编译器（rc.exe / windres）不可用，图标未嵌入到 .exe\n\
+             2. logo.ico 文件在编译时不存在于项目根目录\n\
+             建议：执行 `cargo clean` 后重新 `cargo build`，\
+             观察编译输出中是否有 build.rs 的 warning。"
+        );
     }
 
     // 3. 输出可执行文件路径（帮助用户确认是否运行了正确的 .exe）
@@ -283,6 +315,8 @@ mod tests {
     fn test_app_icon_resource_id() {
         // 资源 ID=1 必须与 build.rs 中 .rc 文件的 "1 ICON" 声明一致
         assert_eq!(APP_ICON_RESOURCE_ID, 1);
+        // 32512 必须与 tauri-build window_icon_path 的默认嵌入 ID 一致
+        assert_eq!(TAURI_ICON_RESOURCE_ID, 32512);
     }
 
     #[test]
@@ -296,7 +330,6 @@ mod tests {
         // 在测试环境中，嵌入资源不存在（.exe 未通过 build.rs 嵌入图标）
         // get_tray_icon 应返回 None 而非 panic
         let result = get_tray_icon();
-        // 测试环境中资源不可用，预期返回 None
         // 注意：如果测试恰好在已嵌入图标的二进制中运行，此断言可能不成立
         assert!(
             result.is_none() || result.is_some(),

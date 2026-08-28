@@ -22,7 +22,8 @@
         "transparent": true,
         "shadow": false,
         "visible": false,
-        "alwaysOnTop": false
+        "alwaysOnTop": false,
+        "center": true
       },
       {
         "label": "create-box",
@@ -35,7 +36,8 @@
         "transparent": true,
         "shadow": false,
         "visible": false,
-        "alwaysOnTop": true
+        "alwaysOnTop": true,
+        "center": true
       },
       {
         "label": "edit-box",
@@ -48,7 +50,8 @@
         "transparent": true,
         "shadow": false,
         "visible": false,
-        "alwaysOnTop": true
+        "alwaysOnTop": true,
+        "center": true
       },
       {
         "label": "ai-classify",
@@ -61,7 +64,8 @@
         "transparent": true,
         "shadow": false,
         "visible": false,
-        "alwaysOnTop": true
+        "alwaysOnTop": true,
+        "center": true
       }
     ],
     "security": {

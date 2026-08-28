@@ -208,24 +208,24 @@ impl DesktopManager {
 
             extern "system" {
                 fn RegOpenKeyExW(
-                    hkey: usize,
+                    hkey: isize,
                     lpSubKey: *const u16,
                     ulOptions: u32,
                     samDesired: u32,
-                    phkResult: *mut usize,
+                    phkResult: *mut isize,
                 ) -> i32;
                 fn RegQueryValueExW(
-                    hkey: usize,
+                    hkey: isize,
                     lpValueName: *const u16,
                     lpReserved: *mut u32,
                     lpType: *mut u32,
                     lpData: *mut u8,
                     lpcbData: *mut u32,
                 ) -> i32;
-                fn RegCloseKey(hkey: usize) -> i32;
+                fn RegCloseKey(hkey: isize) -> i32;
             }
 
-            const HKEY_CURRENT_USER: usize = 0x80000001;
+            const HKEY_CURRENT_USER: isize = 0x80000001u32 as isize;
             const KEY_READ: u32 = 0x20019;
 
             let subkey_wide: Vec<u16> = OsStr::new(subkey)
@@ -237,7 +237,7 @@ impl DesktopManager {
                 .chain(std::iter::once(0))
                 .collect();
 
-            let mut hkey: usize = 0;
+            let mut hkey: isize = 0;
             let result = unsafe {
                 RegOpenKeyExW(
                     HKEY_CURRENT_USER,

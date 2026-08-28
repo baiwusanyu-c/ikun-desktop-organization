@@ -247,14 +247,22 @@ mod tests {
     fn test_build_prompt_format() {
         let icons = vec![
             DesktopIcon {
+                id: uuid::Uuid::new_v4(),
                 display_name: "Chrome".to_string(),
                 path: "C:\\Chrome.lnk".into(),
                 target_path: Some("C:\\Program Files\\Chrome\\chrome.exe".into()),
+                icon_path: None,
+                position: (0, 0),
+                is_shortcut: true,
             },
             DesktopIcon {
+                id: uuid::Uuid::new_v4(),
                 display_name: "VSCode".to_string(),
                 path: "C:\\VSCode.lnk".into(),
                 target_path: Some("C:\\VSCode\\Code.exe".into()),
+                icon_path: None,
+                position: (0, 0),
+                is_shortcut: true,
             },
         ];
 

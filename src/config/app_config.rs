@@ -983,7 +983,6 @@ mod tests {
         // 旧配置文件包含已删除字段时不应报错
         let json_str = r#"{"enabled":true,"base_url":"","api_key":"","model":"","timeout_seconds":120,"max_retries":2,"temperature":0.7,"max_tokens":2048,"system_prompt":"test","headers":{},"proxy_url":"","concurrency":5,"verify_ssl":true,"user_prompt_template":"","batch_size":10,"batch_delay_ms":500}"#;
         let ai: AiConfig = serde_json::from_str(json_str).expect("should parse with extra fields");
-        assert!(ai.enabled);
         assert_eq!(ai.timeout_seconds, 120);
     }
 

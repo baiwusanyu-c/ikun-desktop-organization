@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "ikun_organizer"
 version = "0.1.0"
 edition = "2021"
@@ -84,6 +84,9 @@ libc = "0.2"
 # ===== Build Dependencies =====
 [build-dependencies]
 tauri-build = { version = "2", optional = true, features = [] }
+# 与 tauri-build 相同的资源编译器发现机制（PATH + Windows SDK 注册表 + vswhom），
+# 保证 rc.exe/windres 不在 PATH 的机器上也能嵌入图标与清单。
+embed-resource = "3"
 
 # ===== Dev Dependencies =====
 [dev-dependencies]

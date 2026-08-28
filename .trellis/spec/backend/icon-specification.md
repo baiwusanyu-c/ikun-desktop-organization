@@ -43,31 +43,36 @@ graph LR
 ### build.rs 行为
 
 1. 使用 `CARGO_MANIFEST_DIR` 定位 `logo.ico`（比 cwd 更稳健）
-2. 生成 `.rc` 文件，引用 `1 ICON "绝对路径/logo.ico"`
-3. 依次尝试 `windres`（MinGW）→ `rc.exe` + `cvtres.exe`（MSVC）→ 直接链接 `.res`
-4. **如果所有资源编译工具都不可用，`panic!` 中断编译**（防止产出无图标的 .exe）
-5. 编译成功时输出 `cargo:warning=嵌入应用图标: <路径>`
+2. 生成 `.rc` 文件，引用 `1 ICON "绝对路径/logo.ico"` 与 `1 24 "manifest"`
+3. 使用 **embed-resource** crate 编译 .rc（与 tauri-build 相同的资源编译器发现机制）：
+   - MSVC 目标：PATH 中的 `rc.exe` → Windows SDK 注册表（`KitsRoot10` 等）→ vswhom 探测
+   - GNU 目标：PATH 中的 `windres`（含交叉前缀与 llvm-windres）
+4. 嵌入失败时输出 warning；仅非 tauri-ui 模式 `panic!` 中断编译
+5. 编译成功时输出 `cargo:warning=embed-resource compiled .rc successfully`
+
+> **历史教训**：旧版 build.rs 只在 PATH 中查找 `windres`/`rc.exe`。MSVC 工具链的
+> `rc.exe` 位于 Windows SDK 目录、不在 PATH，导致“家里电脑 cargo run 托盘没有图标”：
+> tauri-build 能通过注册表找到 rc.exe 正常构建，而我们的 ID=1 图标静默缺失。
 
 ### 编译环境要求
 
-编译机器**必须**具备以下任一资源编译工具：
-
-- **MinGW-w64**：提供 `windres`（推荐，安装 Rust 时通常自带）
-- **Visual Studio Build Tools / Windows SDK**：提供 `rc.exe` + `cvtres.exe`
+- **MSVC 目标**：安装 Visual Studio Build Tools / Windows SDK 即可（embed-resource 自动探测）
+- **GNU 目标**：安装 MinGW-w64 提供 `windres`
 
 ## 运行时加载流程
 
 ### app_icon.rs 模块
 
-- `get_tray_icon()` → 返回 HICON（系统托盘使用）
-- `get_menu_bitmap()` → 返回 HBITMAP（右键菜单使用）
+- `get_tray_icon()` → 返回 HICON（系统托盘使用，24x24）
+- `get_menu_bitmap()` → 返回 HBITMAP（右键菜单使用，16x16）
 - `diagnose_icon_availability()` → 启动时诊断图标嵌入状态
 
 ### 加载机制
 
 1. `GetModuleHandleW(NULL)` 获取当前进程模块句柄
-2. `LoadIconW(hinstance, MAKEINTRESOURCE(1))` 从嵌入资源加载图标
-3. 首次加载后缓存到 `CACHED_ICON`，后续调用直接返回缓存
+2. `LoadImageW(hinstance, MAKEINTRESOURCE(id), IMAGE_ICON, size, size, 0)` 按尺寸加载
+3. **回退链**：ID=1（build.rs 嵌入）→ ID=32512（tauri-build `window_icon_path` 嵌入）→ 调用方系统默认图标
+4. 首次加载后缓存到 `CACHED_ICON`，后续调用直接返回缓存
 
 ### 使用图标的代码位置
 

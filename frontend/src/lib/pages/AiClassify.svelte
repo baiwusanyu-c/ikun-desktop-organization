@@ -7,7 +7,7 @@
 
   type State = 'confirm' | 'loading' | 'success' | 'error';
   
-  let state: State = $state('confirm');
+  let phase: State = $state('confirm');
   let errorMessage = $state('');
   let resultMessage = $state('');
 
@@ -16,11 +16,11 @@
   }
 
   async function confirm() {
-    state = 'loading';
+    phase = 'loading';
     try {
       await invoke('start_ai_classification');
     } catch (error) {
-      state = 'error';
+      phase = 'error';
       errorMessage = error instanceof Error ? error.message : String(error);
     }
   }
@@ -28,13 +28,13 @@
   onMount(() => {
     // 窗口每次显示时重置状态
     const unsubscribeOpened = listen('window-opened', () => {
-      state = 'confirm';
+      phase = 'confirm';
       errorMessage = '';
       resultMessage = '';
     });
 
     const unsubscribeSuccess = listen('ai-classification-success', () => {
-      state = 'success';
+      phase = 'success';
       resultMessage = 'AI 分类已完成';
       setTimeout(() => {
         hideCurrentWindow();
@@ -42,7 +42,7 @@
     });
 
     const unsubscribeError = listen<string>('ai-classification-error', (event) => {
-      state = 'error';
+      phase = 'error';
       errorMessage = event.payload;
     });
 
@@ -58,25 +58,25 @@
   <TitleBar title="AI 一键分类" showMinimize={false} onClose={cancel} />
   
   <div class="form-body ai-body">
-    {#if state === 'confirm'}
+    {#if phase === 'confirm'}
       <p class="message">确定要执行 AI 一键分类吗？</p>
       <p class="hint">该操作会覆盖当前分类布局，不可恢复。</p>
       <footer>
         <button class="secondary" onclick={cancel}>取消</button>
         <button class="primary-button" onclick={confirm}>确定</button>
       </footer>
-    {:else if state === 'loading'}
+    {:else if phase === 'loading'}
       <div class="loading">
         <div class="spinner"></div>
         <p>正在分析桌面图标...</p>
         <p class="hint">请稍候，AI 正在处理</p>
       </div>
-    {:else if state === 'success'}
+    {:else if phase === 'success'}
       <div class="result success">
         <div class="icon">&#10003;</div>
         <p>{resultMessage}</p>
       </div>
-    {:else if state === 'error'}
+    {:else if phase === 'error'}
       <div class="result error">
         <div class="icon">&#10007;</div>
         <p>{errorMessage}</p>

@@ -572,3 +572,70 @@ estore_desktop_positions() 恢复图标到快照位置
 ### Next Steps
 
 - None - all bugs fixed and verified
+
+
+## Session 13: 修复托盘图标/弹窗居中/开机自启三个 bug
+
+**Date**: 2026-08-28
+**Task**: 修复托盘图标/弹窗居中/开机自启三个 bug
+**Branch**: `master`
+
+### Summary
+
+build.rs 改 embed-resource 保证图标嵌入；弹窗主屏幕居中；自启加引号+StartupApproved+测试去污染
+
+### Main Changes
+
+# 会话：修复托盘图标、弹窗居中、开机自启三个 bug
+
+## 任务
+08-28-fix-tray-center-autostart
+
+## Bug 1：家里电脑 cargo run 托盘无 logo 图标
+- 根因：旧 build.rs 只在 PATH 找 windres/rc.exe；MSVC 的 rc.exe 在 Windows SDK 目录不在 PATH，
+  导致 ID=1 图标静默未嵌入（tauri-ui 模式仅 warning）。tauri-build 经 embed-resource 能找到 SDK
+  rc.exe，故整体构建正常、唯独我们图标缺失。
+- 修复：build.rs 改用 embed-resource（与 tauri-build 同机制）；tauri-build 设
+  window_icon_path("logo.ico") 并用 new_without_app_manifest() 去重 manifest；
+  Common Controls v6 并入 build/app.manifest。
+- 运行时：app_icon.rs 改 LoadImageW 按尺寸加载，回退链 ID=1 → ID=32512 → 系统默认。
+- 验证：日志显示“图标资源已嵌入且加载成功 (resource ID=1 / 32512)”。
+
+## Bug 2：Tauri 弹窗不居中
+- 修复：tauri.conf.json 四窗口 center:true；window_cmd.rs 新增 center_on_primary_monitor，
+  show_managed_window 每次显示前居中到主屏幕（物理坐标）。
+- 验证：实测 control-panel 与 create-box 窗口中心与屏幕中心偏移 (0,0)。
+
+## Bug 3：开机自启经常不生效
+- 修复：Run 值路径加双引号；开启时写 StartupApproved\Run 启用标记(0x02)、关闭时删除；
+  启动时同步自启注册表错误改为记录日志；main.rs 增加开机上下文诊断日志。
+- 重大发现：单元测试曾把临时 cargo test 二进制路径写入真实 Run 键（重建后失效），
+  是自启“时灵时不灵”的隐藏根因之一；测试已改为原样恢复 Run 值并串行化。
+- 验证：注册表 Run 值为带引号的当前 exe；StartupApproved 首字节 0x02。
+
+## 顺带修复（既有问题，阻塞验收）
+- ai_classifier.rs 测试补 DesktopIcon 新字段；app_config.rs 测试删除已移除的 enabled 断言。
+- platform_runtime.rs request_auto_classify 与测试契约对齐（插件卸载后阻断）。
+- AiClassify.svelte 局部变量 state 重命名为 phase，消除与 $state rune 的解析冲突（npm run check 0 错误）。
+- 统一注册表 FFI 签名为 isize，消除 redeclared 警告；清理若干未使用导入。
+
+## 验证结果
+- cargo test：523 通过 0 失败
+- npm run check：0 错误；npm run build：通过
+- 端到端：新 exe 启动日志含开机上下文与图标诊断；托盘初始化成功；弹窗居中实测通过。
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
