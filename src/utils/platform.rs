@@ -245,7 +245,7 @@ pub fn set_auto_start(enabled: bool) -> anyhow::Result<()> {
 
 /// 查询当前开机自启状态。
 ///
-/// 检查注册表 `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run` 中是否存在本程序条目。
+/// 检查注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 中是否存在本程序条目。
 #[cfg(windows)]
 pub fn is_auto_start_enabled() -> bool {
     use registry::*;
@@ -272,6 +272,131 @@ pub fn is_auto_start_enabled() -> bool {
         RegCloseKey(hkey);
 
         result == ERROR_SUCCESS
+    }
+}
+
+/// 读取 Run 键中本程序条目的原始字符串值（不存在时返回 None）。
+#[cfg(windows)]
+fn read_run_value_raw() -> Option<String> {
+    use registry::*;
+    use std::os::windows::ffi::OsStringExt;
+
+    let key_path = to_wide(RUN_KEY_PATH);
+    let value_name = to_wide(RUN_VALUE_NAME);
+
+    unsafe {
+        let mut hkey: isize = 0;
+        if RegOpenKeyExW(HKEY_CURRENT_USER, key_path.as_ptr(), 0, KEY_READ, &mut hkey)
+            != ERROR_SUCCESS
+        {
+            return None;
+        }
+
+        let mut size: u32 = 0;
+        if RegQueryValueExW(
+            hkey,
+            value_name.as_ptr(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut size,
+        ) != ERROR_SUCCESS
+        {
+            RegCloseKey(hkey);
+            return None;
+        }
+
+        let mut buf: Vec<u16> = vec![0; size as usize / 2 + 1];
+        let result = RegQueryValueExW(
+            hkey,
+            value_name.as_ptr(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            buf.as_mut_ptr() as *mut u8,
+            &mut size,
+        );
+        RegCloseKey(hkey);
+        if result != ERROR_SUCCESS {
+            return None;
+        }
+
+        let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        Some(
+            std::ffi::OsString::from_wide(&buf[..len])
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+}
+
+/// 读取 StartupApproved 标记的首字节（02=启用，03=禁用；值不存在时返回 None）。
+#[cfg(windows)]
+fn read_startup_approved_first_byte() -> Option<u8> {
+    use registry::*;
+
+    let key_path = to_wide(STARTUP_APPROVED_KEY_PATH);
+    let value_name = to_wide(RUN_VALUE_NAME);
+
+    unsafe {
+        let mut hkey: isize = 0;
+        if RegOpenKeyExW(HKEY_CURRENT_USER, key_path.as_ptr(), 0, KEY_READ, &mut hkey)
+            != ERROR_SUCCESS
+        {
+            return None;
+        }
+
+        let mut buf = [0u8; 32];
+        let mut size = buf.len() as u32;
+        let result = RegQueryValueExW(
+            hkey,
+            value_name.as_ptr(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            buf.as_mut_ptr(),
+            &mut size,
+        );
+        RegCloseKey(hkey);
+        if result != ERROR_SUCCESS || size == 0 {
+            return None;
+        }
+        Some(buf[0])
+    }
+}
+
+/// 输出开机自启注册表状态诊断日志。
+///
+/// 在启动同步之前调用，记录：
+/// - Run 键中本程序条目的原始值（以及是否与当前 exe 一致）；
+/// - StartupApproved 标记首字节（02=启用 / 03=禁用 / 不存在）。
+///
+/// 配合 `main.rs` 的开机上下文日志，可以在用户机器上区分三种失效场景：
+/// 日志无任何自启记录 = Windows 没拉起；有条目但指向旧路径 = 路径漂移；
+/// StartupApproved=03 = 被系统/安全软件禁用。
+#[cfg(windows)]
+pub fn diagnose_auto_start_state() {
+    match read_run_value_raw() {
+        Some(value) => {
+            let matches_exe = match std::env::current_exe() {
+                Ok(exe) => {
+                    let quoted = format!("\"{}\"", exe.to_string_lossy());
+                    value == quoted || value == exe.to_string_lossy()
+                }
+                Err(_) => false,
+            };
+            log::info!(
+                "[autostart] Run 键当前值: {}（与当前 exe 一致: {}）",
+                value,
+                matches_exe
+            );
+        }
+        None => log::info!("[autostart] Run 键中不存在本程序条目"),
+    }
+
+    match read_startup_approved_first_byte() {
+        Some(0x02) => log::info!("[autostart] StartupApproved 标记: 启用 (0x02)"),
+        Some(0x03) => log::warn!("[autostart] StartupApproved 标记: 被禁用 (0x03)，将被重写为启用"),
+        Some(other) => log::warn!("[autostart] StartupApproved 标记首字节异常: {other:#04x}"),
+        None => log::info!("[autostart] StartupApproved 标记不存在"),
     }
 }
 
@@ -473,5 +598,34 @@ mod tests {
         // 删除标记也应成功（幂等）
         assert!(set_startup_approved(false).is_ok());
         assert!(set_startup_approved(false).is_ok());
+    }
+
+    #[test]
+    fn test_diagnose_auto_start_state_does_not_panic() {
+        let _guard = test_lock();
+        // 诊断函数只读注册表并输出日志，任何注册表状态下都不应 panic
+        diagnose_auto_start_state();
+        set_auto_start(true).unwrap();
+        diagnose_auto_start_state();
+        set_auto_start(false).unwrap();
+        diagnose_auto_start_state();
+    }
+
+    #[test]
+    fn test_read_run_value_raw_roundtrip() {
+        let _guard = test_lock();
+        let original = read_run_value();
+
+        set_auto_start(true).unwrap();
+        let value = read_run_value_raw().expect("开启自启后应能读到 Run 值");
+        assert!(
+            value.starts_with('"') && value.ends_with('"'),
+            "Run 值应带引号: {value}"
+        );
+
+        set_auto_start(false).unwrap();
+        assert!(read_run_value_raw().is_none(), "关闭自启后 Run 值应不存在");
+
+        restore_run_value(original.as_deref());
     }
 }

@@ -1549,12 +1549,34 @@ KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER);
   `0x03` 禁用标记，导致“设置了自启却不启动”。关闭自启时删除该标记。
 - 每次启动都按配置重新同步 Run 值（自愈），保证 exe 路径迁移后注册表跟随更新。
 
+### 自毁路径防护（历史教训，必读）
+
+- **绝不能按回退默认值同步系统状态**：配置加载失败时 `config` 是默认值
+  （`auto_start=false`），此时若照常执行 `set_auto_start(config.general.auto_start)`，
+  会把用户已开启的自启条目**删掉**。因此 `AppContext` 提供 `config_loaded` 标志，
+  配置未成功加载时必须跳过自启同步（见 `platform_runtime.rs::sync_auto_start`）。
+- **配置必须原子写入**：`AppConfig::save()` 走 `atomic_write_file`（临时文件 +
+  `rename`）。直接 `fs::write` 覆盖时，进程在写入中途被杀（强制关机/断电）会产生
+  半截配置文件 → 下次启动配置解析失败 → 触发上面的回退路径 → 自启被删。这是
+  “开机自启时灵时不灵”的最隐蔽根因。
+- **自启同步必须放在启动流程最前面**：排在托盘初始化、布局恢复等耗时/可能失败的
+  步骤之前，确保进程只要被拉起，注册表状态就会被重写（自愈抵御 0x03 禁用）。
+- **同步失败要重试并记日志**：`sync_auto_start` 最多重试 3 次，每次失败记
+  `log::warn!`，连续失败记 `log::error!`。
+
 ### 排查手段
 
 - `main.rs::log_boot_context` 启动时记录系统运行时长与 exe 路径；
   时长 < 180s 提示“可能由开机自启触发”。
+- `platform.rs::diagnose_auto_start_state` 启动时记录 Run 键原始值（是否指向当前
+  exe）与 StartupApproved 首字节（02=启用 / 03=禁用），区分三种失效：
+  无启动日志 = Windows 没拉起；条目指向旧路径 = 路径漂移；03 = 被禁用。
+- `main.rs::install_panic_hook` 把 panic 与回溯写入日志，区分“没拉起”与“拉起后崩溃”。
 - 开机后检查 `~/.ikun_organizer_log/`：有启动日志 → Windows 已拉起（问题在程序内）；
   无日志 → Windows 未拉起（检查 Run 值路径是否存在、StartupApproved 标记、安全软件）。
+- **日志级别默认必须是 info**：`init_logger` 使用
+  `Env::default().default_filter_or("info")`。若默认 error，上述诊断日志在用户
+  机器上不可见，排查手段全部失效（08-31 任务的根因之一）。
 
 ### 测试纪律
 

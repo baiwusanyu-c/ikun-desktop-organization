@@ -23,6 +23,26 @@ use std::path::PathBuf;
 /// 配置文件名（存放在用户主目录）
 const CONFIG_FILE_NAME: &str = ".ikun_organizer.json";
 
+/// 原子写入文件：先写临时文件，再用 `rename` 原子替换目标文件。
+///
+/// 避免进程在写入中途被杀（强制关机/断电）产生半截目标文件。
+/// Windows 的 `rename` 会原子替换已存在的目标文件；失败时清理临时文件。
+fn atomic_write_file(path: &std::path::Path, content: &str) -> anyhow::Result<()> {
+    let tmp_path = path.with_extension("json.tmp");
+    std::fs::write(&tmp_path, content.as_bytes())
+        .map_err(|e| anyhow::anyhow!("写入临时文件失败 {}: {}", tmp_path.display(), e))?;
+    if let Err(e) = std::fs::rename(&tmp_path, path) {
+        // 替换失败时清理临时文件，避免残留
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(anyhow::anyhow!(
+            "临时文件替换目标文件失败 {}: {}",
+            path.display(),
+            e
+        ));
+    }
+    Ok(())
+}
+
 // =============================================================================
 // AppConfig — 顶层配置
 // =============================================================================
@@ -114,12 +134,15 @@ impl AppConfig {
     }
 
     /// 保存配置到 `~/.ikun_organizer.json`
+    ///
+    /// 采用原子写入：先写临时文件再 `rename` 覆盖，避免进程在写入中途被杀
+    /// （强制关机/断电）产生半截配置文件。配置文件一旦损坏，启动时会回退默认值，
+    /// 进而把开机自启注册表条目同步删除（自启失效的隐藏根因之一）。
     pub fn save(&self) -> anyhow::Result<()> {
         let path = Self::get_config_path()?;
         let content = serde_json::to_string_pretty(self)
             .map_err(|e| anyhow::anyhow!("序列化配置失败: {}", e))?;
-        std::fs::write(&path, content)
-            .map_err(|e| anyhow::anyhow!("写入配置文件失败 {}: {}", path.display(), e))?;
+        atomic_write_file(&path, &content)?;
         log::info!("保存配置成功: {}", path.display());
         Ok(())
     }
@@ -858,6 +881,35 @@ pub struct ThemeColors {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- atomic_write_file ----
+
+    #[test]
+    fn test_atomic_write_file_creates_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("config.json");
+        atomic_write_file(&target, r#"{"a":1}"#).unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), r#"{"a":1}"#);
+    }
+
+    #[test]
+    fn test_atomic_write_file_leaves_no_tmp() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("config.json");
+        atomic_write_file(&target, "content").unwrap();
+        // 成功后不允许残留 .json.tmp 临时文件
+        let tmp = dir.path().join("config.json.tmp");
+        assert!(!tmp.exists(), "写入成功后不应残留临时文件");
+    }
+
+    #[test]
+    fn test_atomic_write_file_overwrites_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("config.json");
+        std::fs::write(&target, "old").unwrap();
+        atomic_write_file(&target, "new").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+    }
 
     // ---- Default 值验证 ----
 

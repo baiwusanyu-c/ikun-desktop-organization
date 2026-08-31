@@ -27,6 +27,7 @@ mod gpui_app;
 
 fn main() -> anyhow::Result<()> {
     utils::init_logger();
+    install_panic_hook();
     #[cfg(windows)]
     log_boot_context();
     log::info!("========================================");
@@ -82,6 +83,29 @@ fn main() -> anyhow::Result<()> {
     {
         anyhow::bail!("Current platform not supported");
     }
+}
+
+/// 安装全局 panic hook：panic 时把信息与回溯写入日志文件。
+///
+/// `windows_subsystem = "windows"` 下进程无控制台，启动早期的 panic 会静默退出，
+/// 表现为"开机自启没有运行"。把崩溃记录到日志后，可以通过日志区分
+/// "Windows 没拉起"和"拉起后崩溃"两种情况。
+fn install_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log::error!("[PANIC] {info}");
+        if let Some(location) = info.location() {
+            log::error!(
+                "[PANIC] 位置: {}:{}:{}",
+                location.file(),
+                location.line(),
+                location.column()
+            );
+        }
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        log::error!("[PANIC] 回溯:\n{backtrace}");
+        default_hook(info);
+    }));
 }
 
 /// 记录开机上下文诊断日志。

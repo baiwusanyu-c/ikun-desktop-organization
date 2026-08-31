@@ -111,7 +111,7 @@ pub fn init_logger() {
     // 创建日志目录
     if let Err(e) = fs::create_dir_all(&log_dir) {
         eprintln!("无法创建日志目录 {}: {}", log_dir.display(), e);
-        env_logger::init();
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
         return;
     }
 
@@ -121,7 +121,9 @@ pub fn init_logger() {
     // 创建滚动文件写入器
     match RollingFileWriter::new(log_dir) {
         Ok(writer) => {
-            env_logger::Builder::from_default_env()
+            // 默认级别 info：未设置 RUST_LOG 时，开机诊断/自启同步等启动日志
+            // 也能写入日志文件（此前默认 error，导致这些日志在用户机器上不可见）
+            env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
                 .target(env_logger::Target::Pipe(Box::new(writer)))
                 .format(|buf, record| {
                     let window_tag = match current_window_label() {

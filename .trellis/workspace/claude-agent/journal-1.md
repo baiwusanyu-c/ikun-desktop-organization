@@ -727,3 +727,44 @@ Windows 版本初步可用，需要发布 beta：评估构建脚本/流程，实
 ### Next Steps
 
 - None - task complete
+
+## Session 15: 修复开机自启间歇性失效（续）— 找到并封堵自毁路径（08-31-fix-autostart-intermittent-v2）
+
+**Date**: 2026-08-31
+**Task**: 修复开机自启间歇性失效（续）（08-31-fix-autostart-intermittent-v2）
+**Branch**: `master`
+
+### Summary
+
+上一轮（08-28, 5b4ba3b）修复了 Run 值引号/StartupApproved/测试污染后，另一台电脑开机自启仍间歇性失效。本轮定位到两个全新根因并封堵，属于上一轮未覆盖的"自毁路径"。
+
+### 本轮新发现的根因（上一轮未覆盖）
+
+1. **自毁路径（核心）**：配置加载失败时 `AppContext::new()` 静默回退默认值（`auto_start=false`），随后启动同步 `set_auto_start(false)` 把用户已开启的自启条目**删掉**。触发器是配置文件损坏——而 `save()` 用 `fs::write` 直接覆盖（非原子），进程写入中途被杀（强制关机/断电）即可制造半截文件。完美解释"时灵时不灵、重新勾选又好了"。
+2. **诊断日志不可见**：`init_logger` 用 `from_default_env()`，未设 RUST_LOG 时默认级别 error，上一轮加的开机诊断/同步告警在用户机器上**全部不写盘**，导致无法定位。
+3. **次要**：自启同步排在 initialize() 第 7 步（在托盘/布局恢复等可能失败的步骤之后）；启动早期 panic 无痕迹。
+
+### 实现内容
+
+- `context.rs`：`AppContext` 新增 `config_loaded` 标志；配置加载失败改 `log::error!` 并明确不按默认值同步。
+- `app_config.rs`：新增 `atomic_write_file`（临时文件 + rename 原子替换，失败清理临时文件），`save()` 改走它。
+- `logger.rs`：日志默认级别改 `default_filter_or("info")`（两处入口），诊断日志真正可见。
+- `platform_runtime.rs`：自启同步提到 initialize() 第 0 步；新增 `sync_auto_start()`——先诊断、配置未加载则跳过、失败重试 3 次并记日志。
+- `platform.rs`：新增 `read_run_value_raw` / `read_startup_approved_first_byte` / `diagnose_auto_start_state`（输出 Run 值原文+是否指向当前 exe+StartupApproved 首字节）。
+- `main.rs`：新增 `install_panic_hook()`，panic 信息+位置+回溯写入日志。
+- `gpui_app/app_runtime.rs`：同步自启加 `config_loaded` 防护。
+- 新增 6 个单元测试（原子写入 3 + config_loaded 1 + 诊断 2）。
+
+### 验证结果
+
+- cargo fmt --check ✓ / cargo clippy（72 个既有白名单警告，无新增）✓
+- cargo test：529 passed 0 failed（原 523 + 新增 6）✓
+- 注：工作区有若干非本任务的暂存变更（docs/RELEASE.md 移动、todo/ 删除），提交时需分开。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 用户实测：在另一台电脑重新开启自启并重启验证；若仍失效，按新增诊断日志定位。

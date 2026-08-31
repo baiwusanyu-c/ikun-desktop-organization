@@ -71,6 +71,15 @@ impl TauriRuntime {
         self.initialized = true;
         log::info!("[TauriRuntime] Initialization started");
 
+        // 0. 开机自启同步（必须最先执行）
+        //
+        // 放在托盘/布局恢复等耗时或可能失败的步骤之前，确保只要进程被拉起，
+        // 自启注册表状态就会被重写一遍（抵御 StartupApproved 被系统标记禁用）。
+        // 配置加载失败时跳过：此时 config 是默认值（auto_start=false），
+        // 若照常同步会把用户已开启的自启条目删掉。
+        #[cfg(windows)]
+        self.sync_auto_start();
+
         // Clear any stale signal files from previous runs
         let _ = std::fs::remove_file(signal_file_path());
         let _ = std::fs::remove_file(open_panel_signal_path());
@@ -121,17 +130,44 @@ impl TauriRuntime {
             log::info!("[TauriRuntime] Global hotkey: {}", hotkey_str);
         }
 
-        // 7. Auto-start sync
-        #[cfg(windows)]
-        {
-            let auto_start = self.ctx.config.general.auto_start;
-            set_tray_auto_start_state(auto_start);
-            if let Err(error) = crate::utils::platform::set_auto_start(auto_start) {
-                log::warn!("启动时同步开机自启注册表失败: {error}");
-            }
+        log::info!("[TauriRuntime] Initialization complete");
+    }
+
+    /// 开机自启同步（含诊断与重试）。
+    ///
+    /// 1. 先输出当前注册表状态诊断（Run 值原文、是否指向当前 exe、
+    ///    StartupApproved 首字节），便于在用户机器上定位"时灵时不灵"问题；
+    /// 2. 配置加载失败时直接跳过（不能按默认值删除用户已开启的条目）；
+    /// 3. 同步失败最多重试 3 次，每次失败都记日志。
+    #[cfg(windows)]
+    fn sync_auto_start(&mut self) {
+        crate::utils::platform::diagnose_auto_start_state();
+
+        if !self.ctx.config_loaded {
+            log::warn!(
+                "[TauriRuntime] 配置未成功加载，跳过开机自启同步（避免按默认值删除注册表条目）"
+            );
+            return;
         }
 
-        log::info!("[TauriRuntime] Initialization complete");
+        let auto_start = self.ctx.config.general.auto_start;
+        set_tray_auto_start_state(auto_start);
+
+        for attempt in 1..=3u32 {
+            match crate::utils::platform::set_auto_start(auto_start) {
+                Ok(()) => {
+                    log::info!(
+                        "[TauriRuntime] 开机自启同步完成: auto_start={auto_start}（第 {attempt} 次尝试）"
+                    );
+                    return;
+                }
+                Err(error) => {
+                    log::warn!("[TauriRuntime] 开机自启同步失败（第 {attempt}/3 次）: {error:#}");
+                    std::thread::sleep(std::time::Duration::from_millis(500 * attempt as u64));
+                }
+            }
+        }
+        log::error!("[TauriRuntime] 开机自启同步连续 3 次失败，本次启动放弃");
     }
 
     /// 用新配置替换运行时配置。

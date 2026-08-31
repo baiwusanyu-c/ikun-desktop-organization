@@ -40,6 +40,12 @@ pub struct AppContext {
     pub platform_service: Box<dyn PlatformService>,
     /// Runtime state
     pub state: AppState,
+    /// 配置是否从文件成功加载。
+    ///
+    /// 为 `false` 时 `config` 是回退的默认值（auto_start=false 等），
+    /// 任何"按配置同步系统状态"的逻辑（如开机自启注册表同步）都必须跳过，
+    /// 否则会把默认值写回系统，静默删除用户已开启的自启条目。
+    pub config_loaded: bool,
 }
 
 impl Default for AppContext {
@@ -50,6 +56,7 @@ impl Default for AppContext {
             desktop_manager: create_desktop_manager(),
             platform_service: create_platform_service(),
             state: AppState::default(),
+            config_loaded: false,
         }
     }
 }
@@ -58,11 +65,18 @@ impl AppContext {
     /// Create application context (load config + initialize subsystems)
     ///
     /// Reads config from ~/.ikun_organizer.json, falls back to defaults.
-    /// Config load failure degrades gracefully, does not block app startup.
+    /// Config load failure degrades gracefully, does not block app startup;
+    /// `config_loaded` records the outcome so callers can avoid syncing
+    /// system state (e.g. auto-start registry) from fallback defaults.
     pub fn new() -> anyhow::Result<Self> {
         // 1. Load config
+        let mut config_loaded = true;
         let config = AppConfig::load().unwrap_or_else(|e| {
-            log::warn!("Failed to load config: {}, using defaults", e);
+            config_loaded = false;
+            log::error!(
+                "配置加载失败，回退默认配置（不会按默认值同步系统状态）: {}",
+                e
+            );
             AppConfig::default()
         });
 
@@ -88,6 +102,7 @@ impl AppContext {
             desktop_manager,
             platform_service,
             state: AppState::default(),
+            config_loaded,
         })
     }
 
@@ -158,5 +173,13 @@ mod tests {
         assert!(ctx.is_ok(), "AppContext::new() should not fail");
         let ctx = ctx.unwrap();
         assert!(!ctx.config.version.is_empty());
+    }
+
+    #[test]
+    fn test_app_context_default_marks_config_not_loaded() {
+        // Default 上下文的配置是回退默认值，不允许作为同步系统状态的依据
+        let ctx = AppContext::default();
+        assert!(!ctx.config_loaded);
+        assert!(!ctx.config.general.auto_start);
     }
 }
