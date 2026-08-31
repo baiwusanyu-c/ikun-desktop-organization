@@ -28,11 +28,12 @@ function fail(msg) {
   process.exit(1);
 }
 function run(cmd, args, opts = {}) {
+  // No shell:true - args (e.g. commit messages with spaces/parentheses)
+  // must reach the child process unmodified.
   const result = spawnSync(cmd, args, {
     cwd: PROJECT_ROOT,
     encoding: "utf-8",
     stdio: opts.capture ? "pipe" : "inherit",
-    shell: process.platform === "win32",
   });
   if (result.status !== 0 && !opts.allowFail) {
     fail(`Command failed: ${cmd} ${args.join(" ")}`);
@@ -165,7 +166,11 @@ if (opts.push) {
   run("git", ["push", "origin", branch]);
   run("git", ["push", "origin", tag]);
   log(`Pushed ${branch} and ${tag} to origin.`);
-  log(`GitHub Release workflow should start: https://github.com/<owner>/<repo>/actions`);
+  const remote = run("git", ["remote", "get-url", "origin"], { capture: true, allowFail: true });
+  const repoMatch = remote.match(/github\.com[:/]([^/]+\/[^/.]+)/);
+  if (repoMatch) {
+    log(`GitHub Release workflow: https://github.com/${repoMatch[1]}/actions`);
+  }
 } else {
   log(`Not pushed. When ready: git push origin $(git branch --show-current) && git push origin ${tag}`);
 }
