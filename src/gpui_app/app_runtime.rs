@@ -269,12 +269,13 @@ impl AppRuntime {
         }
 
         // 同步开机自启状态（配置加载失败时跳过，避免按默认值删除注册表条目）
+        // 通过平台抽象（PlatformService）写入，不直连工具函数
         #[cfg(windows)]
         {
             if self.ctx.config_loaded {
                 let auto_start = self.ctx.config.general.auto_start;
                 set_tray_auto_start_state(auto_start);
-                if let Err(e) = crate::utils::platform::set_auto_start(auto_start) {
+                if let Err(e) = self.ctx.platform_service.set_auto_start(auto_start) {
                     log::warn!("同步开机自启状态失败: {}", e);
                 }
             } else {

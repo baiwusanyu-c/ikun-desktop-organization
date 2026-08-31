@@ -769,35 +769,38 @@ Windows 版本初步可用，需要发布 beta：评估构建脚本/流程，实
 
 - 用户实测：在另一台电脑重新开启自启并重启验证；若仍失效，按新增诊断日志定位。
 
-
-## Session 15: 修复开机自启间歇性失效（续）
+## Session 16: 架构自检与重构 — 自启改动对齐 PlatformService trait 抽象（0aab114..4dc53cb 区间）
 
 **Date**: 2026-08-31
-**Task**: 修复开机自启间歇性失效（续）
+**Task**: 架构自检（08-31-fix-autostart-intermittent-v2 后续）
 **Branch**: `master`
 
 ### Summary
 
-定位并封堵配置回退自毁路径与半截配置两条根因；诊断日志默认可见
+对 0aab114..4dc53cb 区间（实现集中在 4dc53cb）做架构合规自检：对照 CLAUDE.md、.trellis/spec（plugin-architecture、error-handling、quality-guidelines、database-guidelines、tauri-window-contract）逐项核查。
 
-### Main Changes
+### 自检结论
 
-(Add details)
+**符合架构**：原子写入、config_loaded 防护、日志默认级别、panic hook、诊断函数位置（utils/platform.rs 即架构指定的自启模块）。
+**不符合（已重构）**：`sync_auto_start` 与托盘/gpui 切换路径直连 `utils::platform::set_auto_start`，绕过架构定义的 `PlatformService` trait 抽象 → 全部改为经 `ctx.platform_service` 调用（3 处：platform_runtime.rs 同步+托盘切换、gpui app_runtime.rs、legacy app.rs）。
 
-### Git Commits
+### 文档更新（陈旧 → 对齐实现）
 
-| Hash | Message |
-|------|---------|
-| `4dc53cb` | (see git log) |
+- CLAUDE.md：AppContext 代码块删除已不存在的 `classifier` 字段，补 `config_loaded`；日志章节补"默认级别 info"。
+- error-handling.md 示例 1：更新为 config_loaded + error 级日志的现行实现。
+- database-guidelines.md：保存模式改为原子写入示例，新增"加载失败防护"节。
 
-### Testing
+### 测试（新增 3 个，总数 529 → 531）
 
-- [OK] (Add test results)
+- `test_support` 模块：注册表测试辅助提升为 `pub(crate)`（共享锁 + 恢复原状），供跨模块测试复用。
+- `sync_auto_start_skips_when_config_not_loaded`：config_loaded=false 时不得改动 Run 键。
+- `test_platform_service_auto_start_toggle_via_trait`：trait 路径开/关自启。
+- `test_startup_approved_follows_auto_start` 加强：断言首字节 0x02 / 删除后不存在。
+
+### 验证
+
+| cargo fmt ✓ / clippy（72 个既有白名单警告，无新增）✓ / cargo test 531 passed 0 failed ✓
 
 ### Status
 
 [OK] **Completed**
-
-### Next Steps
-
-- None - task complete

@@ -223,13 +223,16 @@ platform/ 鈫?shared (鍏佽锛氬钩鍙板疄鐜板鐢ㄥ叡浜€昏�
 #### 1. AppContext 鈥?涓績涓婁笅鏂?
 
 ```rust
-// src/context.rs锛堝疄闄呬唬鐮侊級
+// src/context.rs（实际代码）
 pub struct AppContext {
     pub config: AppConfig,
     pub desktop_manager: Box<dyn DesktopManagerTrait>,
     pub platform_service: Box<dyn PlatformService>,
-    pub classifier: AppClassifier,
     pub state: AppState,
+    /// 配置是否从文件成功加载。为 false 时 config 是回退默认值，
+    /// 任何"按配置同步系统状态"的逻辑（如开机自启注册表同步）必须跳过，
+    /// 否则会按默认值误删用户已开启的系统条目。
+    pub config_loaded: bool,
 }
 ```
 
@@ -411,7 +414,8 @@ main.rs (Tauri Builder + managed SharedTauriRuntime)
 - 鏃ュ織鍐欏叆 `~/.ikun_organizer_log/` 鐩綍锛屾枃浠跺懡鍚嶏細`.ikun_organizer_log_YYYYMMDD_N`锛堝 `.ikun_organizer_log_20260722_1`锛?
 - 鍗曟枃浠惰秴杩?2MB 鑷姩鍒囨崲鍒颁笅涓€涓簭鍙锋枃浠?
 - 鍚姩鏃惰嚜鍔ㄦ竻鐞嗚秴杩?7 澶╃殑鏃ュ織鏂囦欢
-- 鏃ュ織绾у埆閫氳繃 `RUST_LOG` 鐜鍙橀噺鎺у埗
+- 鏃ュ織绾у埆閫氳繃 `RUST_LOG` 鐜鍙橀噺鎺у埗
+- 日志默认级别为 `info`（未设置 `RUST_LOG` 时），保证开机诊断、自启同步等启动日志在用户机器上可见；`RUST_LOG` 仍可覆盖
 - 寮€鍙戞棩蹇楀畯锛歚log_debug!`銆乣log_info!`銆乣log_warn!`銆乣log_error!`锛堣嚜鍔ㄩ檮鍔犳枃浠?妯″潡淇℃伅锛?
 - 鍙戣鐗堟棩蹇楀畯锛歚release_info!`銆乣release_warn!`銆乣release_error!`锛堝甫 `[RELEASE]` 鍓嶇紑锛岀敤浜庣敓浜х幆澧冮棶棰樻帓鏌ワ紝涓嶅簲浣滀负璋冭瘯浠ｇ爜鍒犻櫎锛?
 - **窗口上下文标记**：Tauri Command 入口使用 WindowLogGuard::new(window.label()) 自动标记窗口来源（[window:control-panel]、[window:create-box]、[window:edit-box]）

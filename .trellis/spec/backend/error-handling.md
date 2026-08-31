@@ -179,18 +179,24 @@ log::warn!("加载失败");  // 缺少具体错误信息
 [src/context.rs](src/context.rs):
 ```rust
 pub fn new() -> anyhow::Result<Self> {
+    // 配置加载失败时回退默认值，但必须记录 config_loaded=false：
+    // 回退的默认值（如 auto_start=false）不得用于"按配置同步系统状态"
+    // 的逻辑（如开机自启注册表同步），否则会误删用户已开启的系统条目。
+    let mut config_loaded = true;
     let config = AppConfig::load().unwrap_or_else(|e| {
-        log::warn!("加载配置失败: {}，使用默认配置", e);
+        config_loaded = false;
+        log::error!("配置加载失败，回退默认配置（不会按默认值同步系统状态）: {}", e);
         AppConfig::default()
     });
-    let classifier = AppClassifier::from_config(&config.classification);
-    let desktop_manager = DesktopManager::new().unwrap_or_else(|e| {
-        log::warn!("初始化桌面管理器失败: {}，使用默认值", e);
-        DesktopManager
-    });
-    Ok(Self { config, desktop_manager, classifier, state: AppState::default() })
+    let desktop_manager = create_desktop_manager();
+    let platform_service = create_platform_service();
+    Ok(Self { config, desktop_manager, platform_service,
+              state: AppState::default(), config_loaded })
 }
 ```
+
+**注意**：配置加载失败属于严重异常（可能导致开机自启等用户功能失效），
+使用 `log::error!` 而非 `warn!`，便于在日志中快速定位。
 
 ### 示例 2：保存配置
 

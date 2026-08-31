@@ -12,6 +12,14 @@ const STARTUP_APPROVED_KEY_PATH: &str =
 /// 启动批准标记：启用（REG_BINARY 首字节 0x02；0x03 表示禁用）
 const STARTUP_APPROVED_ENABLED: [u8; 12] = [0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
+/// 所有操作真实注册表的单元测试共享的串行化锁。
+///
+/// 同一测试二进制内的测试默认并行执行；`utils::platform` 与
+/// `tauri_commands::platform_runtime` 等模块的测试都会读写真实 Run 键，
+/// 必须共享同一把锁，避免并行竞争导致断言失败或环境污染。
+#[cfg(all(test, windows))]
+pub(crate) static REGISTRY_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(windows)]
 mod registry {
     //! 开机自启相关注册表操作的 FFI 声明与常量。
@@ -427,21 +435,25 @@ pub fn get_desktop_path() -> anyhow::Result<std::path::PathBuf> {
     dirs::desktop_dir().ok_or_else(|| anyhow::anyhow!("无法获取桌面路径"))
 }
 
-#[cfg(test)]
-#[cfg(windows)]
-mod tests {
-    use super::*;
+/// 供本文件与 `tauri_commands::platform_runtime` 等模块的单元测试共享的
+/// 注册表测试辅助：读取/写回/删除真实 Run 键条目，并用同一把锁串行化。
+///
+/// 所有操作真实注册表的测试都必须先取 `registry_test_lock()`，并在结束时用
+/// `restore_run_value()` 把 Run 键恢复为测试前的原始状态，避免污染用户环境。
+#[cfg(all(test, windows))]
+pub(crate) mod test_support {
+    use super::registry::*;
+    use super::{RUN_KEY_PATH, RUN_VALUE_NAME};
 
     /// 串行化所有操作真实注册表的测试，避免并行竞争导致断言失败
-    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    fn test_lock() -> std::sync::MutexGuard<'static, ()> {
-        TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    pub fn registry_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        super::REGISTRY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     /// 读取 Run 键中本程序条目的原始值（测试后原样恢复，避免污染用户环境）
-    fn read_run_value() -> Option<String> {
-        use registry::*;
+    pub fn read_run_value() -> Option<String> {
         use std::os::windows::ffi::OsStringExt;
 
         let key_path = to_wide(RUN_KEY_PATH);
@@ -489,9 +501,7 @@ mod tests {
     }
 
     /// 原样写回 Run 键条目
-    fn write_run_value_raw(value: &str) {
-        use registry::*;
-
+    pub fn write_run_value_raw(value: &str) {
         let key_path = to_wide(RUN_KEY_PATH);
         let value_name = to_wide(RUN_VALUE_NAME);
         let wide = to_wide(value);
@@ -525,9 +535,7 @@ mod tests {
     }
 
     /// 删除 Run 键条目
-    fn delete_run_value() {
-        use registry::*;
-
+    pub fn delete_run_value() {
         let key_path = to_wide(RUN_KEY_PATH);
         let value_name = to_wide(RUN_VALUE_NAME);
         unsafe {
@@ -548,11 +556,28 @@ mod tests {
     }
 
     /// 测试结束后把 Run 键恢复到测试前的原始状态
-    fn restore_run_value(original: Option<&str>) {
+    pub fn restore_run_value(original: Option<&str>) {
         match original {
             Some(value) => write_run_value_raw(value),
             None => delete_run_value(),
         }
+    }
+}
+
+#[cfg(test)]
+#[cfg(windows)]
+mod tests {
+    use super::*;
+    use test_support as ts;
+
+    fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+        ts::registry_test_lock()
+    }
+    fn read_run_value() -> Option<String> {
+        ts::read_run_value()
+    }
+    fn restore_run_value(original: Option<&str>) {
+        ts::restore_run_value(original)
     }
 
     #[test]
@@ -595,9 +620,20 @@ mod tests {
         let _guard = test_lock();
         // 开启自启后 StartupApproved 标记写入应成功（不 panic）
         assert!(set_startup_approved(true).is_ok());
+        // 标记首字节必须是 0x02（启用），否则任务管理器会视为禁用
+        assert_eq!(
+            read_startup_approved_first_byte(),
+            Some(0x02),
+            "启用标记首字节应为 0x02"
+        );
         // 删除标记也应成功（幂等）
         assert!(set_startup_approved(false).is_ok());
         assert!(set_startup_approved(false).is_ok());
+        assert_eq!(
+            read_startup_approved_first_byte(),
+            None,
+            "删除标记后值应不存在"
+        );
     }
 
     #[test]

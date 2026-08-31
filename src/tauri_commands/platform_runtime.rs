@@ -139,6 +139,9 @@ impl TauriRuntime {
     ///    StartupApproved 首字节），便于在用户机器上定位"时灵时不灵"问题；
     /// 2. 配置加载失败时直接跳过（不能按默认值删除用户已开启的条目）；
     /// 3. 同步失败最多重试 3 次，每次失败都记日志。
+    ///
+    /// 注册表写入通过 `ctx.platform_service`（PlatformService trait）完成，
+    /// 遵循"运行时层经平台抽象访问系统能力"的架构约束，不直连工具函数。
     #[cfg(windows)]
     fn sync_auto_start(&mut self) {
         crate::utils::platform::diagnose_auto_start_state();
@@ -154,7 +157,7 @@ impl TauriRuntime {
         set_tray_auto_start_state(auto_start);
 
         for attempt in 1..=3u32 {
-            match crate::utils::platform::set_auto_start(auto_start) {
+            match self.ctx.platform_service.set_auto_start(auto_start) {
                 Ok(()) => {
                     log::info!(
                         "[TauriRuntime] 开机自启同步完成: auto_start={auto_start}（第 {attempt} 次尝试）"
@@ -450,7 +453,8 @@ impl TauriRuntime {
                         log::warn!("保存开机自启配置失败: {error}");
                     }
                     self.replace_config(config);
-                    if let Err(error) = crate::utils::platform::set_auto_start(enabled) {
+                    // 通过平台抽象（PlatformService）写入/删除自启条目
+                    if let Err(error) = self.ctx.platform_service.set_auto_start(enabled) {
                         log::warn!("切换开机自启失败: {error}");
                     }
                     set_tray_auto_start_state(enabled);
@@ -667,6 +671,34 @@ mod tests {
         assert!(runtime.plugins.contains("builtin.style"));
         assert!(!runtime.plugins.is_initialized("builtin.classification"));
         assert!(!runtime.plugins.is_initialized("builtin.style"));
+    }
+
+    /// 配置加载失败（config_loaded=false）时，sync_auto_start 必须跳过
+    /// 注册表同步——否则回退的默认值（auto_start=false）会删掉用户
+    /// 已开启的自启条目（自毁路径）。
+    #[cfg(windows)]
+    #[test]
+    fn sync_auto_start_skips_when_config_not_loaded() {
+        use crate::utils::platform::test_support as ts;
+
+        let _guard = ts::registry_test_lock();
+        let original = ts::read_run_value();
+
+        let mut runtime = TauriRuntime::new();
+        // 构造"配置加载失败"场景：标记未加载，并把默认配置设为关闭自启
+        runtime.ctx.config_loaded = false;
+        runtime.ctx.config.general.auto_start = false;
+
+        runtime.sync_auto_start();
+
+        // 同步被跳过：Run 键应保持测试前状态，不得被按默认值删除
+        assert_eq!(
+            ts::read_run_value(),
+            original,
+            "config_loaded=false 时不得改动注册表 Run 键"
+        );
+
+        ts::restore_run_value(original.as_deref());
     }
 
     #[test]

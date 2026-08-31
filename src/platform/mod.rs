@@ -202,6 +202,32 @@ mod tests {
         let _enabled = ps.is_auto_start_enabled();
     }
 
+    /// 平台抽象（PlatformService）是运行时层写开机自启的唯一入口：
+    /// 开启后 is_auto_start_enabled 必须为 true，关闭后为 false。
+    /// 注册表测试串行化与恢复由 utils::platform::test_support 保证。
+    #[cfg(windows)]
+    #[test]
+    fn test_platform_service_auto_start_toggle_via_trait() {
+        use crate::utils::platform::test_support as ts;
+
+        let _guard = ts::registry_test_lock();
+        let original = ts::read_run_value();
+
+        let ps = create_platform_service();
+        ps.set_auto_start(true).unwrap();
+        assert!(
+            ps.is_auto_start_enabled(),
+            "通过 PlatformService 开启后应查询为启用"
+        );
+        ps.set_auto_start(false).unwrap();
+        assert!(
+            !ps.is_auto_start_enabled(),
+            "通过 PlatformService 关闭后应查询为禁用"
+        );
+
+        ts::restore_run_value(original.as_deref());
+    }
+
     #[test]
     fn test_platform_service_tray_action_none_initially() {
         let ps = create_platform_service();

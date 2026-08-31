@@ -122,20 +122,38 @@ let config = AppConfig::load().unwrap_or_else(|e| {
 });
 ```
 
-### 保存模式
+### 保存模式（原子写入）
+
+配置保存必须使用**原子写入**（临时文件 + `rename` 替换），避免进程在写入中途被杀
+（强制关机/断电）产生半截配置文件——配置文件损坏会在下次启动时触发"加载失败回退默认值"，
+进而引发连锁故障（如开机自启条目被误删）。见 `atomic_write_file`（app_config.rs）。
 
 ```rust
 pub fn save(&self) -> anyhow::Result<()> {
     let path = Self::get_config_path()?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let content = serde_json::to_string_pretty(self)?;
-    std::fs::write(&path, content)?;
+    atomic_write_file(&path, &content)?;   // 临时文件 + rename 原子替换
     log::info!("保存配置成功: {:?}", path);
     Ok(())
 }
+
+/// 先写临时文件再 rename；rename 失败时清理临时文件
+fn atomic_write_file(path: &Path, content: &str) -> anyhow::Result<()> {
+    let tmp_path = path.with_extension("json.tmp");
+    std::fs::write(&tmp_path, content)?;
+    if let Err(e) = std::fs::rename(&tmp_path, path) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(e.into());
+    }
+    Ok(())
+}
 ```
+
+### 加载失败防护
+
+加载失败回退默认值时，调用方必须能区分"真实配置"与"回退默认值"：
+`AppContext.config_loaded = false` 时，禁止按配置同步系统状态（开机自启注册表等），
+否则默认值会覆盖用户的真实系统状态。
 
 ### 导入/导出模式
 

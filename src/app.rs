@@ -130,7 +130,8 @@ impl MyApp {
                 if let Err(error) = self.ctx.save_config() {
                     log::warn!("保存开机自启配置失败: {error}");
                 }
-                if let Err(error) = crate::utils::platform::set_auto_start(enabled) {
+                // 通过平台抽象（PlatformService）写入/删除自启条目
+                if let Err(error) = self.ctx.platform_service.set_auto_start(enabled) {
                     log::warn!("切换开机自启失败: {error}");
                 }
                 set_tray_auto_start_state(enabled);
