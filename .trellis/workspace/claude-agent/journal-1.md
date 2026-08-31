@@ -768,3 +768,36 @@ Windows 版本初步可用，需要发布 beta：评估构建脚本/流程，实
 ### Next Steps
 
 - 用户实测：在另一台电脑重新开启自启并重启验证；若仍失效，按新增诊断日志定位。
+
+
+## Session 15: 修复开机自启间歇性失效（续）
+
+**Date**: 2026-08-31
+**Task**: 修复开机自启间歇性失效（续）
+**Branch**: `master`
+
+### Summary
+
+定位并封堵配置回退自毁路径与半截配置两条根因；诊断日志默认可见
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4dc53cb` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

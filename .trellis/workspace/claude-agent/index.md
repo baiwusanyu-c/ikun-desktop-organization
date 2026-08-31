@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 14
-- **Last Active**: 2026-08-28
+- **Total Sessions**: 15
+- **Last Active**: 2026-08-31
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~731 | Active |
+| `journal-1.md` | ~805 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 15 | 2026-08-31 | 修复开机自启间歇性失效（续） | `4dc53cb` | `master` |
 | 14 | 2026-08-28 | Beta发布：构建脚本评估与GitHub发布流程（08-28-beta-release-cicd） | - | `master` |
 | 13 | 2026-08-28 | 修复托盘图标/弹窗居中/开机自启三个 bug | - | `master` |
 | 11 | 2026-07-15 | 修复分类框删除后图标消失bug | - | `master` |
