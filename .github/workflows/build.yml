@@ -45,6 +45,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci
+
+      - name: Build frontend
+        # tauri::generate_context! requires frontendDist to exist at compile time
+        run: npm --prefix frontend run build
+
+      - name: Check frontend types (svelte-check + tsc)
+        run: npm --prefix frontend run check
+
       - name: Format Check
         run: cargo fmt -- --check
 
