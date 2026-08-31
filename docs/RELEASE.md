@@ -104,7 +104,10 @@ enabling it later is small:
 - `scripts/build.mjs --platform mac` exists (fails explicitly on non-macOS
   hosts; unvalidated on macOS hosts);
 - `build.yml` keeps a non-blocking macOS job (`continue-on-error: true`);
-- `release.yml` contains a commented-out `release-macos` job to re-enable.
+- `release.yml` contains a commented-out `release-macos` job to re-enable;
+- macOS bundling will additionally need `tauri/icons/icon.icns` (and PNGs).
+  Generate the full set from a 1024x1024 PNG source with `npx tauri icon <logo.png>`.
+  The icon list in `tauri.conf.json` currently references only files that exist.
 
 ## Code signing (not configured)
 
