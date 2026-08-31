@@ -1,16 +1,17 @@
-/// build.rs - 将应用清单与图标嵌入 Windows 可执行文件，
-/// 并集成 Tauri 2.0 构建流程。
-///
-/// 确保 Windows 识别 Per-Monitor DPI V2 感知，
-/// 防止窗口跨不同 DPI 显示器移动时被 bitmap-stretch。
-///
-/// 同时将 `logo.ico` 以资源 ID=1 ICON 嵌入，供系统托盘与窗口标题栏使用。
-///
-/// 资源编译统一使用 embed-resource crate（与 tauri-build 相同的资源编译器发现机制）：
-/// - MSVC 目标：PATH 中的 rc.exe / Windows SDK 注册表（KitsRoot10 等）/ vswhom 探测
-/// - GNU 目标：PATH 中的 windres（含交叉前缀与 llvm-windres）
-/// 保证在 rc.exe / windres 不在 PATH 的机器上（如仅安装 VS Build Tools 的电脑）
-/// 也能成功嵌入图标与清单。
+//! build.rs - 将应用清单与图标嵌入 Windows 可执行文件，
+//! 并集成 Tauri 2.0 构建流程。
+//!
+//! 确保 Windows 识别 Per-Monitor DPI V2 感知，
+//! 防止窗口跨不同 DPI 显示器移动时被 bitmap-stretch。
+//!
+//! 同时将 `logo.ico` 以资源 ID=1 ICON 嵌入，供系统托盘与窗口标题栏使用。
+//!
+//! 资源编译统一使用 embed-resource crate（与 tauri-build 相同的资源编译器发现机制）：
+//! - MSVC 目标：PATH 中的 rc.exe / Windows SDK 注册表（KitsRoot10 等）/ vswhom 探测
+//! - GNU 目标：PATH 中的 windres（含交叉前缀与 llvm-windres）
+//!
+//! 保证在 rc.exe / windres 不在 PATH 的机器上（如仅安装 VS Build Tools 的电脑）
+//! 也能成功嵌入图标与清单。
 
 fn main() {
     // Tauri 2.0 构建集成（仅在 tauri-ui feature 启用时）
@@ -22,7 +23,7 @@ fn main() {
             tauri_build::WindowsAttributes::new_without_app_manifest().window_icon_path("logo.ico"),
         );
         if let Err(error) = tauri_build::try_build(attrs) {
-            panic!("tauri_build 构建失败: {error}");
+            panic!("tauri_build 构建失败: {error:#}");
         }
     }
 

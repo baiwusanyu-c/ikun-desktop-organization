@@ -692,7 +692,7 @@ fn try_parse_at_offset(data: &[u8], len_offset: usize) -> Option<String> {
         data[len_offset + 2],
         data[len_offset + 3],
     ]) as usize;
-    if path_len < 3 || path_len > 32768 {
+    if !(3..=32768).contains(&path_len) {
         return None;
     }
     let start = len_offset + 4;
@@ -734,7 +734,7 @@ fn scan_for_utf16_path(data: &[u8]) -> Option<String> {
             && data[i + 5] == 0
         {
             let drive_letter = data[i];
-            if drive_letter >= b'A' && drive_letter <= b'Z' {
+            if drive_letter.is_ascii_uppercase() {
                 let mut end = i;
                 while end + 1 < data.len() {
                     let ch = u16::from_le_bytes([data[end], data[end + 1]]);
@@ -1439,7 +1439,7 @@ mod ole_drop_tests {
     #[test]
     fn test_insert_mode_shift_by_n_positions() {
         // 现有项：A@lin0, B@lin1
-        let mut items = vec![(0, 0), (1, 0)]; // (col, row) 线性索引：lin0, lin1
+        let mut items = [(0, 0), (1, 0)]; // (col, row) 线性索引：lin0, lin1
         let cols = 3;
         let insert_lin = 1; // 插入到 lin1 位置
         let valid_count = 2; // 2 个有效新文件
@@ -1461,7 +1461,7 @@ mod ole_drop_tests {
         assert_eq!(items[1], (0, 1), "B 应从 lin1 右移到 lin3（col0, row1）");
 
         // 新项应占据 lin1 和 lin2
-        let new_item_0_lin = insert_lin + 0; // lin1
+        let new_item_0_lin = insert_lin; // lin1
         let new_item_1_lin = insert_lin + 1; // lin2
         assert_eq!(new_item_0_lin, 1, "第一个新项应在 lin1");
         assert_eq!(new_item_1_lin, 2, "第二个新项应在 lin2");
@@ -1491,7 +1491,7 @@ mod ole_drop_tests {
     /// 部分重复文件：valid_count=实际有效数
     #[test]
     fn test_insert_mode_partial_duplicates() {
-        let mut items = vec![(0, 0), (1, 0), (2, 0)]; // lin0, lin1, lin2
+        let mut items = [(0, 0), (1, 0), (2, 0)]; // lin0, lin1, lin2
         let cols = 3;
         let insert_lin = 1;
         let valid_count = 1; // 3 个文件中 2 个重复，只有 1 个有效

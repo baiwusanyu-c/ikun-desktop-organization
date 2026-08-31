@@ -761,8 +761,8 @@ mod tests {
         let my: i32 = 102; // dy = 2, below DRAG_THRESHOLD
         let dx = (mx - drag_start_x).abs();
         let dy = (my - drag_start_y).abs();
-        assert!(dx <= DRAG_THRESHOLD as i32);
-        assert!(dy <= DRAG_THRESHOLD as i32);
+        assert!(dx <= DRAG_THRESHOLD);
+        assert!(dy <= DRAG_THRESHOLD);
     }
 
     #[test]
@@ -773,8 +773,8 @@ mod tests {
         let my: i32 = 115; // dy = 15, above DRAG_THRESHOLD
         let dx = (mx - drag_start_x).abs();
         let dy = (my - drag_start_y).abs();
-        assert!(dx > DRAG_THRESHOLD as i32);
-        assert!(dy > DRAG_THRESHOLD as i32);
+        assert!(dx > DRAG_THRESHOLD);
+        assert!(dy > DRAG_THRESHOLD);
     }
 
     // ===== External window detection logic tests =====
@@ -880,7 +880,7 @@ mod tests {
     #[test]
     fn test_end_drag_full_state_reset() {
         // 模拟拖拽进行中的状态
-        let mut drag_pending = false; // 已激活
+        let drag_pending = false; // 已激活
         let mut drag_active = true;
         let mut drag_item_index: i32 = 3;
         let mut drag_over_item: i32 = 2;
@@ -912,18 +912,18 @@ mod tests {
         let drag_source_idx: usize = 2;
 
         // 场景 1：多选包含拖拽源 → 激活多选拖拽
-        let selected = vec![1, 2, 3];
+        let selected = [1, 2, 3];
         let should_activate = selected.len() > 1 && selected.contains(&drag_source_idx);
         assert!(should_activate, "多选包含拖拽源时应激活");
 
         // 场景 2：单选 → 不激活多选拖拽
-        let selected_single = vec![2];
+        let selected_single = [2];
         let should_activate_single =
             selected_single.len() > 1 && selected_single.contains(&drag_source_idx);
         assert!(!should_activate_single, "单选时不应激活多选拖拽");
 
         // 场景 3：多选但不包含拖拽源 → 不激活
-        let selected_other = vec![0, 1, 3];
+        let selected_other = [0, 1, 3];
         let should_activate_other =
             selected_other.len() > 1 && selected_other.contains(&drag_source_idx);
         assert!(!should_activate_other, "多选不包含拖拽源时不应激活");

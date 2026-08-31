@@ -502,7 +502,7 @@ fn thumbnail_to_hicon(hbitmap: RawHBITMAP) -> HICON {
         return std::ptr::null_mut();
     }
 
-    let mut icon_info = ICONINFO {
+    let icon_info = ICONINFO {
         fIcon: true.into(),
         xHotspot: 0,
         yHotspot: 0,
@@ -510,7 +510,7 @@ fn thumbnail_to_hicon(hbitmap: RawHBITMAP) -> HICON {
         hbmColor: WinHBITMAP(hbitmap),
     };
 
-    let hicon_result = unsafe { CreateIconIndirect(&mut icon_info) };
+    let hicon_result = unsafe { CreateIconIndirect(&icon_info) };
 
     // Release mask bitmap (CreateIconIndirect copies the data)
     unsafe {

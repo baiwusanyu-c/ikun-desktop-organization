@@ -493,88 +493,89 @@ impl AppRuntime {
 
         #[allow(unreachable_code)]
         {
-        let icons = self.ctx.desktop_manager.get_desktop_icons();
-        if icons.is_empty() {
-            self.ctx.set_status("未找到桌面图标");
-            return;
-        }
-
-        let mut games: Vec<DesktopIcon> = Vec::new();
-        let mut dev_tools: Vec<DesktopIcon> = Vec::new();
-        let mut office: Vec<DesktopIcon> = Vec::new();
-
-        for icon in &icons {
-            games.push(icon.clone());
-        }
-
-        destroy_all_grid_windows();
-
-        let categories: Vec<(&str, &Vec<DesktopIcon>)> = vec![
-            ("游戏", &games),
-            ("开发工具", &dev_tools),
-            ("办公", &office),
-        ];
-
-        let (screen_w_phys, screen_h_phys) = get_screen_resolution();
-        let box_w = self.ctx.config.box_defaults.default_width;
-        let box_h = self.ctx.config.box_defaults.default_height;
-        let padding = 20i32;
-        let total_w = 3 * box_w + 2 * padding;
-        // GridCreateParams 的 x/y 是逻辑像素（96 DPI 基准），需要物理→逻辑转换
-        let primary_dpi = get_primary_monitor_dpi();
-        let screen_w = (screen_w_phys * 96) / primary_dpi as i32;
-        let screen_h = (screen_h_phys * 96) / primary_dpi as i32;
-        let start_x = ((screen_w - total_w) / 2).max(10);
-        let start_y = (screen_h as f32 * 0.08) as i32;
-
-        let mut created_count = 0;
-        for (i, (title, icon_list)) in categories.iter().enumerate() {
-            if icon_list.is_empty() {
-                continue;
+            let icons = self.ctx.desktop_manager.get_desktop_icons();
+            if icons.is_empty() {
+                self.ctx.set_status("未找到桌面图标");
+                return;
             }
-            let x = start_x + created_count * (box_w + padding);
-            let mut items: Vec<GridFileItem> = Vec::new();
-            for icon in icon_list.iter() {
-                let path_str = icon.path.to_string_lossy().to_string();
-                let hicon = extract_file_icon(&path_str)
-                    .map(|fi| fi.hicon)
-                    .unwrap_or(std::ptr::null_mut());
-                items.push(GridFileItem {
-                    file_path: path_str,
-                    display_name: icon.display_name.clone(),
-                    icon_handle: hicon,
-                    grid_col: -1,
-                    grid_row: -1,
-                });
-            }
-            let params = GridCreateParams {
-                id: i,
-                title: title.to_string(),
-                x,
-                y: start_y,
-                width: box_w,
-                height: box_h,
-                items,
-                view_mode: self.ctx.config.box_defaults.view_mode.clone(),
-                locked: false,
-                sort_mode: self.ctx.config.box_defaults.sort_mode.clone(),
-                sort_ascending: self.ctx.config.box_defaults.sort_ascending,
-                group_by: self.ctx.config.box_defaults.group_by.clone(),
-                config_id: uuid::Uuid::new_v4(),
-                edit_box_callback: Some(Box::new(|config_id, name| {
-                    trigger_edit_box_callback(config_id, name);
-                })),
-            };
-            if create_grid_window(params).is_ok() {
-                created_count += 1;
-            }
-        }
 
-        self.ctx.set_status(format!(
-            "分类完成！{} 个图标 → {} 个分类框",
-            icons.len(),
-            created_count
-        ));
+            let mut games: Vec<DesktopIcon> = Vec::new();
+            let mut dev_tools: Vec<DesktopIcon> = Vec::new();
+            let mut office: Vec<DesktopIcon> = Vec::new();
+
+            for icon in &icons {
+                games.push(icon.clone());
+            }
+
+            destroy_all_grid_windows();
+
+            let categories: Vec<(&str, &Vec<DesktopIcon>)> = vec![
+                ("游戏", &games),
+                ("开发工具", &dev_tools),
+                ("办公", &office),
+            ];
+
+            let (screen_w_phys, screen_h_phys) = get_screen_resolution();
+            let box_w = self.ctx.config.box_defaults.default_width;
+            let box_h = self.ctx.config.box_defaults.default_height;
+            let padding = 20i32;
+            let total_w = 3 * box_w + 2 * padding;
+            // GridCreateParams 的 x/y 是逻辑像素（96 DPI 基准），需要物理→逻辑转换
+            let primary_dpi = get_primary_monitor_dpi();
+            let screen_w = (screen_w_phys * 96) / primary_dpi as i32;
+            let screen_h = (screen_h_phys * 96) / primary_dpi as i32;
+            let start_x = ((screen_w - total_w) / 2).max(10);
+            let start_y = (screen_h as f32 * 0.08) as i32;
+
+            let mut created_count = 0;
+            for (i, (title, icon_list)) in categories.iter().enumerate() {
+                if icon_list.is_empty() {
+                    continue;
+                }
+                let x = start_x + created_count * (box_w + padding);
+                let mut items: Vec<GridFileItem> = Vec::new();
+                for icon in icon_list.iter() {
+                    let path_str = icon.path.to_string_lossy().to_string();
+                    let hicon = extract_file_icon(&path_str)
+                        .map(|fi| fi.hicon)
+                        .unwrap_or(std::ptr::null_mut());
+                    items.push(GridFileItem {
+                        file_path: path_str,
+                        display_name: icon.display_name.clone(),
+                        icon_handle: hicon,
+                        grid_col: -1,
+                        grid_row: -1,
+                    });
+                }
+                let params = GridCreateParams {
+                    id: i,
+                    title: title.to_string(),
+                    x,
+                    y: start_y,
+                    width: box_w,
+                    height: box_h,
+                    items,
+                    view_mode: self.ctx.config.box_defaults.view_mode.clone(),
+                    locked: false,
+                    sort_mode: self.ctx.config.box_defaults.sort_mode.clone(),
+                    sort_ascending: self.ctx.config.box_defaults.sort_ascending,
+                    group_by: self.ctx.config.box_defaults.group_by.clone(),
+                    config_id: uuid::Uuid::new_v4(),
+                    edit_box_callback: Some(Box::new(|config_id, name| {
+                        trigger_edit_box_callback(config_id, name);
+                    })),
+                };
+                if create_grid_window(params).is_ok() {
+                    created_count += 1;
+                }
+            }
+
+            self.ctx.set_status(format!(
+                "分类完成！{} 个图标 → {} 个分类框",
+                icons.len(),
+                created_count
+            ));
+        }
     }
 
     pub fn clear_and_restore(&mut self) {

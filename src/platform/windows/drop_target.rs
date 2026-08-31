@@ -57,8 +57,8 @@ pub fn take_pending_source_removal() -> Option<PendingSourceRemoval> {
         .and_then(|mut g| g.take())
 }
 
-/// 框→框移动：暂存待添加项信息队列（含释放坐标）
-/// 支持多选拖拽时批量入队，每次 take 取出队头元素
+// 框→框移动：暂存待添加项信息队列（含释放坐标）
+// 支持多选拖拽时批量入队，每次 take 取出队头元素
 lazy_static::lazy_static! {
     static ref PENDING_ADD_ITEM: Mutex<std::collections::VecDeque<(String, String, i32, i32, i32, i32)>> =
         Mutex::new(std::collections::VecDeque::new());

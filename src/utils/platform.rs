@@ -355,7 +355,11 @@ mod tests {
                 return None;
             }
             let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-            Some(std::ffi::OsString::from_wide(&buf[..len]).to_string_lossy().into_owned())
+            Some(
+                std::ffi::OsString::from_wide(&buf[..len])
+                    .to_string_lossy()
+                    .into_owned(),
+            )
         }
     }
 
@@ -403,8 +407,13 @@ mod tests {
         let value_name = to_wide(RUN_VALUE_NAME);
         unsafe {
             let mut hkey: isize = 0;
-            if RegOpenKeyExW(HKEY_CURRENT_USER, key_path.as_ptr(), 0, KEY_WRITE, &mut hkey)
-                != ERROR_SUCCESS
+            if RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                key_path.as_ptr(),
+                0,
+                KEY_WRITE,
+                &mut hkey,
+            ) != ERROR_SUCCESS
             {
                 return;
             }

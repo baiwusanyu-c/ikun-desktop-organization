@@ -368,7 +368,7 @@ impl DesktopIconManager {
     /// 导致所有可见图标位置偏移。保存非管理图标后恢复，使其保持原位。
     pub fn save_protected_positions(&mut self, exclude_indices: &[i32]) {
         self.protected_positions.clear();
-        for (_, &index) in &self.name_to_index {
+        for &index in self.name_to_index.values() {
             // 跳过即将被隐藏的管理图标（防止 restore 将其恢复回可见位置）
             if exclude_indices.contains(&index) {
                 continue;
@@ -1616,6 +1616,111 @@ pub fn verify_icon_screen_position(file_path: &str) -> Option<(i32, i32)> {
     }
 }
 
+// ===== SysListView32 icon extraction =====
+
+const SHGFI_SYSICONINDEX: u32 = 0x00000400;
+const SHGFI_SMALLICON: u32 = 0x00000001;
+const ILD_TRANSPARENT: u32 = 0x00000001;
+
+#[repr(C)]
+struct SysSHFILEINFOW {
+    h_icon: *mut std::ffi::c_void,
+    i_icon: i32,
+    dw_attributes: u32,
+    sz_display_name: [u16; 260],
+    sz_type_name: [u16; 80],
+}
+
+impl Default for SysSHFILEINFOW {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+extern "system" {
+    fn SHGetFileInfoW(
+        pszPath: *const u16,
+        dwFileAttributes: u32,
+        psfi: *mut SysSHFILEINFOW,
+        cbFileInfo: u32,
+        uFlags: u32,
+    ) -> usize;
+    fn ImageList_GetIcon(himl: *mut std::ffi::c_void, i: i32, flags: u32) -> *mut std::ffi::c_void;
+}
+
+/// 获取桌面 SysListView32 使用的系统图像列表句柄
+///
+/// 使用 SHGetImageList(SHIL_LARGE) 获取系统大图标图像列表。
+/// 这是获取系统图像列表的推荐方式，比 SHGetFileInfoW 更可靠。
+/// 返回的 IImageList 由系统管理，这里泄漏引用（系统级资源，进程结束时释放）。
+fn get_shell_image_list() -> Option<*mut std::ffi::c_void> {
+    use windows::Win32::UI::Controls::IImageList;
+    use windows::Win32::UI::Shell::{SHGetImageList, SHIL_LARGE};
+
+    let result: windows::core::Result<IImageList> = unsafe { SHGetImageList(SHIL_LARGE as i32) };
+    match result {
+        Ok(image_list) => {
+            // 将 IImageList COM 接口转换为 HIMAGELIST (原始指针)
+            // IImageList 和 HIMAGELIST 在 Windows 内部是同一对象
+            use windows::core::Interface;
+            let himl = image_list.as_raw() as *mut std::ffi::c_void;
+            // 防止 COM 对象被 drop（系统级资源，保持引用）
+            std::mem::forget(image_list);
+            log::info!("get_shell_image_list: 获取系统图像列表成功 himl={:?}", himl);
+            Some(himl)
+        }
+        Err(e) => {
+            log::warn!("get_shell_image_list: SHGetImageList 失败: {:?}", e);
+            None
+        }
+    }
+}
+
+/// 从系统图像列表提取图标
+///
+/// `image_index` 是 LVITEMW.iImage 字段值（通过 read_item_image 获取），
+/// 而非 ListView item index。
+pub fn extract_icon_from_listview(image_index: i32) -> Option<super::icon_extract::FileIconInfo> {
+    log::info!(
+        "extract_icon_from_listview: 尝试提取 image_index={}",
+        image_index
+    );
+    if image_index < 0 {
+        log::warn!(
+            "extract_icon_from_listview: invalid image_index={}",
+            image_index
+        );
+        return None;
+    }
+    let himl = match get_shell_image_list() {
+        Some(h) => {
+            log::info!(
+                "extract_icon_from_listview: 获取系统图像列表成功 himl={:?}",
+                h
+            );
+            h
+        }
+        None => {
+            log::warn!("extract_icon_from_listview: 获取系统图像列表失败");
+            return None;
+        }
+    };
+    let hicon = unsafe { ImageList_GetIcon(himl, image_index, ILD_TRANSPARENT) };
+    if hicon.is_null() {
+        log::warn!(
+            "extract_icon_from_listview: ImageList_GetIcon(image_index={}) returned null",
+            image_index
+        );
+        return None;
+    }
+    log::info!("extract_icon_from_listview: 成功提取图标 hicon={:?}", hicon);
+    Some(super::icon_extract::FileIconInfo {
+        hicon,
+        display_name: String::new(),
+        type_name: String::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1747,109 +1852,4 @@ mod tests {
             let _ = (*x, *y); // Just verify the types are correct
         }
     }
-}
-
-// ===== SysListView32 icon extraction =====
-
-const SHGFI_SYSICONINDEX: u32 = 0x00000400;
-const SHGFI_SMALLICON: u32 = 0x00000001;
-const ILD_TRANSPARENT: u32 = 0x00000001;
-
-#[repr(C)]
-struct SysSHFILEINFOW {
-    h_icon: *mut std::ffi::c_void,
-    i_icon: i32,
-    dw_attributes: u32,
-    sz_display_name: [u16; 260],
-    sz_type_name: [u16; 80],
-}
-
-impl Default for SysSHFILEINFOW {
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
-}
-
-extern "system" {
-    fn SHGetFileInfoW(
-        pszPath: *const u16,
-        dwFileAttributes: u32,
-        psfi: *mut SysSHFILEINFOW,
-        cbFileInfo: u32,
-        uFlags: u32,
-    ) -> usize;
-    fn ImageList_GetIcon(himl: *mut std::ffi::c_void, i: i32, flags: u32) -> *mut std::ffi::c_void;
-}
-
-/// 获取桌面 SysListView32 使用的系统图像列表句柄
-///
-/// 使用 SHGetImageList(SHIL_LARGE) 获取系统大图标图像列表。
-/// 这是获取系统图像列表的推荐方式，比 SHGetFileInfoW 更可靠。
-/// 返回的 IImageList 由系统管理，这里泄漏引用（系统级资源，进程结束时释放）。
-fn get_shell_image_list() -> Option<*mut std::ffi::c_void> {
-    use windows::Win32::UI::Controls::IImageList;
-    use windows::Win32::UI::Shell::{SHGetImageList, SHIL_LARGE};
-
-    let result: windows::core::Result<IImageList> = unsafe { SHGetImageList(SHIL_LARGE as i32) };
-    match result {
-        Ok(image_list) => {
-            // 将 IImageList COM 接口转换为 HIMAGELIST (原始指针)
-            // IImageList 和 HIMAGELIST 在 Windows 内部是同一对象
-            use windows::core::Interface;
-            let himl = image_list.as_raw() as *mut std::ffi::c_void;
-            // 防止 COM 对象被 drop（系统级资源，保持引用）
-            std::mem::forget(image_list);
-            log::info!("get_shell_image_list: 获取系统图像列表成功 himl={:?}", himl);
-            Some(himl)
-        }
-        Err(e) => {
-            log::warn!("get_shell_image_list: SHGetImageList 失败: {:?}", e);
-            None
-        }
-    }
-}
-
-/// 从系统图像列表提取图标
-///
-/// `image_index` 是 LVITEMW.iImage 字段值（通过 read_item_image 获取），
-/// 而非 ListView item index。
-pub fn extract_icon_from_listview(image_index: i32) -> Option<super::icon_extract::FileIconInfo> {
-    log::info!(
-        "extract_icon_from_listview: 尝试提取 image_index={}",
-        image_index
-    );
-    if image_index < 0 {
-        log::warn!(
-            "extract_icon_from_listview: invalid image_index={}",
-            image_index
-        );
-        return None;
-    }
-    let himl = match get_shell_image_list() {
-        Some(h) => {
-            log::info!(
-                "extract_icon_from_listview: 获取系统图像列表成功 himl={:?}",
-                h
-            );
-            h
-        }
-        None => {
-            log::warn!("extract_icon_from_listview: 获取系统图像列表失败");
-            return None;
-        }
-    };
-    let hicon = unsafe { ImageList_GetIcon(himl, image_index, ILD_TRANSPARENT) };
-    if hicon.is_null() {
-        log::warn!(
-            "extract_icon_from_listview: ImageList_GetIcon(image_index={}) returned null",
-            image_index
-        );
-        return None;
-    }
-    log::info!("extract_icon_from_listview: 成功提取图标 hicon={:?}", hicon);
-    Some(super::icon_extract::FileIconInfo {
-        hicon,
-        display_name: String::new(),
-        type_name: String::new(),
-    })
 }

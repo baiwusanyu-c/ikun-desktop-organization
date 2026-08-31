@@ -987,7 +987,7 @@ mod tests {
         let dpi = 144;
         let (btn_x, btn_y, btn_size) = lock_btn_rect(win_w, title_h, dpi);
         assert_eq!(btn_size, 39);
-        let (more_x, _, more_size) = more_btn_rect(win_w, title_h, dpi);
+        let (more_x, _, _more_size) = more_btn_rect(win_w, title_h, dpi);
         assert!(btn_x < more_x, "锁定按钮应在更多按钮左侧");
         assert_eq!(btn_y, 10);
     }
@@ -999,7 +999,7 @@ mod tests {
         let dpi = 192;
         let (btn_x, btn_y, btn_size) = lock_btn_rect(win_w, title_h, dpi);
         assert_eq!(btn_size, 52);
-        let (more_x, _, more_size) = more_btn_rect(win_w, title_h, dpi);
+        let (more_x, _, _more_size) = more_btn_rect(win_w, title_h, dpi);
         assert!(btn_x < more_x, "锁定按钮应在更多按钮左侧");
         assert_eq!(btn_y, 14);
     }
@@ -1010,7 +1010,7 @@ mod tests {
         let win_w = 100;
         let title_h = 40;
         let dpi = 96;
-        let (btn_x, _btn_y, btn_size) = lock_btn_rect(win_w, title_h, dpi);
+        let (btn_x, _btn_y, _btn_size) = lock_btn_rect(win_w, title_h, dpi);
         let (more_x, _more_y, more_size) = more_btn_rect(win_w, title_h, dpi);
 
         assert!(more_x + more_size <= win_w, "更多按钮不应超出窗口右边界");

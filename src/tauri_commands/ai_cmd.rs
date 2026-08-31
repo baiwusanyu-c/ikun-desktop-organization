@@ -13,18 +13,20 @@ pub fn show_ai_classify_dialog(
     runtime: State<'_, SharedTauriRuntime>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let rt = runtime.lock().map_err(|e| format!("运行时状态不可用: {e}"))?;
-    
+    let rt = runtime
+        .lock()
+        .map_err(|e| format!("运行时状态不可用: {e}"))?;
+
     // 检查 AI 配置
     let config = &rt.ctx.config;
     if config.ai.base_url.is_empty() || config.ai.api_key.is_empty() || config.ai.model.is_empty() {
         return Err("请先在设置中配置 AI 分类参数".to_string());
     }
-    
+
     // 显示对话框
     show_managed_window(&app, ManagedWindow::AiClassify)
         .map_err(|e| format!("显示 AI 分类对话框失败: {e}"))?;
-    
+
     Ok(())
 }
 
@@ -35,18 +37,23 @@ pub async fn start_ai_classification(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     log::info!("[AI] start_ai_classification 已调用");
-    
+
     let config = {
-        let rt = runtime.lock().map_err(|e| format!("运行时状态不可用: {e}"))?;
-        log::info!("[AI] 获取配置: base_url={}, model={}", 
-            rt.ctx.config.ai.base_url, rt.ctx.config.ai.model);
+        let rt = runtime
+            .lock()
+            .map_err(|e| format!("运行时状态不可用: {e}"))?;
+        log::info!(
+            "[AI] 获取配置: base_url={}, model={}",
+            rt.ctx.config.ai.base_url,
+            rt.ctx.config.ai.model
+        );
         rt.ctx.config.clone()
     };
-    
+
     // 在后台线程执行 AI 分类
     let app_clone = app.clone();
     let runtime_clone = runtime.inner().clone();
-    
+
     log::info!("[AI] 准备启动 tokio 任务");
     tokio::spawn(async move {
         log::info!("[AI] tokio 任务已启动");
@@ -57,28 +64,36 @@ pub async fn start_ai_classification(
                 // 在主线程创建分类框
                 let app_for_create = app_clone.clone();
                 let runtime_for_create = runtime_clone.clone();
-                
-                app_clone.run_on_main_thread(move || {
-                    if let Err(e) = create_classified_boxes(&app_for_create, &runtime_for_create, &groups) {
+
+                if let Err(e) = app_clone.run_on_main_thread(move || {
+                    if let Err(e) =
+                        create_classified_boxes(&app_for_create, &runtime_for_create, &groups)
+                    {
                         log::error!("创建分类框失败: {e}");
-                        let _ = app_for_create.emit("ai-classification-error", format!("创建分类框失败: {e}"));
+                        let _ = app_for_create
+                            .emit("ai-classification-error", format!("创建分类框失败: {e}"));
                     } else {
                         let icon_count: usize = groups.values().map(|v| v.len()).sum();
                         let box_count = groups.len();
-                        let _ = app_for_create.emit("ai-classification-success", serde_json::json!({
-                            "icon_count": icon_count,
-                            "box_count": box_count
-                        }));
+                        let _ = app_for_create.emit(
+                            "ai-classification-success",
+                            serde_json::json!({
+                                "icon_count": icon_count,
+                                "box_count": box_count
+                            }),
+                        );
                     }
-                }).map_err(|e| log::error!("调度到主线程失败: {e}"));
+                }) {
+                    log::error!("调度到主线程失败: {e}");
+                }
             }
             Err(e) => {
                 log::error!("[AI] AI 分类失败: {}", e);
-                let _ = app_clone.emit("ai-classification-error", format!("{e}"));
+                let _ = app_clone.emit("ai-classification-error", e.to_string());
             }
         }
     });
-    
+
     Ok(())
 }
 
@@ -88,24 +103,28 @@ async fn perform_ai_classification_async(
     config: crate::config::AppConfig,
 ) -> Result<std::collections::HashMap<String, Vec<crate::platform::DesktopIcon>>, String> {
     use std::collections::HashMap;
-    
+
     // 获取桌面图标
     let icons = {
-        let rt = runtime.lock().map_err(|e| format!("无法访问运行时状态: {e}"))?;
+        let rt = runtime
+            .lock()
+            .map_err(|e| format!("无法访问运行时状态: {e}"))?;
         rt.ctx.desktop_manager.get_desktop_icons()
     };
-    
+
     if icons.is_empty() {
         return Err("桌面没有图标".to_string());
     }
-    
+
     // 调用 AI 分类
     let classifier = crate::classification::AiClassifier::new(config.ai.clone())
         .map_err(|e| format!("创建 AI 分类器失败: {e}"))?;
-    
-    let results = classifier.classify(&icons).await
+
+    let results = classifier
+        .classify(&icons)
+        .await
         .map_err(|e| format!("AI 分类失败: {e}"))?;
-    
+
     // 按分类分组
     let mut groups: HashMap<String, Vec<crate::platform::DesktopIcon>> = HashMap::new();
     for icon in &icons {
@@ -116,7 +135,7 @@ async fn perform_ai_classification_async(
             .unwrap_or_else(|| "其他".to_string());
         groups.entry(category).or_default().push(icon.clone());
     }
-    
+
     Ok(groups)
 }
 
@@ -127,37 +146,44 @@ fn create_classified_boxes(
     groups: &std::collections::HashMap<String, Vec<crate::platform::DesktopIcon>>,
 ) -> Result<(), String> {
     use crate::platform::{
-        create_grid_window, destroy_all_grid_windows, extract_file_icon,
-        get_primary_monitor_dpi, get_screen_resolution, restore_all_hidden_icons,
-        GridCreateParams, GridFileItem,
+        create_grid_window, destroy_all_grid_windows, extract_file_icon, get_primary_monitor_dpi,
+        get_screen_resolution, restore_all_hidden_icons, GridCreateParams, GridFileItem,
     };
-    
+
     let config = {
-        let rt = runtime.lock().map_err(|e| format!("运行时状态不可用: {e}"))?;
+        let rt = runtime
+            .lock()
+            .map_err(|e| format!("运行时状态不可用: {e}"))?;
         rt.ctx.config.clone()
     };
-    
+
     // ★ 先销毁所有分类框
     destroy_all_grid_windows();
-    
+
     // ★ 恢复所有图标到桌面
     restore_all_hidden_icons();
-    
+
     log::info!("[AI] 已恢复所有图标到桌面，准备创建新分类框");
-    
+
     // ★ 按照拖拽逻辑的顺序处理图标
     // 1. 对于 public 图标：先隐藏（检查权限），失败则跳过
     // 2. 对于 non-public 图标：先不隐藏，等创建完分类框后再隐藏
-    let mut filtered_groups: std::collections::HashMap<String, Vec<(crate::platform::DesktopIcon, bool)>> = std::collections::HashMap::new();
+    let mut filtered_groups: std::collections::HashMap<
+        String,
+        Vec<(crate::platform::DesktopIcon, bool)>,
+    > = std::collections::HashMap::new();
     for (category, icons) in groups {
         let mut valid_icons = Vec::new();
         for icon in icons {
             let path_str = icon.path.to_string_lossy().to_string();
             let is_public = crate::platform::windows::icon_hider::is_public_desktop_path(&path_str);
-            
+
             if is_public {
                 // public 图标需要授权，先隐藏（作为 preflight），失败则跳过
-                let success = crate::platform::windows::drag_drop::hide_single_desktop_icon(&path_str, &icon.display_name);
+                let success = crate::platform::windows::drag_drop::hide_single_desktop_icon(
+                    &path_str,
+                    &icon.display_name,
+                );
                 if !success {
                     log::warn!("[AI] public 图标授权失败，跳过: {}", icon.display_name);
                     continue;
@@ -172,43 +198,43 @@ fn create_classified_boxes(
             filtered_groups.insert(category.clone(), valid_icons);
         }
     }
-    
+
     // 计算屏幕尺寸
     let (screen_w, screen_h) = get_screen_resolution();
     let dpi = get_primary_monitor_dpi();
     let scale = dpi as f32 / 96.0;
     let logical_w = (screen_w as f32 / scale) as i32;
     let logical_h = (screen_h as f32 / scale) as i32;
-    
+
     // 计算每个分类框的尺寸和位置
     let box_count = filtered_groups.len();
     let gap = 20;
     let padding = 40;
     let available_width = logical_w - padding * 2;
-    
+
     // 计算每行放多少个框子
     let cols = if box_count <= 3 { box_count as i32 } else { 3 };
     let rows = (box_count as i32 + cols - 1) / cols;
-    
+
     let box_width = (available_width - gap * (cols - 1)) / cols;
     let box_height = (logical_h - padding * 2 - gap * (rows - 1)) / rows;
     let box_height = box_height.min(600); // 最大高度
-    
+
     let start_x = padding;
     let start_y = padding;
-    
+
     // 创建分类框
     let mut created = 0;
     for (index, (category_name, group_icons)) in filtered_groups.iter().enumerate() {
         if group_icons.is_empty() {
             continue;
         }
-        
+
         let row = index as i32 / cols;
         let col = index as i32 % cols;
         let x = start_x + col * (box_width + gap);
         let y = start_y + row * (box_height + gap);
-        
+
         // 提取图标
         let items: Vec<GridFileItem> = group_icons
             .iter()
@@ -216,15 +242,16 @@ fn create_classified_boxes(
                 // ★ 使用原始路径（快捷方式路径），而不是 target_path（exe 路径）
                 let path = icon.path.to_string_lossy().to_string();
                 // 解析实际读取路径（图标可能已被隐藏到仓库）
-                let read_path = crate::platform::windows::drag_drop::resolve_drag_item_read_path(&path);
+                let read_path =
+                    crate::platform::windows::drag_drop::resolve_drag_item_read_path(&path);
                 let read_path_str = read_path.to_string_lossy().to_string();
-                
+
                 let hicon = extract_file_icon(&read_path_str)
-                            .map(|info| info.hicon)
-                            .unwrap_or_else(|| {
-                                log::warn!("[AI] 无法提取图标: {} (解析后: {})", path, read_path_str);
-                                std::ptr::null_mut()
-                            });
+                    .map(|info| info.hicon)
+                    .unwrap_or_else(|| {
+                        log::warn!("[AI] 无法提取图标: {} (解析后: {})", path, read_path_str);
+                        std::ptr::null_mut()
+                    });
                 GridFileItem {
                     file_path: path,
                     display_name: icon.display_name.clone(),
@@ -234,7 +261,7 @@ fn create_classified_boxes(
                 }
             })
             .collect();
-        
+
         let params = GridCreateParams {
             id: index,
             title: category_name.clone(),
@@ -253,26 +280,29 @@ fn create_classified_boxes(
                 app.clone(),
             )),
         };
-        
+
         if let Err(e) = create_grid_window(params) {
             log::warn!("创建分类框 '{}'失败: {e}", category_name);
         } else {
             created += 1;
         }
     }
-    
+
     log::info!("创建了 {}/{} 个分类框", created, box_count);
-    
+
     // ★ 最后，对于所有 non-public 图标，调用 hide_single_desktop_icon 隐藏
     // 这确保了如果创建分类框失败，non-public 图标还在桌面上
-    for (category, icons) in &filtered_groups {
+    for icons in filtered_groups.values() {
         for (icon, is_public) in icons {
             if !is_public {
                 let path_str = icon.path.to_string_lossy().to_string();
-                crate::platform::windows::drag_drop::hide_single_desktop_icon(&path_str, &icon.display_name);
+                crate::platform::windows::drag_drop::hide_single_desktop_icon(
+                    &path_str,
+                    &icon.display_name,
+                );
             }
         }
     }
-    
+
     Ok(())
 }

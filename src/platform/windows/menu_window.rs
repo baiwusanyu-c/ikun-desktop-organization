@@ -797,9 +797,9 @@ unsafe extern "system" fn menu_wnd_proc(
                         render_menu(hwnd);
                     }
                 }
-                VK_RIGHT | VK_RETURN => {
+                VK_RIGHT | VK_RETURN
                     // 展开子菜单或确认
-                    if data.hovered_index >= 0 && (data.hovered_index as usize) < data.items.len() {
+                    if data.hovered_index >= 0 && (data.hovered_index as usize) < data.items.len() => {
                         let item = &data.items[data.hovered_index as usize];
                         if item.has_submenu() {
                             open_submenu(hwnd, data, data.hovered_index);
@@ -807,7 +807,6 @@ unsafe extern "system" fn menu_wnd_proc(
                             data.result_cmd = item.id as i32;
                         }
                     }
-                }
                 _ => {}
             }
             0
@@ -1375,7 +1374,7 @@ fn handle_menu_command(pd: &mut super::grid_window::GridWindowData, cmd: i32) ->
     if cmd == CMD_DELETE {
         log::info!("删除分类框: {}", pd.title);
         return true; // 通知调用方销毁窗口
-    } else if cmd >= CMD_SORT_BASE && cmd < CMD_SORT_BASE + 8 {
+    } else if (CMD_SORT_BASE..CMD_SORT_BASE + 8).contains(&cmd) {
         let modes = [
             SortMode::Name,
             SortMode::Type,
@@ -1394,7 +1393,7 @@ fn handle_menu_command(pd: &mut super::grid_window::GridWindowData, cmd: i32) ->
     } else if cmd == CMD_SORT_DESC {
         pd.sort_ascending = false;
         log::info!("排序: 递减");
-    } else if cmd >= CMD_GROUP_BASE && cmd < CMD_GROUP_BASE + 8 {
+    } else if (CMD_GROUP_BASE..CMD_GROUP_BASE + 8).contains(&cmd) {
         let modes = [
             GroupBy::Name,
             GroupBy::Type,
@@ -1407,7 +1406,7 @@ fn handle_menu_command(pd: &mut super::grid_window::GridWindowData, cmd: i32) ->
         ];
         pd.group_by = modes[(cmd - CMD_GROUP_BASE) as usize].clone();
         log::info!("分组: {:?}", pd.group_by);
-    } else if cmd >= CMD_VIEW_BASE && cmd < CMD_VIEW_BASE + 8 {
+    } else if (CMD_VIEW_BASE..CMD_VIEW_BASE + 8).contains(&cmd) {
         let modes = [
             ViewMode::ExtraLarge,
             ViewMode::Large,

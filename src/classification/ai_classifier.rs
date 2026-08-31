@@ -50,16 +50,15 @@ impl AiClassifier {
     /// 创建 AI 分类器
     pub fn new(config: AiConfig) -> anyhow::Result<Self> {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(config.timeout_seconds as u64))
+            .timeout(std::time::Duration::from_secs(
+                config.timeout_seconds as u64,
+            ))
             .build()?;
         Ok(Self { client, config })
     }
 
     /// 分类桌面图标，返回 Vec<(图标显示名, 分类名)>
-    pub async fn classify(
-        &self,
-        icons: &[DesktopIcon],
-    ) -> anyhow::Result<Vec<(String, String)>> {
+    pub async fn classify(&self, icons: &[DesktopIcon]) -> anyhow::Result<Vec<(String, String)>> {
         if icons.is_empty() {
             return Ok(Vec::new());
         }
@@ -146,9 +145,12 @@ impl AiClassifier {
             "stream": false,
             "enable_thinking": false
         });
-        
+
         log::info!("[AI] 请求 URL: {}", url);
-        log::info!("[AI] 请求体: {}", serde_json::to_string_pretty(&request_body).unwrap_or_default());
+        log::info!(
+            "[AI] 请求体: {}",
+            serde_json::to_string_pretty(&request_body).unwrap_or_default()
+        );
 
         let mut last_error = None;
         let mut delay = std::time::Duration::from_secs(1);
@@ -177,36 +179,41 @@ impl AiClassifier {
                 Ok(response) => {
                     let status = response.status();
                     log::info!("[AI] HTTP 响应状态码: {}", status);
-                    
+
                     if !status.is_success() {
                         let body = response.text().await.unwrap_or_default();
                         log::error!("API 请求失败: HTTP {}, body: {}", status, body);
-                        last_error = Some(anyhow::anyhow!(
-                            "API 请求失败: HTTP {} - {}",
-                            status,
-                            body
-                        ));
+                        last_error =
+                            Some(anyhow::anyhow!("API 请求失败: HTTP {} - {}", status, body));
                         continue;
                     }
 
                     let response_text = response.text().await?;
                     log::info!("[AI] 响应内容长度: {} 字节", response_text.len());
-                    
+
                     if response_text.is_empty() {
                         log::error!("API 返回空内容，URL: {}", url);
-                        last_error = Some(anyhow::anyhow!(
-                            "API 返回空内容 (HTTP {})",
-                            status
-                        ));
+                        last_error = Some(anyhow::anyhow!("API 返回空内容 (HTTP {})", status));
                         continue;
                     }
-                    
-                    let body: serde_json::Value = serde_json::from_str(&response_text)
-                        .map_err(|e| anyhow::anyhow!("API 返回非法 JSON: {}, 内容: {}", e, &response_text[..response_text.len().min(500)]))?;
-                    
+
+                    let body: serde_json::Value =
+                        serde_json::from_str(&response_text).map_err(|e| {
+                            anyhow::anyhow!(
+                                "API 返回非法 JSON: {}, 内容: {}",
+                                e,
+                                &response_text[..response_text.len().min(500)]
+                            )
+                        })?;
+
                     let content = body["choices"][0]["message"]["content"]
                         .as_str()
-                        .ok_or_else(|| anyhow::anyhow!("API 返回缺少 choices/message/content: {}", &response_text[..response_text.len().min(500)]))?;
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "API 返回缺少 choices/message/content: {}",
+                                &response_text[..response_text.len().min(500)]
+                            )
+                        })?;
 
                     return Ok(content.to_string());
                 }
@@ -229,7 +236,7 @@ impl AiClassifier {
             .trim_start_matches("```")
             .trim_end_matches("```")
             .trim();
-        
+
         serde_json::from_str(cleaned).map_err(|error| {
             log::error!("AI 返回 JSON 解析失败: {}", error);
             log::error!("原始响应: {}", json_str);

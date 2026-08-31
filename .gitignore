@@ -3,3 +3,6 @@
 
 # User config files (contain API Key, must not be committed)
 *ikun_organizer*.json
+
+# Build artifacts (scripts/build.mjs output)
+/dist

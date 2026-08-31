@@ -166,7 +166,7 @@ mod tests {
     #[test]
     fn test_desktop_manager_monitor_work_area() {
         let dm = create_desktop_manager();
-        let (x, y, w, h) = dm.get_monitor_work_area((0, 0));
+        let (_x, _y, w, h) = dm.get_monitor_work_area((0, 0));
         assert!(w > 0, "Work area width should be positive");
         assert!(h > 0, "Work area height should be positive");
     }

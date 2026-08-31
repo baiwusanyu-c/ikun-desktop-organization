@@ -49,9 +49,6 @@ pub mod zorder;
 // Re-export key items
 pub use control_panel_window::{hide_control_panel_window, show_control_panel_window};
 pub use desktop_manager::{clsid_display_name, DesktopManager};
-pub use desktop_utils::{
-    is_desktop_auto_arrange_enabled, position_icon_at_screen as position_icon_on_desktop,
-};
 #[allow(unused_imports)] // 公共 API 预留
 pub use drop_target::{
     register_box_drop_target, take_pending_drop, take_pending_source_removal,
@@ -66,7 +63,6 @@ pub use grid_window::{
     rerender_all_grid_windows, update_grid_window_title, GridCreateParams, GridFileItem,
 };
 pub use icon_extract::extract_file_icon;
-#[allow(unused_imports)] // 公共 API 预留
 #[allow(unused_imports)] // 公共 API 预留
 pub use icon_hider::{
     get_vault_display_names, icon_exists_for_box, list_vault_icons, resolve_icon_read_path,

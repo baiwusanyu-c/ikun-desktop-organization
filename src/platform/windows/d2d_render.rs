@@ -836,7 +836,7 @@ pub fn render_icon_grid(
         // Apply scroll offset
         let cell_y = cell_y - scroll_offset;
         let is_selected = i as i32 == selected_item
-            || multi_select_container_type.map_or(false, |ct| {
+            || multi_select_container_type.is_some_and(|ct| {
                 super::multi_select::is_selected(super::multi_select::SelectionKey {
                     container_type: ct,
                     container_id: multi_select_container_id,
@@ -1056,7 +1056,7 @@ fn draw_icon_d2d(
     x: i32,
     y: i32,
     size: i32,
-    mut icon_bitmap_cache: Option<&mut HashMap<(usize, i32), ID2D1Bitmap>>,
+    icon_bitmap_cache: Option<&mut HashMap<(usize, i32), ID2D1Bitmap>>,
 ) {
     let cache_key = (hicon as usize, size);
     if let Some(bitmap) = icon_bitmap_cache
@@ -1234,7 +1234,7 @@ fn draw_icon_d2d(
 
     if let Ok(bmp) = d2d_bitmap {
         draw_icon_bitmap(target, &bmp, x, y, size);
-        if let Some(cache) = icon_bitmap_cache.as_deref_mut() {
+        if let Some(cache) = icon_bitmap_cache {
             cache.insert(cache_key, bmp);
         }
     }
@@ -1308,7 +1308,7 @@ pub fn draw_icon_with_label(
     apply_ellipsis: bool,
 ) {
     draw_icon_with_label_cached(
-        &target,
+        target,
         dw_factory,
         wic_factory,
         icon_handle,

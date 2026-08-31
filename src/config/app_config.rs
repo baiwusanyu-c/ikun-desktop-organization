@@ -452,7 +452,6 @@ impl Default for BoxDefaultsConfig {
 // AiConfig — AI 分类引擎
 // =============================================================================
 
-
 /// AI 分类引擎配置
 ///
 /// 所有字段均需用户自行填写，支持任何 OpenAI 兼容的 LLM API。
@@ -484,7 +483,6 @@ impl fmt::Debug for AiConfig {
             .finish()
     }
 }
-
 
 impl Default for AiConfig {
     fn default() -> Self {
@@ -822,6 +820,7 @@ pub enum GroupBy {
 /// UI 主题配置（支持 light/dark 切换）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct UiThemeConfig {
     /// 亮色主题颜色
     pub light: ThemeColors,
@@ -832,6 +831,7 @@ pub struct UiThemeConfig {
 /// 主题颜色集合
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct ThemeColors {
     /// 背景色 (#RRGGBB 或 #RRGGBBAA)
     pub background: Option<String>,
@@ -849,30 +849,6 @@ pub struct ThemeColors {
     pub danger: Option<String>,
     /// 弱化前景色
     pub muted_foreground: Option<String>,
-}
-
-impl Default for UiThemeConfig {
-    fn default() -> Self {
-        Self {
-            light: ThemeColors::default(),
-            dark: ThemeColors::default(),
-        }
-    }
-}
-
-impl Default for ThemeColors {
-    fn default() -> Self {
-        Self {
-            background: None,
-            foreground: None,
-            border: None,
-            primary: None,
-            primary_foreground: None,
-            success: None,
-            danger: None,
-            muted_foreground: None,
-        }
-    }
 }
 
 // =============================================================================
@@ -958,7 +934,6 @@ mod tests {
         assert_eq!(ai.timeout_seconds, 120);
         assert_eq!(ai.max_retries, 0);
     }
-
 
     #[test]
     fn test_ai_config_user_override() {
@@ -1734,4 +1709,3 @@ mod liquid_glass_tests {
         assert!((config.elasticity - LIQUID_GLASS_ELASTICITY_MAX).abs() < f32::EPSILON);
     }
 }
-

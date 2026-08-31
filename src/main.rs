@@ -1,4 +1,4 @@
-﻿//! Desktop Organizer - Entry point
+//! Desktop Organizer - Entry point
 
 // Windows subsystem (no console window), logs written to file
 #![windows_subsystem = "windows"]
@@ -22,8 +22,7 @@ mod utils;
 #[cfg(feature = "tauri-ui")]
 mod tauri_commands;
 
-#[cfg(windows)]
-#[cfg(not(feature = "tauri-ui"))]
+#[cfg(all(windows, feature = "gpui-ui"))]
 mod gpui_app;
 
 fn main() -> anyhow::Result<()> {
@@ -62,15 +61,11 @@ fn main() -> anyhow::Result<()> {
     #[cfg(feature = "tauri-ui")]
     {
         run_tauri_app()?;
-        return Ok(());
+        Ok(())
     }
 
-    // Windows platform uses GPUI (legacy default)
-    #[cfg(all(
-        target_os = "windows",
-        not(feature = "eframe-ui"),
-        not(feature = "tauri-ui")
-    ))]
+    // Legacy GPUI fallback (only with the gpui-ui feature)
+    #[cfg(all(target_os = "windows", feature = "gpui-ui"))]
     {
         gpui_app::windows_main::run_gpui_app();
         return Ok(());
@@ -83,7 +78,7 @@ fn main() -> anyhow::Result<()> {
         Ok(())
     }
 
-    #[cfg(not(any(target_os = "windows", feature = "eframe-ui", feature = "tauri-ui")))]
+    #[cfg(not(any(feature = "gpui-ui", feature = "eframe-ui", feature = "tauri-ui")))]
     {
         anyhow::bail!("Current platform not supported");
     }
@@ -119,7 +114,6 @@ fn log_boot_context() {
 /// Run Tauri 2.0 application
 #[cfg(feature = "tauri-ui")]
 fn run_tauri_app() -> anyhow::Result<()> {
-
     log::info!("Starting Tauri 2.0 application...");
 
     // Create the shared runtime BEFORE the builder so it can be registered via
@@ -370,4 +364,3 @@ fn check_integrity_level() {
         CloseHandle(token);
     }
 }
-

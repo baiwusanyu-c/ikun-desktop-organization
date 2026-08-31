@@ -207,7 +207,7 @@ pub fn create_box(
                 size: [width as f32, height as f32],
                 item_count: 0,
             });
-        return Ok(created);
+        Ok(created)
     }
 
     #[cfg(not(windows))]

@@ -9,6 +9,8 @@
  *   node scripts/build.mjs --no-installer         # skip NSIS/MSI/DMG
  *   node scripts/build.mjs --no-frontend          # skip frontend build
  *   node scripts/build.mjs --target aarch64-apple-darwin
+ *   node scripts/build.mjs --platform win         # Windows packaging (one-click)
+ *   node scripts/build.mjs --platform mac         # macOS packaging (RESERVED, macOS host only)
  */
 
 import { execSync, spawnSync } from "node:child_process";
@@ -30,7 +32,7 @@ const IS_MACOS = platform() === "darwin";
 // ─── CLI Argument Parsing ───────────────────────────────────────
 function parseArgs() {
   const args = process.argv.slice(2);
-  const opts = { mode: "release", noInstaller: false, noFrontend: false, target: null };
+  const opts = { mode: "release", noInstaller: false, noFrontend: false, target: null, platform: null, bundles: null };
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
       case "--mode":
@@ -44,6 +46,14 @@ function parseArgs() {
         break;
       case "--target":
         opts.target = args[++i] || null;
+        break;
+      case "--platform":
+      case "--os":
+      case "-p":
+        opts.platform = args[++i] || null;
+        break;
+      case "--bundles":
+        opts.bundles = args[++i] || null;
         break;
       case "--help":
       case "-h":
@@ -64,9 +74,52 @@ Options:
   --mode <release|debug>  Build mode (default: release)
   --no-installer          Skip installer generation (NSIS/MSI/DMG)
   --no-frontend           Skip frontend build (dev/debug only)
+  --platform <win|mac>    Target platform (default: current host OS, one-click)
+                          win: Windows host only; mac: RESERVED, macOS host only
+  --bundles <list>        Tauri bundle targets, comma-separated (e.g. nsis / msi / nsis,msi).
+                          Default: all configured targets. Useful to skip MSI where WiX download is blocked.
   --target <triple>       Cross-compilation target (e.g. aarch64-apple-darwin)
   -h, --help              Show this help
   `);
+}
+
+// ─── Platform Resolution ────────────────────────────────────
+const PLATFORM_ALIASES = {
+  win: "win", windows: "win", win32: "win",
+  mac: "mac", macos: "mac", darwin: "mac",
+  linux: "linux",
+};
+
+/**
+ * Resolve --platform argument:
+ * - defaults to the current host platform;
+ * - win: Windows host only (no cross-compilation);
+ * - mac: RESERVED, macOS host only, fails explicitly on other hosts;
+ * - linux: Linux host only (dev convenience, not a release target).
+ */
+function resolvePlatform(opts) {
+  const host = IS_WINDOWS ? "win" : IS_MACOS ? "mac" : "linux";
+  if (!opts.platform) return host;
+
+  const requested = PLATFORM_ALIASES[String(opts.platform).toLowerCase()];
+  if (!requested) {
+    logError(`Unknown platform: ${opts.platform} (valid: win | mac | linux)`);
+    process.exit(1);
+  }
+
+  if (requested !== host) {
+    if (requested === "mac") {
+      logError("macOS packaging is RESERVED: cross-platform packaging is not supported yet, please run on a macOS host (not enabled)");
+      process.exit(1);
+    }
+    logError(`Cannot package ${requested} on a ${host} host: cross-compilation is not supported, run on the matching platform`);
+    process.exit(1);
+  }
+
+  if (requested === "mac") {
+    log("Note: macOS packaging is RESERVED and has not been validated yet");
+  }
+  return requested;
 }
 
 // ─── Utility ────────────────────────────────────────────────────
@@ -140,7 +193,7 @@ function checkEnv() {
 
   // Tauri CLI
   try {
-    const tauriVersion = runCapture("npx --yes @tauri-apps/cli --version");
+    const tauriVersion = runCapture("npx --yes @tauri-apps/cli@2 --version");
     log(`  tauri-cli: ${tauriVersion}`);
   } catch {
     logError("@tauri-apps/cli not available. Install: npm install -g @tauri-apps/cli");
@@ -170,7 +223,7 @@ function installFrontend() {
 
 // ─── Tauri Build ────────────────────────────────────────────────
 function buildTauri(opts) {
-  const parts = ["npx --yes @tauri-apps/cli build"];
+  const parts = ["npx --yes @tauri-apps/cli@2 build"];
 
   if (opts.mode === "debug") {
     parts.push("--debug");
@@ -182,6 +235,10 @@ function buildTauri(opts) {
 
   if (opts.target) {
     parts.push(`--target ${opts.target}`);
+  }
+
+  if (opts.bundles) {
+    parts.push(`--bundles ${opts.bundles}`);
   }
 
   // If skipping frontend, set empty beforeBuildCommand
@@ -341,11 +398,13 @@ function createPortableZip(sourceFile, zipPath, entryName) {
 async function main() {
   const startTime = Date.now();
   const opts = parseArgs();
+  const targetPlatform = resolvePlatform(opts);
 
   log("=".repeat(60));
   log("Desktop Organizer Build");
   log("=".repeat(60));
   log(`Platform: ${platform()} (${arch()})`);
+  log(`Target platform: ${targetPlatform}`);
   log(`Mode: ${opts.mode}`);
   log(`Installer: ${opts.noInstaller ? "skip" : "yes"}`);
   log(`Frontend: ${opts.noFrontend ? "skip" : "yes"}`);
@@ -370,9 +429,9 @@ async function main() {
   const version = getVersion();
   log(`Version: ${version}`);
 
-  if (IS_WINDOWS) {
+  if (targetPlatform === "win") {
     collectWindowsArtifacts(version);
-  } else if (IS_MACOS) {
+  } else if (targetPlatform === "mac") {
     collectMacOSArtifacts(version, opts);
   } else {
     log(`Linux build - artifacts in target/release/`);

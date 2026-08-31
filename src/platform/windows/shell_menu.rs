@@ -266,10 +266,8 @@ pub fn show_multi_select_shell_context_menu(
     let largest_group = group_by_parent(&resolved_paths);
     if largest_group.is_empty() {
         log::warn!("[多选菜单] 无有效分组");
-        for sp in &staging_paths {
-            if let Some(ref p) = sp {
-                super::icon_hider::cleanup_staging(p);
-            }
+        for p in staging_paths.iter().flatten() {
+            super::icon_hider::cleanup_staging(p);
         }
         return MultiShellMenuResponse {
             result: ShellMenuResult::Cancelled,

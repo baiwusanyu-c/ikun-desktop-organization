@@ -1,0 +1,16 @@
+{
+  "name": "ikun-organizer-build",
+  "private": true,
+  "version": "0.1.0-beta.1",
+  "description": "Desktop Organizer - build tooling entry (see scripts/build.mjs)",
+  "scripts": {
+    "pack": "node scripts/build.mjs",
+    "pack:win": "node scripts/build.mjs --platform win",
+    "pack:mac": "node scripts/build.mjs --platform mac",
+    "pack:debug": "node scripts/build.mjs --mode debug",
+    "pack:fast": "node scripts/build.mjs --mode debug --no-installer",
+    "release": "node scripts/release.mjs",
+    "release:beta": "node scripts/release.mjs --bump beta",
+    "release:beta:push": "node scripts/release.mjs --bump beta --push"
+  }
+}

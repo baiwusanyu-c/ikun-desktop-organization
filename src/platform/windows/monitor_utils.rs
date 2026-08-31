@@ -230,50 +230,6 @@ fn fallback_work_area() -> (i32, i32, i32, i32) {
     (0, 0, w, h)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_get_screen_resolution_returns_positive() {
-        let (w, h) = get_screen_resolution();
-        assert!(w > 0, "屏幕宽度应为正数");
-        assert!(h > 0, "屏幕高度应为正数");
-    }
-
-    #[test]
-    fn test_get_primary_monitor_dpi_returns_valid() {
-        let dpi = get_primary_monitor_dpi();
-        assert!(dpi >= 96, "DPI 应至少为 96");
-        assert!(dpi <= 400, "DPI 不应超过 400");
-    }
-
-    #[test]
-    fn test_get_primary_monitor_work_area_valid() {
-        let (x, y, w, h) = get_primary_monitor_work_area_phys();
-        assert!(w > 0, "工作区域宽度应为正数");
-        assert!(h > 0, "工作区域高度应为正数");
-        // 主显示器通常从 (0,0) 开始
-        assert_eq!(x, 0, "主显示器 x 应为 0");
-    }
-
-    #[test]
-    fn test_fallback_work_area() {
-        let (x, y, w, h) = fallback_work_area();
-        assert_eq!(x, 0);
-        assert_eq!(y, 0);
-        assert!(w > 0);
-        assert!(h > 0);
-    }
-
-    #[test]
-    fn test_get_virtual_desktop_bounds_valid() {
-        let (x, y, w, h) = get_virtual_desktop_bounds();
-        assert!(w > 0, "虚拟桌面宽度应为正数");
-        assert!(h > 0, "虚拟桌面高度应为正数");
-    }
-}
-
 /// 获取指定屏幕坐标处的 DPI 值（用于多显示器不同 DPI 场景）
 pub fn dpi_at_screen_point(screen_x: i32, screen_y: i32) -> u32 {
     use std::ffi::c_void;
@@ -313,5 +269,49 @@ pub fn dpi_at_screen_point(screen_x: i32, screen_y: i32) -> u32 {
         dpi_x
     } else {
         96
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_screen_resolution_returns_positive() {
+        let (w, h) = get_screen_resolution();
+        assert!(w > 0, "屏幕宽度应为正数");
+        assert!(h > 0, "屏幕高度应为正数");
+    }
+
+    #[test]
+    fn test_get_primary_monitor_dpi_returns_valid() {
+        let dpi = get_primary_monitor_dpi();
+        assert!(dpi >= 96, "DPI 应至少为 96");
+        assert!(dpi <= 400, "DPI 不应超过 400");
+    }
+
+    #[test]
+    fn test_get_primary_monitor_work_area_valid() {
+        let (x, _y, w, h) = get_primary_monitor_work_area_phys();
+        assert!(w > 0, "工作区域宽度应为正数");
+        assert!(h > 0, "工作区域高度应为正数");
+        // 主显示器通常从 (0,0) 开始
+        assert_eq!(x, 0, "主显示器 x 应为 0");
+    }
+
+    #[test]
+    fn test_fallback_work_area() {
+        let (x, y, w, h) = fallback_work_area();
+        assert_eq!(x, 0);
+        assert_eq!(y, 0);
+        assert!(w > 0);
+        assert!(h > 0);
+    }
+
+    #[test]
+    fn test_get_virtual_desktop_bounds_valid() {
+        let (_x, _y, w, h) = get_virtual_desktop_bounds();
+        assert!(w > 0, "虚拟桌面宽度应为正数");
+        assert!(h > 0, "虚拟桌面高度应为正数");
     }
 }

@@ -8,15 +8,10 @@ use super::box_model::ClassificationBox;
 use uuid::Uuid;
 
 /// 分类框管理器
+#[derive(Default)]
 pub struct BoxManager {
     /// 所有分类框
     boxes: Vec<ClassificationBox>,
-}
-
-impl Default for BoxManager {
-    fn default() -> Self {
-        Self { boxes: Vec::new() }
-    }
 }
 
 impl BoxManager {

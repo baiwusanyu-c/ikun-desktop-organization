@@ -34,7 +34,7 @@
   - macOS job 以注释/禁用形式预留。
 - R4: 完善 `build.yml`：固定 Tauri CLI 主版本、增加 npm 缓存、macOS job 改为 `continue-on-error`（预留非阻塞）。
 - R5: 版本号升级到 `0.1.0-beta.1`（Cargo.toml + tauri.conf.json 同步）。
-- R6: 更新 `scripts/README.md`；新增 `docs/RELEASE.md` 说明发布流程（如何发新 beta）。
+- R6: 更新 `scripts/README.md`；新增 `../../../../../RELEASE.md` 说明发布流程（如何发新 beta）。
 
 ## 验收标准
 

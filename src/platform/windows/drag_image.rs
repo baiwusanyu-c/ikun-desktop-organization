@@ -72,7 +72,7 @@ pub(crate) unsafe fn create_drag_overlay(
     log::info!(
         "[拖拽残影] create: name='{}', hwnd={:?}, icon_size={}, dpi={}",
         display_name,
-        OVERLAY_HWND,
+        std::ptr::addr_of!(OVERLAY_HWND).read(),
         icon_size,
         dpi,
     );
@@ -398,9 +398,9 @@ unsafe fn rebuild_drag_overlay_at_dpi(new_dpi: u32) {
 pub(crate) unsafe fn destroy_drag_overlay() {
     log::info!(
         "[拖拽残影] destroy: hwnd={:?}, hbmp={:?}, multi={}",
-        OVERLAY_HWND,
-        OVERLAY_HBMP,
-        !MULTI_DRAG_ITEMS_STORE.is_empty()
+        std::ptr::addr_of!(OVERLAY_HWND).read(),
+        std::ptr::addr_of!(OVERLAY_HBMP).read(),
+        !(*std::ptr::addr_of!(MULTI_DRAG_ITEMS_STORE)).is_empty()
     );
     if !OVERLAY_HWND.is_null() {
         DestroyWindow(OVERLAY_HWND);
@@ -582,7 +582,7 @@ pub(crate) unsafe fn create_drag_overlay_multi(
         "[拖拽残影] create_multi: {} items, source_idx={}, hwnd={:?}, icon_size={}",
         items.len(),
         drag_source_idx,
-        OVERLAY_HWND,
+        std::ptr::addr_of!(OVERLAY_HWND).read(),
         icon_size,
     );
     destroy_drag_overlay();
@@ -821,7 +821,7 @@ pub(crate) unsafe fn create_drag_overlay_multi(
         "多选拖拽覆盖窗口已创建: {}x{}, {} icons, offset=({},{}), 70% 不透明",
         total_w,
         total_h,
-        MULTI_DRAG_ITEMS_STORE.len(),
+        (*std::ptr::addr_of!(MULTI_DRAG_ITEMS_STORE)).len(),
         icon_offset_x,
         icon_offset_y
     );
@@ -835,7 +835,7 @@ pub(crate) unsafe fn is_multi_drag_active() -> bool {
 /// 清理多选拖拽状态
 pub(crate) unsafe fn clear_multi_drag_state() {
     MULTI_DRAG_ACTIVE = false;
-    MULTI_DRAG_ITEMS_STORE.clear();
+    (*std::ptr::addr_of_mut!(MULTI_DRAG_ITEMS_STORE)).clear();
     MULTI_DRAG_SOURCE_IDX = 0;
     MULTI_DRAG_ICON_SIZE = 0;
     MULTI_DRAG_CELL_W = 0;
@@ -871,7 +871,7 @@ mod tests {
         // 96 -> 144 -> 96 应该还原原始值
         let original = 48;
         let scaled = scale_dpi(original, 144, 96);
-        let restored = scale_dpi(scaled, 96, 96);
+        let _restored = scale_dpi(scaled, 96, 96);
         // 注意：restored 用的是 original_dpi=96，不是 144
         // 正确用法：始终以 original_dpi=96 为基准
         assert_eq!(scale_dpi(original, 96, 96), 48);
@@ -1129,7 +1129,7 @@ fn test_dpi_cache_check_frequency() {
 
     for _ in 0..32 {
         frame_count += 1;
-        if frame_count % 8 == 0 {
+        if frame_count.is_multiple_of(8) {
             dpi_check_count += 1;
         }
     }

@@ -246,10 +246,8 @@ fn handle_multi_shell_menu_result(hwnd: HWND, response: super::shell_menu::Multi
     match response.result {
         ShellMenuResult::Cancelled | ShellMenuResult::Dismissed => {
             // 清理所有 staging
-            for sp in &response.staging_paths {
-                if let Some(ref p) = sp {
-                    super::icon_hider::cleanup_staging(p);
-                }
+            for p in response.staging_paths.iter().flatten() {
+                super::icon_hider::cleanup_staging(p);
             }
         }
         ShellMenuResult::Completed(_) => {
@@ -264,10 +262,8 @@ fn handle_multi_shell_menu_result(hwnd: HWND, response: super::shell_menu::Multi
         ShellMenuResult::NeedsRename(_) => {
             // 多选时不支持重命名（try_windows_crate_multi_context_menu 已排除）
             // 清理 staging
-            for sp in &response.staging_paths {
-                if let Some(ref p) = sp {
-                    super::icon_hider::cleanup_staging(p);
-                }
+            for p in response.staging_paths.iter().flatten() {
+                super::icon_hider::cleanup_staging(p);
             }
         }
         ShellMenuResult::NeedsCutMonitor(_) => {
@@ -298,10 +294,8 @@ fn handle_multi_shell_menu_result(hwnd: HWND, response: super::shell_menu::Multi
                 remove_grid_item_if_missing_after_shell_menu(hwnd, file_path);
             }
             // 清理 staging
-            for sp in &response.staging_paths {
-                if let Some(ref p) = sp {
-                    super::icon_hider::cleanup_staging(p);
-                }
+            for p in response.staging_paths.iter().flatten() {
+                super::icon_hider::cleanup_staging(p);
             }
         }
     }

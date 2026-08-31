@@ -86,7 +86,7 @@ mod tests {
     #[test]
     fn visible_pixel_bounds_keeps_antialiased_edge_pixels() {
         let mut pixels = vec![pixel(0); 4 * 4];
-        pixels[1 * 4 + 1] = pixel(1);
+        pixels[4 + 1] = pixel(1);
         pixels[2 * 4 + 2] = pixel(255);
 
         assert_eq!(visible_pixel_bounds(&pixels, 4, 4), Some((1, 1, 2, 2)));

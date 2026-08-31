@@ -1,4 +1,4 @@
-﻿//! Application context - central state management object
+//! Application context - central state management object
 #![allow(dead_code)]
 //!
 //! All modules share state and configuration via AppContext.
@@ -15,6 +15,7 @@ use crate::platform::{
 };
 
 /// Application runtime state
+#[derive(Default)]
 pub struct AppState {
     /// Whether native desktop icons are hidden
     pub icons_hidden: bool,
@@ -22,16 +23,6 @@ pub struct AppState {
     pub panel_visible: bool,
     /// Current status message
     pub status_message: String,
-}
-
-impl Default for AppState {
-    fn default() -> Self {
-        Self {
-            icons_hidden: false,
-            panel_visible: false,
-            status_message: String::new(),
-        }
-    }
 }
 
 /// Application context (core dependency injection object)
