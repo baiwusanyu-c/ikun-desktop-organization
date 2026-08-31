@@ -72,16 +72,16 @@ pub(crate) fn handle_same_box_drop(
         crate::box_core::layout_calc::calculate_grid(window_width, data.title_h, &view_params, dpi);
 
     // Determine target grid cell from click position
-    let target_col;
-    let target_row;
-    if client_x >= layout.grid_left && client_y >= layout.grid_top {
-        target_col = ((client_x - layout.grid_left) / layout.cell_w).max(0);
-        target_row = ((client_y - layout.grid_top) / layout.cell_h).max(0);
+    let (target_col, target_row) = if client_x >= layout.grid_left && client_y >= layout.grid_top {
+        (
+            ((client_x - layout.grid_left) / layout.cell_w).max(0),
+            ((client_y - layout.grid_top) / layout.cell_h).max(0),
+        )
     } else {
         // Click outside grid area → cancel
         log::info!("同框拖拽: 释放在网格区域外，取消");
         return;
-    }
+    };
 
     // Materialize dragged item's auto-layout position before any swap
     if data.items[dragged_idx].grid_col < 0 {

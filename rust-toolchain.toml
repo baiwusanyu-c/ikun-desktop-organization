@@ -1,0 +1,5 @@
+# Pinned toolchain: keeps local dev and CI clippy/fmt on the same version.
+# Bump deliberately (new clippy releases add lints that can break -D warnings).
+[toolchain]
+channel = "1.98.0"
+components = ["clippy", "rustfmt"]

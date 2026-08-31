@@ -66,8 +66,8 @@ impl AiClassifier {
         let prompt = Self::build_prompt(icons);
         log::info!(
             "AI 分类请求: base_url={}, model={}, 图标数={}",
-            &self.config.base_url,
-            &self.config.model,
+            self.config.base_url,
+            self.config.model,
             icons.len()
         );
 
@@ -131,7 +131,7 @@ impl AiClassifier {
 
     /// 调用 LLM API（带重试机制）
     async fn call_llm(&self, system: &str, user: &str) -> anyhow::Result<String> {
-        let url = format!("{}/chat/completions", &self.config.base_url);
+        let url = format!("{}/chat/completions", self.config.base_url);
         let model = &self.config.model;
 
         let request_body = serde_json::json!({
