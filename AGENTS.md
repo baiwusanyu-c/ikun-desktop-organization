@@ -31,6 +31,7 @@ Reusable Trellis skills are located in `.trellis/skills/` (canonical source).
 - `trellis-finish-work` — Pre-commit quality checklist
 - `trellis-brainstorm` — Requirements discovery and PRD writing
 - `trellis-before-dev` — Read development guidelines before coding
+- `finish-task` — Finish task, archive, and commit code (calls trellis-finish-work)
 
 Keep this managed block so `trellis update` can refresh the instructions.
 

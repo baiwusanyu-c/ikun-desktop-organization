@@ -4,6 +4,10 @@ description: 结束任务，归档，提交代码 - 支持当前任务或所有�
 metadata:
   author: chenzhihui
   version: "1.0.0"
+  compatibility:
+    - codex
+    - hermes
+    - claude-code
 ---
 
 # finish-task - 任务完成与归档提交
@@ -12,16 +16,16 @@ metadata:
 
 根据用户输入的命令参数，执行任务完成、归档和代码提交流程。
 
-此技能内部调用 `/trellis:finish-work` 进行代码检查。
+此技能内部调用 `trellis-finish-work` 进行代码检查。
 
 ## 命令触发规则
 
 | 用户输入 | 处理范围 | 执行动作 |
 |----------|----------|----------|
-| `/finish-task 结束任务，归档，提交` | **仅当前对话上下文的 task** | 1. 调用 `/trellis:finish-work` 检查<br>2. 确定当前任务<br>3. 设置状态为 completed<br>4. 归档任务<br>5. 提交代码 |
-| `/finish-task 结束所有任务、归档，提交` | **所有 active tasks** | 1. 调用 `/trellis:finish-work` 检查<br>2. 设置所有 task 状态为 completed<br>3. 归档所有 task<br>4. 提交代码 |
+| `finish task` 或 `结束任务，归档，提交` | **仅当前对话上下文的 task** | 1. 调用 `trellis-finish-work` 检查<br>2. 确定当前任务<br>3. 设置状态为 completed<br>4. 归档任务<br>5. 提交代码 |
+| `finish all tasks` 或 `结束所有任务、归档，提交` | **所有 active tasks** | 1. 调用 `trellis-finish-work` 检查<br>2. 设置所有 task 状态为 completed<br>3. 归档所有 task<br>4. 提交代码 |
 
-**注意**：此技能是项目级别的，独立于 `/trellis:finish-work` 技能。
+**注意**：此技能是项目级别的，独立于 `trellis-finish-work` 技能。
 
 ---
 
@@ -43,7 +47,7 @@ metadata:
 
 3. **分析最近修改的文件**
    - 查看 `git status` 中的变更文件
-   - 根据文件路径推断关联的任务（如修改了 pools 相关文件 → 对应 pools 任务）
+   - 根据文件路径推断关联的任务（如修改了 pools 相关文件 -> 对应 pools 任务）
 
 4. **检查活跃任务列表**
    - 运行 `python3 ./.trellis/scripts/task.py list` 获取活跃任务
@@ -62,12 +66,9 @@ metadata:
 
 ## 执行流程
 
-### 步骤 1: 调用 trellis:finish-work 进行检查
+### 步骤 1: 调用 trellis-finish-work 进行检查
 
-```typescript
-// 调用 trellis:finish-work 技能执行代码检查
-Skill({ skill: "trellis:finish-work", args: "结束任务并归档提交" })
-```
+调用 `trellis-finish-work` 技能执行代码检查。
 
 等待检查完成后，继续后续步骤。
 
@@ -91,13 +92,11 @@ python3 ./.trellis/scripts/task.py list
 
 **仅当前任务时**：
 ```bash
-# 更新指定任务的 task.json
 python3 ./.trellis/scripts/task.py update <task-dir> --status completed
 ```
 
 **所有任务时**：
 ```bash
-# 遍历 .trellis/tasks/ 下所有活跃任务，逐个更新状态
 for task in active_tasks:
     python3 ./.trellis/scripts/task.py update <task-dir> --status completed
 ```
@@ -106,13 +105,11 @@ for task in active_tasks:
 
 **仅当前任务时**：
 ```bash
-# 将任务目录移动到 .trellis/tasks/archive/{year-month}/
 python3 ./.trellis/scripts/task.py archive <task-name>
 ```
 
 **所有任务时**：
 ```bash
-# 遍历所有活跃任务并归档
 for task in active_tasks:
     python3 ./.trellis/scripts/task.py archive <task-name>
 ```
@@ -120,14 +117,9 @@ for task in active_tasks:
 ### 步骤 5: 提交代码
 
 ```bash
-# 1. 查看变更
 git status
 git diff --name-only
-
-# 2. 添加变更文件
 git add <changed-files>
-
-# 3. 提交代码
 git commit -m "type(scope): description"
 ```
 
@@ -142,8 +134,8 @@ git commit -m "type(scope): description"
 ## 注意事项
 
 1. **区分处理范围**：必须严格按照用户输入判断处理范围
-   - `结束任务，归档，提交` → 仅当前任务
-   - `结束所有任务、归档，提交` → 所有任务
+   - `结束任务，归档，提交` -> 仅当前任务
+   - `结束所有任务、归档，提交` -> 所有任务
 
 2. **从对话上下文分析任务**：通过 Session Start Hook 输出、对话历史、git 状态等多维度分析确定当前任务
 
@@ -155,26 +147,26 @@ git commit -m "type(scope): description"
 
 ---
 
-## 与 trellis:finish-work 的关系
+## 与 trellis-finish-work 的关系
 
 | 技能 | 用途 | 关系 |
 |------|------|------|
-| `/trellis:finish-work` | 代码完成度检查清单 | 被 `/finish-task` 调用 |
-| `/finish-task` | 任务完成 + 归档 + 提交 | 内部调用 `/trellis:finish-work` |
+| `trellis-finish-work` | 代码完成度检查清单 | 被 `finish-task` 调用 |
+| `finish-task` | 任务完成 + 归档 + 提交 | 内部调用 `trellis-finish-work` |
 
 **执行顺序**：
 ```
-/finish-task
-    │
-    ▼
-调用 /trellis:finish-work (代码检查)
-    │
-    ▼
+finish-task
+    |
+    v
+调用 trellis-finish-work (代码检查)
+    |
+    v
 确定当前任务 (从对话上下文分析)
-    │
-    ▼
+    |
+    v
 更新任务状态 + 归档
-    │
-    ▼
+    |
+    v
 提交代码
 ```
