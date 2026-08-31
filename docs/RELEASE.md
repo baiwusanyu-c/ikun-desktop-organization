@@ -53,7 +53,8 @@ After the push, the **Release** workflow:
 3. Builds Windows artifacts via `scripts/build.mjs --platform win`.
 4. Generates `SHA256SUMS.txt`.
 5. Publishes the GitHub Release with:
-   `*-setup.exe` (NSIS), `*.msi`, portable `*.zip`, checksums.
+   `*-setup.exe` (NSIS), portable `*.zip`, checksums
+   (plus `*.msi` for stable releases - MSI cannot encode pre-release tags).
 
 Download page:
 `https://github.com/baiwusanyu-c/ikun-desktop-organization/releases`
@@ -123,4 +124,5 @@ before the build step.
 | Release workflow fails at test gate | Fix fmt/clippy/test locally, push the fix, delete + re-push the tag |
 | Build fails with `os error 32` (file in use) | A running `ikun_organizer.exe` or stale cargo process holds a lock - close the app and retry |
 | Release build fails with `Failed to find fxc.exe` | Only happens when building the legacy `gpui-ui` feature (needs Windows SDK). Default builds no longer compile gpui, so this should not occur |
+| Pre-release has no `.msi` | Expected: MSI (WiX) only accepts numeric versions. `build.mjs` auto-selects NSIS-only for pre-releases; stable releases get NSIS + MSI automatically |
 | SmartScreen warning | Expected for unsigned builds |

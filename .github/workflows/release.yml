@@ -195,7 +195,7 @@ jobs:
             | File | Description |
             | --- | --- |
             | `*-setup.exe` | NSIS installer (recommended, per-user install) |
-            | `*.msi` | MSI installer |
+            | `*.msi` | MSI installer (stable releases only - MSI requires a numeric version, skipped for pre-releases) |
             | `*.zip` | Portable build (unzip and run) |
             | `SHA256SUMS.txt` | SHA256 checksums |
 

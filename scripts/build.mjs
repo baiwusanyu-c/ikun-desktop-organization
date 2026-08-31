@@ -239,6 +239,12 @@ function buildTauri(opts) {
 
   if (opts.bundles) {
     parts.push(`--bundles ${opts.bundles}`);
+  } else if (opts.resolvedPlatform === "win" && getVersion().includes("-")) {
+    // MSI (WiX) requires fully numeric versions; pre-release identifiers such
+    // as "beta.2" are rejected. NSIS has no such restriction, so pre-release
+    // builds ship NSIS only; stable releases get NSIS + MSI automatically.
+    parts.push("--bundles nsis");
+    log("Pre-release version detected: building NSIS only (MSI requires a numeric version)");
   }
 
   // If skipping frontend, set empty beforeBuildCommand
@@ -399,6 +405,7 @@ async function main() {
   const startTime = Date.now();
   const opts = parseArgs();
   const targetPlatform = resolvePlatform(opts);
+  opts.resolvedPlatform = targetPlatform;
 
   log("=".repeat(60));
   log("Desktop Organizer Build");
