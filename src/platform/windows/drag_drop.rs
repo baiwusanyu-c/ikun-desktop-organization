@@ -864,7 +864,9 @@ fn copy_file_to_user_desktop(source_path: &str) -> Option<String> {
         dest
     };
 
-    match std::fs::copy(source, &dest) {
+    // 使用目录感知复制：文件夹（目录）也能完整复制到桌面，
+    // std::fs::copy 仅支持文件，拖拽文件夹时会静默失败
+    match super::icon_hider::copy_path_recursive(source, &dest) {
         Ok(_) => {
             super::icon_hider::notify_shell_create(&dest.to_string_lossy());
             Some(dest.to_string_lossy().to_string())

@@ -557,7 +557,12 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
                     let temp_path = temp_dir.join(&original_name);
 
                     if resolved.exists() {
-                        if let Err(e) = std::fs::copy(&resolved, &temp_path) {
+                        // 目录感知复制：文件夹也能完整复制到临时目录，
+                        // std::fs::copy 仅支持文件，拖拽文件夹到资源管理器会失败
+                        let _ = super::icon_hider::remove_path(&temp_path);
+                        if let Err(e) =
+                            super::icon_hider::copy_path_recursive(&resolved, &temp_path)
+                        {
                             log::warn!(
                                 "[GRID-OLE-MULTI] 复制文件失败: {:?} -> {:?}: {}",
                                 resolved,
@@ -667,7 +672,10 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
                 .unwrap_or_else(|| format!("file_{}", item_idx));
             let temp_path = temp_dir.join(&original_name);
             if resolved.exists() {
-                let _ = std::fs::copy(&resolved, &temp_path);
+                // 目录感知复制：文件夹也能完整复制到临时目录，
+                // std::fs::copy 仅支持文件，拖拽文件夹到资源管理器会失败
+                let _ = super::icon_hider::remove_path(&temp_path);
+                let _ = super::icon_hider::copy_path_recursive(&resolved, &temp_path);
             }
             let resolved_str = temp_path.to_string_lossy().to_string();
             (

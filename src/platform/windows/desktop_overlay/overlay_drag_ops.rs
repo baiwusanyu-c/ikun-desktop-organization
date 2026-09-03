@@ -406,6 +406,10 @@ pub(super) fn end_overlay_drag(hwnd: HWND) {
     }
 
     let is_multi_drag = multi_drag_items.len() > 1;
+    log::info!(
+        "[END-OVERLAY-DRAG] item_idx={}, is_multi_drag={}, multi_items={:?}",
+        item_idx, is_multi_drag, multi_drag_items
+    );
 
     let mut pt = POINT { x: 0, y: 0 };
     unsafe { GetCursorPos(&mut pt) };
@@ -508,6 +512,18 @@ pub(super) fn end_overlay_drag(hwnd: HWND) {
             });
         }
 
+        log::info!(
+            "[END-OVERLAY-DRAG] collected {} items, base_lin={}, base_col={}, base_row={}",
+            items_to_add.len(), base_lin, base_col, base_row
+        );
+        for (idx_i, item) in items_to_add.iter().enumerate() {
+            let is_dir = std::path::Path::new(&item.file_path).is_dir();
+            log::info!(
+                "[END-OVERLAY-DRAG] items[{}]: path={}, is_dir={}, grid=({},{})",
+                idx_i, item.file_path, is_dir, item.grid_col, item.grid_row
+            );
+        }
+
         // Public 图标先完成收纳，授权失败时保持覆盖层和分类框原状。
         let public_items: Vec<_> = items_to_add
             .iter()
@@ -548,9 +564,18 @@ pub(super) fn end_overlay_drag(hwnd: HWND) {
 
                 let read_path = crate::platform::windows::drag_drop::resolve_drag_item_read_path(&info.file_path);
                 let read_path_str = read_path.to_string_lossy().to_string();
+                let is_dir = std::path::Path::new(&read_path_str).is_dir();
+                log::info!(
+                    "[MULTI-DROP-DIRECT] extracting icon for: path={}, is_dir={}",
+                    read_path_str, is_dir
+                );
                 let icon_handle = crate::platform::windows::icon_extract::extract_file_icon(&read_path_str)
                     .map(|ic| ic.hicon)
                     .unwrap_or(std::ptr::null_mut());
+                log::info!(
+                    "[MULTI-DROP-DIRECT] icon extracted: handle={:?}",
+                    icon_handle
+                );
 
                 target_data.items.push(crate::platform::windows::grid_window::GridFileItem {
                     file_path: info.file_path.clone(),
@@ -563,8 +588,16 @@ pub(super) fn end_overlay_drag(hwnd: HWND) {
                     info.display_name, info.grid_col, info.grid_row);
 
                 // Hide desktop icon
-                if !crate::platform::windows::icon_hider::is_public_desktop_path(&info.file_path) {
-                    crate::platform::windows::drag_drop::hide_single_desktop_icon(&info.file_path, &info.display_name);
+                    let is_dir = std::path::Path::new(&info.file_path).is_dir();
+                    log::info!(
+                        "[END-OVERLAY-DRAG] hiding icon: path={}, is_dir={}",
+                        info.file_path, is_dir
+                    );
+                    let hide_result = crate::platform::windows::drag_drop::hide_single_desktop_icon(&info.file_path, &info.display_name);
+                    log::info!(
+                        "[END-OVERLAY-DRAG] hide result: name={}, result={}",
+                        info.display_name, hide_result
+                    );
                 }
             }
 
@@ -585,6 +618,10 @@ pub(super) fn end_overlay_drag(hwnd: HWND) {
             if let Some(data) = get_overlay_data(hwnd) {
                 if drag_idx < data.icons.len() {
                     let removed = data.icons.remove(drag_idx);
+                    log::info!(
+                        "[END-OVERLAY-DRAG] removed overlay icon[{}]: name={}, handle={:?}, remaining={}",
+                        drag_idx, removed.display_name, removed.icon_handle, data.icons.len()
+                    );
                     crate::platform::windows::icon_extract::destroy_icon(removed.icon_handle);
                 }
             }
@@ -837,7 +874,9 @@ pub(super) fn copy_file_to_desktop(source_path: &str) -> Option<String> {
         dest
     };
 
-    match std::fs::copy(source, &dest) {
+    // 使用目录感知复制：文件夹（目录）也能完整复制到桌面，
+    // std::fs::copy 仅支持文件，拖拽文件夹时会静默失败
+    match crate::platform::windows::icon_hider::copy_path_recursive(source, &dest) {
         Ok(_) => {
             crate::platform::windows::icon_hider::notify_shell_create(&dest.to_string_lossy());
             Some(dest.to_string_lossy().to_string())

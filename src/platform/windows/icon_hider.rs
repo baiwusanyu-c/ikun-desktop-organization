@@ -19,10 +19,49 @@ use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+/// 复制文件或整个目录（目录感知复制）
+///
+/// `std::fs::copy` 仅支持文件，对目录会失败或只创建空目录。
+/// 拖拽对象可能是文件夹（桌面/资源管理器→分类框、分类框→资源管理器等），
+/// 统一使用本函数确保目录及其内容被完整复制。
+pub(crate) fn copy_path_recursive(src: &Path, dst: &Path) -> std::io::Result<u64> {
+    if src.is_dir() {
+        std::fs::create_dir_all(dst)?;
+        let mut total = 0u64;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let target = dst.join(entry.file_name());
+            if file_type.is_dir() {
+                total += copy_path_recursive(&entry.path(), &target)?;
+            } else if file_type.is_file() {
+                total += std::fs::copy(entry.path(), &target)?;
+            }
+            // 符号链接等其他类型跳过
+        }
+        Ok(total)
+    } else {
+        std::fs::copy(src, dst)
+    }
+}
+
+/// 删除文件或整个目录（目录感知删除）
+///
+/// `std::fs::remove_file` 仅支持文件，对目录会失败。
+/// 清理仓库/桌面上的残留副本时统一使用本函数。
+pub(crate) fn remove_path(path: &Path) -> std::io::Result<()> {
+    if path.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    }
+}
+
 /// 跨卷移动文件（先尝试 rename，失败后回退到 copy + delete）
 ///
 /// `std::fs::rename` 在源和目标位于不同卷时会失败（Windows 错误码 17: ERROR_NOT_SAME_DEVICE）。
-/// 此函数提供可靠回退：先尝试 rename，失败时改用 copy + remove_file。
+/// 此函数提供可靠回退：先尝试 rename，失败时改用 copy + remove。
+/// 使用 `copy_path_recursive` / `remove_path`，同时支持文件和文件夹。
 fn move_file(src: &Path, dst: &Path) -> Result<()> {
     match std::fs::rename(src, dst) {
         Ok(()) => Ok(()),
@@ -35,7 +74,7 @@ fn move_file(src: &Path, dst: &Path) -> Result<()> {
                     src.display(),
                     dst.display()
                 );
-                std::fs::copy(src, dst).map_err(|copy_err| {
+                copy_path_recursive(src, dst).map_err(|copy_err| {
                     anyhow::anyhow!(
                         "跨卷复制失败 {} -> {}: {}",
                         src.display(),
@@ -43,8 +82,8 @@ fn move_file(src: &Path, dst: &Path) -> Result<()> {
                         copy_err
                     )
                 })?;
-                std::fs::remove_file(src).map_err(|rm_err| {
-                    anyhow::anyhow!("复制后删除源文件失败 {}: {}", src.display(), rm_err)
+                remove_path(src).map_err(|rm_err| {
+                    anyhow::anyhow!("复制后删除源失败 {}: {}", src.display(), rm_err)
                 })?;
                 Ok(())
             } else {
@@ -479,9 +518,7 @@ fn migrate_legacy_public_vault_dir(new_dir: &Path) -> Result<()> {
     let mut migrated = 0;
     for entry in entries.flatten() {
         let src = entry.path();
-        if !src.is_file() {
-            continue;
-        }
+        // 文件和文件夹都迁移（文件夹也可被拖入分类框管理）
         let Some(name) = src.file_name() else {
             continue;
         };
@@ -551,19 +588,17 @@ fn migrate_legacy_hidden_dir(managed_dir: &Path) -> Result<()> {
     let mut migrated = 0;
     for entry in entries.flatten() {
         let src = entry.path();
-        if !src.is_file() {
-            continue;
-        }
+        // 文件和文件夹都迁移（文件夹也可被拖入分类框管理）
         let name = match src.file_name().and_then(|n| n.to_str()) {
             Some(n) => n.to_string(),
             None => continue,
         };
         let dest = managed_dir.join(&name);
         if dest.exists() {
-            let _ = std::fs::remove_file(&src);
+            let _ = remove_path(&src);
             continue;
         }
-        if std::fs::rename(&src, &dest).is_ok() {
+        if move_file(&src, &dest).is_ok() {
             migrated += 1;
         }
     }
@@ -738,7 +773,8 @@ pub fn ingest_icon(logical_path: &str) -> Result<()> {
         if (is_user_desktop_path(logical_path) || is_public_desktop_path(logical_path))
             && src.exists()
         {
-            if let Err(e) = std::fs::remove_file(src) {
+            // 使用目录感知删除：文件夹（如桌面文件夹被拖入后桌面残留的目录）也能清理
+            if let Err(e) = remove_path(src) {
                 log::warn!("清理桌面残留副本失败 {}: {}", logical_path, e);
             } else {
                 notify_shell_delete(logical_path);
@@ -782,9 +818,10 @@ pub fn ingest_icon(logical_path: &str) -> Result<()> {
     }
 
     let t_rename = std::time::Instant::now();
-    std::fs::rename(src, &vault)
+    // 使用 move_file（rename + 跨卷回退），同时支持文件和文件夹
+    move_file(src, &vault)
         .map_err(|e| anyhow::anyhow!("移动图标到仓库失败 {}: {}", logical_path, e))?;
-    log::info!("[TIMING] rename 完成 [{:?}]", t_rename.elapsed());
+    log::info!("[TIMING] move 完成 [{:?}]", t_rename.elapsed());
     let t_notify = std::time::Instant::now();
     notify_shell_delete(logical_path);
     log::info!(
@@ -819,7 +856,8 @@ pub fn export_icon(logical_path: &str) -> Result<(bool, PathBuf)> {
 
     let export = export_desktop_path(logical_path);
     if export.exists() {
-        std::fs::remove_file(&vault)?;
+        // 使用目录感知删除：仓库中的文件夹副本也能正确清理
+        remove_path(&vault)?;
         log::info!("桌面已有该图标，已从仓库删除副本: {}", logical_path);
         return Ok((true, export));
     }
@@ -835,7 +873,8 @@ pub fn export_icon(logical_path: &str) -> Result<(bool, PathBuf)> {
             )
         })?;
     } else {
-        std::fs::rename(&vault, &export).map_err(|e| {
+        // 使用 move_file（rename + 跨卷回退），同时支持文件和文件夹
+        move_file(&vault, &export).map_err(|e| {
             anyhow::anyhow!(
                 "从仓库导出失败 {} → {}: {}",
                 vault.display(),
@@ -870,7 +909,8 @@ pub fn delete_vault_copy(logical_path: &str) {
     match vault_path_for(logical_path) {
         Ok(vault) => {
             if vault.exists() {
-                if let Err(e) = std::fs::remove_file(&vault) {
+                // 目录感知删除：文件夹副本也能正确删除
+                if let Err(e) = remove_path(&vault) {
                     log::warn!("删除仓库副本失败 {}: {}", vault.display(), e);
                 } else {
                     log::info!("已删除仓库副本: {}", vault.display());
@@ -890,14 +930,15 @@ pub fn delete_icon_permanently(logical_path: &str) -> Result<()> {
     let mut deleted_any = false;
     let desktop_path = Path::new(logical_path);
     if desktop_path.exists() {
-        std::fs::remove_file(desktop_path)
+        // 目录感知删除：文件夹也能彻底删除
+        remove_path(desktop_path)
             .map_err(|e| anyhow::anyhow!("delete desktop file failed {}: {}", logical_path, e))?;
         log::info!("deleted desktop file: {}", logical_path);
         deleted_any = true;
     }
     if let Ok(vault) = vault_path_for(logical_path) {
         if vault.exists() {
-            std::fs::remove_file(&vault).map_err(|e| {
+            remove_path(&vault).map_err(|e| {
                 anyhow::anyhow!("delete vault copy failed {}: {}", vault.display(), e)
             })?;
             log::info!("deleted vault copy: {}", vault.display());
@@ -929,7 +970,8 @@ pub fn delete_vault_copy_for(logical_path: &str) {
     match vault_path_for(logical_path) {
         Ok(vault) => {
             if vault.exists() {
-                if let Err(e) = std::fs::remove_file(&vault) {
+                // 目录感知删除：文件夹副本也能正确删除
+                if let Err(e) = remove_path(&vault) {
                     log::warn!("delete vault copy failed {}: {}", vault.display(), e);
                 } else {
                     log::info!("deleted vault copy: {}", vault.display());
@@ -996,13 +1038,13 @@ pub fn create_staging_for_shell(logical_path: &str) -> Option<std::path::PathBuf
     let original_name = original_filename_from_vault(logical_path)?;
     let staging_path = staging_dir.join(&original_name);
 
-    // 清理旧的 staging 文件（如果有）
+    // 清理旧的 staging 文件（如果有）——目录感知删除
     if staging_path.exists() {
-        let _ = std::fs::remove_file(&staging_path);
+        let _ = remove_path(&staging_path);
     }
 
-    // 复制 vault 文件到 staging（使用原始文件名）
-    match std::fs::copy(&vault_path, &staging_path) {
+    // 复制 vault 文件到 staging（使用原始文件名）——目录感知复制
+    match copy_path_recursive(&vault_path, &staging_path) {
         Ok(_) => {
             log::info!(
                 "[STAGING] 创建 staging 副本: {} -> {}",
@@ -1021,7 +1063,8 @@ pub fn create_staging_for_shell(logical_path: &str) -> Option<std::path::PathBuf
 /// 清理 staging 文件
 pub fn cleanup_staging(staging_path: &std::path::Path) {
     if staging_path.exists() {
-        match std::fs::remove_file(staging_path) {
+        // 目录感知删除：文件夹的 staging 副本也能清理
+        match remove_path(staging_path) {
             Ok(_) => log::debug!("[STAGING] 已清理: {}", staging_path.display()),
             Err(e) => log::warn!("[STAGING] 清理失败 {}: {}", staging_path.display(), e),
         }
@@ -1287,9 +1330,7 @@ pub fn get_vault_display_names() -> std::collections::HashSet<String> {
 
         for entry in entries.flatten() {
             let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
+            // 文件和文件夹都是合法的仓库条目（文件夹也可被拖入分类框管理）
             let vault_name = match path.file_name().and_then(|n| n.to_str()) {
                 Some(n) => n.to_string(),
                 None => continue,
@@ -1391,9 +1432,8 @@ pub fn restore_unmanaged_vault_icons() {
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
+        // 文件和文件夹都是合法的仓库条目（文件夹也可被拖入分类框管理），
+        // 分类框删除后未再被管理的条目（含文件夹）需要还原到桌面
 
         let vault_name = match path.file_name().and_then(|n| n.to_str()) {
             Some(n) => n.to_string(),
@@ -1425,7 +1465,7 @@ pub fn restore_unmanaged_vault_icons() {
 
         // 不再被管理，还原到桌面
         if logical_path.exists() {
-            if let Err(e) = std::fs::remove_file(&path) {
+            if let Err(e) = remove_path(&path) {
                 log::warn!("清理仓库副本失败 {}: {}", vault_name, e);
             } else {
                 log::info!("桌面已有该图标，已清理仓库副本: {}", vault_name);
@@ -1473,9 +1513,7 @@ fn restore_unmanaged_public_vault_icons(managed_paths: &std::collections::HashSe
 
     for entry in entries.flatten() {
         let vault_path = entry.path();
-        if !vault_path.is_file() {
-            continue;
-        }
+        // 文件和文件夹都是合法的仓库条目（文件夹也可被拖入分类框管理）
         let Some(name) = vault_path.file_name() else {
             continue;
         };
@@ -1497,7 +1535,7 @@ fn restore_unmanaged_public_vault_icons(managed_paths: &std::collections::HashSe
         }
 
         if logical_path.exists() {
-            let _ = std::fs::remove_file(&vault_path);
+            let _ = remove_path(&vault_path);
             continue;
         }
         if let Err(e) = export_icon(&logical_path.to_string_lossy()) {
@@ -1526,15 +1564,13 @@ fn restore_public_icons_from_dir(public_dir: &Path) -> (u32, u32) {
     let mut skipped = 0;
     for entry in entries.flatten() {
         let vault_path = entry.path();
-        if !vault_path.is_file() {
-            continue;
-        }
+        // 文件和文件夹都是合法的仓库条目（文件夹也可被拖入分类框管理）
         let Some(name) = vault_path.file_name() else {
             continue;
         };
         let desktop_path = get_public_desktop().join(name);
         if desktop_path.exists() {
-            if std::fs::remove_file(&vault_path).is_ok() {
+            if remove_path(&vault_path).is_ok() {
                 skipped += 1;
             }
             continue;
@@ -1570,11 +1606,8 @@ fn restore_icons_from_dir(managed_dir: &Path) -> (u32, u32) {
     for entry in entries.flatten() {
         let path = entry.path();
 
-        // 跳过子目录（如 user__backup/）
-        if !path.is_file() {
-            continue;
-        }
-
+        // 文件和文件夹都是合法的仓库条目（文件夹也可被拖入分类框管理），
+        // 程序退出时均需还原到桌面
         let vault_name = match path.file_name().and_then(|n| n.to_str()) {
             Some(n) => n.to_string(),
             None => continue,
@@ -1593,7 +1626,7 @@ fn restore_icons_from_dir(managed_dir: &Path) -> (u32, u32) {
 
         // 如果桌面已有该文件，仅清理仓库副本
         if logical_path.exists() {
-            if let Err(e) = std::fs::remove_file(&path) {
+            if let Err(e) = remove_path(&path) {
                 log::warn!("清理仓库副本失败 {}: {}", vault_name, e);
             } else {
                 log::info!("桌面已有该图标，已清理仓库副本: {}", vault_name);
@@ -1668,11 +1701,7 @@ pub fn list_vault_icons() -> Vec<crate::platform::types::DesktopIcon> {
         for entry in entries.flatten() {
             let vault_file_path = entry.path();
 
-            // 跳过子目录
-            if !vault_file_path.is_file() {
-                continue;
-            }
-
+            // 文件和文件夹都是合法的仓库条目（文件夹也可被拖入分类框管理）
             let vault_name = match vault_file_path.file_name().and_then(|n| n.to_str()) {
                 Some(n) => n.to_string(),
                 None => continue,
@@ -1894,16 +1923,26 @@ mod tests {
     }
 
     #[test]
-    fn test_restore_icons_skips_subdirectories() {
-        let temp_dir = std::env::temp_dir().join("ikun_test_skip_subdirs");
+    fn test_restore_icons_restores_subdirectories() {
+        // 文件夹是合法的仓库条目（文件夹也可被拖入分类框管理），
+        // 还原时需要移回桌面而不是被跳过
+        let folder_name = "ikun_test_restore_folder_0831";
+        let temp_dir = std::env::temp_dir().join("ikun_test_restore_subdirs");
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::fs::create_dir_all(&temp_dir).expect("create temp dir");
-        std::fs::create_dir_all(temp_dir.join("user__backup")).expect("create subdir");
+        std::fs::create_dir_all(temp_dir.join(format!("user__{}", folder_name)))
+            .expect("create subdir");
 
         let (restored, skipped) = restore_icons_from_dir(&temp_dir);
-        assert_eq!(restored, 0);
+        assert_eq!(restored, 1, "仓库中的文件夹应被还原到桌面");
         assert_eq!(skipped, 0);
 
+        // 清理：删除还原到桌面的测试文件夹
+        let desktop = dirs::home_dir().expect("home dir").join("Desktop");
+        let restored_dir = desktop.join(folder_name);
+        if restored_dir.is_dir() {
+            let _ = std::fs::remove_dir_all(&restored_dir);
+        }
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
@@ -2151,6 +2190,69 @@ mod tests {
         assert!(staging_exists(&file));
         let _ = std::fs::remove_file(&file);
         assert!(!staging_exists(&file));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // =========================================================================
+    // copy_path_recursive / remove_path（目录感知复制/删除）
+    // =========================================================================
+
+    #[test]
+    fn test_copy_path_recursive_file() {
+        let dir = std::env::temp_dir().join("ikun_copy_rec_file");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("a.txt");
+        let dst = dir.join("b.txt");
+        std::fs::write(&src, "hello").unwrap();
+        copy_path_recursive(&src, &dst).unwrap();
+        assert_eq!(std::fs::read_to_string(&dst).unwrap(), "hello");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_copy_path_recursive_directory() {
+        let dir = std::env::temp_dir().join("ikun_copy_rec_dir");
+        let _ = std::fs::remove_dir_all(&dir);
+        let src = dir.join("src_folder");
+        let dst = dir.join("dst_folder");
+        std::fs::create_dir_all(src.join("nested")).unwrap();
+        std::fs::write(src.join("root.txt"), "root").unwrap();
+        std::fs::write(src.join("nested").join("deep.txt"), "deep").unwrap();
+
+        copy_path_recursive(&src, &dst).unwrap();
+
+        assert!(dst.is_dir());
+        assert_eq!(
+            std::fs::read_to_string(dst.join("root.txt")).unwrap(),
+            "root"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dst.join("nested").join("deep.txt")).unwrap(),
+            "deep"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_remove_path_file_and_directory() {
+        let dir = std::env::temp_dir().join("ikun_remove_path_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // 删除普通文件
+        let file = dir.join("a.txt");
+        std::fs::write(&file, "x").unwrap();
+        remove_path(&file).unwrap();
+        assert!(!file.exists());
+
+        // 删除非空目录
+        let sub = dir.join("subdir");
+        std::fs::create_dir_all(sub.join("inner")).unwrap();
+        std::fs::write(sub.join("inner").join("f.txt"), "y").unwrap();
+        remove_path(&sub).unwrap();
+        assert!(!sub.exists());
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
