@@ -39,6 +39,96 @@ pub(crate) fn init_overlay_d2d_devices(data: &mut OverlayWindowData) {
     }
 }
 
+/// 释放覆盖窗口复用的 DIB 渲染后端。
+///
+/// 先把 D2D DC 渲染目标从旧 DC 解绑，再还原默认位图并删除 GDI 对象，
+/// 避免 D2D 继续向已删除的 DC 提交画面。窗口销毁和尺寸变化时调用。
+pub(crate) fn release_overlay_dib(data: &mut OverlayWindowData) {
+    if data.dib_dc.is_null() {
+        return;
+    }
+    if let Some(ref target) = data.d2d_target {
+        let empty = windows::Win32::Foundation::RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        let _ = unsafe { target.BindDC(GdiHDC(std::ptr::null_mut()), &empty) };
+    }
+    unsafe {
+        if !data.dib_old_bmp.is_null() {
+            SelectObject(data.dib_dc, data.dib_old_bmp);
+        }
+        if !data.dib_section.is_null() {
+            DeleteObject(data.dib_section as HGDIOBJ);
+        }
+        DeleteDC(data.dib_dc);
+    }
+    data.dib_section = std::ptr::null_mut();
+    data.dib_dc = std::ptr::null_mut();
+    data.dib_old_bmp = std::ptr::null_mut();
+    data.dib_w = 0;
+    data.dib_h = 0;
+}
+
+/// 确保覆盖窗口持有一个与 width × height 匹配的 DIB 渲染后端。
+///
+/// 尺寸一致时直接复用（绝大多数帧命中这条路径）；尺寸变化时先释放旧后端再重建。
+fn ensure_overlay_dib(data: &mut OverlayWindowData, width: i32, height: i32) -> bool {
+    if !data.dib_dc.is_null() && data.dib_w == width && data.dib_h == height {
+        return true;
+    }
+    release_overlay_dib(data);
+    if width <= 0 || height <= 0 {
+        return false;
+    }
+    unsafe {
+        // 屏幕 DC 仅用于创建兼容 DC，创建完成后立即归还
+        let screen_dc = GetDC(std::ptr::null_mut());
+        if screen_dc.is_null() {
+            return false;
+        }
+        let mem_dc = CreateCompatibleDC(screen_dc);
+        ReleaseDC(std::ptr::null_mut(), screen_dc);
+        if mem_dc.is_null() {
+            return false;
+        }
+        let bi = BITMAPINFOHEADER {
+            bi_size: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            bi_width: width,
+            bi_height: -height, // 自上而下
+            bi_planes: 1,
+            bi_bit_count: 32,
+            bi_compression: 0,
+            bi_size_image: 0,
+            bi_x_pels_per_meter: 0,
+            bi_y_pels_per_meter: 0,
+            bi_clr_used: 0,
+            bi_clr_important: 0,
+        };
+        let mut bits: *mut Pixel32 = std::ptr::null_mut();
+        let dib = CreateDIBSection(
+            mem_dc,
+            &bi as *const BITMAPINFOHEADER as *const c_void,
+            DIB_RGB_COLORS,
+            &mut bits as *mut *mut Pixel32 as *mut *mut c_void,
+            std::ptr::null_mut(),
+            0,
+        );
+        if dib.is_null() || bits.is_null() {
+            DeleteDC(mem_dc);
+            return false;
+        }
+        data.dib_old_bmp = SelectObject(mem_dc, dib as HGDIOBJ);
+        data.dib_section = dib;
+        data.dib_dc = mem_dc;
+        data.dib_w = width;
+        data.dib_h = height;
+        true
+    }
+}
+
 /// 渲染桌面覆盖窗口。
 pub(crate) fn render_desktop_overlay(hwnd: HWND) {
     let data = match get_overlay_data(hwnd) {
@@ -59,47 +149,25 @@ pub(crate) fn render_desktop_overlay(hwnd: HWND) {
         return;
     }
 
+    // ===== 复用的 32 位 ARGB DIB Section（D2D 渲染后端）=====
+    //
+    // 旧实现每次渲染都 CreateDIBSection 一张全虚拟桌面大小的位图
+    // （5040x1080x4 ≈ 21.8MB）再 DeleteObject，实测下主进程私有内存
+    // 以 ~28MB 一个台阶持续上涨。现在 DIB 与内存 DC 存在
+    // OverlayWindowData 中，仅尺寸变化或窗口销毁时重建。
+    if !ensure_overlay_dib(data, w, h) {
+        log::error!("覆盖窗口 DIB 渲染后端创建失败: {w}x{h}");
+        return;
+    }
+    let mem_dc = data.dib_dc;
+
+    // UpdateLayeredWindow 需要屏幕 DC 作为 hdcDst，帧末归还
     let screen_dc = unsafe { GetDC(std::ptr::null_mut()) };
-    let mem_dc = unsafe { CreateCompatibleDC(screen_dc) };
-    if mem_dc.is_null() {
-        unsafe { ReleaseDC(std::ptr::null_mut(), screen_dc) };
+    if screen_dc.is_null() {
+        log::error!("覆盖窗口渲染获取屏幕 DC 失败");
         return;
     }
 
-    let bi = BITMAPINFOHEADER {
-        bi_size: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-        bi_width: w,
-        bi_height: -h,
-        bi_planes: 1,
-        bi_bit_count: 32,
-        bi_compression: 0,
-        bi_size_image: 0,
-        bi_x_pels_per_meter: 0,
-        bi_y_pels_per_meter: 0,
-        bi_clr_used: 0,
-        bi_clr_important: 0,
-    };
-
-    let mut bits: *mut Pixel32 = std::ptr::null_mut();
-    let dib = unsafe {
-        CreateDIBSection(
-            mem_dc,
-            &bi as *const BITMAPINFOHEADER as *const c_void,
-            DIB_RGB_COLORS,
-            &mut bits as *mut *mut Pixel32 as *mut *mut c_void,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-    if dib.is_null() || bits.is_null() {
-        unsafe {
-            DeleteDC(mem_dc);
-            ReleaseDC(std::ptr::null_mut(), screen_dc);
-        }
-        return;
-    }
-
-    let old_bmp = unsafe { SelectObject(mem_dc, dib as HGDIOBJ) };
     let bind_rect = windows::Win32::Foundation::RECT {
         left: 0,
         top: 0,
@@ -108,12 +176,7 @@ pub(crate) fn render_desktop_overlay(hwnd: HWND) {
     };
     if unsafe { target.BindDC(GdiHDC(mem_dc), &bind_rect) }.is_err() {
         log::error!("覆盖窗口 BindDC 失败");
-        unsafe {
-            SelectObject(mem_dc, old_bmp);
-            DeleteObject(dib as HGDIOBJ);
-            DeleteDC(mem_dc);
-            ReleaseDC(std::ptr::null_mut(), screen_dc);
-        }
+        unsafe { ReleaseDC(std::ptr::null_mut(), screen_dc) };
         return;
     }
 
@@ -191,9 +254,7 @@ pub(crate) fn render_desktop_overlay(hwnd: HWND) {
             &blend,
             LWA_ALPHA,
         );
-        SelectObject(mem_dc, old_bmp);
-        DeleteObject(dib as HGDIOBJ);
-        DeleteDC(mem_dc);
+        // DIB 与内存 DC 保留给下一帧复用，只归还屏幕 DC
         ReleaseDC(std::ptr::null_mut(), screen_dc);
     }
 

@@ -253,6 +253,7 @@ mod tests {
             dib_w: 0,
             dib_h: 0,
             render_padding: 0,
+            glass_pixels: Vec::new(),
             d2d_target: None,
             icon_bitmap_cache: std::collections::HashMap::new(),
             renaming_item_index: -1,

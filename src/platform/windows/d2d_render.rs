@@ -322,6 +322,7 @@ pub fn render_layered_window(hwnd: HWND) {
     let fallback_radius = box_style.border_radius * dpi_scale;
     let glass_drawn = if glass_config.enabled {
         draw_liquid_glass_background(
+            data,
             &target,
             wr.left,
             wr.top,
@@ -330,6 +331,7 @@ pub fn render_layered_window(hwnd: HWND) {
             shadow_padding,
             corner_radius,
             dpi_scale,
+            &glass_config,
         )
     } else {
         false
@@ -721,8 +723,19 @@ pub fn render_layered_window(hwnd: HWND) {
 
     RENDERING.store(false, Ordering::SeqCst);
 }
-
+/// 把液态玻璃表面画到分层窗口上。
+///
+/// `data.glass_pixels` 是跨帧复用的 GPU 回读缓冲，避免每帧新分配
+/// 一块 1~5MB 的 Vec。
+///
+/// D2D 位图则**必须**每帧重建，不能跨帧缓存：分类框用的是
+/// `ID2D1DCRenderTarget`，每帧都重新 `BindDC` 到 DIB；从它派生并长期
+/// 持有的位图会钉住上一次绑定的后端表面，让 D2D 无法释放。
+/// 实测把位图缓存下来后主进程私有内存反而涨得更快，因此
+/// 这里保留「每帧创建、帧末释放」的原有语义。
+#[allow(clippy::too_many_arguments)]
 fn draw_liquid_glass_background(
+    data: &mut GridWindowData,
     target: &ID2D1DCRenderTarget,
     screen_x: i32,
     screen_y: i32,
@@ -731,9 +744,9 @@ fn draw_liquid_glass_background(
     padding: i32,
     corner_radius: f32,
     dpi_scale: f32,
+    glass_config: &crate::config::LiquidGlassConfig,
 ) -> bool {
-    let glass_config = super::liquid_glass::get_liquid_glass_config();
-    let Some(pixels) = super::liquid_glass::render_background(
+    if !super::liquid_glass::render_background(
         screen_x,
         screen_y,
         width,
@@ -741,10 +754,16 @@ fn draw_liquid_glass_background(
         padding,
         corner_radius,
         dpi_scale,
-        &glass_config,
-    ) else {
+        glass_config,
+        &mut data.glass_pixels,
+    ) {
         return false;
-    };
+    }
+    // 回读缓冲必须刚好是一张完整表面，否则 pitch 会与位图对不上
+    if data.glass_pixels.len() != ((width + padding * 2) * (height + padding * 2)) as usize {
+        log::warn!("液态玻璃回读尺寸不匹配: {}", data.glass_pixels.len());
+        return false;
+    }
 
     let bitmap_props = D2D1_BITMAP_PROPERTIES {
         pixelFormat: D2D1_PIXEL_FORMAT {
@@ -760,7 +779,7 @@ fn draw_liquid_glass_background(
                 width: (width + padding * 2) as u32,
                 height: (height + padding * 2) as u32,
             },
-            Some(pixels.as_ptr().cast::<c_void>()),
+            Some(data.glass_pixels.as_ptr().cast::<c_void>()),
             (width + padding * 2) as u32 * std::mem::size_of::<Pixel32>() as u32,
             &bitmap_props,
         )

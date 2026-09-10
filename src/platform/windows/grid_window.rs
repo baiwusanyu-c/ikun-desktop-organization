@@ -237,6 +237,15 @@ pub(crate) struct GridWindowData {
     /// 每次按 DPI 重新推算：否则玻璃刚关闭时窗口外框还没收缩，渲染却已经
     /// 按新留白计算，会出现整框错位一帧。
     pub(crate) render_padding: i32,
+
+    /// 液态玻璃像素回读缓冲，跨帧复用。
+    ///
+    /// 玻璃开启时每帧要接收一张 1~5MB 的 GPU 回读表面，
+    /// 旧实现每帧新分配一块再丢掉；5 个框 × 5fps 就是每秒
+    /// 上百 MB 的大对象申请/归还，堆的已提交容量会单调上涨。
+    /// 注意：D2D 位图不能同样跨帧缓存，原因见
+    /// `draw_liquid_glass_background` 的注释。
+    pub(crate) glass_pixels: Vec<Pixel32>,
 }
 
 unsafe impl Send for GridWindowData {}
@@ -346,6 +355,7 @@ impl GridWindowData {
             dib_w: 0,
             dib_h: 0,
             render_padding: 0,
+            glass_pixels: Vec::new(),
         }
     }
 }
@@ -660,6 +670,7 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         dib_w: 0,
         dib_h: 0,
         render_padding: shadow_padding,
+        glass_pixels: Vec::new(),
     });
     let data_ptr = Box::into_raw(data);
     unsafe {

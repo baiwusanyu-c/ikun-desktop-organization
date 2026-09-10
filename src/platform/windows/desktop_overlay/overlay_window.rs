@@ -115,6 +115,23 @@ pub(crate) struct OverlayWindowData {
     pub(crate) wic_factory: Option<IWICImagingFactory>,
     /// DC RenderTarget
     pub(crate) d2d_target: Option<ID2D1DCRenderTarget>,
+
+    // ===== 复用的 DIB 渲染后端 =====
+    //
+    // 覆盖窗口铺满整个虚拟桌面（实测 5040x1080），旧实现每次渲染
+    // 都 CreateDIBSection 一张 ~21.8MB 的位图再 DeleteObject，
+    // 是玻璃开启后内存以 ~28MB 台阶式上涨的来源。
+    // 现在长期持有，仅尺寸变化或窗口销毁时重建。
+    /// 32 位 ARGB DIB Section（自上而下），UpdateLayeredWindow 的位图源
+    pub(crate) dib_section: HBITMAP,
+    /// 选中 `dib_section` 的内存 DC，同时是 D2D DC 渲染目标的绑定点
+    pub(crate) dib_dc: HDC,
+    /// `dib_dc` 中被替换掉的默认位图，释放前需先还原
+    pub(crate) dib_old_bmp: HGDIOBJ,
+    /// 当前 DIB 宽度（物理像素），0 表示尚未创建
+    pub(crate) dib_w: i32,
+    /// 当前 DIB 高度（物理像素），0 表示尚未创建
+    pub(crate) dib_h: i32,
     // ===== 重命名状态 =====
     /// 正在重命名的项索引（-1 = 无重命名）
     pub(crate) renaming_item_index: i32,
@@ -265,6 +282,11 @@ pub fn create_desktop_overlay() -> Result<()> {
         dw_factory: None,
         wic_factory: None,
         d2d_target: None,
+        dib_section: std::ptr::null_mut(),
+        dib_dc: std::ptr::null_mut(),
+        dib_old_bmp: std::ptr::null_mut(),
+        dib_w: 0,
+        dib_h: 0,
         renaming_item_index: -1,
         drop_target_ptr: std::ptr::null_mut(),
         external_drag_hover: false,
@@ -415,10 +437,13 @@ fn release_overlay_window_data(hwnd: HWND) {
     }
     unsafe {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-        let data = Box::from_raw(data_ptr);
+        let mut data = Box::from_raw(data_ptr);
         for icon in &data.icons {
             crate::platform::windows::icon_extract::destroy_icon(icon.icon_handle);
         }
+        // 复用的 DIB 后端必须显式释放，否则每销毁一个覆盖窗口
+        // 就漏掉一张全桌面大小的位图与一个内存 DC。
+        super::overlay_render::release_overlay_dib(&mut data);
         drop(data);
     }
 }
@@ -915,6 +940,11 @@ impl OverlayWindowData {
             dw_factory: None,
             wic_factory: None,
             d2d_target: None,
+            dib_section: std::ptr::null_mut(),
+            dib_dc: std::ptr::null_mut(),
+            dib_old_bmp: std::ptr::null_mut(),
+            dib_w: 0,
+            dib_h: 0,
             renaming_item_index: -1,
             drop_target_ptr: std::ptr::null_mut(),
             external_drag_hover: false,
@@ -961,6 +991,11 @@ mod tests {
             dw_factory: None,
             wic_factory: None,
             d2d_target: None,
+            dib_section: std::ptr::null_mut(),
+            dib_dc: std::ptr::null_mut(),
+            dib_old_bmp: std::ptr::null_mut(),
+            dib_w: 0,
+            dib_h: 0,
             renaming_item_index: -1,
             drop_target_ptr: std::ptr::null_mut(),
             external_drag_hover: false,
@@ -1005,6 +1040,11 @@ mod tests {
             dw_factory: None,
             wic_factory: None,
             d2d_target: None,
+            dib_section: std::ptr::null_mut(),
+            dib_dc: std::ptr::null_mut(),
+            dib_old_bmp: std::ptr::null_mut(),
+            dib_w: 0,
+            dib_h: 0,
             renaming_item_index: -1,
             drop_target_ptr: std::ptr::null_mut(),
             external_drag_hover: false,

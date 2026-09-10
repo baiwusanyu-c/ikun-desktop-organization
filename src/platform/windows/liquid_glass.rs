@@ -21,13 +21,13 @@ use windows::Win32::Graphics::Direct2D::Common::{
 };
 use windows::Win32::Graphics::Direct2D::{
     CLSID_D2D1Border, CLSID_D2D1ColorMatrix, CLSID_D2D1Crop, CLSID_D2D1GaussianBlur,
-    D2D1CreateDevice, ID2D1DeviceContext, ID2D1Image, D2D1_BITMAP_OPTIONS_NONE,
-    D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1, D2D1_BORDER_EDGE_MODE_MIRROR,
-    D2D1_BORDER_PROP_EDGE_MODE_X, D2D1_BORDER_PROP_EDGE_MODE_Y, D2D1_COLORMATRIX_PROP_COLOR_MATRIX,
-    D2D1_CROP_PROP_RECT, D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
-    D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION, D2D1_INTERPOLATION_MODE_LINEAR,
-    D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT, D2D1_PROPERTY_TYPE_MATRIX_5X4,
-    D2D1_PROPERTY_TYPE_VECTOR4,
+    D2D1CreateDevice, ID2D1Bitmap1, ID2D1DeviceContext, ID2D1Effect, ID2D1Image,
+    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_OPTIONS_TARGET,
+    D2D1_BITMAP_PROPERTIES1, D2D1_BORDER_EDGE_MODE_MIRROR, D2D1_BORDER_PROP_EDGE_MODE_X,
+    D2D1_BORDER_PROP_EDGE_MODE_Y, D2D1_COLORMATRIX_PROP_COLOR_MATRIX, D2D1_CROP_PROP_RECT,
+    D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION,
+    D2D1_INTERPOLATION_MODE_LINEAR, D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT,
+    D2D1_PROPERTY_TYPE_MATRIX_5X4, D2D1_PROPERTY_TYPE_VECTOR4,
 };
 use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
 use windows::Win32::Graphics::Direct3D::{
@@ -211,6 +211,19 @@ struct Constants {
     interaction_padding: [f32; 2],
 }
 
+/// 复用的 D2D 模糊 effect 链（每个 output 一份）。
+///
+/// 各级输入在创建时接好，运行期只用 SetValue 改参数。保持 effect
+/// 对象身份稳定，D2D1 才能命中它为该图缓存的 realization（模糊中间表面）。
+struct BlurChain {
+    crop: ID2D1Effect,
+    border: ID2D1Effect,
+    blur: ID2D1Effect,
+    saturate: ID2D1Effect,
+    /// `saturate.GetOutput()`，DrawImage 的输入
+    saturated: ID2D1Image,
+}
+
 struct CaptureOutput {
     rect: WinRect,
     output1: IDXGIOutput1,
@@ -220,6 +233,12 @@ struct CaptureOutput {
     desktop_view: Option<ID3D11ShaderResourceView>,
     blurred_texture: Option<ID3D11Texture2D>,
     blurred_view: Option<ID3D11ShaderResourceView>,
+    /// 桌面捕获纹理的 D2D 位图包装（随 desktop_texture 一起失效）
+    source_bitmap: Option<ID2D1Bitmap1>,
+    /// 模糊目标纹理的 D2D 位图包装（随 blurred_texture 一起失效）
+    target_bitmap: Option<ID2D1Bitmap1>,
+    /// 复用的模糊 effect 链
+    blur_chain: Option<BlurChain>,
 }
 
 struct EmbeddedMap {
@@ -296,6 +315,19 @@ pub fn get_box_style_config() -> BoxStyleConfig {
         .unwrap_or_default()
 }
 
+/// 把缓存的上一成功帧填进调用方缓冲区。
+///
+/// 只在 GPU 捕获失败 / 渲染器忙碌 / 单帧失败时走这条路，
+/// 因此这里的一次克隆不在热路径上。
+fn fill_from_cache(key: (i32, i32, i32, i32, i32), out: &mut Vec<Pixel32>) -> bool {
+    let Some(cached) = cached_frame(key) else {
+        return false;
+    };
+    out.clear();
+    out.extend_from_slice(&cached);
+    true
+}
+
 fn cached_frame(key: (i32, i32, i32, i32, i32)) -> Option<Vec<Pixel32>> {
     LAST_GOOD_FRAMES.with(|frames| frames.borrow().get(&key).cloned())
 }
@@ -303,6 +335,15 @@ fn cached_frame(key: (i32, i32, i32, i32, i32)) -> Option<Vec<Pixel32>> {
 fn cache_frame(key: (i32, i32, i32, i32, i32), pixels: &[Pixel32]) {
     LAST_GOOD_FRAMES.with(|frames| {
         let mut frames = frames.borrow_mut();
+        // 命中同一个 key 时复用已有 Vec 的分配：`clear` 保留容量，
+        // 长度不变就不会再向分配器要内存。旧实现每帧 to_vec 一块
+        // 1~5MB 再丢掉上一块，大对象反复申请/归还会让堆的已提交
+        // 容量单调上涨。
+        if let Some(slot) = frames.get_mut(&key) {
+            slot.clear();
+            slot.extend_from_slice(pixels);
+            return;
+        }
         frames.insert(key, pixels.to_vec());
         while frames.len() > MAX_SURFACE_CACHE_ENTRIES {
             let Some(old_key) = frames.keys().copied().find(|candidate| *candidate != key) else {
@@ -437,6 +478,12 @@ pub fn invalidate_desktop_snapshot() {
                     output.desktop_view = None;
                     output.blurred_texture = None;
                     output.blurred_view = None;
+                    output.source_bitmap = None;
+                    output.target_bitmap = None;
+                    output.blur_chain = None;
+                    output.source_bitmap = None;
+                    output.target_bitmap = None;
+                    output.blur_chain = None;
                 }
             }
         }
@@ -444,6 +491,13 @@ pub fn invalidate_desktop_snapshot() {
     LAST_GOOD_FRAMES.with(|frames| frames.borrow_mut().clear());
 }
 
+/// 渲染一帧液态玻璃背景，像素直接写进 `out`。
+///
+/// 返回 `true` 表示 `out` 里已是一张完整的
+/// `(content_width + padding * 2) × (content_height + padding * 2)` 表面。
+/// 用调用方缓冲区而不是返回新 Vec：旧实现每帧新分配一块
+/// 1~5MB 再丢掉，5 个框 × 5fps 就是每秒上百 MB 的大对象申请/归还。
+#[allow(clippy::too_many_arguments)]
 pub fn render_background(
     screen_x: i32,
     screen_y: i32,
@@ -453,9 +507,10 @@ pub fn render_background(
     corner_radius: f32,
     dpi_scale: f32,
     glass_config: &LiquidGlassConfig,
-) -> Option<Vec<Pixel32>> {
+    out: &mut Vec<Pixel32>,
+) -> bool {
     if content_width <= 0 || content_height <= 0 || padding < 0 {
-        return None;
+        return false;
     }
 
     let cache_key = (screen_x, screen_y, content_width, content_height, padding);
@@ -471,11 +526,11 @@ pub fn render_background(
             Ok(s) => s,
             Err(_) => {
                 log::debug!("液态玻璃渲染器当前忙碌，跳过本帧");
-                return cached_frame(cache_key);
+                return fill_from_cache(cache_key, out);
             }
         };
         if matches!(&*state, GlassState::Failed { retry_at } if Instant::now() < *retry_at) {
-            return cached_frame(cache_key);
+            return fill_from_cache(cache_key, out);
         }
 
         if !matches!(&*state, GlassState::Ready(_)) {
@@ -489,13 +544,13 @@ pub fn render_background(
                     *state = GlassState::Failed {
                         retry_at: Instant::now() + RETRY_DELAY,
                     };
-                    return cached_frame(cache_key);
+                    return fill_from_cache(cache_key, out);
                 }
             }
         }
 
         let GlassState::Ready(renderer) = &mut *state else {
-            return None;
+            return false;
         };
 
         match renderer.render(
@@ -507,18 +562,19 @@ pub fn render_background(
             corner_radius,
             dpi_scale,
             glass_config,
+            out,
         ) {
-            Ok(pixels) => {
-                log::debug!("[LG] render OK, {} pixels", pixels.len());
-                log_first_frame_diagnostic(&pixels, content_width, content_height, padding);
-                cache_frame(cache_key, &pixels);
-                Some(pixels)
+            Ok(()) => {
+                log::debug!("[LG] render OK, {} pixels", out.len());
+                log_first_frame_diagnostic(out, content_width, content_height, padding);
+                cache_frame(cache_key, out);
+                true
             }
             Err(error) => {
                 log::warn!("液态玻璃帧渲染失败，保留上一成功帧: {error:#}");
                 // 单帧捕获失败不应让整个渲染器进入 3 秒回退状态；保留 Ready
                 // 可在下一次定时器 tick 立即重试，避免拖动到新位置时闪黑。
-                cached_frame(cache_key)
+                fill_from_cache(cache_key, out)
             }
         }
     })
@@ -606,6 +662,9 @@ fn create_outputs(device: &ID3D11Device) -> Result<Vec<CaptureOutput>> {
                 desktop_view: None,
                 blurred_texture: None,
                 blurred_view: None,
+                source_bitmap: None,
+                target_bitmap: None,
+                blur_chain: None,
             });
         }
         Ok(outputs)
@@ -730,9 +789,14 @@ impl GlassRenderer {
 
             let buffer_desc = D3D11_BUFFER_DESC {
                 ByteWidth: size_of::<Constants>() as u32,
-                Usage: D3D11_USAGE_DYNAMIC,
+                // DEFAULT + UpdateSubresource，不用 DYNAMIC + MAP_WRITE_DISCARD：
+                // 后者每次 Map 都触发运行时的 buffer renaming（丢弃旧后端、
+                // 另分配一块），玻璃开启时 25 次/秒，GPU 一旦落后重命名
+                // 后端就会堆积。常量缓冲每帧整体覆写，交给运行时走
+                // 统一上传堆即可，无重命名。
+                Usage: D3D11_USAGE_DEFAULT,
                 BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
-                CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+                CPUAccessFlags: 0,
                 ..Default::default()
             };
             let mut constants = None;
@@ -865,6 +929,13 @@ impl GlassRenderer {
                     let view = view.context("创建桌面纹理视图未返回对象")?;
                     output.desktop_texture = Some(new_texture);
                     output.desktop_view = Some(view);
+                    log::info!(
+                        "[LG-mem] 新增桌面捕获纹理 {}x{} = {:.1}MB (output={})",
+                        desc.Width,
+                        desc.Height,
+                        (desc.Width as f64 * desc.Height as f64 * 4.0) / 1_048_576.0,
+                        index
+                    );
                 }
                 if let Some(destination) = &output.desktop_texture {
                     self.context.CopyResource(destination, &texture);
@@ -911,6 +982,12 @@ impl GlassRenderer {
                 let view = view.context("创建模糊纹理视图未返回对象")?;
                 output.blurred_texture = Some(new_texture);
                 output.blurred_view = Some(view);
+                log::info!(
+                    "[LG-mem] 新增模糊纹理 {}x{} = {:.1}MB",
+                    texture_desc.Width,
+                    texture_desc.Height,
+                    (texture_desc.Width as f64 * texture_desc.Height as f64 * 4.0) / 1_048_576.0
+                );
             }
 
             let Some(ref target_texture) = output.blurred_texture else {
@@ -939,13 +1016,34 @@ impl GlassRenderer {
                 ..Default::default()
             };
 
-            let source_surface = source_texture.cast::<IDXGISurface>()?;
-            let target_surface = target_texture.cast::<IDXGISurface>()?;
-
-            let source_bitmap = d2d_context
-                .CreateBitmapFromDxgiSurface(&source_surface, Some(&source_properties))?;
-            let target_bitmap = d2d_context
-                .CreateBitmapFromDxgiSurface(&target_surface, Some(&target_properties))?;
+            // ===== 复用 D2D 位图与 effect 链 =====
+            //
+            // 旧实现每帧 CreateBitmapFromDxgiSurface ×2 + CreateEffect ×4：
+            // 5 个框 × 5fps 就是每秒 150 个 D2D 对象。D2D1 为每张 effect 图
+            // 维护 realization（模糊用的中间表面），对象每帧都是新的 →
+            // realization 永远命不中 → D2D 内部池只增不减。实测私有内存
+            // 以 ~28MB 一个台阶持续上涨，且没有任何 Rust 侧分配与之对应。
+            // 缓存到 output 上之后 effect 对象身份稳定，D2D1 能复用 realization。
+            let source_bitmap = match output.source_bitmap.clone() {
+                Some(bitmap) => bitmap,
+                None => {
+                    let surface = source_texture.cast::<IDXGISurface>()?;
+                    let created = d2d_context
+                        .CreateBitmapFromDxgiSurface(&surface, Some(&source_properties))?;
+                    output.source_bitmap = Some(created.clone());
+                    created
+                }
+            };
+            let target_bitmap = match output.target_bitmap.clone() {
+                Some(bitmap) => bitmap,
+                None => {
+                    let surface = target_texture.cast::<IDXGISurface>()?;
+                    let created = d2d_context
+                        .CreateBitmapFromDxgiSurface(&surface, Some(&target_properties))?;
+                    output.target_bitmap = Some(created.clone());
+                    created
+                }
+            };
 
             let crop_rect = D2D_RECT_F {
                 left: (lens_x - output.rect.left).max(0) as f32,
@@ -957,48 +1055,62 @@ impl GlassRenderer {
                 return Ok(());
             }
 
-            let crop = d2d_context.CreateEffect(&CLSID_D2D1Crop)?;
-            crop.SetInput(0, &source_bitmap, true);
+            // effect 链只建一次：Crop → Border(MIRROR) → GaussianBlur → ColorMatrix。
+            // 各级输入在创建时接好，之后每帧只用 SetValue 改裁剪框 / σ / 饱和度矩阵。
+            let chain = match output.blur_chain.take() {
+                Some(chain) => chain,
+                None => {
+                    let crop = d2d_context.CreateEffect(&CLSID_D2D1Crop)?;
+                    let border = d2d_context.CreateEffect(&CLSID_D2D1Border)?;
+                    border.SetInput(0, &crop.GetOutput()?, true);
+                    let blur = d2d_context.CreateEffect(&CLSID_D2D1GaussianBlur)?;
+                    blur.SetInput(0, &border.GetOutput()?, true);
+                    let saturate = d2d_context.CreateEffect(&CLSID_D2D1ColorMatrix)?;
+                    saturate.SetInput(0, &blur.GetOutput()?, true);
+                    let saturated = saturate.GetOutput()?;
+                    log::info!("[LG-mem] 新建 D2D effect 链（每个 output 一次）");
+                    BlurChain {
+                        crop,
+                        border,
+                        blur,
+                        saturate,
+                        saturated,
+                    }
+                }
+            };
+
+            chain.crop.SetInput(0, &source_bitmap, true);
             let crop_bytes = slice::from_raw_parts(
                 (&crop_rect as *const D2D_RECT_F).cast::<u8>(),
                 size_of::<D2D_RECT_F>(),
             );
-            crop.SetValue(
+            chain.crop.SetValue(
                 D2D1_CROP_PROP_RECT.0 as u32,
                 D2D1_PROPERTY_TYPE_VECTOR4,
                 crop_bytes,
             )?;
-            let cropped = crop.GetOutput()?;
 
-            let border = d2d_context.CreateEffect(&CLSID_D2D1Border)?;
-            border.SetInput(0, &cropped, true);
             let edge_mode = D2D1_BORDER_EDGE_MODE_MIRROR.0;
             let edge_bytes =
                 slice::from_raw_parts((&edge_mode as *const i32).cast::<u8>(), size_of::<i32>());
-            border.SetValue(
+            chain.border.SetValue(
                 D2D1_BORDER_PROP_EDGE_MODE_X.0 as u32,
                 D2D1_PROPERTY_TYPE_ENUM,
                 edge_bytes,
             )?;
-            border.SetValue(
+            chain.border.SetValue(
                 D2D1_BORDER_PROP_EDGE_MODE_Y.0 as u32,
                 D2D1_PROPERTY_TYPE_ENUM,
                 edge_bytes,
             )?;
-            let bordered = border.GetOutput()?;
 
-            let blur = d2d_context.CreateEffect(&CLSID_D2D1GaussianBlur)?;
-            blur.SetInput(0, &bordered, true);
             let sigma_bytes = slice::from_raw_parts((&sigma as *const f32).cast::<u8>(), 4);
-            blur.SetValue(
+            chain.blur.SetValue(
                 D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION.0 as u32,
                 D2D1_PROPERTY_TYPE_FLOAT,
                 sigma_bytes,
             )?;
-            let blurred_image = blur.GetOutput()?;
 
-            let saturate_effect = d2d_context.CreateEffect(&CLSID_D2D1ColorMatrix)?;
-            saturate_effect.SetInput(0, &blurred_image, true);
             let matrix = D2D_MATRIX_5X4_F {
                 Anonymous: windows::Win32::Graphics::Direct2D::Common::D2D_MATRIX_5X4_F_0 {
                     m: [
@@ -1029,24 +1141,41 @@ impl GlassRenderer {
                 (&matrix as *const D2D_MATRIX_5X4_F).cast::<u8>(),
                 size_of::<D2D_MATRIX_5X4_F>(),
             );
-            saturate_effect.SetValue(
+            chain.saturate.SetValue(
                 D2D1_COLORMATRIX_PROP_COLOR_MATRIX.0 as u32,
                 D2D1_PROPERTY_TYPE_MATRIX_5X4,
                 saturation_bytes,
             )?;
-            let saturated_image = saturate_effect.GetOutput()?;
 
             d2d_context.SetTarget(&target_bitmap);
             d2d_context.BeginDraw();
+            // 只模糊分类框自己的内容矩形，不模糊整个桌面。
+            //
+            // 着色器里 `mirrorSource` 把采样 uv 夹在 sourceMinimum /
+            // sourceMaximum 之间，而这两个值算出来正好就是 crop_rect：
+            //     sourceMinimum = (windowOrigin + padding - outputOrigin) / outputSize
+            //     sourceMaximum = (windowOrigin + padding + lensSize - outputOrigin) / outputSize
+            // 也就是说 crop_rect 之外的模糊结果永远不会被读到。
+            //
+            // 旧实现把 DrawImage 交给 D2D 自己算输出范围，Border(MIRROR) 会把
+            // 图像撑到整张目标，于是每帧都对全桌面（2560x1440 级）做
+            // 高斯模糊，D2D 要为中间 pass 分配数张全屏表面。
+            // 5 个框 × 5fps = 每秒 25 次全屏模糊，是玻璃开启后
+            // 内存从 250MB 一路暴涨到 700MB 的主因。
+            // 裁剪后模糊面积缩到原来的 ~1/45，且画面逐像素不变。
+            d2d_context.PushAxisAlignedClip(&crop_rect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
             d2d_context.DrawImage(
-                &saturated_image,
+                &chain.saturated,
                 None,
                 None,
                 D2D1_INTERPOLATION_MODE_LINEAR,
                 D2D1_COMPOSITE_MODE_SOURCE_COPY,
             );
+            d2d_context.PopAxisAlignedClip();
             let end_draw = d2d_context.EndDraw(None, None);
             d2d_context.SetTarget(None::<&ID2D1Image>);
+            // 链交回 output 供下一帧复用（必须在 DrawImage 之后）
+            output.blur_chain = Some(chain);
             end_draw.map_err(Into::into)
         }
     }
@@ -1103,6 +1232,13 @@ impl GlassRenderer {
                     staging_texture,
                 },
             );
+            log::info!(
+                "[LG-mem] 新增渲染表面 {}x{} = {:.1}MB（输出+暂存共 2 张），缓存 {} 项",
+                width,
+                height,
+                (width as f64 * height as f64 * 8.0) / 1_048_576.0,
+                self.surfaces.len()
+            );
 
             // Evict oldest entries AFTER insertion, never evict the current key.
             // HashMap iteration order is non-deterministic, so we explicitly skip
@@ -1134,7 +1270,8 @@ impl GlassRenderer {
         corner_radius: f32,
         dpi_scale: f32,
         glass_config: &LiquidGlassConfig,
-    ) -> Result<Vec<Pixel32>> {
+        out: &mut Vec<Pixel32>,
+    ) -> Result<()> {
         let center_x = screen_x + padding as i32 + content_width as i32 / 2;
         let center_y = screen_y + padding as i32 + content_height as i32 / 2;
 
@@ -1213,6 +1350,7 @@ impl GlassRenderer {
             hdr_active,
             glass_config,
             cursor_in_window,
+            out,
         )
     }
 
@@ -1230,7 +1368,8 @@ impl GlassRenderer {
         hdr_active: bool,
         glass_config: &LiquidGlassConfig,
         cursor_in_window: bool,
-    ) -> Result<Vec<Pixel32>> {
+        out: &mut Vec<Pixel32>,
+    ) -> Result<()> {
         let surface_width = content_width + padding * 2;
         let surface_height = content_height + padding * 2;
         self.ensure_surfaces(surface_width, surface_height)?;
@@ -1330,16 +1469,14 @@ impl GlassRenderer {
             self.context
                 .PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
 
-            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-            self.context.Map(
+            self.context.UpdateSubresource(
                 &self.constants,
                 0,
-                D3D11_MAP_WRITE_DISCARD,
+                None,
+                (&constants as *const Constants).cast::<c_void>(),
+                size_of::<Constants>() as u32,
                 0,
-                Some(&mut mapped),
-            )?;
-            mapped.pData.cast::<Constants>().write(constants);
-            self.context.Unmap(&self.constants, 0);
+            );
 
             // 与 frosted_liquid 示例一致：启用 scissor 后必须在 Draw 前设置范围。
             // 分类框的液态玻璃表面就是完整窗口，因此裁剪范围为整张输出纹理。
@@ -1368,15 +1505,17 @@ impl GlassRenderer {
                 Some(&mut mapped),
             )?;
 
-            let mut pixels = vec![
+            // 复用调用方缓冲区：`clear` 保留容量，长度不变时零分配。
+            out.clear();
+            out.resize(
+                (surface_width * surface_height) as usize,
                 Pixel32 {
                     b: 0,
                     g: 0,
                     r: 0,
-                    a: 0
-                };
-                (surface_width * surface_height) as usize
-            ];
+                    a: 0,
+                },
+            );
             let row_bytes = surface_width as usize * size_of::<Pixel32>();
 
             for row in 0..surface_height as usize {
@@ -1384,7 +1523,7 @@ impl GlassRenderer {
                     .pData
                     .cast::<u8>()
                     .add(row * mapped.RowPitch as usize);
-                let destination = pixels.as_mut_ptr().cast::<u8>().add(row * row_bytes);
+                let destination = out.as_mut_ptr().cast::<u8>().add(row * row_bytes);
                 std::ptr::copy_nonoverlapping(source, destination, row_bytes);
             }
 
@@ -1392,12 +1531,12 @@ impl GlassRenderer {
             let center_index = ((padding + content_height / 2) * surface_width
                 + padding
                 + content_width / 2) as usize;
-            if pixels.get(center_index).is_none_or(|pixel| pixel.a == 0) {
+            if out.get(center_index).is_none_or(|pixel| pixel.a == 0) {
                 return Err(anyhow!("液态玻璃 GPU 输出中心像素完全透明"));
             }
             if self.startup_black_frames_remaining > 0 {
                 if let Some(stats) = content_frame_stats(
-                    &pixels,
+                    out,
                     content_width as i32,
                     content_height as i32,
                     padding as i32,
@@ -1409,7 +1548,7 @@ impl GlassRenderer {
                     self.startup_black_frames_remaining = 0;
                 }
             }
-            Ok(pixels)
+            Ok(())
         }
     }
 }
