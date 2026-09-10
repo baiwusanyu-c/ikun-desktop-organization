@@ -219,8 +219,6 @@ pub fn render_layered_window(hwnd: HWND) {
 
     // 确保窗口的 DC 渲染目标已初始化（D2D/DW/WIC 工厂按渲染线程共享）
     init_d2d_devices(data);
-    // 记一笔「已渲染」，下一个 200ms tick 据此判断能不能跳帧
-    super::grid_window::note_grid_frame_rendered(data);
     prune_icon_bitmap_cache(data);
 
     let (Some(dw_factory), Some(wic_factory), Some(target)) = (
@@ -718,6 +716,11 @@ pub fn render_layered_window(hwnd: HWND) {
     unsafe {
         ReleaseDC(std::ptr::null_mut(), screen_dc);
     }
+
+    // 记一笔「已渲染」，下一个 200ms tick 据此判断能不能跳帧。
+    // 必须放在渲染完成之后：本帧自己的那次 capture_output 会推进
+    // 桌面代号，提前记会漏掉这一步，下一个 tick 就得白扫一遍队列。
+    super::grid_window::note_grid_frame_rendered(data);
 
     RENDERING.store(false, Ordering::SeqCst);
 }

@@ -862,6 +862,21 @@ fn create_outputs(device: &ID3D11Device) -> Result<Vec<CaptureOutput>> {
             let index = i;
             i += 1;
 
+            // 显示器名单独取：失败日志里要能看出是哪一台，
+            // 否则用户只看到一个 output 索引，无法定位到具体设备
+            let device_name = output
+                .GetDesc()
+                .ok()
+                .map(|desc| {
+                    let end = desc
+                        .DeviceName
+                        .iter()
+                        .position(|&c| c == 0)
+                        .unwrap_or(desc.DeviceName.len());
+                    String::from_utf16_lossy(&desc.DeviceName[..end])
+                })
+                .unwrap_or_else(|| "<未知>".to_string());
+
             // 把可能失败的三步放进闭包，失败只影响这一个输出
             let prepared = (|| -> Result<CaptureOutput> {
                 let output1 = output.cast::<IDXGIOutput1>()?;
@@ -884,7 +899,7 @@ fn create_outputs(device: &ID3D11Device) -> Result<Vec<CaptureOutput>> {
             match prepared {
                 Ok(capture) => outputs.push(capture),
                 Err(error) => log::warn!(
-                    "[LG] 输出 {index} 桌面复制不可用，该显示器上的分类框回退半透明背景: {error:#}"
+                    "[LG] 输出 {index} ({device_name}) 桌面复制不可用，该显示器上的分类框回退半透明背景: {error:#}"
                 ),
             }
         }
@@ -1787,6 +1802,97 @@ impl GlassRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// push_change 必须把输出坐标换算成桌面坐标。
+    ///
+    /// DXGI 返回的脏矩形是相对于该输出自己的原点，而分类框
+    /// 查询用的是桌面坐标。剪贴上去之前必须加上 output.rect 的偏移，
+    /// 否则副屏上的分类框会永远收不到变化通知（画面冻住）。
+    #[test]
+    fn push_change_offsets_into_desktop_coordinates() {
+        DESKTOP_CHANGES.with(|c| c.borrow_mut().clear());
+        // 副屏原点在 (2560, 0)，脏矩形在该屏内的 (10,20)-(30,40)
+        push_change(r(10, 20, 30, 40), 2560, 0, 42);
+        let queued = DESKTOP_CHANGES.with(|c| c.borrow().clone());
+        assert_eq!(queued.len(), 1);
+        let (gen, rect) = &queued[0];
+        assert_eq!(*gen, 42);
+        assert_eq!(
+            (rect.left, rect.top, rect.right, rect.bottom),
+            (2570, 20, 2590, 40)
+        );
+
+        // 主屏原点在 (0,0) 时不应偏移
+        push_change(r(100, 100, 200, 200), 0, 0, 43);
+        let queued = DESKTOP_CHANGES.with(|c| c.borrow().clone());
+        assert_eq!(queued.len(), 2);
+        assert_eq!(
+            (
+                queued[1].1.left,
+                queued[1].1.top,
+                queued[1].1.right,
+                queued[1].1.bottom
+            ),
+            (100, 100, 200, 200)
+        );
+        DESKTOP_CHANGES.with(|c| c.borrow_mut().clear());
+    }
+
+    /// 退化矩形（零面积 / 反向）不得入队，否则会把队列填满垃圾。
+    #[test]
+    fn push_change_rejects_degenerate_rects() {
+        DESKTOP_CHANGES.with(|c| c.borrow_mut().clear());
+        push_change(r(50, 50, 50, 80), 0, 0, 1); // 零宽
+        push_change(r(50, 50, 80, 50), 0, 0, 1); // 零高
+        push_change(r(80, 80, 50, 50), 0, 0, 1); // 反向
+        push_change(r(0, 0, 0, 0), 0, 0, 1); // 全零
+        assert!(DESKTOP_CHANGES.with(|c| c.borrow().is_empty()));
+    }
+
+    /// 队列必须有界：满帧率视频下每秒可能产生上百个脏矩形，
+    /// 不能无限堆。裁掉旧的之后 region_changed_in 会转为保守重绘，
+    /// 所以这里只需验证不会溢出、且保留的是最新的那批。
+    #[test]
+    fn change_queue_is_bounded_and_keeps_newest() {
+        DESKTOP_CHANGES.with(|c| c.borrow_mut().clear());
+        let overflow = MAX_DESKTOP_CHANGES + 100;
+        for gen in 1..=overflow as u64 {
+            push_change(r(0, 0, 10, 10), 0, 0, gen);
+        }
+        let queued = DESKTOP_CHANGES.with(|c| c.borrow().clone());
+        assert_eq!(queued.len(), MAX_DESKTOP_CHANGES);
+        // 保留的必须是最新的一批（代号递增到 overflow）
+        assert_eq!(queued.back().unwrap().0, overflow as u64);
+        assert_eq!(
+            queued.front().unwrap().0,
+            (overflow - MAX_DESKTOP_CHANGES + 1) as u64
+        );
+        DESKTOP_CHANGES.with(|c| c.borrow_mut().clear());
+    }
+
+    /// 端到端：push_change 写入的队列能被 region_changed_in 正确读出。
+    #[test]
+    fn pushed_changes_drive_region_queries() {
+        DESKTOP_CHANGES.with(|c| c.borrow_mut().clear());
+        let box_on_secondary = r(2600, 100, 3000, 500); // 副屏上的分类框
+        let box_on_primary = r(100, 100, 700, 600);
+
+        // 副屏（原点 2560,0）上有东西变了，输出坐标 (40,100)-(300,400)
+        push_change(r(40, 100, 300, 400), 2560, 0, 5);
+
+        DESKTOP_CHANGES.with(|c| {
+            let q = c.borrow();
+            assert!(
+                region_changed_in(&q, 5, &box_on_secondary, 4),
+                "副屏上的框必须收到通知"
+            );
+            assert!(
+                !region_changed_in(&q, 5, &box_on_primary, 4),
+                "主屏上的框不应陪绘"
+            );
+        });
+        DESKTOP_CHANGES.with(|c| c.borrow_mut().clear());
+    }
 
     fn r(left: i32, top: i32, right: i32, bottom: i32) -> WinRect {
         WinRect {
