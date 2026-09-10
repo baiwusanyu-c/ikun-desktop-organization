@@ -51,9 +51,20 @@ use super::ffi_types::Pixel32;
 use crate::config::{BoxStyleConfig, LiquidGlassConfig};
 
 const RETRY_DELAY: Duration = Duration::from_secs(3);
+
+/// 初始化连续失败时的退避上限。
+///
+/// 屏幕锁定 / 安全桌面下 DXGI 会对**所有**输出返回
+/// E_ACCESSDENIED，而渲染器会按 RETRY_DELAY 不停重试。每次重试
+/// 都要重建一个 D3D11 设备（这一步本身就是十毫秒级），实测锁屏
+/// 期间白烧 ~7% 单核，一整晚就是几小时 CPU 与满屏日志。
+/// 改为指数退避：3s → 6s → 10s 封顶，解锁后最多 10 秒恢复。
+const RETRY_DELAY_MAX: Duration = Duration::from_secs(10);
 const MAX_SURFACE_CACHE_ENTRIES: usize = 8;
 static FIRST_FRAME_DIAGNOSTIC_LOGGED: AtomicBool = AtomicBool::new(false);
 static NON_BLACK_FRAME_DIAGNOSTIC_LOGGED: AtomicBool = AtomicBool::new(false);
+/// E_ACCESSDENIED 的成因提示只打一次（否则锁屏期间每 3 秒刷一条）
+static ACCESS_DENIED_HINT_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// 桌面内容代号：任一显示器捕获到新帧就自增。
 ///
@@ -260,6 +271,11 @@ struct CaptureOutput {
     target_bitmap: Option<ID2D1Bitmap1>,
     /// 复用的模糊 effect 链
     blur_chain: Option<BlurChain>,
+    /// 脏矩形临时缓冲。每次取帧都要拿一批矩形，新建 Vec 就是
+    /// 白白的热路径分配；复用后稳态下零分配。
+    dirty_scratch: Vec<WinRect>,
+    /// 移动矩形临时缓冲，同上
+    move_scratch: Vec<DXGI_OUTDUPL_MOVE_RECT>,
 }
 
 struct EmbeddedMap {
@@ -298,6 +314,8 @@ enum GlassState {
 
 thread_local! {
     static GLASS_STATE: RefCell<GlassState> = const { RefCell::new(GlassState::Uninitialized) };
+    /// 连续初始化失败次数（驱动指数退避，成功后归零）
+    static INIT_FAILURES: Cell<u32> = const { Cell::new(0) };
     static LAST_GOOD_FRAMES: RefCell<HashMap<(i32, i32, i32, i32, i32), Vec<Pixel32>>> = RefCell::new(HashMap::new());
     /// 待判定的桌面变化矩形队列（按代号递增）
     static DESKTOP_CHANGES: RefCell<VecDeque<(u64, WinRect)>> = RefCell::new(VecDeque::new());
@@ -546,7 +564,7 @@ fn push_change(rect: WinRect, origin_x: i32, origin_y: i32, generation: u64) {
 /// 必须在 `AcquireNextFrame` 与 `ReleaseFrame` 之间调用。
 /// 两种矩形都要取：窗口拖动/滚动时 DXGI 用 move rect 表达，
 /// dirty rect 里可能只有很小一块甚至为空。
-unsafe fn collect_frame_changes(output: &CaptureOutput, generation: u64) {
+unsafe fn collect_frame_changes(output: &mut CaptureOutput, generation: u64) {
     let origin_x = output.rect.left;
     let origin_y = output.rect.top;
     let empty = WinRect {
@@ -564,16 +582,21 @@ unsafe fn collect_frame_changes(output: &CaptureOutput, generation: u64) {
     let rect_size = size_of::<WinRect>() as u32;
     if required >= rect_size {
         let count = (required / rect_size) as usize;
-        let mut buffer = vec![empty; count];
+        // 复用缓冲：`clear` 保留容量，稳态下不再向分配器要内存
+        output.dirty_scratch.clear();
+        output.dirty_scratch.resize(count, empty);
         let mut written: u32 = 0;
-        if output
+        let ok = output
             .duplication
-            .GetFrameDirtyRects(required, buffer.as_mut_ptr(), &mut written)
-            .is_ok()
-        {
+            .GetFrameDirtyRects(required, output.dirty_scratch.as_mut_ptr(), &mut written)
+            .is_ok();
+        if ok {
             let got = (written as usize / rect_size as usize).min(count);
-            for rect in &buffer[..got] {
-                push_change(*rect, origin_x, origin_y, generation);
+            // push_change 只写 DESKTOP_CHANGES 这个 thread_local，不碰 output，
+            // 所以可以直接在遍历借用里调，不需要再拷一份
+            for index in 0..got {
+                let rect = output.dirty_scratch[index];
+                push_change(rect, origin_x, origin_y, generation);
             }
         }
     }
@@ -585,28 +608,39 @@ unsafe fn collect_frame_changes(output: &CaptureOutput, generation: u64) {
     let move_size = size_of::<DXGI_OUTDUPL_MOVE_RECT>() as u32;
     if required >= move_size {
         let count = (required / move_size) as usize;
-        let mut buffer = vec![
+        output.move_scratch.clear();
+        output.move_scratch.resize(
+            count,
             DXGI_OUTDUPL_MOVE_RECT {
                 SourcePoint: POINT { x: 0, y: 0 },
                 DestinationRect: empty,
-            };
-            count
-        ];
+            },
+        );
         let mut written: u32 = 0;
-        if output
+        let ok = output
             .duplication
-            .GetFrameMoveRects(required, buffer.as_mut_ptr(), &mut written)
-            .is_ok()
-        {
+            .GetFrameMoveRects(required, output.move_scratch.as_mut_ptr(), &mut written)
+            .is_ok();
+        if ok {
             let got = (written as usize / move_size as usize).min(count);
-            for m in &buffer[..got] {
-                push_change(m.DestinationRect, origin_x, origin_y, generation);
+            for index in 0..got {
+                // DXGI_OUTDUPL_MOVE_RECT 没有 Copy，逐字段取出来用
+                let m = &output.move_scratch[index];
+                let dest = WinRect {
+                    left: m.DestinationRect.left,
+                    top: m.DestinationRect.top,
+                    right: m.DestinationRect.right,
+                    bottom: m.DestinationRect.bottom,
+                };
+                let width = dest.right - dest.left;
+                let height = dest.bottom - dest.top;
                 let source = WinRect {
                     left: m.SourcePoint.x,
                     top: m.SourcePoint.y,
-                    right: m.SourcePoint.x + (m.DestinationRect.right - m.DestinationRect.left),
-                    bottom: m.SourcePoint.y + (m.DestinationRect.bottom - m.DestinationRect.top),
+                    right: m.SourcePoint.x + width,
+                    bottom: m.SourcePoint.y + height,
                 };
+                push_change(dest, origin_x, origin_y, generation);
                 push_change(source, origin_x, origin_y, generation);
             }
         }
@@ -686,6 +720,47 @@ fn region_changed_in(
     }
 }
 
+/// 计算下一次重试的等待时长，并返回累计失败次数。
+fn next_retry_delay() -> (Duration, u32) {
+    let failures = INIT_FAILURES.with(|cell| {
+        let next = cell.get().saturating_add(1);
+        cell.set(next);
+        next
+    });
+    // 3s → 6s → 12s，再往上一律封顶到 RETRY_DELAY_MAX
+    let shift = (failures - 1).min(2);
+    let scaled = RETRY_DELAY.saturating_mul(1u32 << shift);
+    (scaled.min(RETRY_DELAY_MAX), failures)
+}
+
+/// 初始化成功后清零退避计数。
+fn reset_init_backoff() {
+    INIT_FAILURES.with(|cell| cell.set(0));
+}
+
+/// 首次碰到 E_ACCESSDENIED 时解释一下原因，之后不再重复。
+///
+/// 桌面复制被拒绝绝大多数不是代码问题：会话锁定/安全桌面下
+/// DXGI 就是会对所有输出返回这个错误，解锁后自动恢复。
+/// 不写进日志的话，下次排查又得重新猜一遍。
+fn note_access_denied(error: &anyhow::Error) {
+    const E_ACCESSDENIED: i32 = -2147024891; // 0x80070005
+    let denied = error
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<windows::core::Error>())
+        .any(|e| e.code().0 == E_ACCESSDENIED);
+    if !denied {
+        return;
+    }
+    if ACCESS_DENIED_HINT_LOGGED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    log::warn!(
+        "[LG] 桌面复制被拒绝（E_ACCESSDENIED）：会话处于锁定/安全桌面时 DXGI 就是会这样，\
+         不是代码问题。解锁后渲染器会自动恢复；本提示只打一次。"
+    );
+}
+
 /// 两个矩形是否相交（边界重叠不算）。
 fn intersects(a: &WinRect, b: &WinRect) -> bool {
     a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
@@ -736,13 +811,23 @@ pub fn render_background(
         if !matches!(&*state, GlassState::Ready(_)) {
             match GlassRenderer::new() {
                 Ok(renderer) => {
+                    reset_init_backoff();
                     log::info!("液态玻璃 D3D11 渲染器已初始化");
                     *state = GlassState::Ready(renderer);
                 }
                 Err(error) => {
-                    log::warn!("液态玻璃初始化失败，使用半透明背景: {error:#}");
+                    let (delay, failures) = next_retry_delay();
+                    // 锁屏期间每几秒刷一条 warn 会把日志写爆（单日上限 2MB）：
+                    // 第一次和每 20 次才记 warn，其余降为 debug。
+                    if failures == 1 || failures % 20 == 0 {
+                        log::warn!(
+                            "液态玻璃初始化失败（第 {failures} 次，{delay:?} 后重试），使用半透明背景: {error:#}"
+                        );
+                    } else {
+                        log::debug!("液态玻璃初始化失败（第 {failures} 次）: {error:#}");
+                    }
                     *state = GlassState::Failed {
-                        retry_at: Instant::now() + RETRY_DELAY,
+                        retry_at: Instant::now() + delay,
                     };
                     return fill_from_cache(cache_key, out);
                 }
@@ -894,13 +979,18 @@ fn create_outputs(device: &ID3D11Device) -> Result<Vec<CaptureOutput>> {
                     source_bitmap: None,
                     target_bitmap: None,
                     blur_chain: None,
+                    dirty_scratch: Vec::new(),
+                    move_scratch: Vec::new(),
                 })
             })();
             match prepared {
                 Ok(capture) => outputs.push(capture),
-                Err(error) => log::warn!(
-                    "[LG] 输出 {index} ({device_name}) 桌面复制不可用，该显示器上的分类框回退半透明背景: {error:#}"
-                ),
+                Err(error) => {
+                    log::warn!(
+                        "[LG] 输出 {index} ({device_name}) 桌面复制不可用，该显示器上的分类框回退半透明背景: {error:#}"
+                    );
+                    note_access_denied(&error);
+                }
             }
         }
         Ok(outputs)
@@ -997,6 +1087,18 @@ impl GlassRenderer {
         unsafe {
             let (device, context) = create_device()?;
 
+            // 先做最容易失败、也最便宜的一步：拿桌面复制。
+            //
+            // 屏幕锁定/安全桌面下 DXGI 会对**所有**输出返回 E_ACCESSDENIED，
+            // 而渲染器会按 RETRY_DELAY 不停重试。旧顺序把失败点放在最后，
+            // 每次重试都先白白跑完 3 次 PNG 解码 + 3 次纹理上传 +
+            // 2 次 D3DCompile 才发现不行——实测锁屏期间白烧 ~7% 单核。
+            // 提到前面后，失败路径只剩一个 D3D11 设备创建。
+            let outputs = create_outputs(&device)?;
+            if outputs.is_empty() {
+                return Err(anyhow!("未找到可用的 DXGI 显示输出"));
+            }
+
             let dxgi_device: IDXGIDevice = device.cast()?;
             let d2d_device = D2D1CreateDevice(&dxgi_device, None)?;
             let d2d_context = d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
@@ -1060,11 +1162,6 @@ impl GlassRenderer {
                 },
                 Some(&mut rasterizer),
             )?;
-
-            let outputs = create_outputs(&device)?;
-            if outputs.is_empty() {
-                return Err(anyhow!("未找到可用的 DXGI 显示输出"));
-            }
 
             Ok(Self {
                 device,
