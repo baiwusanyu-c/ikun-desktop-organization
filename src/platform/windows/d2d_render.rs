@@ -35,8 +35,8 @@ use windows::Win32::Graphics::Direct2D::{
 use windows::Win32::Graphics::DirectWrite::{
     IDWriteFactory, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL,
     DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
-    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TRIMMING,
-    DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP, DWRITE_WORD_WRAPPING_WRAP,
+    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_WORD_WRAPPING_NO_WRAP,
+    DWRITE_WORD_WRAPPING_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::HDC as GdiHDC;
@@ -398,23 +398,23 @@ pub fn render_layered_window(hwnd: HWND) {
     );
     let title_format = super::render_devices::text_format(&title_spec);
 
-    if let Some(ref tf) = title_format {
+    if title_format.is_some() {
         // 锁定按钮区域（标题栏右侧）
         let (btn_x, btn_y, btn_size) = super::grid_layout::lock_btn_rect(w, title_h, dpi);
 
         let title_text: Vec<u16> = data.title.encode_utf16().collect();
         let text_max_w = (btn_x as f32 - 10.0).max(40.0);
-        let layout = unsafe {
-            target_inner_create_text_layout(
-                &dw_factory,
-                &title_text,
-                tf,
-                text_max_w,
-                title_h as f32,
-                DWRITE_TEXT_ALIGNMENT_LEADING,
-                DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
-            )
-        };
+        // 标题的段落对齐在布局上覆盖为 CENTER（文字格式里是 NEAR），
+        // 两者不一致，所以对齐必须作为缓存键的一部分显式传入。
+        let layout = super::render_devices::text_layout(
+            &title_text,
+            &title_spec,
+            text_max_w,
+            title_h as f32,
+            DWRITE_TEXT_ALIGNMENT_LEADING,
+            DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+            false,
+        );
 
         if let Some(ref layout) = layout {
             let shadow_offset = scale_for_dpi(1, dpi) as f32;
@@ -456,19 +456,17 @@ pub fn render_layered_window(hwnd: HWND) {
         );
         let lock_format = super::render_devices::text_format(&lock_spec);
 
-        if let Some(ref lf) = lock_format {
+        if lock_format.is_some() {
             let lock_text: Vec<u16> = lock_icon.encode_utf16().collect();
-            let lock_layout = unsafe {
-                target_inner_create_text_layout(
-                    &dw_factory,
-                    &lock_text,
-                    lf,
-                    btn_size as f32,
-                    btn_size as f32,
-                    DWRITE_TEXT_ALIGNMENT_CENTER,
-                    DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
-                )
-            };
+            let lock_layout = super::render_devices::text_layout(
+                &lock_text,
+                &lock_spec,
+                btn_size as f32,
+                btn_size as f32,
+                DWRITE_TEXT_ALIGNMENT_CENTER,
+                DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+                false,
+            );
 
             if let Some(ref ll) = lock_layout {
                 // 锁定按钮 hover 背景高亮
@@ -539,19 +537,17 @@ pub fn render_layered_window(hwnd: HWND) {
     );
     let more_format = super::render_devices::text_format(&more_spec);
 
-    if let Some(ref mf) = more_format {
+    if more_format.is_some() {
         let more_text: Vec<u16> = more_icon.encode_utf16().collect();
-        let more_layout = unsafe {
-            target_inner_create_text_layout(
-                &dw_factory,
-                &more_text,
-                mf,
-                mbtn_size as f32,
-                mbtn_size as f32,
-                DWRITE_TEXT_ALIGNMENT_CENTER,
-                DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
-            )
-        };
+        let more_layout = super::render_devices::text_layout(
+            &more_text,
+            &more_spec,
+            mbtn_size as f32,
+            mbtn_size as f32,
+            DWRITE_TEXT_ALIGNMENT_CENTER,
+            DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+            false,
+        );
 
         if let Some(ref ml) = more_layout {
             // hover 背景高亮
@@ -1381,7 +1377,10 @@ pub fn draw_icon_with_label(
 #[allow(clippy::too_many_arguments)]
 fn draw_icon_with_label_cached(
     target: &ID2D1DCRenderTarget,
-    dw_factory: &IDWriteFactory,
+    // 已不再直接使用：文字布局改从 render_devices 的线程内缓存取。
+    // 保留参数只为了不动 draw_icon_with_label 的公开签名
+    // （桌面覆盖窗口也在调它）。
+    _dw_factory: &IDWriteFactory,
     wic_factory: Option<&IWICImagingFactory>,
     icon_handle: HICON,
     display_name: &str,
@@ -1427,36 +1426,20 @@ fn draw_icon_with_label_cached(
             DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
             DWRITE_WORD_WRAPPING_WRAP,
         );
-        let Some(text_format) = super::render_devices::text_format(&label_spec) else {
-            return;
-        };
-
         let text_wide: Vec<u16> = display_name.encode_utf16().collect();
-        let text_layout = {
-            target_inner_create_text_layout(
-                dw_factory,
-                &text_wide,
-                &text_format,
-                label_w,
-                label_h,
-                DWRITE_TEXT_ALIGNMENT_CENTER,
-                DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
-            )
-        };
+        // 省略号裁剪已在 text_layout 内部（入缓存前）一次性设定完毕，
+        // 所以 apply_ellipsis 是缓存键的一部分；命中后不得再改布局。
+        let cached_layout = super::render_devices::text_layout(
+            &text_wide,
+            &label_spec,
+            label_w,
+            label_h,
+            DWRITE_TEXT_ALIGNMENT_CENTER,
+            DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
+            apply_ellipsis,
+        );
 
-        if let Some(ref layout) = text_layout {
-            // 应用字符级省略号裁剪
-            if apply_ellipsis {
-                if let Some(ellipsis) = super::render_devices::ellipsis_sign(&label_spec) {
-                    let trimming = DWRITE_TRIMMING {
-                        granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
-                        delimiter: 0,
-                        delimiterCount: 0,
-                    };
-                    let _ = layout.SetTrimming(&trimming, &ellipsis);
-                }
-            }
-
+        if let Some(ref layout) = cached_layout {
             // 4 方向阴影描边
             let shadow_offset = scale_for_dpi(1, dpi) as f32;
             if let Ok(shadow) = target.CreateSolidColorBrush(&d2d_color(0, 0, 0, 200), None) {

@@ -35,9 +35,10 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_RENDER_TARGET_USAGE_NONE,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWriteCreateFactory, IDWriteFactory, IDWriteInlineObject, IDWriteTextFormat,
+    DWriteCreateFactory, IDWriteFactory, IDWriteInlineObject, IDWriteTextFormat, IDWriteTextLayout,
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE, DWRITE_FONT_WEIGHT,
-    DWRITE_PARAGRAPH_ALIGNMENT, DWRITE_TEXT_ALIGNMENT, DWRITE_WORD_WRAPPING,
+    DWRITE_PARAGRAPH_ALIGNMENT, DWRITE_TEXT_ALIGNMENT, DWRITE_TRIMMING,
+    DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Imaging::{CLSID_WICImagingFactory, IWICImagingFactory};
@@ -105,6 +106,10 @@ thread_local! {
         RefCell::new(HashMap::new());
     static ELLIPSIS_SIGNS: RefCell<HashMap<TextFormatSpec, IDWriteInlineObject>> =
         RefCell::new(HashMap::new());
+    /// 文字布局缓存。用 Vec + 线性扫描而不是 HashMap：
+    /// 条目数天然收敛到几百条，而命中时能直接比较借用的 `&[u16]`，
+    /// 不用为了查一次而先克隆一个 owned key。
+    static TEXT_LAYOUTS: RefCell<Vec<TextLayoutEntry>> = RefCell::new(Vec::new());
 }
 
 /// 获取（必要时创建）当前渲染线程共享的 Direct2D 工厂。
@@ -244,6 +249,111 @@ pub(crate) fn ellipsis_sign(spec: &TextFormatSpec) -> Option<IDWriteInlineObject
     Some(sign)
 }
 
+/// 文字布局缓存条目。
+///
+/// 键 = 文本 × 文字格式 × 换行尺寸 × 对齐 × 是否省略号。
+/// 尺寸乘 100 取整参与比较，避免浮点相等陷阱。
+struct TextLayoutEntry {
+    text: Vec<u16>,
+    spec: TextFormatSpec,
+    max_width_centi: i32,
+    max_height_centi: i32,
+    text_align: i32,
+    para_align: i32,
+    ellipsis: bool,
+    layout: IDWriteTextLayout,
+}
+
+/// 文字布局缓存的容量上限。
+///
+/// 条目数天然收敛到「不同文本 × 不同换行宽度」，几十个分类框
+/// 也就几百条。上限只是防极端情况（不停重命名、不停拖拽改宽度）
+/// 下无界增长，触顶直接清空重来。
+const TEXT_LAYOUT_CACHE_LIMIT: usize = 2048;
+
+/// 获取（必要时创建并缓存）DirectWrite 文字布局。
+///
+/// 旧实现每帧为标题、锁定按钮、更多按钮和**每个图标标签**
+/// 都重新 `CreateTextLayout` 一次。DirectWrite 每次都要跑完整的
+/// 文本分析（脚本切分、字形映射、簇表、断行）并分配若干内部缓冲。
+/// 开销随「分类框数 × 每框文字段数 × 帧率」相乘：10 个框就是
+/// 每秒 400+ 次，是玻璃开启时堆已提交容量持续抬升的主因之一。
+///
+/// 布局对象在入缓存前就把对齐与省略号裁剪全部设定完毕，
+/// 之后**不得再修改**（会被同线程多处渲染共享）。
+///
+/// 注意：`text_align` / `para_align` 不能从 `spec` 里推——标题的
+/// 文字格式声明的是 NEAR，但布局上覆盖为 CENTER，两者不一致。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn text_layout(
+    text: &[u16],
+    spec: &TextFormatSpec,
+    max_width: f32,
+    max_height: f32,
+    text_align: DWRITE_TEXT_ALIGNMENT,
+    para_align: DWRITE_PARAGRAPH_ALIGNMENT,
+    ellipsis: bool,
+) -> Option<IDWriteTextLayout> {
+    let w = (max_width * 100.0).round() as i32;
+    let h = (max_height * 100.0).round() as i32;
+    let hit = TEXT_LAYOUTS.with(|cell| {
+        cell.borrow()
+            .iter()
+            .find(|entry| {
+                entry.max_width_centi == w
+                    && entry.max_height_centi == h
+                    && entry.text_align == text_align.0
+                    && entry.para_align == para_align.0
+                    && entry.ellipsis == ellipsis
+                    && entry.spec == *spec
+                    && entry.text == text
+            })
+            .map(|entry| entry.layout.clone())
+    });
+    if let Some(layout) = hit {
+        return Some(layout);
+    }
+
+    let format = text_format(spec)?;
+    let factory = dw_factory()?;
+    let layout = unsafe {
+        factory
+            .CreateTextLayout(text, &format, max_width, max_height)
+            .ok()?
+    };
+    let _ = unsafe { layout.SetTextAlignment(text_align) };
+    let _ = unsafe { layout.SetParagraphAlignment(para_align) };
+    if ellipsis {
+        if let Some(sign) = ellipsis_sign(spec) {
+            let trimming = DWRITE_TRIMMING {
+                granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+                delimiter: 0,
+                delimiterCount: 0,
+            };
+            let _ = unsafe { layout.SetTrimming(&trimming, &sign) };
+        }
+    }
+
+    TEXT_LAYOUTS.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        if borrow.len() >= TEXT_LAYOUT_CACHE_LIMIT {
+            log::debug!("文字布局缓存触顶 {} 条，清空重建", borrow.len());
+            borrow.clear();
+        }
+        borrow.push(TextLayoutEntry {
+            text: text.to_vec(),
+            spec: spec.clone(),
+            max_width_centi: w,
+            max_height_centi: h,
+            text_align: text_align.0,
+            para_align: para_align.0,
+            ellipsis,
+            layout: layout.clone(),
+        });
+    });
+    Some(layout)
+}
+
 /// 清空当前线程的文字格式缓存（仅测试使用）。
 ///
 /// 运行期缓存条目由「字体族 × 字号 × 对齐」组合天然收敛，分类框最多产生十余条。
@@ -251,6 +361,7 @@ pub(crate) fn ellipsis_sign(spec: &TextFormatSpec) -> Option<IDWriteInlineObject
 pub(crate) fn clear_text_format_cache() {
     TEXT_FORMATS.with(|cell| cell.borrow_mut().clear());
     ELLIPSIS_SIGNS.with(|cell| cell.borrow_mut().clear());
+    TEXT_LAYOUTS.with(|cell| cell.borrow_mut().clear());
 }
 
 #[cfg(test)]
@@ -363,6 +474,129 @@ mod tests {
         // 清缓存后重新创建，仍然应成功（或同样失败），且不与旧对象同址
         let third = text_format(&key);
         assert_eq!(first.is_some(), third.is_some());
+        clear_text_format_cache();
+    }
+
+    /// 文字布局缓存必须同键复用、异键分离。
+    ///
+    /// 键写错会直接画出错误文字（比如把带省略号的布局用到
+    /// 不该裁剪的地方，或把标题的 CENTER 段落对齐用到标签上），
+    /// 所以每一个键分量都要单独验证。
+    #[test]
+    fn test_text_layout_cache_keys_are_exact() {
+        let key = spec(13.0, DWRITE_FONT_WEIGHT_NORMAL);
+        let text: Vec<u16> = "开发工具".encode_utf16().collect();
+        let other: Vec<u16> = "系统工具".encode_utf16().collect();
+
+        let base = text_layout(
+            &text,
+            &key,
+            80.0,
+            32.0,
+            DWRITE_TEXT_ALIGNMENT_CENTER,
+            DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
+            true,
+        );
+        let again = text_layout(
+            &text,
+            &key,
+            80.0,
+            32.0,
+            DWRITE_TEXT_ALIGNMENT_CENTER,
+            DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
+            true,
+        );
+        assert_eq!(base.is_some(), again.is_some());
+        let (Some(a), Some(b)) = (&base, &again) else {
+            // 无 DirectWrite 环境下允许创建失败，但两次必须一致
+            clear_text_format_cache();
+            return;
+        };
+        assert_eq!(
+            windows::core::Interface::as_raw(a),
+            windows::core::Interface::as_raw(b),
+            "同一个键必须复用同一个 IDWriteTextLayout"
+        );
+
+        let differs = |t: &[u16],
+                       w: f32,
+                       h: f32,
+                       ta: DWRITE_TEXT_ALIGNMENT,
+                       pa: DWRITE_PARAGRAPH_ALIGNMENT,
+                       el: bool| {
+            let got = text_layout(t, &key, w, h, ta, pa, el);
+            assert_eq!(got.is_some(), base.is_some());
+            assert_ne!(
+                got.map(|l| windows::core::Interface::as_raw(&l)),
+                Some(windows::core::Interface::as_raw(a)),
+                "键分量变了就必须是不同的布局对象"
+            );
+        };
+        differs(
+            &other,
+            80.0,
+            32.0,
+            DWRITE_TEXT_ALIGNMENT_CENTER,
+            DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
+            true,
+        );
+        differs(
+            &text,
+            81.0,
+            32.0,
+            DWRITE_TEXT_ALIGNMENT_CENTER,
+            DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
+            true,
+        );
+        differs(
+            &text,
+            80.0,
+            33.0,
+            DWRITE_TEXT_ALIGNMENT_CENTER,
+            DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
+            true,
+        );
+        differs(
+            &text,
+            80.0,
+            32.0,
+            DWRITE_TEXT_ALIGNMENT_LEADING,
+            DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
+            true,
+        );
+        differs(
+            &text,
+            80.0,
+            32.0,
+            DWRITE_TEXT_ALIGNMENT_CENTER,
+            DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+            true,
+        );
+        differs(
+            &text,
+            80.0,
+            32.0,
+            DWRITE_TEXT_ALIGNMENT_CENTER,
+            DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
+            false,
+        );
+
+        // 字号也必须参与键（随 spec 一起）
+        let bigger = spec(14.0, DWRITE_FONT_WEIGHT_NORMAL);
+        let got = text_layout(
+            &text,
+            &bigger,
+            80.0,
+            32.0,
+            DWRITE_TEXT_ALIGNMENT_CENTER,
+            DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
+            true,
+        );
+        assert_ne!(
+            got.map(|l| windows::core::Interface::as_raw(&l)),
+            Some(windows::core::Interface::as_raw(a)),
+            "字号不同必须是不同的布局"
+        );
         clear_text_format_cache();
     }
 
