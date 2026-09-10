@@ -270,6 +270,14 @@ pub(crate) struct GridWindowData {
     pub(crate) ticks_since_render: u32,
     /// 上一次实际渲染时记录的桌面代号
     pub(crate) last_desktop_generation: u64,
+
+    // ===== 遮挡判定状态 =====
+    /// 上次判定结果：被其他应用窗口完全盖住，可以跳过渲染
+    pub(crate) occluded: bool,
+    /// 上次判定时刻。窗口枚举不便宜，按间隔限流
+    pub(crate) occlusion_checked_at: std::time::Instant,
+    /// 被判定遮挡后已跳过的 tick 数（驱动自愈心跳）
+    pub(crate) occluded_ticks: u32,
 }
 
 unsafe impl Send for GridWindowData {}
@@ -388,6 +396,9 @@ impl GridWindowData {
             cursor_idle_ticks: 0,
             ticks_since_render: 0,
             last_desktop_generation: 0,
+            occluded: false,
+            occlusion_checked_at: std::time::Instant::now(),
+            occluded_ticks: 0,
         }
     }
 }
@@ -436,6 +447,13 @@ pub(crate) const GLASS_CURSOR_SETTLE_TICKS: u32 = 25;
 /// 200ms 一个 tick，10 个 = 2 秒。即使所有变化检测都漏了，
 /// 最坏也只会滞后 2 秒，不会永久停在旧画面。
 pub(crate) const GLASS_FORCE_RENDER_TICKS: u32 = 10;
+
+/// 被判定为遮挡后仍然强制渲染的心跳间隔（tick 数）。
+///
+/// 遮挡判定是启发式的，万一误报（比如某个窗口报告可见
+/// 但实际没画出来），5 秒一次的自愈心跳能保证分类框
+/// 不会永久冻在旧画面上。
+pub(crate) const GLASS_OCCLUDED_HEARTBEAT_TICKS: u32 = 25;
 
 /// 返回当前 DPI 下液态玻璃外投影所需的物理像素留白（纯 DPI 换算，不看开关）。
 pub(crate) fn glass_shadow_padding_at_dpi(dpi: u32) -> i32 {
@@ -723,6 +741,9 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         cursor_idle_ticks: 0,
         ticks_since_render: 0,
         last_desktop_generation: 0,
+        occluded: false,
+        occlusion_checked_at: std::time::Instant::now(),
+        occluded_ticks: 0,
     });
     let data_ptr = Box::into_raw(data);
     unsafe {
@@ -929,34 +950,154 @@ pub(crate) fn note_grid_frame_rendered(data: &mut GridWindowData) {
 /// 判据全部保守：任一条件成立就渲染，并且有 2 秒心跳兜底。
 /// 分类框自身状态变化（hover / 选中 / 拖拽 / 滚动 / 重命名 /
 /// 配置变更）一律走显式 `render_layered_window`，不经过本函数。
+/// 周期 tick 的判定结果。
+#[derive(Clone, Copy)]
+enum TickDecision {
+    /// 画面会变，需要重绘
+    Render,
+    /// 桌面与光标都没动，省一帧
+    SkipIdle,
+    /// 被其他应用窗口完全盖住，省一帧
+    SkipOccluded,
+}
+
+/// 渲染统计的输出间隔。
+///
+/// 每 30 秒一条，用于确认帧跳过真的在生效——否则
+/// 「内存不涨了」可能只是因为根本没在渲染（画面冻住了）。
+const TICK_STATS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+
+thread_local! {
+    /// (tick 次数, 实际渲染次数, 遮挡跳过次数, 上次输出时刻)
+    static TICK_STATS: std::cell::RefCell<(u64, u64, u64, Option<std::time::Instant>)> =
+        const { std::cell::RefCell::new((0, 0, 0, None)) };
+}
+
+fn record_tick_stats(decision: TickDecision) {
+    TICK_STATS.with(|cell| {
+        let (ticks, rendered, occluded) = {
+            let mut stats = cell.borrow_mut();
+            stats.0 += 1;
+            match decision {
+                TickDecision::Render => stats.1 += 1,
+                TickDecision::SkipOccluded => stats.2 += 1,
+                TickDecision::SkipIdle => {}
+            }
+            let now = std::time::Instant::now();
+            let due = match stats.3 {
+                Some(last) => now.duration_since(last) >= TICK_STATS_INTERVAL,
+                None => true,
+            };
+            if !due {
+                return;
+            }
+            let snapshot = (stats.0, stats.1, stats.2);
+            *stats = (0, 0, 0, Some(now));
+            snapshot
+        };
+        let skipped = ticks.saturating_sub(rendered).saturating_sub(occluded);
+        log::info!(
+            "[分类框渲染] 近 {ticks} tick → 实际渲染 {rendered}，静止跳过 {skipped}，遮挡跳过 {occluded}"
+        );
+    });
+}
+
 pub(crate) fn on_grid_refresh_tick(hwnd: HWND) {
-    let should_render = {
-        let Some(data) = (unsafe { get_data(hwnd) }) else {
-            return;
-        };
-        data.ticks_since_render = data.ticks_since_render.saturating_add(1);
-
-        let cursor_moved = match cursor_screen_pos() {
-            Some((x, y)) => x != data.last_cursor_x || y != data.last_cursor_y,
-            None => false,
-        };
-        if cursor_moved {
-            data.cursor_idle_ticks = 0;
-        } else {
-            data.cursor_idle_ticks = data.cursor_idle_ticks.saturating_add(1);
-        }
-
-        // 代号只在真正渲染时由 capture_output 推进，这里只读不写，
-        // 零开销。桌面变化最坏滞后一个心跳周期（2 秒）。
-        let generation = super::liquid_glass::desktop_generation();
-        cursor_moved
-            || generation != data.last_desktop_generation
-            || data.cursor_idle_ticks < GLASS_CURSOR_SETTLE_TICKS
-            || data.ticks_since_render >= GLASS_FORCE_RENDER_TICKS
-    };
-    // 必须先结束 data 的可变借用：render_layered_window 会重新取一次
-    if should_render {
+    // 判定与渲染分两步：decide 里持有 data 的可变借用，
+    // 必须先释放才能调 render_layered_window（它会重新取一次 data）。
+    let decision = decide_grid_refresh(hwnd);
+    record_tick_stats(decision);
+    if matches!(decision, TickDecision::Render) {
         render_layered_window(hwnd);
+    }
+}
+
+/// 判断这个 tick 是否真的需要重绘。
+///
+/// 三层判据，从便宜到昂贵：
+/// 1. **遮挡**：被其他应用窗口完全盖住 → 整条管线都不用跑；
+/// 2. **光标**：移动过或刚停下不久（高光/形变还在插值收敛）；
+/// 3. **桌面脏矩形**：只看这个框自己覆盖的那块桌面变了没。
+///    任务栏时钟、别处光标闪烁都不会再让所有框陪绘。
+///
+/// 另外有两层兜底心跳：正常 2 秒一次，遮挡态下 5 秒一次。
+fn decide_grid_refresh(hwnd: HWND) -> TickDecision {
+    let Some(data) = (unsafe { get_data(hwnd) }) else {
+        return TickDecision::SkipIdle;
+    };
+    data.ticks_since_render = data.ticks_since_render.saturating_add(1);
+
+    // 外框矩形取一次，遮挡判定与脏矩形判定都用它
+    let mut outer = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    let have_rect = unsafe { GetWindowRect(hwnd, &mut outer) } != 0;
+
+    // ===== 1. 全屏遮挡 =====
+    let now = std::time::Instant::now();
+    if now.duration_since(data.occlusion_checked_at) >= super::occlusion::OCCLUSION_CHECK_INTERVAL {
+        data.occlusion_checked_at = now;
+        let occluded = have_rect && super::occlusion::is_window_occluded(hwnd, &outer);
+        if occluded != data.occluded {
+            log::info!(
+                "分类框遮挡状态切换: {} → {}（上方候选窗口已逐个排除自己/不可见/cloaked）",
+                data.occluded,
+                occluded
+            );
+        }
+        data.occluded = occluded;
+    }
+    if data.occluded {
+        data.occluded_ticks = data.occluded_ticks.saturating_add(1);
+        if data.occluded_ticks < GLASS_OCCLUDED_HEARTBEAT_TICKS {
+            return TickDecision::SkipOccluded;
+        }
+        data.occluded_ticks = 0;
+    } else {
+        data.occluded_ticks = 0;
+    }
+
+    // ===== 2. 光标 =====
+    let cursor_moved = match cursor_screen_pos() {
+        Some((x, y)) => x != data.last_cursor_x || y != data.last_cursor_y,
+        None => false,
+    };
+    if cursor_moved {
+        data.cursor_idle_ticks = 0;
+    } else {
+        data.cursor_idle_ticks = data.cursor_idle_ticks.saturating_add(1);
+    }
+
+    // ===== 3. 桌面脏矩形：只看这个框自己覆盖的区域 =====
+    // 不能调 get_grid_content_rect：它内部会再取一次 data，
+    // 与此处的可变借用冲突，所以直接用 render_padding 算。
+    let desktop_changed = if have_rect {
+        // 先把新帧取回来，否则不渲染就永远不知道桌面变了
+        super::liquid_glass::poll_desktop_changes();
+        let content = content_rect_with_padding(outer, data.render_padding);
+        let region = windows::Win32::Foundation::RECT {
+            left: content.left,
+            top: content.top,
+            right: content.right,
+            bottom: content.bottom,
+        };
+        super::liquid_glass::region_changed_since(&region, data.last_desktop_generation)
+    } else {
+        // 拿不到矩形就不猜，照常渲染
+        true
+    };
+
+    if cursor_moved
+        || desktop_changed
+        || data.cursor_idle_ticks < GLASS_CURSOR_SETTLE_TICKS
+        || data.ticks_since_render >= GLASS_FORCE_RENDER_TICKS
+    {
+        TickDecision::Render
+    } else {
+        TickDecision::SkipIdle
     }
 }
 

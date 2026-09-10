@@ -39,6 +39,7 @@ pub mod liquid_glass;
 mod menu_window;
 mod monitor_utils;
 pub mod multi_select;
+mod occlusion;
 pub mod ole_dnd;
 pub mod rename_editor;
 pub(crate) mod render_devices;

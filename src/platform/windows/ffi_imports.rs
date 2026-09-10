@@ -531,6 +531,11 @@ extern "system" {
 
     pub fn GetForegroundWindow() -> HWND;
 
+    /// 窗口是否已最小化（非 0 = 是）。最小化的窗口不遮挡任何东西。
+    pub fn IsIconic(hWnd: HWND) -> i32;
+
+    pub fn GetCurrentProcessId() -> u32;
+
     pub fn AttachThreadInput(idAttach: u32, idAttachTo: u32, fAttach: i32) -> i32;
 
     pub fn GetCurrentThreadId() -> u32;

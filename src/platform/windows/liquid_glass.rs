@@ -4,8 +4,9 @@
 //! (Crop -> Border -> GaussianBlur -> ColorMatrix) 处理纹理，再通过自定义
 //! PSMain shader 采样处理后的纹理和法线贴图生成预乘 alpha BGRA 位图。
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::ffi::{c_void, CStr};
 use std::mem::size_of;
 use std::slice;
@@ -42,6 +43,7 @@ use windows::Win32::Graphics::Dxgi::Common::{
 use windows::Win32::Graphics::Dxgi::{
     IDXGIDevice, IDXGIOutput1, IDXGIOutputDuplication, IDXGIResource, IDXGISurface,
     DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
+    DXGI_OUTDUPL_MOVE_RECT,
 };
 use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
@@ -58,6 +60,19 @@ static NON_BLACK_FRAME_DIAGNOSTIC_LOGGED: AtomicBool = AtomicBool::new(false);
 /// 分类框的周期 tick 用它判断「玻璃背景是否变了」，
 /// 没变就跳过整帧渲染。
 static DESKTOP_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// 桌面变化记录：（代号, 桌面坐标矩形）。
+///
+/// 分类框不能只看「桌面变了没」：任务栏时钟跳一下、别处光标
+/// 闪一下，整个桌面代号就前进了，于是所有框都得重绘。
+/// 记下具体矩形后，每个框只需问「我这块区域变了吗」。
+const MAX_DESKTOP_CHANGES: usize = 512;
+
+/// 桌面变化轮询的最小间隔。
+///
+/// 每个分类框都有自己的 200ms 定时器且相互错开，限流后
+/// 同一时间窗内只有第一个调用真正去 DXGI 取帧。
+const DESKTOP_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 const STANDARD_MAP: &[u8] = include_bytes!("embedded/standard.jpg");
 const POLAR_MAP: &[u8] = include_bytes!("embedded/polar.jpg");
@@ -284,6 +299,10 @@ enum GlassState {
 thread_local! {
     static GLASS_STATE: RefCell<GlassState> = const { RefCell::new(GlassState::Uninitialized) };
     static LAST_GOOD_FRAMES: RefCell<HashMap<(i32, i32, i32, i32, i32), Vec<Pixel32>>> = RefCell::new(HashMap::new());
+    /// 待判定的桌面变化矩形队列（按代号递增）
+    static DESKTOP_CHANGES: RefCell<VecDeque<(u64, WinRect)>> = RefCell::new(VecDeque::new());
+    /// 上一次真正向 DXGI 取帧的时刻（轮询节流用）
+    static LAST_DESKTOP_POLL: Cell<Option<Instant>> = const { Cell::new(None) };
 }
 
 static LIQUID_GLASS_CONFIG: std::sync::OnceLock<std::sync::RwLock<LiquidGlassConfig>> =
@@ -502,6 +521,176 @@ pub fn desktop_generation() -> u64 {
     DESKTOP_GENERATION.load(Ordering::Relaxed)
 }
 
+/// 把一个输出坐标的矩形换算成桌面坐标后记入变化队列。
+fn push_change(rect: WinRect, origin_x: i32, origin_y: i32, generation: u64) {
+    if rect.right <= rect.left || rect.bottom <= rect.top {
+        return;
+    }
+    let desktop = WinRect {
+        left: rect.left.saturating_add(origin_x),
+        top: rect.top.saturating_add(origin_y),
+        right: rect.right.saturating_add(origin_x),
+        bottom: rect.bottom.saturating_add(origin_y),
+    };
+    DESKTOP_CHANGES.with(|cell| {
+        let mut queue = cell.borrow_mut();
+        queue.push_back((generation, desktop));
+        while queue.len() > MAX_DESKTOP_CHANGES {
+            queue.pop_front();
+        }
+    });
+}
+
+/// 采集本帧的脏矩形与移动矩形。
+///
+/// 必须在 `AcquireNextFrame` 与 `ReleaseFrame` 之间调用。
+/// 两种矩形都要取：窗口拖动/滚动时 DXGI 用 move rect 表达，
+/// dirty rect 里可能只有很小一块甚至为空。
+unsafe fn collect_frame_changes(output: &CaptureOutput, generation: u64) {
+    let origin_x = output.rect.left;
+    let origin_y = output.rect.top;
+    let empty = WinRect {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+
+    // 第一次传 0 只为了拿到所需字节数（返回 DXGI_ERROR_MORE_DATA）
+    let mut required: u32 = 0;
+    let _ = output
+        .duplication
+        .GetFrameDirtyRects(0, std::ptr::null_mut(), &mut required);
+    let rect_size = size_of::<WinRect>() as u32;
+    if required >= rect_size {
+        let count = (required / rect_size) as usize;
+        let mut buffer = vec![empty; count];
+        let mut written: u32 = 0;
+        if output
+            .duplication
+            .GetFrameDirtyRects(required, buffer.as_mut_ptr(), &mut written)
+            .is_ok()
+        {
+            let got = (written as usize / rect_size as usize).min(count);
+            for rect in &buffer[..got] {
+                push_change(*rect, origin_x, origin_y, generation);
+            }
+        }
+    }
+
+    let mut required: u32 = 0;
+    let _ = output
+        .duplication
+        .GetFrameMoveRects(0, std::ptr::null_mut(), &mut required);
+    let move_size = size_of::<DXGI_OUTDUPL_MOVE_RECT>() as u32;
+    if required >= move_size {
+        let count = (required / move_size) as usize;
+        let mut buffer = vec![
+            DXGI_OUTDUPL_MOVE_RECT {
+                SourcePoint: POINT { x: 0, y: 0 },
+                DestinationRect: empty,
+            };
+            count
+        ];
+        let mut written: u32 = 0;
+        if output
+            .duplication
+            .GetFrameMoveRects(required, buffer.as_mut_ptr(), &mut written)
+            .is_ok()
+        {
+            let got = (written as usize / move_size as usize).min(count);
+            for m in &buffer[..got] {
+                push_change(m.DestinationRect, origin_x, origin_y, generation);
+                let source = WinRect {
+                    left: m.SourcePoint.x,
+                    top: m.SourcePoint.y,
+                    right: m.SourcePoint.x + (m.DestinationRect.right - m.DestinationRect.left),
+                    bottom: m.SourcePoint.y + (m.DestinationRect.bottom - m.DestinationRect.top),
+                };
+                push_change(source, origin_x, origin_y, generation);
+            }
+        }
+    }
+}
+
+/// 轮询所有显示器的桌面变化，返回当前桌面代号。
+///
+/// 必须在分类框决定是否重绘之前调用：不取帧就永远不知道
+/// 桌面变了。内部按 `DESKTOP_POLL_INTERVAL` 限流，并且直接复用
+/// `capture_output`——它会把新帧拷进 `desktop_texture`，所以随后
+/// 真正渲染时只会得到 WAIT_TIMEOUT 并复用同一张纹理，不会丢帧。
+///
+/// 代价：每个输出的 `desktop_texture` 会被提前分配（每屏约 8MB，
+/// 一次性）。相比之下省下的是每帧整条 D2D/D3D 管线，得不偿失。
+pub fn poll_desktop_changes() -> u64 {
+    if !is_liquid_glass_enabled() {
+        return DESKTOP_GENERATION.load(Ordering::Relaxed);
+    }
+    let now = Instant::now();
+    let due = LAST_DESKTOP_POLL.with(|cell| match cell.get() {
+        Some(last) if now.duration_since(last) < DESKTOP_POLL_INTERVAL => false,
+        _ => {
+            cell.set(Some(now));
+            true
+        }
+    });
+    if due {
+        GLASS_STATE.with(|state| {
+            let Ok(mut state) = state.try_borrow_mut() else {
+                return;
+            };
+            let GlassState::Ready(renderer) = &mut *state else {
+                return;
+            };
+            for index in 0..renderer.outputs.len() {
+                if let Err(error) = renderer.capture_output(index, 0) {
+                    log::debug!("[LG] 桌面变化轮询失败 output={index}: {error:#}");
+                }
+            }
+        });
+    }
+    DESKTOP_GENERATION.load(Ordering::Relaxed)
+}
+
+/// 判断指定桌面区域自 `since_generation` 以来是否发生过变化。
+///
+/// 保守优先：历史被裁掉、队列为空、代号对不上时一律返回 `true`，
+/// 宁可多画一帧也不能漏更新。
+pub fn region_changed_since(rect: &WinRect, since_generation: u64) -> bool {
+    let current = DESKTOP_GENERATION.load(Ordering::Relaxed);
+    DESKTOP_CHANGES.with(|cell| region_changed_in(&cell.borrow(), current, rect, since_generation))
+}
+
+/// `region_changed_since` 的纯函数内核，不碰任何全局状态，便于单测。
+///
+/// 保守优先：只有能**证明**该区域自 `since` 以来没被任何
+/// 脏矩形碰到时才返回 false。历史被裁掉、队列为空但代号
+/// 已前进、代号对不上，一律返回 true。
+fn region_changed_in(
+    queue: &VecDeque<(u64, WinRect)>,
+    current_generation: u64,
+    rect: &WinRect,
+    since_generation: u64,
+) -> bool {
+    if current_generation == since_generation {
+        // 桌面自上次渲染后一帧都没变
+        return false;
+    }
+    match queue.front() {
+        // 队列已经裁掉了 since 之后的部分历史 → 无法证明没变
+        Some((oldest, _)) if *oldest > since_generation.saturating_add(1) => true,
+        None => true,
+        _ => queue.iter().any(|(generation, changed)| {
+            *generation > since_generation && intersects(changed, rect)
+        }),
+    }
+}
+
+/// 两个矩形是否相交（边界重叠不算）。
+fn intersects(a: &WinRect, b: &WinRect) -> bool {
+    a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
+}
+
 /// 渲染一帧液态玻璃背景，像素直接写进 `out`。
 ///
 /// 返回 `true` 表示 `out` 里已是一张完整的
@@ -648,6 +837,16 @@ fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     }
 }
 
+/// 为每个显示器输出建立桌面复制。
+///
+/// **单个输出失败不能让整套玻璃报废。** DXGI 每个输出同一
+/// 时刻只允许一个 duplication：录屏、会议软件、远程桌面、截图工具
+/// 占着时 `DuplicateOutput` 会返回 E_ACCESSDENIED。旧实现用 `?`
+/// 直接冒泡，结果是只要有一个显示器被占用，**所有**分类框
+/// 都失去液态玻璃。现在跳过失败的输出，其余显示器照常工作；
+/// 落在失败输出上的分类框会自动回退到半透明背景。
+/// 全部输出都失败时返回空 Vec，由调用方转成 Failed 状态按
+/// `RETRY_DELAY` 退避重试，而不是每帧报一次错。
 fn create_outputs(device: &ID3D11Device) -> Result<Vec<CaptureOutput>> {
     unsafe {
         let dxgi: IDXGIDevice = device.cast()?;
@@ -660,23 +859,34 @@ fn create_outputs(device: &ID3D11Device) -> Result<Vec<CaptureOutput>> {
                 Ok(o) => o,
                 Err(_) => break,
             };
+            let index = i;
             i += 1;
-            let output1 = output.cast::<IDXGIOutput1>()?;
-            let duplication = output1.DuplicateOutput(device)?;
-            let desc = output.GetDesc()?;
-            outputs.push(CaptureOutput {
-                rect: desc.DesktopCoordinates,
-                output1: output1.clone(),
-                duplication,
-                hdr_active: false,
-                desktop_texture: None,
-                desktop_view: None,
-                blurred_texture: None,
-                blurred_view: None,
-                source_bitmap: None,
-                target_bitmap: None,
-                blur_chain: None,
-            });
+
+            // 把可能失败的三步放进闭包，失败只影响这一个输出
+            let prepared = (|| -> Result<CaptureOutput> {
+                let output1 = output.cast::<IDXGIOutput1>()?;
+                let duplication = output1.DuplicateOutput(device)?;
+                let desc = output.GetDesc()?;
+                Ok(CaptureOutput {
+                    rect: desc.DesktopCoordinates,
+                    output1,
+                    duplication,
+                    hdr_active: false,
+                    desktop_texture: None,
+                    desktop_view: None,
+                    blurred_texture: None,
+                    blurred_view: None,
+                    source_bitmap: None,
+                    target_bitmap: None,
+                    blur_chain: None,
+                })
+            })();
+            match prepared {
+                Ok(capture) => outputs.push(capture),
+                Err(error) => log::warn!(
+                    "[LG] 输出 {index} 桌面复制不可用，该显示器上的分类框回退半透明背景: {error:#}"
+                ),
+            }
         }
         Ok(outputs)
     }
@@ -958,7 +1168,9 @@ impl GlassRenderer {
                 // 拿到新帧 → 桌面代号前进，分类框的周期 tick 据此
                 // 判断「玻璃背景变了」。只在真正渲染时才会走到这里，
                 // 因此不需要额外的轮询开销。
-                DESKTOP_GENERATION.fetch_add(1, Ordering::Relaxed);
+                let generation = DESKTOP_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
+                // 必须在 ReleaseFrame 之前取脏矩形
+                collect_frame_changes(output, generation);
                 Ok(true)
             })();
             let _ = output.duplication.ReleaseFrame();
@@ -1575,6 +1787,97 @@ impl GlassRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn r(left: i32, top: i32, right: i32, bottom: i32) -> WinRect {
+        WinRect {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+
+    #[test]
+    fn intersects_ignores_edge_touching() {
+        let a = r(0, 0, 100, 100);
+        assert!(intersects(&a, &r(50, 50, 150, 150)));
+        assert!(intersects(&a, &r(0, 0, 100, 100)));
+        // 只有边界重叠不算相交：那样的脏矩形不会改变任何像素
+        assert!(!intersects(&a, &r(100, 0, 200, 100)));
+        assert!(!intersects(&a, &r(0, 100, 100, 200)));
+        assert!(!intersects(&a, &r(-50, -50, 0, 0)));
+        assert!(!intersects(&a, &r(500, 500, 600, 600)));
+    }
+
+    #[test]
+    fn region_unchanged_when_generation_is_current() {
+        let queue: VecDeque<(u64, WinRect)> = VecDeque::new();
+        // 代号没前进 → 无论队列里有什么都不需要重绘
+        assert!(!region_changed_in(&queue, 7, &r(0, 0, 10, 10), 7));
+    }
+
+    #[test]
+    fn region_changed_only_when_dirty_rect_hits_it() {
+        let box_a = r(100, 100, 700, 600);
+        let box_b = r(4600, 0, 5000, 400);
+        let mut queue: VecDeque<(u64, WinRect)> = VecDeque::new();
+        // 任务栏时钟跳了一下：只碰到屏幕底部
+        queue.push_back((8, r(2400, 1050, 2500, 1080)));
+        // 别处光标闪烁
+        queue.push_back((9, r(3000, 500, 3010, 520)));
+
+        assert!(
+            !region_changed_in(&queue, 9, &box_a, 7),
+            "桌面变了但不在这个框里 → 不应重绘"
+        );
+        assert!(!region_changed_in(&queue, 9, &box_b, 7));
+
+        // 现在有一块脏区域碰到 box_a
+        queue.push_back((10, r(650, 550, 900, 800)));
+        assert!(
+            region_changed_in(&queue, 10, &box_a, 7),
+            "脏矩形碰到了这个框 → 必须重绘"
+        );
+        assert!(
+            !region_changed_in(&queue, 10, &box_b, 7),
+            "同一帧里另一个框不受影响 → 不重绘"
+        );
+    }
+
+    #[test]
+    fn trimmed_history_falls_back_to_conservative() {
+        let box_a = r(100, 100, 700, 600);
+        let mut queue: VecDeque<(u64, WinRect)> = VecDeque::new();
+        // 队列最老记录已经是代号 50，而调用方上次渲染在 7
+        // → 8..49 的历史被裁掉了，无法证明该区域没变
+        queue.push_back((50, r(0, 0, 10, 10)));
+        assert!(
+            region_changed_in(&queue, 50, &box_a, 7),
+            "历史丢了就必须保守重绘"
+        );
+        // 但如果只差一代（刚好没裁到），仍可以正常判定
+        queue.clear();
+        queue.push_back((8, r(0, 0, 10, 10)));
+        assert!(!region_changed_in(&queue, 8, &box_a, 7));
+    }
+
+    #[test]
+    fn empty_queue_with_advanced_generation_is_conservative() {
+        // 代号前进了但一条矩形都没记录（例如刚被清空）
+        // → 不敢断言没变，保守重绘
+        let queue: VecDeque<(u64, WinRect)> = VecDeque::new();
+        assert!(region_changed_in(&queue, 9, &r(0, 0, 10, 10), 7));
+    }
+
+    #[test]
+    fn change_queue_is_bounded() {
+        // push_change 走的是全局队列，这里只验证上限常量本身合理：
+        // 太小会频繁丢历史（导致保守重绘），太大则白占内存
+        assert!(MAX_DESKTOP_CHANGES >= 64);
+        assert!(MAX_DESKTOP_CHANGES <= 4096);
+        // 每条 24 字节左右，上限下不超过 100KB
+        assert!(MAX_DESKTOP_CHANGES * size_of::<(u64, WinRect)>() < 100 * 1024);
+    }
 
     #[test]
     fn dxgi_placeholder_detection_rejects_opaque_black_frame() {
