@@ -6,19 +6,14 @@
 use std::ffi::c_void;
 use std::sync::Mutex;
 
-use windows::Win32::Graphics::Direct2D::{
-    Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT},
-    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-    D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
-    D2D1_RENDER_TARGET_USAGE_NONE,
-};
-use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
+use windows::Win32::Graphics::Direct2D::{ID2D1DCRenderTarget, ID2D1Factory};
 use windows::Win32::Graphics::Gdi::HDC as GdiHDC;
 use windows_numerics::Vector2;
 
 use super::alignment_detect::AlignmentResult;
 use crate::platform::windows::ffi_imports::*;
 use crate::platform::windows::ffi_types::*;
+use crate::platform::windows::render_devices;
 
 /// 桌面颜色采样网格大小（NxN 个采样点）
 /// 10x10=100 个采样点足够估算屏幕中心区域亮度，同时保持启动时间 < 50ms
@@ -270,41 +265,17 @@ fn ensure_class_registered() -> Result<HINSTANCE, &'static str> {
     Ok(hinstance)
 }
 
-/// ��ʼ�� D2D �豸
+/// 初始化 D2D 设备
+///
+/// 工厂取渲染线程共享实例（见 `render_devices`），参考线窗口只保留
+/// 自己的 DC 渲染目标；旧实现在这里再建一个 `ID2D1Factory`，
+/// 等于又多一个独立 D3D11 设备（约 50MB 私有内存）。
 fn init_d2d_devices(data: &mut GuideOverlayData) {
     if data.d2d_factory.is_none() {
-        match unsafe { D2D1CreateFactory::<ID2D1Factory>(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) }
-        {
-            Ok(factory) => data.d2d_factory = Some(factory),
-            Err(e) => {
-                log::error!("���� Guide D2D Factory ʧ��: {:?}", e);
-                return;
-            }
-        }
+        data.d2d_factory = render_devices::d2d_factory();
     }
-
     if data.d2d_target.is_none() {
-        if let Some(ref factory) = data.d2d_factory {
-            let props = D2D1_RENDER_TARGET_PROPERTIES {
-                r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
-                pixelFormat: D2D1_PIXEL_FORMAT {
-                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                    alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-                },
-                dpiX: 0.0,
-                dpiY: 0.0,
-                usage: D2D1_RENDER_TARGET_USAGE_NONE,
-                minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
-            };
-            match unsafe { factory.CreateDCRenderTarget(&props) } {
-                Ok(target) => {
-                    data.d2d_target = Some(target);
-                }
-                Err(e) => {
-                    log::error!("���� Guide D2D DC RenderTarget ʧ��: {:?}", e);
-                }
-            }
-        }
+        data.d2d_target = render_devices::create_dc_render_target(0.0);
     }
 }
 

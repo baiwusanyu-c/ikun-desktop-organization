@@ -546,10 +546,22 @@ fn migrate_legacy_public_vault_dir(new_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Shell 变更通知常量（数值必须与 Windows SDK `shlobj.h` 一致）。
+///
+/// 本模块底部的单元测试会把这五个值钉在 `windows` crate 的官方
+/// 定义上，避免再出现手写错位的情况。历史上这里有两个致命错值：
+///
+/// - `SHCNF_PATHW` 曾写成 `0x8000`。`uFlags & SHCNF_TYPE(0xFF)` 因此落到
+///   `SHCNF_IDLIST(0)`，Shell 会把传进去的宽字符串指针当成 PIDL 逐段解析；
+///   路径里一旦出现中文（首字符码元很大，被当成 `cb` 长度）就会越界，
+///   表现为启动还原分类框时在 `windows.storage.dll` / `ucrtbase.dll` 里
+///   0xC0000005 崩溃，而纯 ASCII 路径反而能侥幸走完。
+/// - `SHCNE_DELETE` 曾写成 `0x4000`，那是 `SHCNE_SERVERDISCONNECT`，
+///   桌面图标不会真正刷新。
 const SHCNE_UPDATEITEM: u32 = 0x0000_2000;
 const SHCNE_CREATE: u32 = 0x0000_0002;
-const SHCNE_DELETE: u32 = 0x0000_4000;
-const SHCNF_PATHW: u32 = 0x0000_8000;
+const SHCNE_DELETE: u32 = 0x0000_0004;
+const SHCNF_PATHW: u32 = 0x0000_0005;
 const SHCNF_FLUSH: u32 = 0x0000_1000;
 
 fn app_data_root() -> Result<PathBuf> {
@@ -946,7 +958,7 @@ pub fn delete_icon_permanently(logical_path: &str) -> Result<()> {
         }
     }
     if deleted_any {
-        let shcne_delete: u32 = 0x0000_4000;
+        let shcne_delete: u32 = SHCNE_DELETE;
         use std::os::windows::ffi::OsStrExt;
         let wide: Vec<u16> = Path::new(logical_path)
             .as_os_str()
@@ -1165,7 +1177,7 @@ pub fn rename_icon_file(logical_path: &str, new_name: &str) -> Result<String> {
             old_path.display(),
             new_path.display()
         );
-        let shcne_delete: u32 = 0x0000_4000;
+        let shcne_delete: u32 = SHCNE_DELETE;
         use std::os::windows::ffi::OsStrExt;
         let old_wide: Vec<u16> = old_path
             .as_os_str()
@@ -1772,6 +1784,33 @@ pub fn list_vault_icons() -> Vec<crate::platform::types::DesktopIcon> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Shell 通知常量必须与 `windows` crate（即 Windows SDK）一致。
+    ///
+    /// 这不是形式主义：`SHCNF_PATHW` 写错会让 Shell 把宽字符串指针
+    /// 当 PIDL 解析，含中文的桌面路径直接把进程打成 0xC0000005。
+    #[test]
+    fn shell_notify_constants_match_windows_sdk() {
+        use windows::Win32::UI::Shell::{
+            SHCNE_CREATE as SDK_CREATE, SHCNE_DELETE as SDK_DELETE,
+            SHCNE_UPDATEITEM as SDK_UPDATEITEM, SHCNF_FLUSH as SDK_FLUSH, SHCNF_PATHW as SDK_PATHW,
+            SHCNF_TYPE,
+        };
+
+        assert_eq!(SHCNE_CREATE, SDK_CREATE.0, "SHCNE_CREATE 必须与 SDK 一致");
+        assert_eq!(SHCNE_DELETE, SDK_DELETE.0, "SHCNE_DELETE 必须与 SDK 一致");
+        assert_eq!(
+            SHCNE_UPDATEITEM, SDK_UPDATEITEM.0,
+            "SHCNE_UPDATEITEM 必须与 SDK 一致"
+        );
+        assert_eq!(SHCNF_PATHW, SDK_PATHW.0, "SHCNF_PATHW 必须与 SDK 一致");
+        assert_eq!(SHCNF_FLUSH, SDK_FLUSH.0, "SHCNF_FLUSH 必须与 SDK 一致");
+        // 组合后的类型位必须落在 PATHW 上，否则 Shell 会按 PIDL 解析参数
+        assert_eq!(
+            (SHCNF_PATHW | SHCNF_FLUSH) & SHCNF_TYPE.0,
+            SDK_PATHW.0,
+            "uFlags 的类型位必须是 SHCNF_PATHW，不能退化成 SHCNF_IDLIST"
+        );
+    }
 
     #[test]
     fn test_user_desktop_path_detection() {

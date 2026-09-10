@@ -28,95 +28,165 @@ use std::ffi::c_void;
 use windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED;
 use windows::Win32::Graphics::Direct2D::{
     Common::{D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_SIZE_U},
-    D2D1CreateFactory, ID2D1Bitmap, ID2D1DCRenderTarget, ID2D1Factory, D2D1_ANTIALIAS_MODE_ALIASED,
+    ID2D1Bitmap, ID2D1DCRenderTarget, D2D1_ANTIALIAS_MODE_ALIASED,
     D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_BITMAP_PROPERTIES, D2D1_DRAW_TEXT_OPTIONS_NONE,
-    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT,
+    D2D1_ROUNDED_RECT,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWriteCreateFactory, IDWriteFactory, DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL,
-    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL,
+    IDWriteFactory, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL,
     DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
     DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TRIMMING,
     DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP, DWRITE_WORD_WRAPPING_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::HDC as GdiHDC;
-use windows::Win32::Graphics::Imaging::{CLSID_WICImagingFactory, IWICImagingFactory};
-use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+use windows::Win32::Graphics::Imaging::IWICImagingFactory;
 use windows_numerics::{Matrix3x2, Vector2};
 
 use super::ffi_imports::*;
 use super::ffi_types::*;
 use super::grid_window::GridWindowData;
+use super::render_devices::TextFormatSpec;
 
-/// 初始化 D2D/DirectWrite/WIC 设备（首次渲染时调用）
+/// 初始化窗口的 D2D DC 渲染目标（首次渲染时调用）。
+///
+/// Direct2D / DirectWrite / WIC 三个工厂已收敛到 render_devices 按渲染线程共享：
+/// 每个 ID2D1Factory 内部都持有一个独立 D3D11 设备，按窗口各建一套会让
+/// 5 个分类框额外占用约 200MB 私有内存。
+///
+/// DC 渲染目标仍按窗口持有：它需要与各窗口自己的 DIB 绑定，
+/// 共享同一个 target 会在并发 BindDC 时互相踩画面。
 pub fn init_d2d_devices(data: &mut GridWindowData) {
-    // D2D Factory
-    if data.d2d_factory.is_none() {
-        match unsafe { D2D1CreateFactory::<ID2D1Factory>(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) }
-        {
-            Ok(f) => data.d2d_factory = Some(f),
-            Err(e) => {
-                log::error!("创建 D2D Factory 失败: {:?}", e);
-                return;
-            }
+    if data.d2d_target.is_some() {
+        return;
+    }
+    if let Some(target) = super::render_devices::create_dc_render_target(0.0) {
+        data.d2d_target = Some(target);
+        log::info!("D2D DC RenderTarget 已创建（共享 D2D 工厂）");
+    }
+}
+
+/// 丢弃图标位图缓存中已不再被任何条目引用的 HICON。
+///
+/// 缓存以 `HICON` 地址为键，而图标句柄在条目被删除 / 替换时就会
+/// `DestroyIcon`。旧实现从不清理，于是：
+/// - 缓存单调增长，长期运行后每个分类框都背着一堆无主位图；
+/// - 句柄地址被系统回收复用后会命中过期条目，画出错误图标。
+///
+/// 键空间实际上只有「可见图标数 × 图标尺寸种类」（尺寸同一时刻只有一种），
+/// 因此只在超出预算时才做一次全量剪枝，正常帧零开销。
+fn prune_icon_bitmap_cache(data: &mut GridWindowData) {
+    // 预留 4 倍余量：切换视图模式会短暂共存新旧两种图标尺寸
+    let budget = data.items.len() * 4 + 16;
+    if data.icon_bitmap_cache.len() <= budget {
+        return;
+    }
+    let live: Vec<usize> = data
+        .items
+        .iter()
+        .map(|item| item.icon_handle as usize)
+        .collect();
+    let before = data.icon_bitmap_cache.len();
+    data.icon_bitmap_cache
+        .retain(|(hicon, _), _| live.contains(hicon));
+    log::debug!(
+        "图标位图缓存剪枝: {} → {} 条",
+        before,
+        data.icon_bitmap_cache.len()
+    );
+}
+
+/// 释放分类框复用的 DIB 渲染后端。
+///
+/// 先把 D2D DC 渲染目标从旧 DC 解绑，再还原默认位图并删除 GDI 对象，
+/// 避免 D2D 继续向已删除的 DC 提交画面。窗口销毁和尺寸变化时调用。
+pub(crate) fn release_grid_dib(data: &mut GridWindowData) {
+    if data.dib_dc.is_null() {
+        return;
+    }
+    if let Some(ref target) = data.d2d_target {
+        let empty = windows::Win32::Foundation::RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        let _ = unsafe { target.BindDC(GdiHDC(std::ptr::null_mut()), &empty) };
+    }
+    unsafe {
+        if !data.dib_old_bmp.is_null() {
+            SelectObject(data.dib_dc, data.dib_old_bmp);
         }
+        if !data.dib_section.is_null() {
+            DeleteObject(data.dib_section as HGDIOBJ);
+        }
+        DeleteDC(data.dib_dc);
+    }
+    data.dib_section = std::ptr::null_mut();
+    data.dib_dc = std::ptr::null_mut();
+    data.dib_old_bmp = std::ptr::null_mut();
+    data.dib_w = 0;
+    data.dib_h = 0;
+}
+
+/// 确保分类框持有一个与 width × height 匹配的 DIB 渲染后端。
+///
+/// 尺寸一致时直接复用（绝大多数帧命中这条路径）；尺寸变化时先释放旧后端再重建。
+fn ensure_grid_dib(data: &mut GridWindowData, width: i32, height: i32) -> bool {
+    if !data.dib_dc.is_null() && data.dib_w == width && data.dib_h == height {
+        return true;
+    }
+    release_grid_dib(data);
+    if width <= 0 || height <= 0 {
+        return false;
     }
 
-    // DirectWrite Factory
-    if data.dw_factory.is_none() {
-        match unsafe { DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED) } {
-            Ok(f) => data.dw_factory = Some(f),
-            Err(e) => {
-                log::error!("创建 DirectWrite Factory 失败: {:?}", e);
-                return;
-            }
+    unsafe {
+        // 屏幕 DC 仅用于创建兼容 DC，创建完成后立即归还
+        let screen_dc = GetDC(std::ptr::null_mut());
+        if screen_dc.is_null() {
+            return false;
         }
-    }
+        let mem_dc = CreateCompatibleDC(screen_dc);
+        ReleaseDC(std::ptr::null_mut(), screen_dc);
+        if mem_dc.is_null() {
+            return false;
+        }
 
-    // WIC Imaging Factory
-    if data.wic_factory.is_none() {
-        match unsafe {
-            CoCreateInstance::<_, IWICImagingFactory>(
-                &CLSID_WICImagingFactory,
-                None,
-                CLSCTX_INPROC_SERVER,
-            )
-        } {
-            Ok(f) => data.wic_factory = Some(f),
-            Err(e) => {
-                log::error!("创建 WIC Factory 失败: {:?}", e);
-                return;
-            }
-        }
-    }
+        let bi = BITMAPINFOHEADER {
+            bi_size: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            bi_width: width,
+            bi_height: -height, // 自上而下
+            bi_planes: 1,
+            bi_bit_count: 32,
+            bi_compression: 0,
+            bi_size_image: 0,
+            bi_x_pels_per_meter: 0,
+            bi_y_pels_per_meter: 0,
+            bi_clr_used: 0,
+            bi_clr_important: 0,
+        };
 
-    // DC Render Target（创建一次，每次渲染时 BindDC 到新 DC）
-    if data.d2d_target.is_none() {
-        if let Some(ref factory) = data.d2d_factory {
-            let props = D2D1_RENDER_TARGET_PROPERTIES {
-                r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
-                pixelFormat: D2D1_PIXEL_FORMAT {
-                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                    alphaMode:
-                        windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED,
-                },
-                dpiX: 0.0,
-                dpiY: 0.0,
-                usage: D2D1_RENDER_TARGET_USAGE_NONE,
-                minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
-            };
-            match unsafe { factory.CreateDCRenderTarget(&props) } {
-                Ok(rt) => {
-                    data.d2d_target = Some(rt);
-                    log::info!("D2D DC RenderTarget 已创建");
-                }
-                Err(e) => {
-                    log::error!("创建 D2D DC RenderTarget 失败: {:?}", e);
-                }
-            }
+        let mut bits: *mut Pixel32 = std::ptr::null_mut();
+        let dib = CreateDIBSection(
+            mem_dc,
+            &bi as *const BITMAPINFOHEADER as *const c_void,
+            DIB_RGB_COLORS,
+            &mut bits as *mut *mut Pixel32 as *mut *mut c_void,
+            std::ptr::null_mut(),
+            0,
+        );
+        if dib.is_null() || bits.is_null() {
+            DeleteDC(mem_dc);
+            return false;
         }
+
+        data.dib_old_bmp = SelectObject(mem_dc, dib as HGDIOBJ);
+        data.dib_section = dib;
+        data.dib_dc = mem_dc;
+        data.dib_w = width;
+        data.dib_h = height;
+        true
     }
 }
 
@@ -147,13 +217,13 @@ pub fn render_layered_window(hwnd: HWND) {
         }
     };
 
-    // 确保 D2D/DW/WIC 设备已初始化
+    // 确保窗口的 DC 渲染目标已初始化（D2D/DW/WIC 工厂按渲染线程共享）
     init_d2d_devices(data);
+    prune_icon_bitmap_cache(data);
 
-    let (Some(_d2d_factory), Some(dw_factory), Some(wic_factory), Some(target)) = (
-        data.d2d_factory.clone(),
-        data.dw_factory.clone(),
-        data.wic_factory.clone(),
+    let (Some(dw_factory), Some(wic_factory), Some(target)) = (
+        super::render_devices::dw_factory(),
+        super::render_devices::wic_factory(),
         data.d2d_target.clone(),
     ) else {
         log::warn!("D2D 设备未初始化，跳过渲染");
@@ -173,7 +243,10 @@ pub fn render_layered_window(hwnd: HWND) {
     let outer_h = wr.bottom - wr.top;
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     let dpi = if dpi > 0 { dpi } else { 96 };
-    let shadow_padding = super::grid_window::shadow_padding_for_dpi(dpi);
+    // 留白取窗口当前生效值，不能每帧重新按 DPI 推算：
+    // 玻璃开关刚切换、窗口外框还没收缩完时，重新推算会让本帧
+    // 按新留白在旧外框上作画，表现为内容整体错位一帧。
+    let shadow_padding = data.render_padding;
     let w = outer_w - shadow_padding * 2;
     let h = outer_h - shadow_padding * 2;
     if w <= 0 || h <= 0 || outer_w <= 0 || outer_h <= 0 {
@@ -184,45 +257,24 @@ pub fn render_layered_window(hwnd: HWND) {
     let ww = w as f32;
     let hh = h as f32;
 
-    // 创建 32 位 ARGB DIB Section（D2D 渲染后端）
-    let screen_dc = unsafe { GetDC(std::ptr::null_mut()) };
-    let mem_dc = unsafe { CreateCompatibleDC(screen_dc) };
-
-    let bi = BITMAPINFOHEADER {
-        bi_size: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-        bi_width: outer_w,
-        bi_height: -outer_h, // 自上而下
-        bi_planes: 1,
-        bi_bit_count: 32,
-        bi_compression: 0,
-        bi_size_image: 0,
-        bi_x_pels_per_meter: 0,
-        bi_y_pels_per_meter: 0,
-        bi_clr_used: 0,
-        bi_clr_important: 0,
-    };
-
-    let mut bits: *mut Pixel32 = std::ptr::null_mut();
-    let dib = unsafe {
-        CreateDIBSection(
-            mem_dc,
-            &bi as *const BITMAPINFOHEADER as *const c_void,
-            DIB_RGB_COLORS,
-            &mut bits as *mut *mut Pixel32 as *mut *mut c_void,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-    if dib.is_null() || bits.is_null() {
-        unsafe {
-            DeleteDC(mem_dc);
-            ReleaseDC(std::ptr::null_mut(), screen_dc);
-        }
+    // ===== 复用的 32 位 ARGB DIB Section（D2D 渲染后端）=====
+    //
+    // 旧实现每帧 CreateDIBSection + DeleteObject：分类框定时器 200ms 一次、
+    // 5 个框即每秒上百 MB 的 GDI 分配/释放，是主进程内存持续爬升的主因之一。
+    // 现在 DIB 与内存 DC 存放在 GridWindowData 中，仅尺寸变化或窗口销毁时重建。
+    if !ensure_grid_dib(data, outer_w, outer_h) {
+        log::error!("分类框 DIB 渲染后端创建失败: {outer_w}x{outer_h}");
         RENDERING.store(false, Ordering::SeqCst);
         return;
     }
+    let mem_dc = data.dib_dc;
 
-    let old_bmp = unsafe { SelectObject(mem_dc, dib as HGDIOBJ) };
+    let screen_dc = unsafe { GetDC(std::ptr::null_mut()) };
+    if screen_dc.is_null() {
+        log::error!("分类框渲染获取屏幕 DC 失败");
+        RENDERING.store(false, Ordering::SeqCst);
+        return;
+    }
 
     // 绑定 D2D render target 到 memory DC
     let bind_rect = windows::Win32::Foundation::RECT {
@@ -233,10 +285,8 @@ pub fn render_layered_window(hwnd: HWND) {
     };
     if unsafe { target.BindDC(GdiHDC(mem_dc), &bind_rect) }.is_err() {
         log::error!("BindDC 失败");
+        release_grid_dib(data);
         unsafe {
-            SelectObject(mem_dc, old_bmp);
-            DeleteObject(dib as HGDIOBJ);
-            DeleteDC(mem_dc);
             ReleaseDC(std::ptr::null_mut(), screen_dc);
         }
         RENDERING.store(false, Ordering::SeqCst);
@@ -332,23 +382,19 @@ pub fn render_layered_window(hwnd: HWND) {
 
     // ===== 标题文字（DirectWrite 渲染）=====
     let title_font_size = scale_for_dpi(15, dpi) as f32;
-    let title_format = unsafe {
-        let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
-        let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
-        dw_factory.CreateTextFormat::<_, _, _>(
-            windows::core::PCWSTR(font_name.as_ptr()),
-            None,
-            DWRITE_FONT_WEIGHT_BOLD,
-            DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL,
-            title_font_size,
-            windows::core::PCWSTR(locale.as_ptr()),
-        )
-    };
+    // 标题格式：雅黑 UI + 粗体 + 不换行；对齐沿用 DirectWrite 默认的 LEADING / NEAR
+    let title_spec = TextFormatSpec::new(
+        "Microsoft YaHei UI",
+        title_font_size,
+        DWRITE_FONT_WEIGHT_BOLD,
+        DWRITE_FONT_STYLE_NORMAL,
+        DWRITE_TEXT_ALIGNMENT_LEADING,
+        DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
+        DWRITE_WORD_WRAPPING_NO_WRAP,
+    );
+    let title_format = super::render_devices::text_format(&title_spec);
 
-    if let Ok(ref tf) = title_format {
-        let _ = unsafe { tf.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP) };
-
+    if let Some(ref tf) = title_format {
         // 锁定按钮区域（标题栏右侧）
         let (btn_x, btn_y, btn_size) = super::grid_layout::lock_btn_rect(w, title_h, dpi);
 
@@ -395,24 +441,18 @@ pub fn render_layered_window(hwnd: HWND) {
         // ===== 绘制锁定按钮（标题栏右侧）=====
         let lock_icon = if data.locked { "🔒" } else { "🔓" };
         let lock_font_size = scale_for_dpi(14, dpi) as f32;
-        let lock_format = unsafe {
-            let font_name: Vec<u16> = "Segoe UI Emoji\0".encode_utf16().collect();
-            let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
-            dw_factory.CreateTextFormat::<_, _, _>(
-                windows::core::PCWSTR(font_name.as_ptr()),
-                None,
-                DWRITE_FONT_WEIGHT_NORMAL,
-                DWRITE_FONT_STYLE_NORMAL,
-                DWRITE_FONT_STRETCH_NORMAL,
-                lock_font_size,
-                windows::core::PCWSTR(locale.as_ptr()),
-            )
-        };
+        let lock_spec = TextFormatSpec::new(
+            "Segoe UI Emoji",
+            lock_font_size,
+            DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_TEXT_ALIGNMENT_CENTER,
+            DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+            DWRITE_WORD_WRAPPING_WRAP,
+        );
+        let lock_format = super::render_devices::text_format(&lock_spec);
 
-        if let Ok(ref lf) = lock_format {
-            let _ = unsafe { lf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER) };
-            let _ = unsafe { lf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER) };
-
+        if let Some(ref lf) = lock_format {
             let lock_text: Vec<u16> = lock_icon.encode_utf16().collect();
             let lock_layout = unsafe {
                 target_inner_create_text_layout(
@@ -484,24 +524,18 @@ pub fn render_layered_window(hwnd: HWND) {
     let (mbtn_x, mbtn_y, mbtn_size) = super::grid_layout::more_btn_rect(w, title_h, dpi);
     let more_icon = "\u{22EE}"; // ⋮ 三个竖点
     let more_font_size = scale_for_dpi(16, dpi) as f32;
-    let more_format = unsafe {
-        let font_name: Vec<u16> = "Segoe UI Symbol\0".encode_utf16().collect();
-        let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
-        dw_factory.CreateTextFormat::<_, _, _>(
-            windows::core::PCWSTR(font_name.as_ptr()),
-            None,
-            DWRITE_FONT_WEIGHT_BOLD,
-            DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL,
-            more_font_size,
-            windows::core::PCWSTR(locale.as_ptr()),
-        )
-    };
+    let more_spec = TextFormatSpec::new(
+        "Segoe UI Symbol",
+        more_font_size,
+        DWRITE_FONT_WEIGHT_BOLD,
+        DWRITE_FONT_STYLE_NORMAL,
+        DWRITE_TEXT_ALIGNMENT_CENTER,
+        DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+        DWRITE_WORD_WRAPPING_WRAP,
+    );
+    let more_format = super::render_devices::text_format(&more_spec);
 
-    if let Ok(ref mf) = more_format {
-        let _ = unsafe { mf.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER) };
-        let _ = unsafe { mf.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER) };
-
+    if let Some(ref mf) = more_format {
         let more_text: Vec<u16> = more_icon.encode_utf16().collect();
         let more_layout = unsafe {
             target_inner_create_text_layout(
@@ -680,11 +714,8 @@ pub fn render_layered_window(hwnd: HWND) {
         log::info!("UpdateLayeredWindow 提交分类框画面已恢复: hwnd={:?}", hwnd);
     }
 
-    // 清理 GDI 资源（D2D target 保留复用）
+    // DIB 与内存 DC 保留给下一帧复用，仅在尺寸变化或窗口销毁时释放
     unsafe {
-        SelectObject(mem_dc, old_bmp);
-        DeleteObject(dib as HGDIOBJ);
-        DeleteDC(mem_dc);
         ReleaseDC(std::ptr::null_mut(), screen_dc);
     }
 
@@ -1364,28 +1395,20 @@ fn draw_icon_with_label_cached(
         }
 
         let label_font_size = scale_for_dpi(13, dpi) as f32;
-        let text_format = {
-            let font_name: Vec<u16> = "Microsoft YaHei UI\0".encode_utf16().collect();
-            let locale: Vec<u16> = "zh-cn\0".encode_utf16().collect();
-            dw_factory.CreateTextFormat::<_, _, _>(
-                windows::core::PCWSTR(font_name.as_ptr()),
-                None,
-                DWRITE_FONT_WEIGHT_NORMAL,
-                DWRITE_FONT_STYLE_NORMAL,
-                DWRITE_FONT_STRETCH_NORMAL,
-                label_font_size,
-                windows::core::PCWSTR(locale.as_ptr()),
-            )
+        // 图标标签格式全进程缓存：每个分类框每帧每个图标都会用到，
+        // 旧实现每次重新 CreateTextFormat，是分类框定时器最主要的对象churn来源。
+        let label_spec = TextFormatSpec::new(
+            "Microsoft YaHei UI",
+            label_font_size,
+            DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_TEXT_ALIGNMENT_CENTER,
+            DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
+            DWRITE_WORD_WRAPPING_WRAP,
+        );
+        let Some(text_format) = super::render_devices::text_format(&label_spec) else {
+            return;
         };
-
-        let text_format = match text_format {
-            Ok(f) => f,
-            Err(_) => return,
-        };
-
-        let _ = text_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-        let _ = text_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
-        let _ = text_format.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
 
         let text_wide: Vec<u16> = display_name.encode_utf16().collect();
         let text_layout = {
@@ -1403,7 +1426,7 @@ fn draw_icon_with_label_cached(
         if let Some(ref layout) = text_layout {
             // 应用字符级省略号裁剪
             if apply_ellipsis {
-                if let Ok(ellipsis) = dw_factory.CreateEllipsisTrimmingSign(&text_format) {
+                if let Some(ellipsis) = super::render_devices::ellipsis_sign(&label_spec) {
                     let trimming = DWRITE_TRIMMING {
                         granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
                         delimiter: 0,
@@ -1524,42 +1547,15 @@ pub fn render_drag_overlay_bitmap(
 
         let old_bmp = SelectObject(mem_dc, dib as HGDIOBJ);
 
-        // 创建临时 D2D DC Render Target
-        let d2d_factory =
-            match D2D1CreateFactory::<ID2D1Factory>(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) {
-                Ok(f) => f,
-                Err(e) => {
-                    log::warn!("拖拽覆盖: D2D Factory 创建失败: {:?}", e);
-                    SelectObject(mem_dc, old_bmp);
-                    DeleteObject(dib as HGDIOBJ);
-                    DeleteDC(mem_dc);
-                    ReleaseDC(std::ptr::null_mut(), screen_dc);
-                    return std::ptr::null_mut();
-                }
-            };
-
-        let rt_props = D2D1_RENDER_TARGET_PROPERTIES {
-            r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
-            pixelFormat: D2D1_PIXEL_FORMAT {
-                format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-            },
-            dpiX: 96.0,
-            dpiY: 96.0,
-            usage: D2D1_RENDER_TARGET_USAGE_NONE,
-            minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
-        };
-
-        let target = match d2d_factory.CreateDCRenderTarget(&rt_props) {
-            Ok(t) => t,
-            Err(e) => {
-                log::warn!("拖拽覆盖: DC RenderTarget 创建失败: {:?}", e);
-                SelectObject(mem_dc, old_bmp);
-                DeleteObject(dib as HGDIOBJ);
-                DeleteDC(mem_dc);
-                ReleaseDC(std::ptr::null_mut(), screen_dc);
-                return std::ptr::null_mut();
-            }
+        // D2D 工厂与 DC 渲染目标改用全进程共享工厂（见 render_devices）。
+        // 旧实现每次重建拖拽位图都新建一个 ID2D1Factory，等价于新建一个 D3D11 设备。
+        let Some(target) = super::render_devices::create_dc_render_target(96.0) else {
+            log::warn!("拖拽覆盖: 共享 DC RenderTarget 创建失败");
+            SelectObject(mem_dc, old_bmp);
+            DeleteObject(dib as HGDIOBJ);
+            DeleteDC(mem_dc);
+            ReleaseDC(std::ptr::null_mut(), screen_dc);
+            return std::ptr::null_mut();
         };
 
         // 绑定 D2D render target 到 memory DC
@@ -1595,16 +1591,14 @@ pub fn render_drag_overlay_bitmap(
         let label_y = (icon_size + gap) as f32;
         let label_w = (total_w - 4) as f32;
 
-        let dw_factory = match DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED) {
-            Ok(f) => f,
-            Err(e) => {
-                log::warn!("拖拽覆盖: DirectWrite Factory 创建失败: {:?}", e);
-                let _ = target.EndDraw(None, None);
-                SelectObject(mem_dc, old_bmp);
-                DeleteDC(mem_dc);
-                ReleaseDC(std::ptr::null_mut(), screen_dc);
-                return dib;
-            }
+        // DirectWrite 工厂改为全进程共享，避免每次重建拖拽位图都新建一个工厂
+        let Some(dw_factory) = super::render_devices::dw_factory() else {
+            log::warn!("拖拽覆盖: 共享 DirectWrite Factory 不可用");
+            let _ = target.EndDraw(None, None);
+            SelectObject(mem_dc, old_bmp);
+            DeleteDC(mem_dc);
+            ReleaseDC(std::ptr::null_mut(), screen_dc);
+            return dib;
         };
 
         draw_icon_with_label(

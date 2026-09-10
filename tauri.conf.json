@@ -11,6 +11,7 @@
     "windows": [
       {
         "label": "control-panel",
+        "create": false,
         "title": "Desktop Organizer",
         "url": "/#/control-panel",
         "width": 576,
@@ -27,6 +28,7 @@
       },
       {
         "label": "create-box",
+        "create": false,
         "title": "Create Category Box",
         "url": "/#/create-box",
         "width": 416,
@@ -41,6 +43,7 @@
       },
       {
         "label": "edit-box",
+        "create": false,
         "title": "Edit Category Box",
         "url": "/#/edit-box",
         "width": 416,
@@ -55,6 +58,7 @@
       },
       {
         "label": "ai-classify",
+        "create": false,
         "title": "AI Classification",
         "url": "/#/ai-classify",
         "width": 400,

@@ -415,6 +415,18 @@ pub fn get_liquid_glass_config() -> LiquidGlassConfig {
         .unwrap_or_default()
 }
 
+/// 液态玻璃是否启用。
+///
+/// 分类框需要根据这个开关算外投影留白与是否装配周期重绘定时器，
+/// 而 `get_liquid_glass_config` 会克隆整份配置（含多个 String / Vec）。
+/// 只读开关时走这里，避免把配置克隆变成热路径上的分配点。
+pub fn is_liquid_glass_enabled() -> bool {
+    get_config_lock()
+        .read()
+        .map(|guard| guard.enabled)
+        .unwrap_or(false)
+}
+
 /// 在显示器/DPI/桌面组成变化后丢弃旧快照，下一次分类框渲染前重新采集。
 pub fn invalidate_desktop_snapshot() {
     GLASS_STATE.with(|state| {

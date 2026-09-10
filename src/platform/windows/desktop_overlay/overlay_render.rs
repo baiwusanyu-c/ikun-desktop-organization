@@ -5,23 +5,13 @@
 
 use std::ffi::c_void;
 
-use windows::Win32::Graphics::Direct2D::{
-    Common::{D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT},
-    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-    D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
-    D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT,
-};
-use windows::Win32::Graphics::DirectWrite::{
-    DWriteCreateFactory, IDWriteFactory, DWRITE_FACTORY_TYPE_SHARED,
-};
-use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
+use windows::Win32::Graphics::Direct2D::{ID2D1DCRenderTarget, D2D1_ROUNDED_RECT};
+use windows::Win32::Graphics::DirectWrite::IDWriteFactory;
 use windows::Win32::Graphics::Gdi::HDC as GdiHDC;
-
-use windows::Win32::Graphics::Imaging::{CLSID_WICImagingFactory, IWICImagingFactory};
-use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 
 use crate::platform::windows::ffi_imports::*;
 use crate::platform::windows::ffi_types::*;
+use crate::platform::windows::render_devices;
 
 use super::overlay_window::{
     dpi_at_screen_point, get_overlay_data, overlay_icon_cell_x, overlay_icon_cell_y,
@@ -30,65 +20,22 @@ use super::overlay_window::{
 use crate::platform::windows::d2d_render::draw_icon_with_label;
 
 /// 初始化覆盖窗口的 D2D/DirectWrite/WIC 设备。
+///
+/// 三个工厂取渲染线程共享实例（见 `render_devices`）：每个 `ID2D1Factory`
+/// 内部都持有独立 D3D11 设备，覆盖窗口再建一套等于又多占约 50MB 私有内存。
+/// DC 渲染目标仍按窗口持有，避免与其他窗口并发 `BindDC` 时互相踩画面。
 pub(crate) fn init_overlay_d2d_devices(data: &mut OverlayWindowData) {
     if data.d2d_factory.is_none() {
-        match unsafe { D2D1CreateFactory::<ID2D1Factory>(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) }
-        {
-            Ok(factory) => data.d2d_factory = Some(factory),
-            Err(e) => {
-                log::error!("创建覆盖窗口 D2D Factory 失败: {:?}", e);
-                return;
-            }
-        }
+        data.d2d_factory = render_devices::d2d_factory();
     }
-
     if data.dw_factory.is_none() {
-        match unsafe { DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED) } {
-            Ok(factory) => data.dw_factory = Some(factory),
-            Err(e) => {
-                log::error!("创建覆盖窗口 DirectWrite Factory 失败: {:?}", e);
-                return;
-            }
-        }
+        data.dw_factory = render_devices::dw_factory();
     }
-
     if data.wic_factory.is_none() {
-        match unsafe {
-            CoCreateInstance::<_, IWICImagingFactory>(
-                &CLSID_WICImagingFactory,
-                None,
-                CLSCTX_INPROC_SERVER,
-            )
-        } {
-            Ok(factory) => data.wic_factory = Some(factory),
-            Err(e) => {
-                log::error!("创建覆盖窗口 WIC Factory 失败: {:?}", e);
-                return;
-            }
-        }
+        data.wic_factory = render_devices::wic_factory();
     }
-
     if data.d2d_target.is_none() {
-        if let Some(ref factory) = data.d2d_factory {
-            let props = D2D1_RENDER_TARGET_PROPERTIES {
-                r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
-                pixelFormat: D2D1_PIXEL_FORMAT {
-                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                    alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-                },
-                dpiX: 0.0,
-                dpiY: 0.0,
-                usage: D2D1_RENDER_TARGET_USAGE_NONE,
-                minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
-            };
-            match unsafe { factory.CreateDCRenderTarget(&props) } {
-                Ok(target) => {
-                    data.d2d_target = Some(target);
-                    log::info!("覆盖窗口 D2D DC RenderTarget 已创建");
-                }
-                Err(e) => log::error!("创建覆盖窗口 D2D DC RenderTarget 失败: {:?}", e),
-            }
-        }
+        data.d2d_target = render_devices::create_dc_render_target(0.0);
     }
 }
 

@@ -41,6 +41,7 @@ mod monitor_utils;
 pub mod multi_select;
 pub mod ole_dnd;
 pub mod rename_editor;
+pub(crate) mod render_devices;
 pub mod shell_menu;
 mod sys_tray;
 mod wnd_proc;

@@ -47,13 +47,26 @@ fn update_config(
 
 /// 将配置推送到原生渲染器。
 ///
-/// 注意：不再同步调用 rerender_all_grid_windows，因为它会阻塞 Tauri 事件循环，
-/// 导致 WebView2 窗口底部出现异常空白区域。分类框的 TIMER_ID_LIQUID_GLASS 定时器
-/// 每 200ms 自动调用 render_layered_window，会读取更新后的配置并重新渲染。
+/// 不在本线程直接调用 `rerender_all_grid_windows`：分类框窗口属于平台渲染
+/// 线程，跨线程同步调用会阻塞 Tauri 事件循环，曾经导致 WebView2 窗口
+/// 底部出现异常空白。所有刷新都通过 `PostMessageW` 交给窗口自己的消息循环。
+///
+/// 液态玻璃开关变化时必须走 `sync_all_grid_windows_to_glass_state`：开关
+/// 同时决定分类框外投影留白与 200ms 周期重绘定时器是否装配，
+/// 只改配置不重建外框会让玻璃关闭后仍按放大 3 倍的面积分配每帧 DIB。
 pub fn apply_runtime_config(config: &AppConfig) {
     #[cfg(windows)]
     {
-        crate::platform::windows::liquid_glass::update_box_style_config(&config.box_style);
+        use crate::platform::windows::{grid_window, liquid_glass};
+
+        let glass_was_enabled = liquid_glass::is_liquid_glass_enabled();
+        liquid_glass::update_box_style_config(&config.box_style);
+        if liquid_glass::is_liquid_glass_enabled() != glass_was_enabled {
+            grid_window::sync_all_grid_windows_to_glass_state();
+        } else {
+            // 周期重绘定时器只在玻璃开启时装配，样式改动必须显式请求重绘
+            grid_window::request_all_grid_windows_redraw();
+        }
     }
 }
 

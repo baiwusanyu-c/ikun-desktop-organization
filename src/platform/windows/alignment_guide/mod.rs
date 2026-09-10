@@ -82,14 +82,16 @@ pub fn on_moving(hwnd: *mut std::ffi::c_void, proposed_rect: &mut RECT) {
     let others = collect_other_box_rects(hwnd);
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     let dpi = if dpi > 0 { dpi } else { 96 };
-    let content_rect = grid_window::content_rect_from_window_rect(
+    // 留白取窗口当前生效值（而不是按 DPI 重新推算），
+    // 保证对齐参考线看到的内容矩形与分类框自己的命中测试一致。
+    let content_rect = grid_window::content_rect_with_padding(
         RECT {
             left: proposed_rect.left,
             top: proposed_rect.top,
             right: proposed_rect.right,
             bottom: proposed_rect.bottom,
         },
-        dpi,
+        grid_window::window_padding(hwnd, dpi),
     );
     let result = detect_alignments(&content_rect, &others, DEFAULT_ALIGNMENT_THRESHOLD);
     let (work_x, work_y, _, _) =

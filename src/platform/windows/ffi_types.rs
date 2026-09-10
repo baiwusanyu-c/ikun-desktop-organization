@@ -651,6 +651,15 @@ pub struct WINDOWPOS {
 pub const WM_USER_PUSH_GRIDS_BELOW: u32 = WM_APP + 15;
 /// 通知目标框：更新拖拽覆盖可视化状态（lparam = 光标屏幕坐标）
 pub const WM_USER_DRAG_OVER_UPDATE: u32 = WM_APP + 22;
+
+/// 分类框异步重绘一帧（配置里只改了颜色/圆角等样式时使用）。
+///
+/// 液态玻璃关闭后 200ms 周期重绘定时器不再装配，静态画面的更新
+/// 必须有显式入口，否则控制面板改完样式会看不到变化。
+pub const WM_USER_GRID_REDRAW: u32 = WM_APP + 23;
+
+/// 按当前液态玻璃开关重设分类框留白、定时器并重绘。
+pub const WM_USER_GRID_SYNC_GLASS: u32 = WM_APP + 24;
 pub const WM_USER_CUT_FILE_MOVED: u32 = WM_APP + 17;
 /// 通知覆盖窗口：外部文件拖拽放置完成（由 overlay IDropTarget PostMessage 触发）
 pub const WM_USER_OVERLAY_DROP: u32 = WM_APP + 18;

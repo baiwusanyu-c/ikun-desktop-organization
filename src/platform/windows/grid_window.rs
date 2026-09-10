@@ -16,11 +16,12 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-// ===== Windows crate D2D/DW/WIC imports =====
+// ===== Windows crate D2D imports =====
+//
+// D2D / DirectWrite / WIC 工厂已收敛到 `render_devices` 按渲染线程共享，
+// 窗口只保留自己的 DC 渲染目标与图标位图缓存。
 use windows::Win32::Foundation::HWND as WindowsHwnd;
-use windows::Win32::Graphics::Direct2D::{ID2D1Bitmap, ID2D1DCRenderTarget, ID2D1Factory};
-use windows::Win32::Graphics::DirectWrite::IDWriteFactory;
-use windows::Win32::Graphics::Imaging::IWICImagingFactory;
+use windows::Win32::Graphics::Direct2D::{ID2D1Bitmap, ID2D1DCRenderTarget};
 use windows::Win32::UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE};
 
 // ===== 业务层导入 =====
@@ -205,13 +206,37 @@ pub(crate) struct GridWindowData {
     /// List of selected item indices for multi-select operations
     pub(crate) multi_drag_items: Vec<usize>,
 
-    // ===== D2D/DirectWrite 设备缓存（窗口级） =====
-    pub(crate) d2d_factory: Option<ID2D1Factory>,
-    pub(crate) dw_factory: Option<IDWriteFactory>,
-    pub(crate) wic_factory: Option<IWICImagingFactory>,
+    // ===== D2D 渲染资源（窗口级） =====
+    //
+    // D2D / DirectWrite / WIC 工厂已收敛到 `render_devices` 按渲染线程共享：
+    // 每个 `ID2D1Factory` 内部都持有一个独立 D3D11 设备，按窗口各建一套会让
+    // 5 个分类框额外占用约 200MB 私有内存。窗口只保留自己的 DC 渲染目标。
     pub(crate) d2d_target: Option<ID2D1DCRenderTarget>,
     /// HICON + 目标尺寸对应的 D2D 位图缓存，避免实时玻璃刷新时重复读取 GDI 位图。
     pub(crate) icon_bitmap_cache: HashMap<(usize, i32), ID2D1Bitmap>,
+
+    // ===== 复用的 DIB 渲染后端 =====
+    //
+    // 旧实现每帧 `CreateDIBSection` + `DeleteObject`：200ms 定时器下 5 个分类框
+    // 每秒产生上百 MB 的 GDI 分配/释放，是主进程内存持续爬升的主因之一。
+    // 现在 DIB 与内存 DC 长期持有，仅在尺寸变化或窗口销毁时重建。
+    /// 32 位 ARGB DIB Section（自上而下），`UpdateLayeredWindow` 的位图源
+    pub(crate) dib_section: HBITMAP,
+    /// 选中 `dib_section` 的内存 DC，同时是 D2D DC 渲染目标的绑定点
+    pub(crate) dib_dc: HDC,
+    /// `dib_dc` 中被替换掉的默认位图，释放前需先还原
+    pub(crate) dib_old_bmp: HGDIOBJ,
+    /// 当前 DIB 宽度（物理像素），0 表示尚未创建
+    pub(crate) dib_w: i32,
+    /// 当前 DIB 高度（物理像素），0 表示尚未创建
+    pub(crate) dib_h: i32,
+
+    /// 当前生效的外投影留白（物理像素）。
+    ///
+    /// 留白随液态玻璃开关变化，渲染、布局与命中测试都必须读这个字段而不是
+    /// 每次按 DPI 重新推算：否则玻璃刚关闭时窗口外框还没收缩，渲染却已经
+    /// 按新留白计算，会出现整框错位一帧。
+    pub(crate) render_padding: i32,
 }
 
 unsafe impl Send for GridWindowData {}
@@ -313,11 +338,14 @@ impl GridWindowData {
             marquee_current_y: 0,
             multi_drag_items: Vec::new(),
             renaming_item_index: -1,
-            d2d_factory: None,
-            dw_factory: None,
-            wic_factory: None,
             d2d_target: None,
             icon_bitmap_cache: HashMap::new(),
+            dib_section: std::ptr::null_mut(),
+            dib_dc: std::ptr::null_mut(),
+            dib_old_bmp: std::ptr::null_mut(),
+            dib_w: 0,
+            dib_h: 0,
+            render_padding: 0,
         }
     }
 }
@@ -355,20 +383,48 @@ pub(crate) const LIQUID_GLASS_SHADOW_PADDING: i32 = 128;
 /// 视觉差异极小（液态玻璃效果变化较慢），但 GPU 开销降低约 70%。
 pub(crate) const LIQUID_GLASS_RENDER_INTERVAL_MS: u32 = 200;
 
-/// 返回当前 DPI 下液态玻璃外投影所需的物理像素留白。
-pub(crate) fn shadow_padding_for_dpi(dpi: u32) -> i32 {
+/// 返回当前 DPI 下液态玻璃外投影所需的物理像素留白（纯 DPI 换算，不看开关）。
+pub(crate) fn glass_shadow_padding_at_dpi(dpi: u32) -> i32 {
     scale_for_dpi(LIQUID_GLASS_SHADOW_PADDING, dpi.max(1))
 }
 
-/// 将分层窗口外部矩形转换为用户可见的分类框内容矩形。
-pub(crate) fn content_rect_from_window_rect(rect: RECT, dpi: u32) -> RECT {
-    let padding = shadow_padding_for_dpi(dpi);
+/// 返回当前 DPI 下分类框实际应使用的外投影留白。
+///
+/// 液态玻璃关闭时返回 0：外投影完全由玻璃着色器画在内容矩形之外，关闭后
+/// 继续保留 128 逻辑像素留白会把每帧 DIB、DWM 重定向表面和命中测试区域
+/// 一起放大到内容面积的 3 倍以上（200% DPI 下 5 个分类框每帧 23MB → 7MB），
+/// 还会在窗口四周多出一大圈能吃鼠标事件的透明区域。
+pub(crate) fn shadow_padding_for_dpi(dpi: u32) -> i32 {
+    if super::liquid_glass::is_liquid_glass_enabled() {
+        glass_shadow_padding_at_dpi(dpi)
+    } else {
+        0
+    }
+}
+
+/// 读取窗口当前生效的外投影留白。
+///
+/// `render_padding` 只在窗口创建、DPI 变更和液态玻璃开关切换时写入，其余
+/// 时刻直接复用，避免每帧重新查询全局配置导致窗口外框与渲染留白错拍。
+pub(crate) fn window_padding(hwnd: HWND, dpi: u32) -> i32 {
+    unsafe { get_data(hwnd) }
+        .map(|data| data.render_padding)
+        .unwrap_or_else(|| shadow_padding_for_dpi(dpi))
+}
+
+/// 将分层窗口外部矩形按指定留白内缩为用户可见的分类框内容矩形。
+pub(crate) fn content_rect_with_padding(rect: RECT, padding: i32) -> RECT {
     RECT {
         left: rect.left + padding,
         top: rect.top + padding,
         right: rect.right - padding,
         bottom: rect.bottom - padding,
     }
+}
+
+/// 将分层窗口外部矩形转换为用户可见的分类框内容矩形。
+pub(crate) fn content_rect_from_window_rect(rect: RECT, dpi: u32) -> RECT {
+    content_rect_with_padding(rect, shadow_padding_for_dpi(dpi))
 }
 
 /// 获取分类框用户可见内容的屏幕坐标矩形。
@@ -384,12 +440,11 @@ pub(crate) fn get_grid_content_rect(hwnd: HWND) -> Option<RECT> {
     }
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     let dpi = if dpi > 0 { dpi } else { 96 };
-    Some(content_rect_from_window_rect(rect, dpi))
+    Some(content_rect_with_padding(rect, window_padding(hwnd, dpi)))
 }
 
-/// 将窗口客户区坐标转换为分类框内容坐标。
-pub(crate) fn client_to_content_point(dpi: u32, x: i32, y: i32) -> (i32, i32) {
-    let padding = shadow_padding_for_dpi(dpi);
+/// 将窗口客户区坐标按指定留白转换为分类框内容坐标。
+pub(crate) fn client_to_content_point_with_padding(padding: i32, x: i32, y: i32) -> (i32, i32) {
     (x - padding, y - padding)
 }
 
@@ -596,11 +651,15 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         marquee_current_x: 0,
         marquee_current_y: 0,
         multi_drag_items: Vec::new(),
-        d2d_factory: None,
-        dw_factory: None,
-        wic_factory: None,
         d2d_target: None,
         icon_bitmap_cache: HashMap::new(),
+        // DIB 后端由 render_layered_window 按需创建并长期复用
+        dib_section: std::ptr::null_mut(),
+        dib_dc: std::ptr::null_mut(),
+        dib_old_bmp: std::ptr::null_mut(),
+        dib_w: 0,
+        dib_h: 0,
+        render_padding: shadow_padding,
     });
     let data_ptr = Box::into_raw(data);
     unsafe {
@@ -662,13 +721,11 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
     unsafe {
         // 先完成首帧再显示窗口，避免桌面捕获尚未就绪时短暂出现黑/透明窗口。
         ShowWindow(hwnd, SW_SHOW);
-        SetTimer(
-            hwnd,
-            TIMER_ID_LIQUID_GLASS,
-            LIQUID_GLASS_RENDER_INTERVAL_MS,
-            std::ptr::null_mut(),
-        );
     }
+    // 周期重绘只在液态玻璃开启时才需要：玻璃关闭时画面是静态位图，
+    // 所有变更都会走显式重绘路径。200ms 定时器空转实测吃掉约 9% CPU，
+    // 并且是主进程内存持续爬升的放大器。
+    sync_grid_refresh_timer(hwnd);
 
     // 4. 注册到全局列表
     if let Ok(mut grids) = GRID_WINDOWS.lock() {
@@ -756,6 +813,108 @@ pub fn rerender_all_grid_windows() {
             }
         }
     }
+}
+
+/// 按当前液态玻璃开关装配 / 卸载分类框的周期重绘定时器。
+///
+/// 玻璃关闭时画面是一张静态位图，所有会改变它的操作都走显式重绘路径，
+/// 200ms 定时器只会白白唤醒消息循环（实测约 9% CPU）并持续制造内存抖动。
+pub(crate) fn sync_grid_refresh_timer(hwnd: HWND) {
+    unsafe { KillTimer(hwnd, TIMER_ID_LIQUID_GLASS) };
+    if !super::liquid_glass::is_liquid_glass_enabled() {
+        return;
+    }
+    unsafe {
+        SetTimer(
+            hwnd,
+            TIMER_ID_LIQUID_GLASS,
+            LIQUID_GLASS_RENDER_INTERVAL_MS,
+            std::ptr::null_mut(),
+        );
+    }
+}
+
+/// 保持分类框内容矩形不动，按当前液态玻璃开关重设分层窗口外框。
+///
+/// 玻璃关闭后 128 逻辑像素的外投影留白失去意义，必须同步收缩窗口外框，
+/// 否则每帧 DIB、DWM 重定向表面与命中测试区域仍按放大 3 倍的面积分配。
+/// 内容矩形保持不变 = 用户看到的分类框位置尺寸完全不受开关影响。
+pub(crate) fn sync_grid_window_padding(hwnd: HWND) {
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    let dpi = if dpi > 0 { dpi } else { 96 };
+
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
+        return;
+    }
+
+    let old_padding = unsafe { get_data(hwnd) }
+        .map(|data| data.render_padding)
+        .unwrap_or(0);
+    let new_padding = shadow_padding_for_dpi(dpi);
+    if new_padding == old_padding {
+        return;
+    }
+
+    let content = content_rect_with_padding(rect, old_padding);
+    // 先写回新留白：SetWindowPos 会同步派发 WM_SIZE，
+    // 处理函数按 render_padding 反算内容矩形，必须已经是新值。
+    if let Some(data) = unsafe { get_data(hwnd) } {
+        data.render_padding = new_padding;
+    }
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            content.left - new_padding,
+            content.top - new_padding,
+            (content.right - content.left) + new_padding * 2,
+            (content.bottom - content.top) + new_padding * 2,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
+    log::info!(
+        "分类框外投影留白切换: {} → {} (dpi={})",
+        old_padding,
+        new_padding,
+        dpi
+    );
+    // 留白变了 → 分层位图尺寸变了 → 立即重绘一帧，避免残留旧画面
+    render_layered_window(hwnd);
+}
+
+/// 向所有分类框广播一条自定义消息（异步，不等待对方线程）。
+///
+/// 配置写入发生在 Tauri 命令线程，而分类框窗口属于平台渲染线程。
+/// 直接跨线程 SetWindowPos / render_layered_window 会同步等待对方线程，
+/// 曾经导致 WebView2 事件循环被卡住、窗口底部出现异常空白，因此统一走
+/// PostMessageW，由窗口自己的消息循环执行。
+fn post_to_all_grid_windows(message: u32) {
+    let hwnds: Vec<HWND> = match GRID_WINDOWS.lock() {
+        Ok(grids) => grids.iter().map(|grid| grid.hwnd).collect(),
+        Err(error) => {
+            log::warn!("无法锁定分类框列表，跳过广播: {error}");
+            return;
+        }
+    };
+    for hwnd in hwnds {
+        unsafe { PostMessageW(hwnd, message, 0, 0) };
+    }
+}
+
+/// 液态玻璃开关变化后，同步所有分类框的留白与周期重绘定时器。
+pub fn sync_all_grid_windows_to_glass_state() {
+    post_to_all_grid_windows(WM_USER_GRID_SYNC_GLASS);
+}
+
+/// 请求所有分类框异步重绘一帧（配置里只改了颜色/圆角等样式时使用）。
+pub fn request_all_grid_windows_redraw() {
+    post_to_all_grid_windows(WM_USER_GRID_REDRAW);
 }
 
 /// 获取格子数量
@@ -921,41 +1080,93 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shadow_padding_preserves_content_rect_at_96_dpi() {
+    fn glass_shadow_padding_preserves_content_rect_at_96_dpi() {
         let outer = RECT {
             left: 72,
             top: 172,
             right: 728,
             bottom: 828,
         };
-        let content = content_rect_from_window_rect(outer, 96);
+        let content = content_rect_with_padding(outer, glass_shadow_padding_at_dpi(96));
 
         assert_eq!(content.left, 200);
         assert_eq!(content.top, 300);
         assert_eq!(content.right, 600);
         assert_eq!(content.bottom, 700);
-        assert_eq!(client_to_content_point(96, 128, 128), (0, 0));
-        assert_eq!(client_to_content_point(96, 528, 528), (400, 400));
+        assert_eq!(client_to_content_point_with_padding(128, 128, 128), (0, 0));
+        assert_eq!(
+            client_to_content_point_with_padding(128, 528, 528),
+            (400, 400)
+        );
     }
 
     #[test]
-    fn shadow_padding_scales_with_dpi() {
-        assert_eq!(shadow_padding_for_dpi(144), 192);
-        let content = content_rect_from_window_rect(
+    fn glass_shadow_padding_scales_with_dpi() {
+        assert_eq!(glass_shadow_padding_at_dpi(96), 128);
+        assert_eq!(glass_shadow_padding_at_dpi(144), 192);
+        assert_eq!(glass_shadow_padding_at_dpi(192), 256);
+        let content = content_rect_with_padding(
             RECT {
                 left: -92,
                 top: 8,
                 right: 692,
                 bottom: 792,
             },
-            144,
+            glass_shadow_padding_at_dpi(144),
         );
 
         assert_eq!(content.left, 100);
         assert_eq!(content.top, 200);
         assert_eq!(content.right, 500);
         assert_eq!(content.bottom, 600);
-        assert_eq!(client_to_content_point(144, 192, 192), (0, 0));
+        assert_eq!(client_to_content_point_with_padding(192, 192, 192), (0, 0));
+    }
+
+    /// 液态玻璃关闭时不得预留任何外投影留白。
+    ///
+    /// 留白只服务于玻璃着色器画到内容矩形之外的外投影；关闭后继续保留会把
+    /// 每帧 DIB、DWM 重定向表面和命中测试区域一起放大到内容面积的 3 倍以上
+    /// （200% DPI 下 5 个分类框每帧 23MB → 7MB）。
+    #[test]
+    fn shadow_padding_follows_liquid_glass_switch() {
+        let enabled = super::super::liquid_glass::get_liquid_glass_config().enabled;
+        for dpi in [96u32, 120, 144, 192] {
+            if enabled {
+                assert_eq!(
+                    shadow_padding_for_dpi(dpi),
+                    glass_shadow_padding_at_dpi(dpi),
+                    "玻璃开启时留白应等于 DPI 换算值"
+                );
+            } else {
+                assert_eq!(shadow_padding_for_dpi(dpi), 0, "玻璃关闭时留白必须为 0");
+            }
+        }
+    }
+
+    /// 内容矩形换算必须自洽：外框按留白内缩，客户区原点映射到内容原点。
+    #[test]
+    fn content_rect_conversion_uses_given_padding() {
+        for padding in [0i32, 128, 192] {
+            let outer = RECT {
+                left: 300,
+                top: 400,
+                right: 1300,
+                bottom: 1200,
+            };
+            // RECT 没有 Copy，先取出四条边再把 outer 移动进函数
+            let (ol, ot, orr, ob) = (outer.left, outer.top, outer.right, outer.bottom);
+            let content = content_rect_with_padding(outer, padding);
+            assert_eq!(content.left, ol + padding);
+            assert_eq!(content.top, ot + padding);
+            assert_eq!(content.right, orr - padding);
+            assert_eq!(content.bottom, ob - padding);
+            assert_eq!(content.right - content.left, (orr - ol) - padding * 2);
+            assert_eq!(content.bottom - content.top, (ob - ot) - padding * 2);
+            assert_eq!(
+                client_to_content_point_with_padding(padding, padding, padding),
+                (0, 0)
+            );
+        }
     }
 
     // ===== lock_btn_rect 计算验证 =====

@@ -19,20 +19,17 @@ use crate::config::app_config::{GroupBy, SortMode, ViewMode};
 use std::ffi::c_void;
 
 use windows::Win32::Graphics::Direct2D::{
-    Common::D2D1_PIXEL_FORMAT, D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory,
-    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
-    D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE,
-    D2D1_ROUNDED_RECT,
+    ID2D1DCRenderTarget, ID2D1Factory, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ROUNDED_RECT,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWriteCreateFactory, IDWriteFactory, DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL,
-    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
-    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_WORD_WRAPPING_NO_WRAP,
+    IDWriteFactory, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
+    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_WORD_WRAPPING_NO_WRAP,
 };
-use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Gdi::HDC as GdiHDC;
-use windows::Win32::Graphics::Imaging::{CLSID_WICImagingFactory, IWICImagingFactory};
-use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+use windows::Win32::Graphics::Imaging::IWICImagingFactory;
+
+use crate::platform::windows::render_devices;
 
 // ===== 命令 ID 常量 =====
 const CMD_DELETE: u32 = 1;
@@ -502,35 +499,10 @@ fn run_menu_loop(
     }
 
     // 初始化 D2D 设备
-    let d2d_factory =
-        unsafe { D2D1CreateFactory::<ID2D1Factory>(D2D1_FACTORY_TYPE_SINGLE_THREADED, None).ok() };
-    let dw_factory =
-        unsafe { DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED).ok() };
-    let wic_factory = unsafe {
-        CoCreateInstance::<_, IWICImagingFactory>(
-            &CLSID_WICImagingFactory,
-            None,
-            CLSCTX_INPROC_SERVER,
-        )
-        .ok()
-    };
-    let d2d_target = if let Some(ref factory) = d2d_factory {
-        let props = D2D1_RENDER_TARGET_PROPERTIES {
-            r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
-            pixelFormat: D2D1_PIXEL_FORMAT {
-                format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                alphaMode:
-                    windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED,
-            },
-            dpiX: 0.0,
-            dpiY: 0.0,
-            usage: D2D1_RENDER_TARGET_USAGE_NONE,
-            minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
-        };
-        unsafe { factory.CreateDCRenderTarget(&props).ok() }
-    } else {
-        None
-    };
+    let d2d_factory = render_devices::d2d_factory();
+    let dw_factory = render_devices::dw_factory();
+    let wic_factory = render_devices::wic_factory();
+    let d2d_target = render_devices::create_dc_render_target(0.0);
 
     // 存储窗口数据
     let data = Box::new(MenuWindowData {
@@ -947,35 +919,10 @@ fn open_submenu(parent_hwnd: HWND, data: &mut MenuWindowData, item_index: i32) {
     // 初始化子菜单数据
     let sub_item_rects = calculate_item_rects(&item.children, data.dpi);
 
-    let sub_d2d_factory =
-        unsafe { D2D1CreateFactory::<ID2D1Factory>(D2D1_FACTORY_TYPE_SINGLE_THREADED, None).ok() };
-    let sub_dw_factory =
-        unsafe { DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED).ok() };
-    let sub_wic_factory = unsafe {
-        CoCreateInstance::<_, IWICImagingFactory>(
-            &CLSID_WICImagingFactory,
-            None,
-            CLSCTX_INPROC_SERVER,
-        )
-        .ok()
-    };
-    let sub_d2d_target = if let Some(ref factory) = sub_d2d_factory {
-        let props = D2D1_RENDER_TARGET_PROPERTIES {
-            r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
-            pixelFormat: D2D1_PIXEL_FORMAT {
-                format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                alphaMode:
-                    windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED,
-            },
-            dpiX: 0.0,
-            dpiY: 0.0,
-            usage: D2D1_RENDER_TARGET_USAGE_NONE,
-            minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
-        };
-        unsafe { factory.CreateDCRenderTarget(&props).ok() }
-    } else {
-        None
-    };
+    let sub_d2d_factory = render_devices::d2d_factory();
+    let sub_dw_factory = render_devices::dw_factory();
+    let sub_wic_factory = render_devices::wic_factory();
+    let sub_d2d_target = render_devices::create_dc_render_target(0.0);
 
     let sub_data = Box::new(MenuWindowData {
         items: item

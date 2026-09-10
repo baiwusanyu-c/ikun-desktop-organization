@@ -26,8 +26,8 @@ use super::grid_layout::{
     grid_hit_test, lock_btn_rect, more_btn_rect, recalculate_layout, reflow_items,
 };
 use super::grid_window::{
-    client_to_content_point, get_data, get_grid_content_rect, shadow_padding_for_dpi,
-    GridWindowData,
+    client_to_content_point_with_padding, get_data, get_grid_content_rect, shadow_padding_for_dpi,
+    window_padding, GridWindowData,
 };
 use super::menu_window::show_menu_window;
 use super::shell_menu::{
@@ -72,7 +72,10 @@ fn content_point_from_lparam(hwnd: HWND, lparam: LPARAM) -> (i32, i32) {
         }
     }
 
-    client_to_content_point(window_dpi(hwnd), client_x, client_y)
+    // 留白随液态玻璃开关与 DPI 变化，必须读窗口当前生效值，
+    // 否则刚切换开关时命中测试会整体偏移一个留白的距离。
+    let padding = window_padding(hwnd, window_dpi(hwnd));
+    client_to_content_point_with_padding(padding, client_x, client_y)
 }
 
 fn remove_grid_item_if_missing_after_shell_menu(hwnd: HWND, logical_path: &str) {
@@ -536,6 +539,12 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             let new_w = (outer_w - padding * 2).max(0);
             let new_h = (outer_h - padding * 2).max(0);
 
+            // DPI 变化后留白的物理像素值也变了，必须同步写回窗口，
+            // 后面的布局重算与重绘都依赖这个字段。
+            if let Some(data) = get_data(hwnd) {
+                data.render_padding = padding;
+            }
+
             if let Some(data) = get_data(hwnd) {
                 reflow_items(data);
                 recalculate_layout(data, new_w, new_h, new_dpi);
@@ -564,7 +573,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             let title_h = get_data(hwnd)
                 .map(|d| d.title_h)
                 .unwrap_or(scale_for_dpi(40, dpi));
-            let padding = shadow_padding_for_dpi(dpi) * 2;
+            let padding = window_padding(hwnd, dpi) * 2;
             let mmi = &mut *(lparam as *mut MINMAXINFO);
             mmi.pt_min_track_size = POINT {
                 x: scale_for_dpi(200, dpi) + padding,
@@ -1309,7 +1318,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             KillTimer(hwnd, TIMER_ID_LIQUID_GLASS);
             let data_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GridWindowData;
             if !data_ptr.is_null() {
-                let data = Box::from_raw(data_ptr);
+                let mut data = Box::from_raw(data_ptr);
 
                 // 注销 OLE 拖拽目标
                 if !data.drop_target_ptr.is_null() {
@@ -1323,11 +1332,12 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                     }
                 }
 
-                // D2D/DW/WIC 资源通过 Drop 自动释放（windows crate COM 包装器）
+                // 复用的 DIB 渲染后端必须显式释放，
+                // 否则每个销毁的分类框都会漏掉一块 DIB 与一个内存 DC。
+                super::d2d_render::release_grid_dib(&mut data);
+                // DC 渲染目标通过 Drop 释放（windows crate COM 包装器）；
+                // D2D / DirectWrite / WIC 工厂是渲染线程共享的，不能在这里 drop。
                 drop(data.d2d_target);
-                drop(data.d2d_factory);
-                drop(data.dw_factory);
-                drop(data.wic_factory);
 
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                 log::info!("格子窗口 D2D/DW 资源已释放");
@@ -1336,6 +1346,20 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         }
 
         // ===== 默认处理 =====
+        // ===== 异步重绘请求（样式配置变更后由 Tauri 线程 PostMessage 触发）=====
+        WM_USER_GRID_REDRAW => {
+            render_layered_window(hwnd);
+            0
+        }
+
+        // ===== 液态玻璃开关变更：重设留白 + 装配/卸载周期重绘定时器 =====
+        WM_USER_GRID_SYNC_GLASS => {
+            super::grid_window::sync_grid_window_padding(hwnd);
+            super::grid_window::sync_grid_refresh_timer(hwnd);
+            render_layered_window(hwnd);
+            0
+        }
+
         // ===== 延迟打开菜单（由 PostMessage 触发，用于菜单互斥切换）=====
         WM_USER_OPEN_MENU => {
             show_menu_window(hwnd);

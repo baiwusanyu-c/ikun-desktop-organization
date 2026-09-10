@@ -1,7 +1,16 @@
 //! 持久 Tauri WebView 窗口管理。
 //!
-//! 控制面板、创建框和编辑框在整个进程生命周期内复用同一 WebView。
-//! 所有关闭请求都转换为隐藏，后续可由托盘、热键或原生分类框再次打开。
+//! 控制面板、创建框、编辑框和 AI 分类四个窗口在 `tauri.conf.json` 中
+//! 声明为 `"create": false`：尺寸、透明、置顶等属性仍由配置唯一描述，
+//! 但启动时不创建，首次需要显示时才用
+//! `WebviewWindowBuilder::from_config` 按同一份声明拉起。
+//!
+//! 为什么不能预创建：每个 WebView2 窗口会拉起一个独立 renderer 进程，
+//! 四个隐藏窗口连同共享的 browser / gpu / utility 进程共 9 个，
+//! 常驻约 500MB 工作集；而用户绝大多数时间一个面板都不开。
+//!
+//! 创建后的生命周期与改造前一致：所有关闭请求都转换为隐藏，
+//! WebView 不销毁，后续可由托盘、热键或原生分类框再次打开。
 
 use tauri::{Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
@@ -42,6 +51,40 @@ impl ManagedWindow {
     }
 }
 
+/// 按 `tauri.conf.json` 中的声明创建持久窗口。
+///
+/// 直接复用配置对象，不在代码里再抄一份尺寸/透明/置顶参数：
+/// 两边不一致时窗口表现会悄悄变样，而且很难被发现。
+fn build_managed_window(
+    app: &tauri::AppHandle,
+    target: ManagedWindow,
+) -> Result<tauri::WebviewWindow, String> {
+    let label = target.label();
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == label)
+        .ok_or_else(|| format!("tauri.conf.json 缺少窗口声明: '{label}'"))?;
+    log::info!("按需创建持久 WebView 窗口: {label}");
+    tauri::WebviewWindowBuilder::from_config(app, config)
+        .map_err(|error| format!("构造窗口失败: {label}: {error}"))?
+        .build()
+        .map_err(|error| format!("创建窗口失败: {label}: {error}"))
+}
+
+/// 取得持久窗口；尚未创建时按配置声明拉起一个。
+fn ensure_managed_window(
+    app: &tauri::AppHandle,
+    target: ManagedWindow,
+) -> Result<tauri::WebviewWindow, String> {
+    if let Some(window) = app.get_webview_window(target.label()) {
+        return Ok(window);
+    }
+    build_managed_window(app, target)
+}
+
 fn parse_window(label: &str) -> Result<ManagedWindow, String> {
     ManagedWindow::from_label(label).ok_or_else(|| format!("不允许管理未知窗口: '{label}'"))
 }
@@ -54,9 +97,7 @@ pub fn is_persistent_window_label(label: &str) -> bool {
 /// 显示并聚焦持久窗口。
 pub fn show_managed_window(app: &tauri::AppHandle, target: ManagedWindow) -> Result<(), String> {
     let label = target.label();
-    let window = app
-        .get_webview_window(label)
-        .ok_or_else(|| format!("窗口不存在: '{label}'"))?;
+    let window = ensure_managed_window(app, target)?;
     // 默认位置：主屏幕水平垂直居中（每次显示前重置，保证弹窗居中契约）
     if let Err(error) = center_on_primary_monitor(app, &window) {
         log::warn!("窗口主屏幕居中失败: {label}: {error}");
@@ -103,21 +144,25 @@ fn center_on_primary_monitor(
 /// 隐藏持久窗口而不销毁 WebView。
 pub fn hide_managed_window(app: &tauri::AppHandle, target: ManagedWindow) -> Result<(), String> {
     let label = target.label();
-    app.get_webview_window(label)
-        .ok_or_else(|| format!("窗口不存在: '{label}'"))?
+    // 窗口还没被创建过 = 已经处于隐藏态，
+    // 不能为了隐藏反而拉起一个 WebView2 renderer 进程。
+    let Some(window) = app.get_webview_window(label) else {
+        return Ok(());
+    };
+    window
         .hide()
         .map_err(|error| format!("隐藏窗口失败: {label}: {error}"))
 }
 
 /// 切换持久窗口可见状态。
 pub fn toggle_managed_window(app: &tauri::AppHandle, target: ManagedWindow) -> Result<(), String> {
-    let label = target.label();
-    let window = app
-        .get_webview_window(label)
-        .ok_or_else(|| format!("窗口不存在: '{label}'"))?;
+    // 尚未创建等价于不可见，直接走显示分支（内部会按需创建）。
+    let Some(window) = app.get_webview_window(target.label()) else {
+        return show_managed_window(app, target);
+    };
     match window
         .is_visible()
-        .map_err(|error| format!("读取窗口状态失败: {label}: {error}"))?
+        .map_err(|error| format!("读取窗口状态失败: {}: {error}", target.label()))?
     {
         true => hide_managed_window(app, target),
         false => show_managed_window(app, target),
@@ -153,8 +198,11 @@ pub async fn toggle_window(app: tauri::AppHandle, label: String) -> Result<(), S
 #[tauri::command]
 pub async fn is_window_visible(app: tauri::AppHandle, label: String) -> Result<bool, String> {
     let target = parse_window(&label)?;
-    app.get_webview_window(target.label())
-        .ok_or_else(|| format!("窗口不存在: '{}'", target.label()))?
+    // 尚未创建等价于不可见；不能为了回答一个 bool 而拉起 WebView2。
+    let Some(window) = app.get_webview_window(target.label()) else {
+        return Ok(false);
+    };
+    window
         .is_visible()
         .map_err(|error| format!("读取窗口状态失败: {}: {error}", target.label()))
 }
