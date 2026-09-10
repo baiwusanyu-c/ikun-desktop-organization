@@ -723,14 +723,16 @@ pub fn render_layered_window(hwnd: HWND) {
 }
 /// 把液态玻璃表面画到分层窗口上。
 ///
-/// `data.glass_pixels` 是跨帧复用的 GPU 回读缓冲，避免每帧新分配
-/// 一块 1~5MB 的 Vec。
+/// 两块跨帧复用的缓存：
+/// - `data.glass_pixels`：GPU 回读缓冲，避免每帧新分配一块 1~5MB 的 Vec
+/// - `data.glass_bitmap`：D2D 位图，尺寸不变时只做 `CopyFromMemory`
+///   原地更新。旧实现每帧 `CreateBitmap` 一张整窗大小的 GPU 位图
+///   （5 框 × 5fps = 每秒 25 次 1~5MB 纹理创建/销毁），6 倍放大
+///   帧率下实测占整个泄漏的 60%。
 ///
-/// D2D 位图则**必须**每帧重建，不能跨帧缓存：分类框用的是
-/// `ID2D1DCRenderTarget`，每帧都重新 `BindDC` 到 DIB；从它派生并长期
-/// 持有的位图会钉住上一次绑定的后端表面，让 D2D 无法释放。
-/// 实测把位图缓存下来后主进程私有内存反而涨得更快，因此
-/// 这里保留「每帧创建、帧末释放」的原有语义。
+/// **`CopyFromMemory` 的 dstRect 必须显式传**：传 `None` 时从 DC 渲染
+/// 目标派生的位图会返回 `Ok(())` 但实际不写入，表现为玻璃完全
+/// 消失且无任何报错——看返回值和日志都发现不了，只能靠像素级比对。
 #[allow(clippy::too_many_arguments)]
 fn draw_liquid_glass_background(
     data: &mut GridWindowData,
