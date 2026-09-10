@@ -1481,7 +1481,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 super::drag_handler::handle_grid_drag_timer(hwnd);
             }
             if wparam == TIMER_ID_LIQUID_GLASS {
-                render_layered_window(hwnd);
+                super::grid_window::on_grid_refresh_tick(hwnd);
             }
             0
         }

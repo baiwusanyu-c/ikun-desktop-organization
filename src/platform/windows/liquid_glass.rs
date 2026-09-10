@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::ffi::{c_void, CStr};
 use std::mem::size_of;
 use std::slice;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
@@ -52,6 +52,12 @@ const RETRY_DELAY: Duration = Duration::from_secs(3);
 const MAX_SURFACE_CACHE_ENTRIES: usize = 8;
 static FIRST_FRAME_DIAGNOSTIC_LOGGED: AtomicBool = AtomicBool::new(false);
 static NON_BLACK_FRAME_DIAGNOSTIC_LOGGED: AtomicBool = AtomicBool::new(false);
+
+/// 桌面内容代号：任一显示器捕获到新帧就自增。
+///
+/// 分类框的周期 tick 用它判断「玻璃背景是否变了」，
+/// 没变就跳过整帧渲染。
+static DESKTOP_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 const STANDARD_MAP: &[u8] = include_bytes!("embedded/standard.jpg");
 const POLAR_MAP: &[u8] = include_bytes!("embedded/polar.jpg");
@@ -491,6 +497,11 @@ pub fn invalidate_desktop_snapshot() {
     LAST_GOOD_FRAMES.with(|frames| frames.borrow_mut().clear());
 }
 
+/// 读取当前桌面代号（不触发 DXGI 轮询）。
+pub fn desktop_generation() -> u64 {
+    DESKTOP_GENERATION.load(Ordering::Relaxed)
+}
+
 /// 渲染一帧液态玻璃背景，像素直接写进 `out`。
 ///
 /// 返回 `true` 表示 `out` 里已是一张完整的
@@ -869,7 +880,10 @@ impl GlassRenderer {
         }
     }
 
-    fn capture_output(&mut self, index: usize, timeout_ms: u32) -> Result<()> {
+    /// 抓一帧桌面。返回 `true` 表示确实拿到了新帧并已拷进
+    /// `desktop_texture`；`false` 表示桌面自上次以来没变
+    /// （DXGI 返回 WAIT_TIMEOUT）。
+    fn capture_output(&mut self, index: usize, timeout_ms: u32) -> Result<bool> {
         unsafe {
             let output = &mut self.outputs[index];
             let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
@@ -885,20 +899,21 @@ impl GlassRenderer {
                         "[LG] capture WAIT_TIMEOUT, desktop_texture={}",
                         output.desktop_texture.is_some()
                     );
-                    return Ok(());
+                    return Ok(false);
                 }
                 if e.code() == DXGI_ERROR_ACCESS_LOST {
                     // DXGI desktop capture access lost — rebuild duplication instead of
                     // failing the entire renderer. This is common during rapid window resize.
-                    return self.rebuild_duplication(index);
+                    self.rebuild_duplication(index)?;
+                    return Ok(false);
                 }
                 return Err(e.into());
             }
 
             // 所有可能失败的 COM 操作都放在闭包中，确保 Acquire 成功后总会 ReleaseFrame。
-            let capture_result = (|| -> Result<()> {
+            let capture_result = (|| -> Result<bool> {
                 let Some(resource) = resource else {
-                    return Ok(());
+                    return Ok(false);
                 };
                 let texture = resource.cast::<ID3D11Texture2D>()?;
 
@@ -940,7 +955,11 @@ impl GlassRenderer {
                 if let Some(destination) = &output.desktop_texture {
                     self.context.CopyResource(destination, &texture);
                 }
-                Ok(())
+                // 拿到新帧 → 桌面代号前进，分类框的周期 tick 据此
+                // 判断「玻璃背景变了」。只在真正渲染时才会走到这里，
+                // 因此不需要额外的轮询开销。
+                DESKTOP_GENERATION.fetch_add(1, Ordering::Relaxed);
+                Ok(true)
             })();
             let _ = output.duplication.ReleaseFrame();
             capture_result

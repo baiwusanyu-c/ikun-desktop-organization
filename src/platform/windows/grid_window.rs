@@ -246,6 +246,25 @@ pub(crate) struct GridWindowData {
     /// 注意：D2D 位图不能同样跨帧缓存，原因见
     /// `draw_liquid_glass_background` 的注释。
     pub(crate) glass_pixels: Vec<Pixel32>,
+
+    // ===== 周期重绘的变化检测状态 =====
+    //
+    // 液态玻璃不是时间驱动的动画，它只响应三件事：桌面内容变化、
+    // 光标位置（决定高光与弹性形变）、以及分类框自身状态
+    // （后者一律走显式重绘）。下面四个字段让 200ms 定时器
+    // 能判断「这一帧与上一帧完全一样」从而整帧跳过。
+    /// 上一次实际渲染时的光标屏幕坐标
+    pub(crate) last_cursor_x: i32,
+    pub(crate) last_cursor_y: i32,
+    /// 光标静止后经过的 tick 数。
+    ///
+    /// 光标停下后 `light_direction` 仍在按 0.14 的系数逐帧插值收敛，
+    /// 收敛窗口内必须继续渲染，否则形变会停在中途。
+    pub(crate) cursor_idle_ticks: u32,
+    /// 距上一次实际渲染经过的 tick 数（心跳兜底用）
+    pub(crate) ticks_since_render: u32,
+    /// 上一次实际渲染时记录的桌面代号
+    pub(crate) last_desktop_generation: u64,
 }
 
 unsafe impl Send for GridWindowData {}
@@ -356,6 +375,11 @@ impl GridWindowData {
             dib_h: 0,
             render_padding: 0,
             glass_pixels: Vec::new(),
+            last_cursor_x: 0,
+            last_cursor_y: 0,
+            cursor_idle_ticks: 0,
+            ticks_since_render: 0,
+            last_desktop_generation: 0,
         }
     }
 }
@@ -392,6 +416,18 @@ pub(crate) const LIQUID_GLASS_SHADOW_PADDING: i32 = 128;
 /// 大幅减少 GPU 负载和与 GPUI 渲染帧的 RefCell 冲突频率。
 /// 视觉差异极小（液态玻璃效果变化较慢），但 GPU 开销降低约 70%。
 pub(crate) const LIQUID_GLASS_RENDER_INTERVAL_MS: u32 = 200;
+
+/// 光标静止后继续渲染的 tick 数，用于等待高光/形变插值收敛。
+///
+/// `light_direction` 每帧按 `LIGHT_BLEND = 0.14` 向目标靠拢，残差为
+/// `0.86^n`；n=25 时剩 2.2%，肉眼已看不出差别，再渲染只是白白浪费。
+pub(crate) const GLASS_CURSOR_SETTLE_TICKS: u32 = 25;
+
+/// 周期重绘的心跳兜底间隔（tick 数）。
+///
+/// 200ms 一个 tick，10 个 = 2 秒。即使所有变化检测都漏了，
+/// 最坏也只会滞后 2 秒，不会永久停在旧画面。
+pub(crate) const GLASS_FORCE_RENDER_TICKS: u32 = 10;
 
 /// 返回当前 DPI 下液态玻璃外投影所需的物理像素留白（纯 DPI 换算，不看开关）。
 pub(crate) fn glass_shadow_padding_at_dpi(dpi: u32) -> i32 {
@@ -671,6 +707,11 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         dib_h: 0,
         render_padding: shadow_padding,
         glass_pixels: Vec::new(),
+        last_cursor_x: 0,
+        last_cursor_y: 0,
+        cursor_idle_ticks: 0,
+        ticks_since_render: 0,
+        last_desktop_generation: 0,
     });
     let data_ptr = Box::into_raw(data);
     unsafe {
@@ -842,6 +883,69 @@ pub(crate) fn sync_grid_refresh_timer(hwnd: HWND) {
             LIQUID_GLASS_RENDER_INTERVAL_MS,
             std::ptr::null_mut(),
         );
+    }
+}
+
+/// 读取当前光标的屏幕坐标（失败时返回 None）。
+fn cursor_screen_pos() -> Option<(i32, i32)> {
+    let mut cursor = windows::Win32::Foundation::POINT { x: 0, y: 0 };
+    // SAFETY: 只往本地栈上的 POINT 里写
+    let ok = unsafe { windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut cursor) }.is_ok();
+    ok.then_some((cursor.x, cursor.y))
+}
+
+/// 记录一次实际渲染，供下一个 tick 判断画面是否会变。
+///
+/// 无论是定时器还是显式调用触发的渲染都要记一笔，
+/// 否则下一个 tick 会误以为画面还没更新过。
+pub(crate) fn note_grid_frame_rendered(data: &mut GridWindowData) {
+    data.ticks_since_render = 0;
+    data.last_desktop_generation = super::liquid_glass::desktop_generation();
+    if let Some((x, y)) = cursor_screen_pos() {
+        data.last_cursor_x = x;
+        data.last_cursor_y = y;
+    }
+}
+
+/// 200ms 周期 tick：只有画面真的会变才渲染。
+///
+/// 旧实现每个 tick 无条件重绘，5 个框 × 5fps = 每秒 25 帧，
+/// 每帧新建上百个 DirectWrite / D2D 小对象（标题、锁定、更多、
+/// 每个标签各一个 TextLayout）。这些对象都会释放，但高频
+/// 申请/归还会让 Windows 堆的已提交容量单调上涨：
+/// 实测 +36MB/分，并伴随 ~28MB 的堆段提交台阶。
+///
+/// 判据全部保守：任一条件成立就渲染，并且有 2 秒心跳兜底。
+/// 分类框自身状态变化（hover / 选中 / 拖拽 / 滚动 / 重命名 /
+/// 配置变更）一律走显式 `render_layered_window`，不经过本函数。
+pub(crate) fn on_grid_refresh_tick(hwnd: HWND) {
+    let should_render = {
+        let Some(data) = (unsafe { get_data(hwnd) }) else {
+            return;
+        };
+        data.ticks_since_render = data.ticks_since_render.saturating_add(1);
+
+        let cursor_moved = match cursor_screen_pos() {
+            Some((x, y)) => x != data.last_cursor_x || y != data.last_cursor_y,
+            None => false,
+        };
+        if cursor_moved {
+            data.cursor_idle_ticks = 0;
+        } else {
+            data.cursor_idle_ticks = data.cursor_idle_ticks.saturating_add(1);
+        }
+
+        // 代号只在真正渲染时由 capture_output 推进，这里只读不写，
+        // 零开销。桌面变化最坏滞后一个心跳周期（2 秒）。
+        let generation = super::liquid_glass::desktop_generation();
+        cursor_moved
+            || generation != data.last_desktop_generation
+            || data.cursor_idle_ticks < GLASS_CURSOR_SETTLE_TICKS
+            || data.ticks_since_render >= GLASS_FORCE_RENDER_TICKS
+    };
+    // 必须先结束 data 的可变借用：render_layered_window 会重新取一次
+    if should_render {
+        render_layered_window(hwnd);
     }
 }
 
