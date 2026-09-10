@@ -246,6 +246,11 @@ pub(crate) struct GridWindowData {
     /// 注意：D2D 位图不能同样跨帧缓存，原因见
     /// `draw_liquid_glass_background` 的注释。
     pub(crate) glass_pixels: Vec<Pixel32>,
+    /// 玻璃表面对应的 D2D 位图（尺寸变化时重建，
+    /// 否则 CopyFromMemory 原地更新）
+    pub(crate) glass_bitmap: Option<ID2D1Bitmap>,
+    pub(crate) glass_bitmap_w: u32,
+    pub(crate) glass_bitmap_h: u32,
 
     // ===== 周期重绘的变化检测状态 =====
     //
@@ -375,6 +380,9 @@ impl GridWindowData {
             dib_h: 0,
             render_padding: 0,
             glass_pixels: Vec::new(),
+            glass_bitmap: None,
+            glass_bitmap_w: 0,
+            glass_bitmap_h: 0,
             last_cursor_x: 0,
             last_cursor_y: 0,
             cursor_idle_ticks: 0,
@@ -707,6 +715,9 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         dib_h: 0,
         render_padding: shadow_padding,
         glass_pixels: Vec::new(),
+        glass_bitmap: None,
+        glass_bitmap_w: 0,
+        glass_bitmap_h: 0,
         last_cursor_x: 0,
         last_cursor_y: 0,
         cursor_idle_ticks: 0,

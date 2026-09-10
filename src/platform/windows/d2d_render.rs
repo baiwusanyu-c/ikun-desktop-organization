@@ -763,38 +763,70 @@ fn draw_liquid_glass_background(
         return false;
     }
 
-    let bitmap_props = D2D1_BITMAP_PROPERTIES {
-        pixelFormat: D2D1_PIXEL_FORMAT {
-            format: DXGI_FORMAT_B8G8R8A8_UNORM,
-            alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-        },
-        dpiX: 96.0,
-        dpiY: 96.0,
-    };
-    let bitmap = unsafe {
-        target.CreateBitmap(
-            D2D_SIZE_U {
-                width: (width + padding * 2) as u32,
-                height: (height + padding * 2) as u32,
+    let surface_w = (width + padding * 2) as u32;
+    let surface_h = (height + padding * 2) as u32;
+    let pitch = surface_w * std::mem::size_of::<Pixel32>() as u32;
+    let src = data.glass_pixels.as_ptr().cast::<c_void>();
+
+    // 位图跨帧复用：尺寸不变就只做 CopyFromMemory 原地更新。
+    // 旧实现每帧 CreateBitmap 一张整窗口大小的 GPU 位图（5 框 × 5fps
+    // = 每秒 25 次 1~5MB 纹理创建/销毁），6 倍放大帧率下实测
+    // 占整个泄漏的 60%。
+    //
+    // 注意 dstRect 必须显式传：传 None 时从 DC 渲染目标派生的位图会
+    // 返回 Ok 但实际不写入，表现为玻璃完全消失且无任何报错。
+    let mut reused = false;
+    if data.glass_bitmap_w == surface_w && data.glass_bitmap_h == surface_h {
+        if let Some(bitmap) = data.glass_bitmap.as_ref() {
+            let dst = windows::Win32::Graphics::Direct2D::Common::D2D_RECT_U {
+                left: 0,
+                top: 0,
+                right: surface_w,
+                bottom: surface_h,
+            };
+            match unsafe { bitmap.CopyFromMemory(Some(&dst), src, pitch) } {
+                Ok(()) => reused = true,
+                Err(error) => {
+                    log::warn!("玻璃位图原地更新失败，改为重建: {error:?}");
+                    data.glass_bitmap = None;
+                }
+            }
+        }
+    }
+    if !reused {
+        let bitmap_props = D2D1_BITMAP_PROPERTIES {
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
             },
-            Some(data.glass_pixels.as_ptr().cast::<c_void>()),
-            (width + padding * 2) as u32 * std::mem::size_of::<Pixel32>() as u32,
-            &bitmap_props,
-        )
-    };
-    let Ok(bitmap) = bitmap else {
+            dpiX: 96.0,
+            dpiY: 96.0,
+        };
+        let Ok(bitmap) = (unsafe {
+            target.CreateBitmap(
+                D2D_SIZE_U {
+                    width: surface_w,
+                    height: surface_h,
+                },
+                Some(src),
+                pitch,
+                &bitmap_props,
+            )
+        }) else {
+            return false;
+        };
+        data.glass_bitmap = Some(bitmap);
+        data.glass_bitmap_w = surface_w;
+        data.glass_bitmap_h = surface_h;
+    }
+    let Some(bitmap) = data.glass_bitmap.as_ref() else {
         return false;
     };
 
     unsafe {
         target.DrawBitmap(
-            &bitmap,
-            Some(&d2d_rect(
-                0.0,
-                0.0,
-                (width + padding * 2) as f32,
-                (height + padding * 2) as f32,
-            )),
+            bitmap,
+            Some(&d2d_rect(0.0, 0.0, surface_w as f32, surface_h as f32)),
             1.0,
             D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
             None,
