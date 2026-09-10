@@ -243,6 +243,23 @@ pub(crate) fn is_window_occluded(hwnd: HWND, target: &RECT) -> bool {
         return false;
     }
 
+    // 快路径：中心点上最顶层的窗口就是自己 → 什么都没盖住，
+    // 不用枚举全部顶层窗口。
+    //
+    // 分类框被压在 Z-order 最底（HWND_BOTTOM），一旦被别的应用盖住，
+    // WindowFromPoint 就会返回那个应用的窗口。而「没被遮挡」是
+    // 绝大多数时间的常态，没有这个快路径的话每次判定都要把所有
+    // 顶层窗口走一遍并逐个查进程/DWM/样式，实测能吃掉
+    // 百分之几的 CPU。快路径不命中时无条件回退到完整枚举，
+    // 不会漏判。
+    let center = POINT {
+        x: target.left + (target.right - target.left) / 2,
+        y: target.top + (target.bottom - target.top) / 2,
+    };
+    if unsafe { WindowFromPoint(center) } == hwnd {
+        return false;
+    }
+
     let mut state = CollectState {
         self_hwnd: hwnd,
         self_pid: unsafe { GetCurrentProcessId() },
