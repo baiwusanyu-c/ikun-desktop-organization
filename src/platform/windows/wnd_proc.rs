@@ -43,9 +43,29 @@ use crate::box_core::view_engine::get_view_params;
 thread_local! {
     static IN_DRAG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static IN_MOVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };  // 区分拖拽移动和边缘缩放
+
     static PROPOSED_X: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
     static PROPOSED_Y: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
 }
+
+/// 是否处于 Windows 原生移动/缩放模态循环中。
+///
+/// 模态移动期间玻璃必须「零延迟」跟住窗口位置：
+/// 帧间读回上一帧会让背景在快速移动时滑移，
+/// 用户感知为拖拽卡顿（2026-09-14 反馈）。
+pub(crate) fn in_modal_move_or_resize() -> bool {
+    IN_DRAG.with(|c| c.get())
+}
+
+/// 当前正在被模态拖拽的分类框（统计只记它，避免多框串扰）。
+pub(crate) fn drag_hwnd() -> HWND {
+    DRAG_HWND.with(|c| c.get())
+}
+
+thread_local! { static DRAG_HWND: std::cell::Cell<HWND> = const { std::cell::Cell::new(std::ptr::null_mut()) }; }
+thread_local! { static CUSTOM_MOVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+thread_local! { static GRAB_DX: std::cell::Cell<i32> = const { std::cell::Cell::new(0) }; }
+thread_local! { static GRAB_DY: std::cell::Cell<i32> = const { std::cell::Cell::new(0) }; }
 
 fn window_dpi(hwnd: HWND) -> u32 {
     let dpi = unsafe { GetDpiForWindow(hwnd) };
@@ -544,6 +564,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             if let Some(data) = get_data(hwnd) {
                 data.render_padding = padding;
             }
+            super::grid_window::update_dcomp_scale(hwnd);
 
             if let Some(data) = get_data(hwnd) {
                 reflow_items(data);
@@ -587,7 +608,15 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         }
 
         // ===== 鼠标移动：hover 效果 + tooltip + 锁定按钮 + 边缘指示 + 拖拽检测 =====
+        // ===== 标题拖拽：自定义 SetCapture 移动，不走 Windows 模态循环 =====
+        // 模态循环在 125Hz 鼠标消息下会饥饿定时器/渲染（实测快速甩动崩到 3fps）；
+        // 自定义移动每个鼠标消息直接 SetWindowPos + 节流渲染，任意速度不掉帧。
         WM_MOUSEMOVE => {
+            // 模态移动期间鼠标消息 125Hz 打满模态循环：悬停/阈值/残影
+            // 逻辑全部跳过（实测高速甩动时模态循环饥饿、渲染崩到 3fps）。
+            if IN_DRAG.get() {
+                return 0;
+            }
             let (mx, my) = content_point_from_lparam(hwnd, lparam);
 
             // Phase 1: 拖拽阈值检测（超过阈值 → 创建覆盖窗口 + SetCapture）
@@ -1335,6 +1364,12 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 // 复用的 DIB 渲染后端必须显式释放，
                 // 否则每个销毁的分类框都会漏掉一块 DIB 与一个内存 DC。
                 super::d2d_render::release_grid_dib(&mut data);
+                // DComp 视觉兑底摘树：正常路径在 DestroyWindow 之前已摘（此时
+                // dcomp 为 None）；任何绕过 teardown 的销毁路径在这里补摘，
+                // 否则旧视觉冻结在合成树上变成永久残影。
+                if let Some(state) = data.dcomp.take() {
+                    super::grid_window::teardown_dcomp_state(state);
+                }
                 // DC 渲染目标通过 Drop 释放（windows crate COM 包装器）；
                 // D2D / DirectWrite / WIC 工厂是渲染线程共享的，不能在这里 drop。
                 drop(data.d2d_target);
@@ -1361,6 +1396,11 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         }
 
         // ===== 延迟打开菜单（由 PostMessage 触发，用于菜单互斥切换）=====
+        WM_USER_DESTROY_GUIDE => {
+            // 延迟销毁全屏参考线 overlay：释放全屏分层窗与 DIB（约 50MB+）。
+            super::alignment_guide::destroy_guide_overlay();
+            0
+        }
         WM_USER_OPEN_MENU => {
             show_menu_window(hwnd);
             0
@@ -1406,9 +1446,6 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
 
         // ===== 鼠标左键释放：完成自定义拖拽 / 取消拖拽检测 =====
         WM_LBUTTONUP => {
-            if super::drag_handler::end_drag(hwnd) {
-                return 0;
-            }
             if let Some(data) = get_data(hwnd) {
                 if data.marquee_active {
                     let ctrl_down = unsafe { GetAsyncKeyState(VK_CONTROL) } & 0x8000u16 as i16 != 0;
@@ -1481,7 +1518,25 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 super::drag_handler::handle_grid_drag_timer(hwnd);
             }
             if wparam == TIMER_ID_LIQUID_GLASS {
-                super::grid_window::on_grid_refresh_tick(hwnd);
+                {
+                use std::sync::atomic::{AtomicU32, Ordering};
+                static MODAL_TICKS: AtomicU32 = AtomicU32::new(0);
+                if IN_DRAG.get() {
+                    let n = MODAL_TICKS.fetch_add(1, Ordering::Relaxed);
+                    if n % 64 == 0 {
+                        log::warn!("[dragdbg] modal tick #{}", n);
+                    }
+                }
+            }
+            {
+                use std::sync::atomic::{AtomicU32, Ordering};
+                static WT: AtomicU32 = AtomicU32::new(0);
+                let n = WT.fetch_add(1, Ordering::Relaxed);
+                if n % 500 == 0 {
+                    log::warn!("[timerdbg] WM_TIMER #{}", n);
+                }
+            }
+            super::grid_window::on_grid_refresh_tick(hwnd);
             }
             0
         }
@@ -1620,15 +1675,29 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         // ===== Enter move/resize mode: start alignment detection =====
         WM_ENTERSIZEMOVE => {
             IN_DRAG.set(true);
+            DRAG_HWND.with(|c| c.set(hwnd));
             super::alignment_guide::on_enter_size_move(hwnd);
+            // 进入 Windows 的移动/缩放模态循环：把周期重绘切到高频档。
+            //
+            // 模态循环自己会派发 WM_TIMER，所以这里换间隔就够了，
+            // 不需要另开线程。静止档 200ms 在拖拽时意味着玻璃只有
+            // 5fps —— 那是「移动分类框时玻璃卡顿」的直接成因，
+            // 与单帧耗时无关：单帧再快， tick 不来就没有新画面。
+            super::grid_window::enter_drag_refresh(hwnd);
             0
         }
 
         // ===== Exit move/resize mode: clear guide lines =====
         WM_EXITSIZEMOVE => {
             IN_DRAG.set(false);
+            DRAG_HWND.with(|c| c.set(std::ptr::null_mut()));
             IN_MOVE.set(false); // 重置移动标记
             super::alignment_guide::on_exit_size_move(hwnd);
+            // 必须与 WM_ENTERSIZEMOVE 严格配对：漏掉这一步分类框会
+            // 永久以 60Hz 重绘，画面看不出问题，但 CPU 与驱动内存
+            // 常驻高水位都下不来，而且不会有任何报错。
+            super::grid_window::exit_drag_refresh(hwnd);
+            super::mem_probe::flush_drag_stats();
             // Save layout after move/resize
             super::drag_handler::save_config();
             0
@@ -1644,6 +1713,26 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 PROPOSED_X.set(rect.left);
                 PROPOSED_Y.set(rect.top);
                 super::alignment_guide::on_moving(hwnd, rect);
+            }
+            // 玻璃同步渲染：模态循环里 WM_TIMER 会被鼠标消息流饥饿
+            // （2026-09-15 实测帧间隔 24-42ms 且掉帧），改为随 WM_MOVING
+            // 节流 8ms 同步渲染，玻璃与光标移动 1:1 跟手。
+            {
+                use std::time::Instant;
+                thread_local! {
+                    static LAST_MOVE_RENDER: std::cell::Cell<Option<Instant>> =
+                        const { std::cell::Cell::new(None) };
+                }
+                let now = Instant::now();
+                let due = LAST_MOVE_RENDER.with(|c| match c.get() {
+                    None => true,
+                    Some(t) => now.duration_since(t).as_millis() >= 8,
+                });
+                if due {
+                    LAST_MOVE_RENDER.with(|c| c.set(Some(now)));
+                    super::d2d_render::render_layered_window_glass_only(hwnd);
+                    super::mem_probe::record_drag_frame(hwnd as usize, true, now, now.elapsed());
+                }
             }
             0
         }

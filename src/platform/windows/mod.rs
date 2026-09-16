@@ -14,6 +14,7 @@
 //! - `icon_manager`: 逐图标管理（LVM_SETITEMPOSITION 跨进程操作）
 //! - `shell_menu`: Shell 上下文菜单 + 注册表管理
 //! - `sys_tray`: 系统托盘
+//! - `mem_probe`: 内存占用分解探针（只读诊断）
 
 pub mod alignment_guide;
 pub mod app_icon;
@@ -36,6 +37,7 @@ pub mod icon_extract;
 pub mod icon_hider;
 pub mod icon_manager;
 pub mod liquid_glass;
+pub(crate) mod mem_probe;
 mod menu_window;
 mod monitor_utils;
 pub mod multi_select;

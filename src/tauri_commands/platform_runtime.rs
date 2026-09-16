@@ -421,6 +421,23 @@ impl TauriRuntime {
         }
 
         log::info!("[TauriRuntime] Restored {}/{} boxes", created, boxes.len());
+
+        // 诊断开关：IKUN_DEBUG_RECREATE=1 时，启动恢复后额外做一轮
+        // 「销毁全部 + 重建」，用于实证 DComp 旧视觉残影是否还会出现。
+        // 默认关闭；开启时也只在启动阶段多一轮重建，不影响功能。
+        #[cfg(windows)]
+        if std::env::var("IKUN_DEBUG_RECREATE")
+            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+        {
+            static RECREATE_ONCE: std::sync::Once = std::sync::Once::new();
+            if !RECREATE_ONCE.is_completed() {
+                RECREATE_ONCE.call_once(|| {});
+                log::warn!("[diag] IKUN_DEBUG_RECREATE=1: 额外执行一轮销毁全部 + 重建");
+                destroy_all_grid_windows();
+                self.restore_layout(app);
+            }
+        }
     }
 
     /// Poll tick - returns (changed, quit)
@@ -656,6 +673,13 @@ pub fn start_platform_runtime(app: tauri::AppHandle, runtime: SharedTauriRuntime
 
         // 退出 Tauri 应用
         log::info!("[TauriRuntime] 调用 app_handle.exit(0)");
+        // 退出看门狗：清理若卡在某个等待（模态循环/跨线程同步），3 秒后强制结束进程。
+        // 尸尸进程会长期占着 DXGI 桌面复制，导致后续所有实例玻璃捕获被拒绝、
+        // 退化半透明白背景且拖拽不跟随（2026-09-16 实测案发现）。
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            std::process::exit(0);
+        });
         app_handle.exit(0);
     });
 }

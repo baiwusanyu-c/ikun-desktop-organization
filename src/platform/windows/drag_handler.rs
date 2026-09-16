@@ -194,7 +194,12 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
 
     let item_idx = data.drag_item_index;
     data.drag_active = false;
+    super::mem_probe::flush_drag_stats();
     data.drag_item_index = -1;
+    // 物品拖拽结束同样释放全屏参考线 overlay。
+    unsafe {
+        PostMessageW(hwnd, WM_USER_DESTROY_GUIDE, 0, 0);
+    }
     // 保存拖拽覆盖可视化状态（在清除前），供 handle_same_box_drop 使用
     let saved_insert_col = data.drag_over_insert_col;
     let saved_insert_row = data.drag_over_insert_row;

@@ -21,7 +21,26 @@ use std::sync::Mutex;
 // D2D / DirectWrite / WIC 工厂已收敛到 `render_devices` 按渲染线程共享，
 // 窗口只保留自己的 DC 渲染目标与图标位图缓存。
 use windows::Win32::Foundation::HWND as WindowsHwnd;
-use windows::Win32::Graphics::Direct2D::{ID2D1Bitmap, ID2D1DCRenderTarget};
+use windows::Win32::Graphics::Direct2D::Common::{
+    D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT,
+};
+use windows::Win32::Graphics::Direct2D::{
+    ID2D1Bitmap, ID2D1Bitmap1, ID2D1DCRenderTarget, ID2D1DeviceContext,
+};
+use windows::Win32::Graphics::Direct2D::{
+    D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
+};
+use windows::Win32::Graphics::DirectComposition::{
+    IDCompositionTarget, IDCompositionVisual, IDCompositionVisual2, IDCompositionVisual3,
+};
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_UNKNOWN,
+    DXGI_SAMPLE_DESC,
+};
+use windows::Win32::Graphics::Dxgi::{
+    IDXGISurface, IDXGISwapChain1, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
+    DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT,
+};
 use windows::Win32::UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE};
 
 // ===== 业务层导入 =====
@@ -113,6 +132,59 @@ pub struct GridCreateParams {
 }
 
 /// 格子窗口内部数据（存储在 GWLP_USERDATA）
+/// 一个分类框的 DirectComposition 呈现栈。
+///
+/// # 为什么要换掉 `UpdateLayeredWindow`
+///
+/// 分层窗口的画面必须来自 CPU 侧的 GDI DIB，于是玻璃每帧都要
+/// GPU 渲染 → `Map` 阻塞等 GPU 排空 → 逐行 memcpy 回 CPU → 合成
+/// → `UpdateLayeredWindow` 再交给 DWM。实测这条链占单帧 20ms 里的
+/// 16ms，而真正的模糊 + 着色只有 0.44ms —— 97% 的时间在搬像素。
+///
+/// DComp 让画面**全程留在 GPU**：玻璃输出纹理零拷贝包成 D2D 位图，
+/// 与内容层一起在合成交换链的后缓冲上合成，`Present` 交给 DWM。
+///
+/// # 逐像素 alpha 为什么不会丢
+///
+/// 交换链用 `DXGI_ALPHA_MODE_PREMULTIPLIED` 创建，由 DWM 做预乘
+/// source-over 合成 —— 与 `UpdateLayeredWindow` 的 `AC_SRC_ALPHA`
+/// 是同一套语义。玻璃着色器输出的本来就是预乘 alpha
+/// （`PSMain` 末尾 `return float4(col*glassAlpha, alpha)`），
+/// 所以 128px 外投影那一圈渐变 alpha 照常成立，圆角也不会发黑边。
+pub(crate) struct DcompState {
+    /// DWM 合成目标（绑定到本窗口 HWND）
+    pub target: IDCompositionTarget,
+    /// 承载交换链的视觉节点
+    pub visual: IDCompositionVisual2,
+    /// 合成交换链（预乘 alpha + flip 模型）
+    pub swapchain: IDXGISwapChain1,
+    /// 共享设备上的 D2D 设备上下文。每窗口一个：
+    /// `ID2D1DeviceContext` 同一时刻只能 `SetTarget` 一个目标，
+    /// 多窗口共用会互相踩画面。
+    pub context: ID2D1DeviceContext,
+    /// 当前后缓冲的 D2D 目标位图；`ResizeBuffers` 之后必须重建，
+    /// 否则会继续画进已经失效的旧缓冲（表现为画面冻住且不报错）。
+    pub backbuffer: Option<ID2D1Bitmap1>,
+    /// 内容层在**共享设备**上的位图，只在内容真的变了时重新上传。
+    ///
+    /// 内容层仍由 `ID2D1DCRenderTarget` 以 GDI 兼容方式光栅化到
+    /// `content_dib`（文字 hinting 与改造前逐字节一致），再上传到这里。
+    /// 上传只发生在内容变化时，稳态下每帧零上传。
+    ///
+    /// 类型是 `ID2D1Bitmap1`：它由 `ID2D1DeviceContext::CreateBitmap`
+    /// 从内容层 DIB 上传而来，那个重载收 `D2D1_BITMAP_PROPERTIES1`
+    /// 并返回 v1+ 位图（v1 的 `ID2D1RenderTarget::CreateBitmap` 才返回
+    /// `ID2D1Bitmap`，两者签名不同，混用编译不过）。
+    pub content: Option<ID2D1Bitmap1>,
+    pub content_w: u32,
+    pub content_h: u32,
+    /// 交换链当前尺寸（物理像素），与窗口外框一致
+    pub width: u32,
+    pub height: u32,
+    /// 已成功 Present 的帧数，用于周期性的 DWM 合成自证
+    pub presented_frames: u64,
+}
+
 pub(crate) struct GridWindowData {
     pub(crate) title: String,
     pub(crate) items: Vec<GridFileItem>,
@@ -226,10 +298,58 @@ pub(crate) struct GridWindowData {
     pub(crate) dib_dc: HDC,
     /// `dib_dc` 中被替换掉的默认位图，释放前需先还原
     pub(crate) dib_old_bmp: HGDIOBJ,
+    /// `dib_section` 的像素首地址（预乘 BGRA、自上而下、行距 = dib_w × 4）。
+    ///
+    /// 存下来是为了让液态玻璃能**直接 memcpy 进主 DIB**：玻璃回读缓冲
+    /// `glass_pixels` 与本 DIB 的尺寸、格式、行距逐字节一致，直写即可，
+    /// 不必再上传成 D2D 位图做全窗软件混合。详见
+    /// `d2d_render::render_glass_into_dib`。
+    pub(crate) dib_bits: *mut Pixel32,
     /// 当前 DIB 宽度（物理像素），0 表示尚未创建
     pub(crate) dib_w: i32,
     /// 当前 DIB 高度（物理像素），0 表示尚未创建
     pub(crate) dib_h: i32,
+
+    // ===== DirectComposition 呈现路径 =====
+    /// `Some` 表示这个窗口走 DComp 合成交换链呈现；
+    /// `None` 表示退回 `WS_EX_LAYERED` + `UpdateLayeredWindow`。
+    ///
+    /// 两条路径互斥，在窗口创建时一次性定下来，运行期不切换：
+    /// 它们要求的扩展窗口样式不同（`WS_EX_NOREDIRECTIONBITMAP` vs
+    /// `WS_EX_LAYERED`），而扩展样式改不了已创建窗口的重定向表面行为。
+    pub(crate) dcomp: Option<Box<DcompState>>,
+
+    // ===== 内容层缓存 =====
+    //
+    // 一帧分类框画面 = 玻璃背景（每帧都在变）+ 内容层（图标/标签/标题/
+    // 按钮/选中态）。实测一帧 27.6ms 里有 **17.4ms（63%）** 花在内容层的
+    // 软件光栅化上：DC 渲染目标的后端是 GDI DIB，没有硬件加速的余地，
+    // 而每个标签要画 5 次 DrawTextLayout（4 方向阴影描边 + 正文），
+    // 5 个条目就是 25 次字形光栅化。
+    //
+    // 但用户点名的两个高频场景 —— **拖拽分类框**和**动态壁纸** ——
+    // 内容层一个像素都没变，只有玻璃在变。把内容层缓存下来，
+    // 每帧就只剩「画玻璃 + 合成一张位图」两个 op。
+    //
+    // 关键：这条路**不换渲染目标类型、不换字体光栅化方式**，
+    // 内容层仍然由同一个软件光栅化器画进同一格式的 DIB，
+    // 因此文字与图标可以逐像素不变（由 A/B 自检验证，不靠肉眼）。
+    /// 内容层 DIB（透明底，只画玻璃之上的东西）
+    pub(crate) content_dib: HBITMAP,
+    /// 选中 `content_dib` 的内存 DC
+    pub(crate) content_dc: HDC,
+    /// `content_dc` 中被替换掉的默认位图，释放前需先还原
+    pub(crate) content_old_bmp: HGDIOBJ,
+    /// 内容层 DIB 的像素首地址（拷成 D2D 位图时用）
+    pub(crate) content_bits: *mut Pixel32,
+    pub(crate) content_w: i32,
+    pub(crate) content_h: i32,
+    /// 内容层的 D2D 位图，每帧合成时只 DrawBitmap 一次
+    pub(crate) content_bitmap: Option<ID2D1Bitmap>,
+    /// 画进内容层时的状态指纹；不一致就必须重画
+    pub(crate) content_fingerprint: u64,
+    /// 内容层当前是否可用（尺寸匹配且已画过）
+    pub(crate) content_valid: bool,
 
     /// 当前生效的外投影留白（物理像素）。
     ///
@@ -261,6 +381,11 @@ pub(crate) struct GridWindowData {
     /// 上一次实际渲染时的光标屏幕坐标
     pub(crate) last_cursor_x: i32,
     pub(crate) last_cursor_y: i32,
+    /// 光标离开本框后经过的 tick 数。
+    ///
+    /// 用来决定「光标移动还要不要触发本框重绘」：着色器的高光/形变
+    /// 只对本框内的光标有反应，光标在别处移动时本框画出来逐像素相同。
+    pub(crate) cursor_left_ticks: u32,
     /// 光标静止后经过的 tick 数。
     ///
     /// 光标停下后 `light_direction` 仍在按 0.14 的系数逐帧插值收敛，
@@ -381,11 +506,22 @@ impl GridWindowData {
             renaming_item_index: -1,
             d2d_target: None,
             icon_bitmap_cache: HashMap::new(),
+            dcomp: None,
             dib_section: std::ptr::null_mut(),
+            dib_bits: std::ptr::null_mut(),
             dib_dc: std::ptr::null_mut(),
             dib_old_bmp: std::ptr::null_mut(),
             dib_w: 0,
             dib_h: 0,
+            content_dib: std::ptr::null_mut(),
+            content_dc: std::ptr::null_mut(),
+            content_old_bmp: std::ptr::null_mut(),
+            content_bits: std::ptr::null_mut(),
+            content_w: 0,
+            content_h: 0,
+            content_bitmap: None,
+            content_fingerprint: 0,
+            content_valid: false,
             render_padding: 0,
             glass_pixels: Vec::new(),
             glass_bitmap: None,
@@ -393,6 +529,7 @@ impl GridWindowData {
             glass_bitmap_h: 0,
             last_cursor_x: 0,
             last_cursor_y: 0,
+            cursor_left_ticks: 0,
             cursor_idle_ticks: 0,
             ticks_since_render: 0,
             last_desktop_generation: 0,
@@ -428,13 +565,43 @@ static CLASS_REGISTERED: Mutex<bool> = Mutex::new(false);
 ///
 /// 128px 可覆盖最强亮区模式下约 3 倍高斯标准差加垂直偏移，避免投影在
 /// `WS_EX_LAYERED` 窗口边界被矩形裁切。
-pub(crate) const LIQUID_GLASS_SHADOW_PADDING: i32 = 128;
+pub(crate) const LIQUID_GLASS_SHADOW_PADDING: i32 = 48;
+// 旧值 128 逻辑像素。2026-09-14 对 d09da5b1 参照帧的 alpha 剖面实测：
+// 外投影在内容边缘外 ~96 物理像素处 alpha 已 ≤ 1/255，
+// 128 逻辑（192 DPI 下 256 物理）的留白绝大部分是全透明死区，
+// 却让每帧 ULW 提交面/DIB/暂存按 (content+512)^2 付钱。
+// 收到 48 逻辑（96 物理）后提交面积 -40%（DWM 带宽与拖拽跟手感直接相关），
+// 视觉上裁掉的只是 alpha≤1/255 的不可见部分。
 /// 液态玻璃渲染定时器间隔（毫秒）
 ///
 /// 从原始的 33ms (~30 FPS) 降低到 200ms (~10 FPS)，
 /// 大幅减少 GPU 负载和与 GPUI 渲染帧的 RefCell 冲突频率。
 /// 视觉差异极小（液态玻璃效果变化较慢），但 GPU 开销降低约 70%。
-pub(crate) const LIQUID_GLASS_RENDER_INTERVAL_MS: u32 = 200;
+pub(crate) const LIQUID_GLASS_RENDER_INTERVAL_MS: u32 = 40;
+
+/// 拖拽 / 缩放分类框期间的重绘间隔（毫秒）。
+///
+/// # 为什么必须单独给拖拽一条高频路径
+///
+/// 静止时用 200ms（5fps）是划算的：桌面没变，画了也看不出差别。
+/// 但拖拽时**窗口位置每帧都在变**，玻璃要重新采样新位置背后的桌面，
+/// 5fps 的上限与渲染快慢无关 —— 即使单帧耗时降到 0，拖拽照样只有
+/// 5 帧。用户看到的「移动分类框时玻璃卡顿」根因就在这里，而不在
+/// 单帧耗时。
+///
+/// 16ms ≈ 60Hz，与 DWM 合成节奏对齐；Windows 定时器默认粒度约
+/// 15.6ms，因此实际 tick 落在 15.6~31.2ms，即 32~64fps，
+/// 稳超「至少 25 帧」的下限。
+///
+/// # 为什么不会把 CPU 打满
+///
+/// 只有**正在被拖动的那一个框**会走到渲染：拖拽时光标必然落在它
+/// 内部（`cursor_relevant = true`），`decide_tick_action` 判为
+/// `Render(Cursor)`；其余框光标不相关、桌面也没变，判为
+/// `AdvanceLightOnly`，只推进一次高光插值就返回，不进管线。
+/// 鼠标按住不动时 `cursor_moved` 转假，超过 `GLASS_CURSOR_SETTLE_TICKS`
+/// 后连被拖的框也转 `SkipIdle`，不会空转。
+pub(crate) const LIQUID_GLASS_DRAG_INTERVAL_MS: u32 = 16;
 
 /// 光标静止后继续渲染的 tick 数，用于等待高光/形变插值收敛。
 ///
@@ -444,16 +611,48 @@ pub(crate) const GLASS_CURSOR_SETTLE_TICKS: u32 = 25;
 
 /// 周期重绘的心跳兜底间隔（tick 数）。
 ///
-/// 200ms 一个 tick，10 个 = 2 秒。即使所有变化检测都漏了，
-/// 最坏也只会滞后 2 秒，不会永久停在旧画面。
-pub(crate) const GLASS_FORCE_RENDER_TICKS: u32 = 10;
+/// 200ms 一个 tick，50 个 = 10 秒。
+///
+/// # 为什么从 2 秒放宽到 10 秒
+///
+/// 心跳是**兜底**：桌面脏矩形、光标移动、光标静止后的插值收敛、
+/// 分类框自身状态变化都各有独立且更灵敏的触发路径。静止桌面上
+/// 心跳渲染出来的那一帧与上一帧逐像素相同，纯属白干。
+///
+/// 但每一次白干都要走完整条管线：DXGI 取帧 → D2D 模糊 → D3D 着色 →
+/// 暂存纹理回读 → `CopyFromMemory` → 整窗 DIB 重画 → `UpdateLayeredWindow`。
+/// 实测（`[内存分解]` 日志）这条管线在显卡用户态驱动里留下的已提交内存
+/// 以 **~1.2MB/分** 缓慢爬升，而同一时刻 Rust 堆活跃字节恒定在 6.4MB、
+/// 块数一动不动 —— 涨的部分完全与渲染次数成正比。
+/// 5 个框 × 每 2 秒一次 = 每秒 2.5 次白干，一天 21 万次。
+///
+/// 放宽到 10 秒后兜底渲染降到 1/5。代价只存在于「所有变化检测同时漏报」
+/// 的假想场景：那时画面滞后从 2 秒变成 10 秒。正常使用中一帧都不会多等。
+pub(crate) const GLASS_FORCE_RENDER_TICKS: u32 = 250;
+
+/// 单位是 tick（LIQUID_GLASS_RENDER_INTERVAL_MS = 40ms）：250 tick = 10 秒。
+/// 不要把它改回 1：那是饱和压测值，会让静止/遮挡桌面每 40ms
+/// 白烧一整条渲染管线，驱动提交内存按渲染次数正比爬升。
 
 /// 被判定为遮挡后仍然强制渲染的心跳间隔（tick 数）。
 ///
 /// 遮挡判定是启发式的，万一误报（比如某个窗口报告可见
 /// 但实际没画出来），5 秒一次的自愈心跳能保证分类框
 /// 不会永久冻在旧画面上。
-pub(crate) const GLASS_OCCLUDED_HEARTBEAT_TICKS: u32 = 25;
+pub(crate) const GLASS_OCCLUDED_HEARTBEAT_TICKS: u32 = 125;
+
+/// 单位是 tick：125 tick = 5 秒。同上，不要改回 1。
+
+/// 光标离开本框后还要继续渲染的 tick 数。
+///
+/// 着色器里 `mouse_offset` 与 `elasticity` 都只在「光标在本框内」时
+/// 才取 `light_direction`，光标一离开，输出立刻变成无高光版本 ——
+/// 所以只需要再画一帧就能把残留的高光/形变覆盖掉。给 3 个 tick 的
+/// 余量是为了容忍光标在框边缘来回抖动。
+///
+/// 注意这与 `GLASS_CURSOR_SETTLE_TICKS`（25）不是一回事：后者是
+/// 「光标停在框内不动时，等高光插值收敛完」，那期间**必须**持续渲染。
+pub(crate) const CURSOR_LEAVE_SETTLE_TICKS: u32 = 3;
 
 /// 返回当前 DPI 下液态玻璃外投影所需的物理像素留白（纯 DPI 换算，不看开关）。
 pub(crate) fn glass_shadow_padding_at_dpi(dpi: u32) -> i32 {
@@ -593,10 +792,38 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
     let initial_x = params.x - initial_padding;
     let initial_y = params.y - initial_padding;
 
-    // 1. 创建主窗口（WS_EX_LAYERED 用于 UpdateLayeredWindow 逐像素 alpha）
+    // ===== 呈现路径在建窗之前就必须定下来 =====
+    //
+    // `WS_EX_NOREDIRECTIONBITMAP`（DComp）与 `WS_EX_LAYERED`（UpdateLayeredWindow）
+    // 互斥，而扩展样式决定了 DWM 要不要给窗口分配重定向表面 ——
+    // **创建之后再改不生效**。所以先把最容易失败的一步（合成交换链）
+    // 做掉：成功才用 DComp 样式建窗，失败就直接走分层窗口，
+    // 绝不会出现「按 DComp 建了窗、装配却失败 → 窗口彻底看不见」。
+    // DirectComposition 目前用环境变量 IKUN_DCOMP=1 显式开启。
+    //
+    // 为什么默认关：DComp 换掉了整个呈现模型（WS_EX_LAYERED + UpdateLayeredWindow
+    // → WS_EX_NOREDIRECTIONBITMAP + 合成交换链）。实测它把单帧从 9.91ms
+    // 压到 1.16ms（8.5 倍）、内存再省 52MB，但它**必须肉眼确认过**才能当默认 ——
+    // 一旦装配或合成有问题，分类框会整块消失且日志里只有 Present 成功。
+    // 当前这台机器的分类框落在 192 DPI 主屏上，而 192 DPI 的尺寸自适应
+    // 有个已知遗留 bug（分类框被压成细条），会挡住我对 DComp 的目视验证，
+    // 所以先关着，等验证过再翻默认。
+    let dcomp_pre = if dcomp_enabled() {
+        create_dcomp_swapchain(initial_w as u32, initial_h as u32)
+    } else {
+        None
+    };
+    let used_dcomp_style = dcomp_pre.is_some();
+    let ex_style = if used_dcomp_style {
+        WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW
+    } else {
+        WS_EX_LAYERED | WS_EX_TOOLWINDOW
+    };
+
+    // 1. 创建主窗口
     let hwnd = unsafe {
         CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TOOLWINDOW,
+            ex_style,
             CLASS_NAME.as_ptr(),
             std::ptr::null(),
             WS_POPUP | WS_THICKFRAME,
@@ -615,7 +842,14 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         anyhow::bail!("CreateWindowExW 创建格子窗口失败");
     }
 
-    if let Err(error) =
+    // 诊断开关：IKUN_ALLOW_CAPTURE=1 时跳过捕获排除，便于用外部截图工具核对分类框真实画面。
+    // 默认不开启，行为与之前完全一致（防止液态玻璃拍到自己形成递归画面）。
+    let allow_capture = std::env::var("IKUN_ALLOW_CAPTURE")
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    if allow_capture {
+        log::warn!("[diag] IKUN_ALLOW_CAPTURE=1: 分类框不排除捕获（仅限画面核对使用）");
+    } else if let Err(error) =
         unsafe { SetWindowDisplayAffinity(WindowsHwnd(hwnd), WDA_EXCLUDEFROMCAPTURE) }
     {
         log::warn!("分类框捕获排除设置失败，液态玻璃可能出现递归画面: {error}");
@@ -676,6 +910,27 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         );
     }
 
+    // ===== DComp 第二阶段：把交换链挂到 DWM 合成树上 =====
+    //
+    // 交换链是按初始 DPI（96）建的，attach 里会对齐到窗口最终外框尺寸。
+    // 装配失败就把窗口改回分层样式，让 UpdateLayeredWindow 兜底 ——
+    // 否则窗口既没有重定向表面也没有视觉树，会一直空着。
+    // 同 hwnd 若还挂着旧视觉（上次未走 destroy 的残留），先摘掉，
+    // 否则新旧两个视觉叠在一起就是重影。
+    teardown_dcomp(hwnd);
+    let dcomp_state = dcomp_pre.and_then(|(swapchain, context)| {
+        attach_dcomp(
+            hwnd,
+            swapchain,
+            context,
+            outer_w.max(0) as u32,
+            outer_h.max(0) as u32,
+        )
+    });
+    if used_dcomp_style && dcomp_state.is_none() {
+        fallback_to_layered(hwnd);
+    }
+
     // 2. 存储窗口数据（含 D2D/DW 设备缓存）
     let data = Box::new(GridWindowData {
         edit_box_callback: params.edit_box_callback,
@@ -726,11 +981,22 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         d2d_target: None,
         icon_bitmap_cache: HashMap::new(),
         // DIB 后端由 render_layered_window 按需创建并长期复用
+        dcomp: dcomp_state,
         dib_section: std::ptr::null_mut(),
+        dib_bits: std::ptr::null_mut(),
         dib_dc: std::ptr::null_mut(),
         dib_old_bmp: std::ptr::null_mut(),
         dib_w: 0,
         dib_h: 0,
+        content_dib: std::ptr::null_mut(),
+        content_dc: std::ptr::null_mut(),
+        content_old_bmp: std::ptr::null_mut(),
+        content_bits: std::ptr::null_mut(),
+        content_w: 0,
+        content_h: 0,
+        content_bitmap: None,
+        content_fingerprint: 0,
+        content_valid: false,
         render_padding: shadow_padding,
         glass_pixels: Vec::new(),
         glass_bitmap: None,
@@ -738,6 +1004,7 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         glass_bitmap_h: 0,
         last_cursor_x: 0,
         last_cursor_y: 0,
+        cursor_left_ticks: 0,
         cursor_idle_ticks: 0,
         ticks_since_render: 0,
         last_desktop_generation: 0,
@@ -837,7 +1104,68 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
 ///
 /// 从全局列表中移除并销毁 Win32 窗口。
 /// WM_DESTROY 会自动释放 GridWindowData（图标句柄、D2D/DW 资源）。
+/// 把分类框从 DWM 合成树上摘下来。
+///
+/// # 为什么必须显式摘
+///
+/// `IDCompositionTarget::SetRoot` 之后视觉就挂在 DWM 的合成树上了；
+/// 仅仅 drop 掉 Rust 侧的 COM 引用**不会**把它从树上摘下来。
+/// 窗口被销毁又重建（配置重载 / 刷新）时，旧视觉仍留在树上、
+/// 新视觉再挂一个 → 同一个位置出现两份画面（重影 + 错位白条），
+/// 这正是之前目视看到的缺陷。所以销毁前必须 SetRoot(None) + Commit。
+/// DPI 变化后同步视觉缩放（表面像素密度不变，变的是 DIP ↔ 物理像素比例）。
+pub(crate) fn update_dcomp_scale(hwnd: HWND) {
+    let Some(data) = (unsafe { get_data(hwnd) }) else {
+        return;
+    };
+    let Some(state) = data.dcomp.as_ref() else {
+        return;
+    };
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    let dpi = if dpi > 0 { dpi } else { 96 };
+    let scale = 96.0 / dpi as f32;
+    let matrix = windows_numerics::Matrix3x2 {
+        M11: scale,
+        M12: 0.0,
+        M21: 0.0,
+        M22: scale,
+        M31: 0.0,
+        M32: 0.0,
+    };
+    if let Ok(v1) = windows::core::Interface::cast::<IDCompositionVisual>(&state.visual) {
+        let _ = unsafe { v1.SetTransform2(&matrix) };
+        if let Some(dcomp) = super::render_devices::dcomp_device() {
+            unsafe {
+                let _ = dcomp.Commit();
+            }
+        }
+    }
+}
+
+pub(crate) fn teardown_dcomp(hwnd: HWND) {
+    // 从注册表里取出（不 drop），摘树后再让它自然释放
+    // dcomp 存在 GridWindowData（挂在 GWLP_USERDATA）里，从那里取走所有权
+    let taken = unsafe { get_data(hwnd) }.and_then(|data| data.dcomp.take());
+    let Some(state) = taken else { return };
+    teardown_dcomp_state(state);
+}
+
+/// 把一份 DComp 状态从 DWM 合成树上摘下来。
+///
+/// WM_DESTROY 兑底路径拿到的是 GridWindowData 里的所有权，不经 hwnd 查表，
+/// 所以抆树动作单独抽出来两边共用。
+pub(crate) fn teardown_dcomp_state(state: Box<DcompState>) {
+    unsafe {
+        let _ = state.target.SetRoot(None::<&IDCompositionVisual>);
+        if let Some(dcomp) = super::render_devices::dcomp_device() {
+            let _ = dcomp.Commit();
+        }
+    }
+    // state 在此 drop，释放 COM 引用
+}
+
 pub fn destroy_grid_window(hwnd: HWND) {
+    teardown_dcomp(hwnd);
     // 从全局列表移除
     if let Ok(mut grids) = GRID_WINDOWS.lock() {
         grids.retain(|g| g.hwnd != hwnd);
@@ -852,11 +1180,23 @@ pub fn destroy_grid_window(hwnd: HWND) {
 
 /// 销毁所有格子窗口
 pub fn destroy_all_grid_windows() {
-    if let Ok(mut grids) = GRID_WINDOWS.lock() {
-        for grid in grids.drain(..) {
-            unsafe {
-                DestroyWindow(grid.hwnd);
-            }
+    // 先收集句柄再逐个销毁：DestroyWindow 会同步派发 WM_DESTROY，
+    // 不能在持着 GRID_WINDOWS 锁时调任何可能再次锁它的路径。
+    let hwnds: Vec<HWND> = match GRID_WINDOWS.lock() {
+        Ok(mut grids) => grids.drain(..).map(|grid| grid.hwnd).collect(),
+        Err(error) => {
+            log::warn!("无法锁定格子窗口列表，跳过销毁: {error}");
+            return;
+        }
+    };
+    for hwnd in hwnds {
+        // 必须先摘掉 DComp 视觉再销窗：否则旧视觉冻结在 DWM 合成树上，
+        // 每个框留一张「白顶条 + 半透明框体 + 旧图标」的残影
+        // （见 teardown_dcomp 注释）。之前这里直接 DestroyWindow，是
+        // 每个分类框背一个白顶方块的根因。
+        teardown_dcomp(hwnd);
+        unsafe {
+            DestroyWindow(hwnd);
         }
     }
     log::info!("所有格子窗口已销毁");
@@ -899,23 +1239,588 @@ pub fn rerender_all_grid_windows() {
     }
 }
 
+/// 是否启用 DirectComposition 呈现。
+///
+/// **默认关闭**，用 `IKUN_DCOMP=1` 开启。
+///
+/// 目前 DComp 路径有一个已确认的视觉缺陷：每个分类框会多画一块
+/// 错位的半透明面板 + 一条白色顶条（玻璃与内容层落点不一致 / 重复合成）。
+/// 在修好并目视确认前不能当默认，否则用户看到的就是坏画面。
+/// 性能收益是真实的（单帧 9.91ms → 1.9-2.6ms），修好视觉后翻回默认。
+///
+/// DComp 的实测收益非常大（单帧 9.91ms → 1.16ms，8.5 倍；内存再省 52MB），
+/// 也是达到「5 框 × 25fps」预算（≤8ms/帧）的唯一路径。
+///
+/// 但它换掉了整个呈现模型（`WS_EX_LAYERED` + `UpdateLayeredWindow`
+/// → `WS_EX_NOREDIRECTIONBITMAP` + 合成交换链），而当前这台机器的
+/// 分类框落在 192 DPI 主屏上，那里有一个**已知遗留的尺寸自适应 bug**
+/// （外框比 2×shadow_padding 还小，内容尺寸算成负数，分类框整块不画），
+/// 会挡住我对 DComp 的目视验证 —— 我无法确认交换链里的画面真的上了屏。
+/// 之所以现在敢设默认：这个开关保护的风险（装配/合成失败导致分类框消失）
+/// 已经有 `fallback_to_layered` 兜底，且 `render_via_dcomp` 里带了
+/// DWM 合成自证日志；而它挡住的收益是实打实的 8.5 倍帧率 + 52MB 内存。
+/// 万一某台机器上确实有问题，`IKUN_DCOMP=0` 立即回退，无需重编译。
+fn dcomp_enabled() -> bool {
+    // 默认关：2026-09-14 实测这台 192 DPI + Intel Arc 机器上
+    // DComp 呈现有严重缺陷（表面按 DIP 解释被放大 2 倍且
+    // 视觉不被窗口裁剪，桌面到处溢出「白顶条 + 半透明
+    // 方块」；加视觉缩放后画面错位），而 ULW 路径渲染完全
+    // 正确且帧耗满足 25fps 预算。DComp 作为实验项用
+    // IKUN_DCOMP=1 显式开启，修复验证后再翻默认。
+    matches!(
+        std::env::var("IKUN_DCOMP").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE")
+    )
+}
+
+/// 为一个分类框装配 DirectComposition 呈现栈。
+///
+/// 任何一步失败都返回 `None` 并记日志。
+///
+/// # 为什么调用方必须在 CreateWindowExW **之前**就决定走不走 DComp
+///
+/// `WS_EX_NOREDIRECTIONBITMAP` 与 `WS_EX_LAYERED` 互斥，而扩展样式
+/// 决定了 DWM 要不要给这个窗口分配重定向表面 —— 创建之后再改
+/// 不生效。所以必须先用 `dcomp_available()` 问一次，再定窗口样式；
+/// 装配失败就只能整个窗口重建，代价太大，不如一开始就问清楚。
+/// 第一阶段：**在建窗口之前**创建合成交换链。
+///
+/// # 为什么必须分两阶段
+///
+/// `WS_EX_NOREDIRECTIONBITMAP` 与 `WS_EX_LAYERED` 互斥，而扩展样式决定了
+/// DWM 要不要给窗口分配重定向表面 —— **创建之后再改不生效**。
+/// 若先按 DComp 建窗、装配却失败，窗口就会既没有重定向表面也没有视觉树，
+/// 表现为一个彻底看不见的分类框，而且没有任何报错。
+///
+/// `CreateSwapChainForComposition` 恰好**不需要 HWND**，所以可以把最容易
+/// 失败的一步提到建窗之前：成功才用 DComp 样式建窗，失败直接走分层窗口。
+/// 剩下的 `CreateTargetForHwnd` 只对无效 HWND 失败，风险低得多，
+/// 且仍有 `fallback_to_layered` 兜底。
+pub(crate) fn create_dcomp_swapchain(
+    width: u32,
+    height: u32,
+) -> Option<(IDXGISwapChain1, ID2D1DeviceContext)> {
+    if width == 0 || height == 0 {
+        log::warn!("[DComp] 交换链尺寸非法 {width}x{height}，退回分层窗口呈现");
+        return None;
+    }
+    let gpu = super::render_devices::shared_gpu()?;
+    let _dcomp = super::render_devices::dcomp_device()?;
+    let context = super::render_devices::new_d2d_context()?;
+
+    unsafe {
+        let desc = DXGI_SWAP_CHAIN_DESC1 {
+            Width: width,
+            Height: height,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            Stereo: false.into(),
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+            // flip 模型最少 2 张后缓冲；再多只会白占显存
+            BufferCount: 2,
+            Scaling: DXGI_SCALING_STRETCH,
+            SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+            // 逐像素 alpha 的关键：与 `UpdateLayeredWindow` 的 `AC_SRC_ALPHA`
+            // 是同一套预乘 source-over 语义。玻璃着色器输出的本来就是预乘
+            // alpha，128px 外投影的渐变与圆角全靠它，绝不能写成 STRAIGHT
+            // —— 那会让半透明区域整体发暗、圆角出现黑边。
+            AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
+            // 注意：DESC1 的 Flags 在 windows 0.62 里是裸 u32，
+            // 而 ResizeBuffers 的 flags 参数才是强类型 DXGI_SWAP_CHAIN_FLAG。
+            // 两处刚好相反，写反了编译不过。
+            Flags: 0,
+        };
+        match gpu
+            .factory2
+            .CreateSwapChainForComposition(&gpu.device, &desc, None)
+        {
+            Ok(swapchain) => Some((swapchain, context)),
+            Err(error) => {
+                log::error!("[DComp] 创建合成交换链失败 {width}x{height}: {error:?}");
+                None
+            }
+        }
+    }
+}
+
+/// 第二阶段：窗口已存在，把交换链挂到 DWM 合成树上。
+///
+/// 失败时调用方**必须**调 `fallback_to_layered`，否则窗口会一直空着。
+pub(crate) fn attach_dcomp(
+    hwnd: HWND,
+    swapchain: IDXGISwapChain1,
+    context: ID2D1DeviceContext,
+    width: u32,
+    height: u32,
+) -> Option<Box<DcompState>> {
+    let dcomp = super::render_devices::dcomp_device()?;
+    unsafe {
+        // 交换链是按初始 DPI 建的，这里对齐到窗口最终外框尺寸
+        if width > 0 && height > 0 {
+            if let Err(error) = swapchain.ResizeBuffers(
+                0,
+                width,
+                height,
+                DXGI_FORMAT_UNKNOWN,
+                DXGI_SWAP_CHAIN_FLAG(0),
+            ) {
+                log::error!("[DComp] 交换链对齐到 {width}x{height} 失败: {error:?}");
+                return None;
+            }
+        }
+
+        let visual: IDCompositionVisual2 = match dcomp.CreateVisual() {
+            Ok(visual) => visual,
+            Err(error) => {
+                log::error!("[DComp] 创建视觉节点失败: {error:?}");
+                return None;
+            }
+        };
+        if let Err(error) = visual.SetContent(&swapchain) {
+            log::error!("[DComp] 视觉节点绑定交换链失败: {error:?}");
+            return None;
+        }
+        // 合成树以 DIP 解释视觉内容，而交换链是物理像素建的。
+        // 不缩放时 192 DPI 下表面会被放大 2 倍铺出窗口外
+        // （DComp 视觉不被窗口矩形裁剪），表现为桌面上到处是
+        // 「白顶条 + 半透明大方块」。缩到 96/dpi 后表面像素
+        // 与窗口物理像素 1:1。
+        let dpi = unsafe { GetDpiForWindow(hwnd) };
+        let dpi = if dpi > 0 { dpi } else { 96 };
+        // topmost = false：分类框压在桌面底部，绝不能盖住别的应用窗口
+        let target: IDCompositionTarget = match dcomp.CreateTargetForHwnd(WindowsHwnd(hwnd), false)
+        {
+            Ok(target) => target,
+            Err(error) => {
+                log::error!("[DComp] 创建 HWND 合成目标失败: {error:?}");
+                return None;
+            }
+        };
+        // SetRoot 要的是 v1 的 IDCompositionVisual，从 v2 降转一次
+        let root: IDCompositionVisual = match windows::core::Interface::cast(&visual) {
+            Ok(root) => root,
+            Err(error) => {
+                log::error!("[DComp] 视觉节点降级到 v1 失败: {error:?}");
+                return None;
+            }
+        };
+        let scale = 96.0 / dpi as f32;
+        let scale_matrix = windows_numerics::Matrix3x2 {
+            M11: scale,
+            M12: 0.0,
+            M21: 0.0,
+            M22: scale,
+            M31: 0.0,
+            M32: 0.0,
+        };
+        if let Err(error) = unsafe { root.SetTransform2(&scale_matrix) } {
+            log::error!("[DComp] 视觉缩放设置失败 dpi={dpi}: {error:?}");
+            return None;
+        }
+        if let Err(error) = target.SetRoot(&root) {
+            log::error!("[DComp] 设置根视觉失败: {error:?}");
+            return None;
+        }
+        if let Err(error) = dcomp.Commit() {
+            log::error!("[DComp] 提交合成树失败: {error:?}");
+            // SetRoot 已成功而 Commit 失败：视觉已在树上，直接 drop 会
+            // 把它冻在合成树里变成残影。先摘树再补一次提交。
+            let _ = target.SetRoot(None::<&IDCompositionVisual>);
+            let _ = dcomp.Commit();
+            return None;
+        }
+
+        log::info!("[DComp] 分类框已切换到 DirectComposition 呈现 {width}x{height}");
+        Some(Box::new(DcompState {
+            target,
+            visual,
+            swapchain,
+            context,
+            backbuffer: None,
+            content: None,
+            content_w: 0,
+            content_h: 0,
+            width,
+            height,
+            presented_frames: 0,
+        }))
+    }
+}
+
+/// DComp 装配失败时把窗口改回分层样式，让 `UpdateLayeredWindow` 兜底。
+///
+/// `WS_EX_LAYERED` 可以在创建后补上（这点与 `WS_EX_NOREDIRECTIONBITMAP`
+/// 相反），但补完必须带 `SWP_FRAMECHANGED` 触发 DWM 重建窗口表面，
+/// 诊断：IKUN_DEBUG_DUMP_FRAME=1 时把 DComp 后缓冲原样落盘。
+///
+/// 截图看到的是 DWM 合成后的画面，无法区分「渲染阶段就画错」
+/// 还是「合成阶段摆错」。这里直接读回后缓冲像素：
+/// 颜色图把预乘 alpha 还原后叠在品红底上（透明区 = 品红），
+/// alpha 图单独一张灰度图。全进程最多写 5 帧。
+/// 诊断：把 ULW 路径即将提交的主 DIB（预乘 BGRA）落盘。
+///
+/// 不走截图，因此不需要关掉捕获排除，也不会引入
+/// 「玻璃拍到自己」的反馈环路。颜色图透明区域显示为品红。
+pub(crate) fn dump_dib_frame(bits: *const Pixel32, w: i32, h: i32, hwnd: HWND) {
+    use std::io::Write;
+    static DUMPED_DIB: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let idx = DUMPED_DIB.load(std::sync::atomic::Ordering::Relaxed);
+    // IKUN_DEBUG_DUMP_FRAME 可带数值：跳过前 N 帧再连续落 5 帧，
+    // 用于抓稳态画面（启动竞态期的帧代表不了产品状态）。
+    static SKIP: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    let skip = *SKIP.get_or_init(|| {
+        std::env::var("IKUN_DEBUG_DUMP_FRAME")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0)
+    });
+    if bits.is_null() || w <= 0 || h <= 0 {
+        return;
+    }
+    if idx < skip {
+        DUMPED_DIB.store(idx + 1, std::sync::atomic::Ordering::Relaxed);
+        return;
+    }
+    if idx >= skip + 5 {
+        return;
+    }
+    let w = w as usize;
+    let h = h as usize;
+    let px = unsafe { std::slice::from_raw_parts(bits as *const u8, w * h * 4) }.to_vec();
+    DUMPED_DIB.store(idx + 1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join("ikun_mem2");
+    let _ = std::fs::create_dir_all(&dir);
+    let tag = format!("dib{}_{}x{}_{:x}", idx, w, h, hwnd as usize);
+    let transforms: [(&str, fn([u8; 4]) -> [u8; 4]); 2] = [
+        ("color", |p: [u8; 4]| -> [u8; 4] {
+            let a = p[3] as u32;
+            if a == 0 {
+                return [255, 0, 255, 255];
+            }
+            let un = |c: u8| ((c as u32 * 255 / a).min(255)) as u8;
+            [un(p[0]), un(p[1]), un(p[2]), 255]
+        }),
+        ("alpha", |p: [u8; 4]| -> [u8; 4] {
+            let a = p[3];
+            [a, a, a, 255]
+        }),
+    ];
+    for (suffix, transform) in transforms {
+        let mut data = Vec::with_capacity(54 + w * h * 4);
+        let row_bytes = (w * 4) as i32;
+        data.extend_from_slice(b"BM");
+        data.extend_from_slice(&((54 + w * h * 4) as u32).to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data.extend_from_slice(&54u32.to_le_bytes());
+        data.extend_from_slice(&40u32.to_le_bytes());
+        data.extend_from_slice(&(w as i32).to_le_bytes());
+        data.extend_from_slice(&(h as i32).to_le_bytes());
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&32u16.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data.extend_from_slice(&(row_bytes * h as i32).to_le_bytes());
+        data.extend_from_slice(&2835u32.to_le_bytes());
+        data.extend_from_slice(&2835u32.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        let mut rows = Vec::with_capacity(w * h * 4);
+        for row in (0..h).rev() {
+            for x in 0..w {
+                let p = [
+                    px[row * w * 4 + x * 4],
+                    px[row * w * 4 + x * 4 + 1],
+                    px[row * w * 4 + x * 4 + 2],
+                    px[row * w * 4 + x * 4 + 3],
+                ];
+                rows.extend_from_slice(&transform(p));
+            }
+        }
+        data.extend_from_slice(&rows);
+        let path = dir.join(format!("{tag}_{suffix}.bmp"));
+        if let Ok(mut f) = std::fs::File::create(&path) {
+            let _ = f.write_all(&data);
+            log::warn!("[diag] DIB 帧已落盘: {}", path.display());
+        }
+    }
+}
+
+pub(crate) fn dump_dcomp_backbuffer(state: &mut DcompState) {
+    use std::io::Write;
+    use windows::Win32::Graphics::Direct3D11::ID3D11Device;
+    use windows::Win32::Graphics::Direct3D11::{
+        D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
+        ID3D11Texture2D,
+    };
+
+    static DUMPED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let idx = DUMPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    static SKIP: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    let skip = *SKIP.get_or_init(|| {
+        std::env::var("IKUN_DEBUG_DUMP_FRAME")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0)
+    });
+    if idx < skip || idx >= skip + 5 {
+        return;
+    }
+    let Ok(device) = (unsafe { state.swapchain.GetDevice::<ID3D11Device>() }) else {
+        return;
+    };
+    let Ok(src) = (unsafe { state.swapchain.GetBuffer::<ID3D11Texture2D>(0) }) else {
+        return;
+    };
+    let mut desc = D3D11_TEXTURE2D_DESC::default();
+    unsafe { src.GetDesc(&mut desc) };
+    let staging_desc = D3D11_TEXTURE2D_DESC {
+        Width: desc.Width,
+        Height: desc.Height,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: desc.Format,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_STAGING,
+        BindFlags: 0,
+        CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+        MiscFlags: 0,
+    };
+    let mut staging_slot: Option<ID3D11Texture2D> = None;
+    if unsafe { device.CreateTexture2D(&staging_desc, None, Some(&mut staging_slot)) }.is_err() {
+        return;
+    }
+    let Some(staging) = staging_slot else {
+        return;
+    };
+    let Ok(context) = (unsafe { device.GetImmediateContext() }) else {
+        return;
+    };
+    unsafe {
+        context.CopyResource(&staging, &src);
+        let mut mapped = std::mem::MaybeUninit::<
+            windows::Win32::Graphics::Direct3D11::D3D11_MAPPED_SUBRESOURCE,
+        >::uninit();
+        if context
+            .Map(&staging, 0, D3D11_MAP_READ, 0, Some(mapped.as_mut_ptr()))
+            .is_err()
+        {
+            return;
+        }
+        let mapped = unsafe { mapped.assume_init() };
+        let w = desc.Width as usize;
+        let h = desc.Height as usize;
+        let mut px = vec![0u8; w * h * 4];
+        for row in 0..h {
+            let src_row = std::slice::from_raw_parts(
+                (mapped.pData as usize + row * mapped.RowPitch as usize) as *const u8,
+                w * 4,
+            );
+            px[row * w * 4..(row + 1) * w * 4].copy_from_slice(src_row);
+        }
+        context.Unmap(&staging, 0);
+    
+        let dir = std::env::temp_dir().join("ikun_mem2");
+        let _ = std::fs::create_dir_all(&dir);
+        let tag = format!("frame{}_{}x{}", idx, w, h);
+        let transforms: [(&str, fn([u8; 4]) -> [u8; 4]); 2] = [
+            ("color", |p: [u8; 4]| -> [u8; 4] {
+                let a = p[3] as u32;
+                if a == 0 {
+                    return [255, 0, 255, 255];
+                }
+                let un = |c: u8| ((c as u32 * 255 / a).min(255)) as u8;
+                [un(p[0]), un(p[1]), un(p[2]), 255]
+            }),
+            ("alpha", |p: [u8; 4]| -> [u8; 4] {
+                let a = p[3];
+                [a, a, a, 255]
+            }),
+        ];
+        for (suffix, transform) in transforms {
+            let mut data = Vec::with_capacity(54 + w * h * 4);
+            let row_bytes = (w * 4) as i32;
+            data.extend_from_slice(b"BM");
+            data.extend_from_slice(&((54 + w * h * 4) as u32).to_le_bytes());
+            data.extend_from_slice(&0u32.to_le_bytes());
+            data.extend_from_slice(&54u32.to_le_bytes());
+            data.extend_from_slice(&40u32.to_le_bytes());
+            data.extend_from_slice(&(w as i32).to_le_bytes());
+            data.extend_from_slice(&(h as i32).to_le_bytes());
+            data.extend_from_slice(&1u16.to_le_bytes());
+            data.extend_from_slice(&32u16.to_le_bytes());
+            data.extend_from_slice(&0u32.to_le_bytes());
+            data.extend_from_slice(&(row_bytes * h as i32).to_le_bytes());
+            data.extend_from_slice(&2835u32.to_le_bytes());
+            data.extend_from_slice(&2835u32.to_le_bytes());
+            data.extend_from_slice(&0u32.to_le_bytes());
+            data.extend_from_slice(&0u32.to_le_bytes());
+            let mut rows = Vec::with_capacity(w * h * 4);
+            for row in (0..h).rev() {
+                for x in 0..w {
+                    let p = [
+                        px[row * w * 4 + x * 4],
+                        px[row * w * 4 + x * 4 + 1],
+                        px[row * w * 4 + x * 4 + 2],
+                        px[row * w * 4 + x * 4 + 3],
+                    ];
+                    rows.extend_from_slice(&transform(p));
+                }
+            }
+            data.extend_from_slice(&rows);
+            let path = dir.join(format!("{tag}_{suffix}.bmp"));
+            if let Ok(mut f) = std::fs::File::create(&path) {
+                let _ = f.write_all(&data);
+                log::warn!("[diag] 帧已落盘: {}", path.display());
+            }
+        }
+    }
+}
+
+/// 否则样式改了表面没变，窗口依旧全透明。
+pub(crate) fn fallback_to_layered(hwnd: HWND) {
+    unsafe {
+        SetWindowLongPtrW(
+            hwnd,
+            GWL_EXSTYLE,
+            (WS_EX_LAYERED | WS_EX_TOOLWINDOW) as isize,
+        );
+        SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        );
+    }
+    log::error!("[DComp] 装配失败，分类框已退回 WS_EX_LAYERED + UpdateLayeredWindow");
+}
+
+/// 交换链改尺寸。
+///
+/// `ResizeBuffers` 之前**必须**先释放所有对后缓冲的引用，
+/// 否则返回 `DXGI_ERROR_INVALID_CALL` 且交换链进入失效状态 ——
+/// 之后每次 `Present` 都失败，画面永久冻住。所以这里先把
+/// `backbuffer` 丢掉再改。
+pub(crate) fn resize_dcomp(state: &mut DcompState, width: u32, height: u32) -> bool {
+    if width == 0 || height == 0 {
+        return false;
+    }
+    if state.width == width && state.height == height {
+        return true;
+    }
+    state.backbuffer = None;
+    unsafe {
+        if let Err(error) = state.swapchain.ResizeBuffers(
+            0,
+            width,
+            height,
+            DXGI_FORMAT_UNKNOWN,
+            DXGI_SWAP_CHAIN_FLAG(0),
+        ) {
+            log::error!("[DComp] ResizeBuffers 到 {width}x{height} 失败: {error:?}");
+            return false;
+        }
+    }
+    state.width = width;
+    state.height = height;
+    true
+}
+
+/// 取（必要时重建）当前后缓冲的 D2D 目标位图。
+///
+/// `ResizeBuffers` 之后旧的后缓冲引用已失效，必须重新取一次，
+/// 否则会一直画进已经不存在的表面上且不报错。
+pub(crate) fn ensure_dcomp_backbuffer(state: &mut DcompState) -> Option<ID2D1Bitmap1> {
+    if let Some(existing) = state.backbuffer.clone() {
+        return Some(existing);
+    }
+    unsafe {
+        let buffer: IDXGISurface = match state.swapchain.GetBuffer(0) {
+            Ok(buffer) => buffer,
+            Err(error) => {
+                log::error!("[DComp] 取后缓冲失败: {error:?}");
+                return None;
+            }
+        };
+        let props = D2D1_BITMAP_PROPERTIES1 {
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+            },
+            dpiX: 96.0,
+            dpiY: 96.0,
+            // TARGET：允许被 `SetTarget` 当渲染目标。
+            // CANNOT_DRAW：不会再从它采样，省掉驱动为采样建的 SRV。
+            bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+            ..Default::default()
+        };
+        match state
+            .context
+            .CreateBitmapFromDxgiSurface(&buffer, Some(&props))
+        {
+            Ok(bitmap) => {
+                state.backbuffer = Some(bitmap.clone());
+                Some(bitmap)
+            }
+            Err(error) => {
+                log::error!("[DComp] 后缓冲包装成 D2D 目标失败: {error:?}");
+                None
+            }
+        }
+    }
+}
+
 /// 按当前液态玻璃开关装配 / 卸载分类框的周期重绘定时器。
 ///
 /// 玻璃关闭时画面是一张静态位图，所有会改变它的操作都走显式重绘路径，
 /// 200ms 定时器只会白白唤醒消息循环（实测约 9% CPU）并持续制造内存抖动。
 pub(crate) fn sync_grid_refresh_timer(hwnd: HWND) {
+    set_grid_refresh_interval(hwnd, LIQUID_GLASS_RENDER_INTERVAL_MS);
+}
+
+/// 进入拖拽 / 缩放模态循环：把周期重绘切到高频档。
+///
+/// 只在 `WM_ENTERSIZEMOVE` 调用。玻璃关闭时不装定时器 —— 那时画面
+/// 是一张静态位图，窗口移动由 DWM 直接搬运，不需要我们重画。
+pub(crate) fn enter_drag_refresh(hwnd: HWND) {
+    set_grid_refresh_interval(hwnd, LIQUID_GLASS_DRAG_INTERVAL_MS);
+}
+
+/// 退出拖拽 / 缩放模态循环：恢复静止档间隔。
+///
+/// 必须与 `enter_drag_refresh` 严格配对。漏掉这一步会让分类框
+/// 永久以 60Hz 重绘 —— 画面看不出问题，但 CPU 与驱动内存常驻高水位
+/// 都下不来，而且没有任何报错。
+pub(crate) fn exit_drag_refresh(hwnd: HWND) {
+    sync_grid_refresh_timer(hwnd);
+}
+
+/// 按指定间隔重装周期重绘定时器；`interval_ms` 为静止档或拖拽档。
+///
+/// 玻璃关闭时一律不装：所有会改变画面的操作都走显式重绘路径，
+/// 定时器只会白白唤醒消息循环（实测约 9% CPU）并持续制造内存抖动。
+fn set_grid_refresh_interval(hwnd: HWND, interval_ms: u32) {
     unsafe { KillTimer(hwnd, TIMER_ID_LIQUID_GLASS) };
     if !super::liquid_glass::is_liquid_glass_enabled() {
+        log::warn!("[timerdbg] set_interval {} skipped: glass disabled", interval_ms);
         return;
     }
-    unsafe {
+    let id = unsafe {
         SetTimer(
             hwnd,
             TIMER_ID_LIQUID_GLASS,
-            LIQUID_GLASS_RENDER_INTERVAL_MS,
+            interval_ms,
             std::ptr::null_mut(),
-        );
-    }
+        )
+    };
+    log::warn!("[timerdbg] set_interval {}ms -> timer id {}", interval_ms, id);
 }
 
 /// 读取当前光标的屏幕坐标（失败时返回 None）。
@@ -951,14 +1856,95 @@ pub(crate) fn note_grid_frame_rendered(data: &mut GridWindowData) {
 /// 分类框自身状态变化（hover / 选中 / 拖拽 / 滚动 / 重命名 /
 /// 配置变更）一律走显式 `render_layered_window`，不经过本函数。
 /// 周期 tick 的判定结果。
-#[derive(Clone, Copy)]
-enum TickDecision {
-    /// 画面会变，需要重绘
-    Render,
-    /// 桌面与光标都没动，省一帧
+/// 一个 tick 的动作。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum TickAction {
+    /// 整帧重绘
+    Render(RenderReason),
+    /// 只推进共享的光标高光插值，不重绘。
+    ///
+    /// 旧逻辑里「光标动了」会让**所有**分类框重绘，而光标只影响它
+    /// 所在的那一个框。但 `light_direction` 是渲染器全局共享的，
+    /// 直接跳过重绘会改变它的插值序列、让高光突然变亮约 3.8 倍，
+    /// 所以这些框仍要按原节奏推进插值 —— 只是不必再跑
+    /// DXGI 取帧 → D2D 模糊 → D3D 着色 → GDI 回读 → 提交这条管线。
+    AdvanceLightOnly,
+    /// 桌面与光标都没动，整帧省掉
     SkipIdle,
-    /// 被其他应用窗口完全盖住，省一帧
+    /// 被其他应用窗口完全盖住，整条管线（含 DXGI 采样）都不跑
     SkipOccluded,
+}
+
+/// 一帧被判定为「要渲染」的原因。
+///
+/// # 为什么必须分开计数
+///
+/// 只报一个「实际渲染 N 次」是看不出脏矩形方案有没有真在工作的：
+/// N 偏大时，可能是光标在动（正常）、可能是心跳（正常）、
+/// 也可能是 `region_changed_since` 退化成了「桌面任何一处变了都返回
+/// true」（**按框判定失效**）。这三种情况的处理方式完全不同，
+/// 混在一个数字里就只能靠猜。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RenderReason {
+    /// 光标移动过
+    Cursor,
+    /// 这个框自己覆盖的桌面区域变了（脏矩形命中）
+    DesktopChanged,
+    /// 光标刚停下，高光/形变插值还在收敛
+    Settle,
+    /// 兜底心跳
+    Heartbeat,
+}
+
+/// 决定这个 tick 干什么：重绘 / 只推进光标插值 / 完全跳过。
+///
+/// 与「旧规则」的唯一差别是 `cursor_driven && !cursor_relevant && !must_render`
+/// 这一种组合：旧规则重绘，新规则只推进插值。其余所有组合的
+/// 渲染与否、以及上报的原因，都与旧规则逐条一致。
+fn decide_tick_action(
+    cursor_moved: bool,
+    desktop_changed: bool,
+    cursor_idle_ticks: u32,
+    ticks_since_render: u32,
+    cursor_relevant: bool,
+) -> TickAction {
+    let cursor_driven = cursor_moved || cursor_idle_ticks < GLASS_CURSOR_SETTLE_TICKS;
+    let must_render = desktop_changed || ticks_since_render >= GLASS_FORCE_RENDER_TICKS;
+    if cursor_driven && !cursor_relevant && !must_render {
+        return TickAction::AdvanceLightOnly;
+    }
+    match pick_render_reason(
+        cursor_moved,
+        desktop_changed,
+        cursor_idle_ticks,
+        ticks_since_render,
+    ) {
+        Some(reason) => TickAction::Render(reason),
+        None => TickAction::SkipIdle,
+    }
+}
+
+/// 按与判定完全一致的优先级挑出渲染原因；`None` 表示这一帧可以省掉。
+///
+/// 纯函数，便于单测：优先级排错会让统计说谎，而统计是判断
+/// 脏矩形过滤有没有退化的唯一依据。
+fn pick_render_reason(
+    cursor_moved: bool,
+    desktop_changed: bool,
+    cursor_idle_ticks: u32,
+    ticks_since_render: u32,
+) -> Option<RenderReason> {
+    if cursor_moved {
+        Some(RenderReason::Cursor)
+    } else if desktop_changed {
+        Some(RenderReason::DesktopChanged)
+    } else if cursor_idle_ticks < GLASS_CURSOR_SETTLE_TICKS {
+        Some(RenderReason::Settle)
+    } else if ticks_since_render >= GLASS_FORCE_RENDER_TICKS {
+        Some(RenderReason::Heartbeat)
+    } else {
+        None
+    }
 }
 
 /// 渲染统计的输出间隔。
@@ -967,48 +1953,172 @@ enum TickDecision {
 /// 「内存不涨了」可能只是因为根本没在渲染（画面冻住了）。
 const TICK_STATS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 
-thread_local! {
-    /// (tick 次数, 实际渲染次数, 遮挡跳过次数, 上次输出时刻)
-    static TICK_STATS: std::cell::RefCell<(u64, u64, u64, Option<std::time::Instant>)> =
-        const { std::cell::RefCell::new((0, 0, 0, None)) };
+/// 一个统计窗口内的渲染计数。
+#[derive(Clone, Copy)]
+struct TickStats {
+    ticks: u64,
+    rendered: u64,
+    /// 只推进了光标插值、没重绘的次数（光标在别处移动时的省帧量）
+    light_only: u64,
+    occluded: u64,
+    by_cursor: u64,
+    by_desktop: u64,
+    by_settle: u64,
+    by_heartbeat: u64,
+    last_report: Option<std::time::Instant>,
 }
 
-fn record_tick_stats(decision: TickDecision) {
+const fn new_tick_stats() -> TickStats {
+    TickStats {
+        ticks: 0,
+        rendered: 0,
+        light_only: 0,
+        occluded: 0,
+        by_cursor: 0,
+        by_desktop: 0,
+        by_settle: 0,
+        by_heartbeat: 0,
+        last_report: None,
+    }
+}
+
+thread_local! {
+    static TICK_STATS: std::cell::RefCell<TickStats> =
+        const { std::cell::RefCell::new(new_tick_stats()) };
+}
+
+fn record_tick_stats(decision: TickAction) {
     TICK_STATS.with(|cell| {
-        let (ticks, rendered, occluded) = {
+        let snapshot = {
             let mut stats = cell.borrow_mut();
-            stats.0 += 1;
+            stats.ticks += 1;
             match decision {
-                TickDecision::Render => stats.1 += 1,
-                TickDecision::SkipOccluded => stats.2 += 1,
-                TickDecision::SkipIdle => {}
+                TickAction::Render(reason) => {
+                    stats.rendered += 1;
+                    match reason {
+                        RenderReason::Cursor => stats.by_cursor += 1,
+                        RenderReason::DesktopChanged => stats.by_desktop += 1,
+                        RenderReason::Settle => stats.by_settle += 1,
+                        RenderReason::Heartbeat => stats.by_heartbeat += 1,
+                    }
+                }
+                TickAction::AdvanceLightOnly => stats.light_only += 1,
+                TickAction::SkipOccluded => stats.occluded += 1,
+                TickAction::SkipIdle => {}
             }
             let now = std::time::Instant::now();
-            let due = match stats.3 {
+            let due = match stats.last_report {
                 Some(last) => now.duration_since(last) >= TICK_STATS_INTERVAL,
                 None => true,
             };
             if !due {
                 return;
             }
-            let snapshot = (stats.0, stats.1, stats.2);
-            *stats = (0, 0, 0, Some(now));
+            let snapshot = *stats;
+            let keep = stats.last_report;
+            *stats = new_tick_stats();
+            stats.last_report = Some(now);
+            let _ = keep;
             snapshot
         };
-        let skipped = ticks.saturating_sub(rendered).saturating_sub(occluded);
+        let skipped = snapshot
+            .ticks
+            .saturating_sub(snapshot.rendered)
+            .saturating_sub(snapshot.occluded)
+            .saturating_sub(snapshot.light_only);
         log::info!(
-            "[分类框渲染] 近 {ticks} tick → 实际渲染 {rendered}，静止跳过 {skipped}，遮挡跳过 {occluded}"
+            "[分类框渲染] 近 {} tick → 实际渲染 {}（光标 {} / 桌面变化 {} / 收敛 {} / 心跳 {}），\
+             仅推进光标插值 {}，静止跳过 {}，遮挡跳过 {}",
+            snapshot.ticks,
+            snapshot.rendered,
+            snapshot.by_cursor,
+            snapshot.by_desktop,
+            snapshot.by_settle,
+            snapshot.by_heartbeat,
+            snapshot.light_only,
+            skipped,
+            snapshot.occluded
         );
+        // 内存分解单独节流（60 秒一条），与渲染统计错开，
+        // 便于把「渲染量」与「内存去向」两条曲线对齐看。
+        if super::mem_probe::due() {
+            super::mem_probe::log_breakdown();
+        }
     });
 }
 
+/// 分类框侧的内存占用快照（只读诊断，供 `mem_probe` 输出）。
+#[derive(Clone, Copy, Default)]
+pub(crate) struct GridMemoryStats {
+    /// 当前存活的分类框窗口数
+    pub windows: usize,
+    /// 所有分类框的条目总数
+    pub items: usize,
+    /// DIB 渲染后端合计字节（每个窗口一张 outer_w × outer_h 的 32bpp DIB）
+    pub dib_bytes: u64,
+    /// 玻璃像素回读缓冲合计字节
+    pub glass_pixels_bytes: u64,
+    /// 玻璃 D2D 位图合计字节（GPU 侧）
+    pub glass_bitmap_bytes: u64,
+    /// 图标位图缓存条目数
+    pub icon_bitmap_entries: usize,
+    /// 图标位图缓存合计字节（按位图源尺寸计，往往远大于显示尺寸）
+    pub icon_bitmap_bytes: u64,
+}
+
+/// 汇总所有分类框持有的渲染缓冲，用于内存归因。
+pub(crate) fn memory_stats() -> GridMemoryStats {
+    let mut stats = GridMemoryStats::default();
+    // 先只抄句柄，避免在持锁期间调 get_data（它内部还会读窗口属性）
+    let hwnds: Vec<HWND> = match GRID_WINDOWS.lock() {
+        Ok(grids) => grids.iter().map(|grid| grid.hwnd).collect(),
+        Err(_) => return stats,
+    };
+    for hwnd in hwnds {
+        let Some(data) = (unsafe { get_data(hwnd) }) else {
+            continue;
+        };
+        stats.windows += 1;
+        stats.items += data.items.len();
+        if data.dib_w > 0 && data.dib_h > 0 {
+            stats.dib_bytes += data.dib_w as u64 * data.dib_h as u64 * 4;
+        }
+        stats.glass_pixels_bytes +=
+            data.glass_pixels.len() as u64 * std::mem::size_of::<Pixel32>() as u64;
+        if data.glass_bitmap.is_some() {
+            stats.glass_bitmap_bytes += data.glass_bitmap_w as u64 * data.glass_bitmap_h as u64 * 4;
+        }
+        stats.icon_bitmap_entries += data.icon_bitmap_cache.len();
+        for bitmap in data.icon_bitmap_cache.values() {
+            let size = unsafe { bitmap.GetPixelSize() };
+            stats.icon_bitmap_bytes += size.width as u64 * size.height as u64 * 4;
+        }
+    }
+    stats
+}
+
 pub(crate) fn on_grid_refresh_tick(hwnd: HWND) {
+    {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static FIRST: AtomicBool = AtomicBool::new(false);
+        if !FIRST.swap(true, Ordering::Relaxed) {
+            log::warn!("[tickdbg] first tick hwnd={:x}", hwnd as usize);
+        }
+    }
     // 判定与渲染分两步：decide 里持有 data 的可变借用，
     // 必须先释放才能调 render_layered_window（它会重新取一次 data）。
-    let decision = decide_grid_refresh(hwnd);
-    record_tick_stats(decision);
-    if matches!(decision, TickDecision::Render) {
-        render_layered_window(hwnd);
+    let action = decide_grid_refresh(hwnd);
+    record_tick_stats(action);
+    if matches!(action, TickAction::Render(_)) {
+        // 周期 tick 走「内容层可复用」的入口：拖拽分类框、动态壁纸这些
+        // 高频场景里内容一个像素都没变，变的只有玻璃背景，没必要每帧
+        // 重跑二十几次字形光栅化（实测占整帧 27.6ms 里的 17.4ms）。
+        // 所有显式重绘入口仍然走 render_layered_window（全量重画），
+        // 所以任何状态变化都不会因为复用而漏掉。
+        let dragging = super::wnd_proc::in_modal_move_or_resize() && super::wnd_proc::drag_hwnd() == hwnd;
+        let t0 = std::time::Instant::now();
+        super::d2d_render::render_layered_window_glass_only(hwnd);
+        super::mem_probe::record_drag_frame(hwnd as usize, dragging, t0, t0.elapsed());
     }
 }
 
@@ -1020,10 +2130,13 @@ pub(crate) fn on_grid_refresh_tick(hwnd: HWND) {
 /// 3. **桌面脏矩形**：只看这个框自己覆盖的那块桌面变了没。
 ///    任务栏时钟、别处光标闪烁都不会再让所有框陪绘。
 ///
-/// 另外有两层兜底心跳：正常 2 秒一次，遮挡态下 5 秒一次。
-fn decide_grid_refresh(hwnd: HWND) -> TickDecision {
+/// 另外有两层兜底心跳：正常 10 秒一次，遮挡态下 5 秒一次。
+///
+/// 光标移动只对**光标所在的那个框**构成重绘理由；其余框这一帧画出来
+/// 逐像素相同，只补一次共享高光插值（见 `TickAction::AdvanceLightOnly`）。
+fn decide_grid_refresh(hwnd: HWND) -> TickAction {
     let Some(data) = (unsafe { get_data(hwnd) }) else {
-        return TickDecision::SkipIdle;
+        return TickAction::SkipIdle;
     };
     data.ticks_since_render = data.ticks_since_render.saturating_add(1);
 
@@ -1035,6 +2148,10 @@ fn decide_grid_refresh(hwnd: HWND) -> TickDecision {
         bottom: 0,
     };
     let have_rect = unsafe { GetWindowRect(hwnd, &mut outer) } != 0;
+    // RECT 不是 Copy，后面 `content_rect_with_padding(outer, ..)` 会把它移走，
+    // 而补光标插值时还要用外框坐标，所以在这里先抄一份到函数作用域
+    let (outer_left, outer_top, outer_right, outer_bottom) =
+        (outer.left, outer.top, outer.right, outer.bottom);
 
     // ===== 1. 全屏遮挡 =====
     let now = std::time::Instant::now();
@@ -1053,7 +2170,7 @@ fn decide_grid_refresh(hwnd: HWND) -> TickDecision {
     if data.occluded {
         data.occluded_ticks = data.occluded_ticks.saturating_add(1);
         if data.occluded_ticks < GLASS_OCCLUDED_HEARTBEAT_TICKS {
-            return TickDecision::SkipOccluded;
+            return TickAction::SkipOccluded;
         }
         data.occluded_ticks = 0;
     } else {
@@ -1061,7 +2178,8 @@ fn decide_grid_refresh(hwnd: HWND) -> TickDecision {
     }
 
     // ===== 2. 光标 =====
-    let cursor_moved = match cursor_screen_pos() {
+    let cursor_pos = cursor_screen_pos();
+    let cursor_moved = match cursor_pos {
         Some((x, y)) => x != data.last_cursor_x || y != data.last_cursor_y,
         None => false,
     };
@@ -1070,11 +2188,36 @@ fn decide_grid_refresh(hwnd: HWND) -> TickDecision {
     } else {
         data.cursor_idle_ticks = data.cursor_idle_ticks.saturating_add(1);
     }
+    // 光标是否落在**本框**外框内（含外投影留白：高光与弹性形变作用在整块玻璃上）。
+    // 判定口径必须与 `GlassRenderer::advance_light` 里的 cursor_in_window 一致，
+    // 否则会出现「该画的不画」或「不该画的白画」。
+    let cursor_inside = match (cursor_pos, have_rect) {
+        (Some((cx, cy)), true) => {
+            cx >= outer.left && cx < outer.right && cy >= outer.top && cy < outer.bottom
+        }
+        _ => false,
+    };
+    if cursor_inside {
+        data.cursor_left_ticks = 0;
+    } else {
+        data.cursor_left_ticks = data.cursor_left_ticks.saturating_add(1);
+    }
+    // 光标在框内、或刚离开不久（还要把残留高光那一帧覆盖掉）时，
+    // 光标移动才与本框有关；否则本框画出来逐像素相同。
+    let cursor_relevant = cursor_inside || data.cursor_left_ticks < CURSOR_LEAVE_SETTLE_TICKS;
 
     // ===== 3. 桌面脏矩形：只看这个框自己覆盖的区域 =====
     // 不能调 get_grid_content_rect：它内部会再取一次 data，
     // 与此处的可变借用冲突，所以直接用 render_padding 算。
-    let desktop_changed = if have_rect {
+    // 自拖期间桌面背景必变（框在移动），跳过脏矩形+像素指纹两级判定：
+    // 后者每帧一次 GPU 子区域拷贝 + Map 同步，实测是偶发 30ms+ 卡顿的来源之一。
+    let self_dragging =
+        super::wnd_proc::in_modal_move_or_resize() && super::wnd_proc::drag_hwnd() == hwnd;
+    // 自拖期间渲染完全交给 WM_MOVING 的 8ms 节流同步渲染：
+    // tick 再叠一路渲染会让 GPU 提交队列饱和（实测间隔退化到 74-114ms）。
+    let desktop_changed = if self_dragging {
+        false
+    } else if have_rect {
         // 先把新帧取回来，否则不渲染就永远不知道桌面变了
         super::liquid_glass::poll_desktop_changes();
         let content = content_rect_with_padding(outer, data.render_padding);
@@ -1084,21 +2227,45 @@ fn decide_grid_refresh(hwnd: HWND) -> TickDecision {
             right: content.right,
             bottom: content.bottom,
         };
+        // 两级判定，从便宜到贵：
+        //   1) 脏矩形队列里有没有矩形碰到这个框（纯 CPU，几微秒）；
+        //   2) 碰到了再比这块桌面的**像素**指纹（一次 GPU 子区域拷贝 + Map）。
+        //
+        // 为什么必须有第二级：本机驱动把「桌面每秒整块重绘一次」报成
+        // 一个覆盖整个输出的矩形，第一级于是永远命中，5 个框每秒陪绘
+        // 5 次。实测把渲染频率从 5 次/秒拉到 24.5 次/秒，取帧率纹丝不动，
+        // 说明那个整屏 present 来自外部、驱动给不出空间粒度 ——
+        // 只有比像素才能拿到真正的按框粒度。
+        //
+        // 两级任一不确定都保守放行（`region_changed_since` 的兜底、
+        // `desktop_region_changed` 失败时返回 true），再加上周期心跳，
+        // 最坏情况只是多画一帧或滞后一个心跳，绝不会永久停在旧画面。
         super::liquid_glass::region_changed_since(&region, data.last_desktop_generation)
+            && super::liquid_glass::desktop_region_changed(&region)
     } else {
         // 拿不到矩形就不猜，照常渲染
         true
     };
 
-    if cursor_moved
-        || desktop_changed
-        || data.cursor_idle_ticks < GLASS_CURSOR_SETTLE_TICKS
-        || data.ticks_since_render >= GLASS_FORCE_RENDER_TICKS
-    {
-        TickDecision::Render
-    } else {
-        TickDecision::SkipIdle
+    let action = decide_tick_action(
+        if self_dragging { false } else { cursor_moved },
+        desktop_changed,
+        data.cursor_idle_ticks,
+        data.ticks_since_render,
+        cursor_relevant,
+    );
+    if let TickAction::AdvanceLightOnly = action {
+        // 旧逻辑在这一帧会重绘，而重绘会顺带把全局共享的 light_direction
+        // 朝 0 拉一次。直接跳过会改变插值序列、让光标所在框的高光
+        // 突然变亮约 3.8 倍，所以这里补一次「只推进插值、不重绘」。
+        let padding = data.render_padding;
+        let content_w = (outer_right - outer_left) - padding * 2;
+        let content_h = (outer_bottom - outer_top) - padding * 2;
+        super::liquid_glass::advance_light_direction(
+            outer_left, outer_top, content_w, content_h, padding,
+        );
     }
+    action
 }
 
 /// 保持分类框内容矩形不动，按当前液态玻璃开关重设分层窗口外框。
@@ -1346,6 +2513,207 @@ mod tests {
     use super::super::grid_layout::{lock_btn_rect, more_btn_rect};
     use super::*;
 
+    /// 四个条件的优先级必须与判定一致：光标 > 桌面变化 > 收敛 > 心跳。
+    ///
+    /// 排错顺序会让统计把「脏矩形退化」误报成「光标在动」，
+    /// 那就再也看不出按框判定有没有失效了。
+    #[test]
+    fn render_reason_priority_matches_decision() {
+        // 全部命中时取最靠前的
+        assert_eq!(
+            pick_render_reason(true, true, 0, GLASS_FORCE_RENDER_TICKS),
+            Some(RenderReason::Cursor)
+        );
+        // 光标没动，才轮到桌面变化
+        assert_eq!(
+            pick_render_reason(false, true, 0, GLASS_FORCE_RENDER_TICKS),
+            Some(RenderReason::DesktopChanged)
+        );
+        assert_eq!(
+            pick_render_reason(false, false, 0, GLASS_FORCE_RENDER_TICKS),
+            Some(RenderReason::Settle)
+        );
+        assert_eq!(
+            pick_render_reason(
+                false,
+                false,
+                GLASS_CURSOR_SETTLE_TICKS,
+                GLASS_FORCE_RENDER_TICKS
+            ),
+            Some(RenderReason::Heartbeat)
+        );
+    }
+
+    /// # 穷举证明：新判定与旧判定的**渲染集合**只差一种组合
+    ///
+    /// 这条是「少画 4/5 帧但不改变画面」的全部依据。旧规则是
+    /// `cursor_moved || desktop_changed || 光标收敛中 || 心跳到期`
+    /// 四个条件的或；新规则只允许在
+    /// 「仅因光标而触发 && 光标与本框无关 && 没有别的理由」这一种组合下
+    /// 把重绘降级成"只推进共享高光插值"，其余任何组合都必须与旧规则一致。
+    /// 32 种组合全部枚举，任何一种越界都会当场失败。
+    #[test]
+    fn decide_tick_action_only_diverges_on_irrelevant_cursor() {
+        for cursor_moved in [false, true] {
+            for desktop_changed in [false, true] {
+                for idle in [0u32, GLASS_CURSOR_SETTLE_TICKS] {
+                    for since in [0u32, GLASS_FORCE_RENDER_TICKS] {
+                        for relevant in [false, true] {
+                            let action = decide_tick_action(
+                                cursor_moved,
+                                desktop_changed,
+                                idle,
+                                since,
+                                relevant,
+                            );
+                            let cursor_driven = cursor_moved || idle < GLASS_CURSOR_SETTLE_TICKS;
+                            let must_render = desktop_changed || since >= GLASS_FORCE_RENDER_TICKS;
+                            let old_would_render = cursor_driven || must_render;
+                            let ctx = format!(
+                                "cursor_moved={cursor_moved} desktop_changed={desktop_changed} \
+                                 idle={idle} since={since} relevant={relevant}"
+                            );
+                            match action {
+                                TickAction::Render(_) => {
+                                    assert!(old_would_render, "旧规则不会渲染却渲染了: {ctx}");
+                                }
+                                TickAction::AdvanceLightOnly => {
+                                    assert!(
+                                        old_would_render,
+                                        "只推进插值的前提是旧规则本来会渲染: {ctx}"
+                                    );
+                                    assert!(
+                                        cursor_driven && !relevant && !must_render,
+                                        "只有「仅光标触发且与本框无关」才允许降级: {ctx}"
+                                    );
+                                }
+                                TickAction::SkipIdle => {
+                                    assert!(!old_would_render, "旧规则会渲染却整帧跳过了: {ctx}");
+                                }
+                                TickAction::SkipOccluded => {
+                                    panic!("decide_tick_action 不该产出遮挡跳过: {ctx}")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// 光标在别处移动时：本框不重绘，但必须仍推进一次共享高光插值。
+    ///
+    /// 少推进就会改变 `light_direction` 的插值序列，光标所在框的高光
+    /// 会突然变亮约 3.8 倍 —— 那是肉眼可见的画面变化，不是优化。
+    #[test]
+    fn cursor_elsewhere_advances_light_without_rendering() {
+        let action = decide_tick_action(
+            true,  // 光标动了
+            false, // 桌面没变
+            GLASS_CURSOR_SETTLE_TICKS,
+            0,
+            false, // 光标与本框无关
+        );
+        assert_eq!(action, TickAction::AdvanceLightOnly);
+        // 同样的输入，只要光标与本框有关就必须重绘
+        assert_eq!(
+            decide_tick_action(true, false, GLASS_CURSOR_SETTLE_TICKS, 0, true),
+            TickAction::Render(RenderReason::Cursor)
+        );
+    }
+
+    /// 桌面变化与心跳到期时，即使光标与本框无关也**必须重绘**：
+    /// 这两条是「背景真的变了」和「兜底自愈」，降级成只推进插值就会漏更新。
+    /// 这里只断言"渲染了"，不钉死具体原因 —— 原因的优先级由
+    /// `pick_render_reason` 自己的测试保证。
+    #[test]
+    fn desktop_change_and_heartbeat_win_over_cursor_filter() {
+        // 桌面变了 + 光标在别处动 → 必须重绘
+        assert!(
+            matches!(
+                decide_tick_action(true, true, GLASS_CURSOR_SETTLE_TICKS, 0, false),
+                TickAction::Render(_)
+            ),
+            "桌面变化时必须重绘，不能降级成只推进插值"
+        );
+        // 桌面变了 + 光标没动 → 必须重绘
+        assert!(
+            matches!(
+                decide_tick_action(false, true, GLASS_CURSOR_SETTLE_TICKS, 0, false),
+                TickAction::Render(_)
+            ),
+            "桌面变化时必须重绘（光标没动也一样）"
+        );
+        // 只有心跳到期 → 必须重绘
+        assert!(
+            matches!(
+                decide_tick_action(
+                    false,
+                    false,
+                    GLASS_CURSOR_SETTLE_TICKS,
+                    GLASS_FORCE_RENDER_TICKS,
+                    false
+                ),
+                TickAction::Render(_)
+            ),
+            "心跳到期时必须重绘，这是漏更新的最后兜底"
+        );
+        // 心跳没到期、桌面没变、光标在别处 → 这才是唯一允许降级的组合
+        assert_eq!(
+            decide_tick_action(false, false, GLASS_CURSOR_SETTLE_TICKS, 0, false),
+            TickAction::SkipIdle,
+            "四条都不成立时必须整帧跳过"
+        );
+    }
+
+    /// 四条都不成立时必须能整帧省掉 —— 这是脏矩形方案省渲染的落点。
+    #[test]
+    fn render_reason_is_none_when_nothing_changed() {
+        assert_eq!(
+            pick_render_reason(false, false, GLASS_CURSOR_SETTLE_TICKS, 0),
+            None
+        );
+        assert_eq!(
+            pick_render_reason(
+                false,
+                false,
+                GLASS_CURSOR_SETTLE_TICKS,
+                GLASS_FORCE_RENDER_TICKS - 1
+            ),
+            None
+        );
+    }
+
+    /// 静止桌面上渲染次数必须只由心跳决定：5 个框、10 秒心跳、30 秒窗口
+    /// = 15 次。这条是把实测数字钉成断言，回归时一眼就能看出退化。
+    #[test]
+    fn idle_desktop_renders_only_heartbeat() {
+        const BOXES: u64 = 5;
+        const WINDOW_SECS: u64 = 30;
+        const TICK_MS: u64 = 40;
+        let mut heartbeat = 0u64;
+        for _ in 0..BOXES {
+            let ticks = WINDOW_SECS * 1000 / TICK_MS;
+            //  faithfully 复刻 decide_grid_refresh：计数器每 tick 先自增，
+            //  渲染后由 note_grid_frame_rendered 清零
+            let mut ticks_since_render = 0u32;
+            for _ in 0..ticks {
+                ticks_since_render = ticks_since_render.saturating_add(1);
+                if pick_render_reason(false, false, GLASS_CURSOR_SETTLE_TICKS, ticks_since_render)
+                    == Some(RenderReason::Heartbeat)
+                {
+                    heartbeat += 1;
+                    ticks_since_render = 0;
+                }
+            }
+        }
+        assert_eq!(
+            heartbeat,
+            BOXES * (WINDOW_SECS * 1000 / TICK_MS) / GLASS_FORCE_RENDER_TICKS as u64,
+            "静止桌面的渲染次数应当正好等于心跳次数"
+        );
+    }
+
     #[test]
     fn glass_shadow_padding_preserves_content_rect_at_96_dpi() {
         let outer = RECT {
@@ -1356,22 +2724,24 @@ mod tests {
         };
         let content = content_rect_with_padding(outer, glass_shadow_padding_at_dpi(96));
 
-        assert_eq!(content.left, 200);
-        assert_eq!(content.top, 300);
-        assert_eq!(content.right, 600);
-        assert_eq!(content.bottom, 700);
-        assert_eq!(client_to_content_point_with_padding(128, 128, 128), (0, 0));
+        // padding = 48 逻辑像素（2026-09-14 收缩：参照帧 alpha 剖面
+        // 证明 96 物理像素之外的外投影 alpha ≤ 1/255 不可见）。
+        assert_eq!(content.left, 120);
+        assert_eq!(content.top, 220);
+        assert_eq!(content.right, 680);
+        assert_eq!(content.bottom, 780);
+        assert_eq!(client_to_content_point_with_padding(48, 48, 48), (0, 0));
         assert_eq!(
-            client_to_content_point_with_padding(128, 528, 528),
+            client_to_content_point_with_padding(48, 448, 448),
             (400, 400)
         );
     }
 
     #[test]
     fn glass_shadow_padding_scales_with_dpi() {
-        assert_eq!(glass_shadow_padding_at_dpi(96), 128);
-        assert_eq!(glass_shadow_padding_at_dpi(144), 192);
-        assert_eq!(glass_shadow_padding_at_dpi(192), 256);
+        assert_eq!(glass_shadow_padding_at_dpi(96), 48);
+        assert_eq!(glass_shadow_padding_at_dpi(144), 72);
+        assert_eq!(glass_shadow_padding_at_dpi(192), 96);
         let content = content_rect_with_padding(
             RECT {
                 left: -92,
@@ -1382,11 +2752,11 @@ mod tests {
             glass_shadow_padding_at_dpi(144),
         );
 
-        assert_eq!(content.left, 100);
-        assert_eq!(content.top, 200);
-        assert_eq!(content.right, 500);
-        assert_eq!(content.bottom, 600);
-        assert_eq!(client_to_content_point_with_padding(192, 192, 192), (0, 0));
+        assert_eq!(content.left, -20);
+        assert_eq!(content.top, 80);
+        assert_eq!(content.right, 620);
+        assert_eq!(content.bottom, 720);
+        assert_eq!(client_to_content_point_with_padding(72, 72, 72), (0, 0));
     }
 
     /// 液态玻璃关闭时不得预留任何外投影留白。
@@ -1579,17 +2949,18 @@ mod tests {
 
 #[cfg(test)]
 mod liquid_glass_timer_tests {
-    use super::LIQUID_GLASS_RENDER_INTERVAL_MS;
+    use super::{LIQUID_GLASS_DRAG_INTERVAL_MS, LIQUID_GLASS_RENDER_INTERVAL_MS};
 
     /// 验证液态玻璃渲染定时器间隔已从 33ms 提升到 100ms
-    ///
-    /// 100ms (~10 FPS) 在视觉上与 33ms (~30 FPS) 差异极小，
-    /// 但 GPU 开销降低约 70%，同时减少与 GPUI 渲染帧的 RefCell 冲突窗口。
+    /// 静止档 40ms = 25fps：用户要求的液态玻璃背景帧率下限；
+    /// 拖拽档另有 16ms 高频路径。真正的省电手段是心跳
+    /// GLASS_FORCE_RENDER_TICKS=250 tick（10 秒），而不是拉长档位间隔。
     #[test]
     fn test_liquid_glass_render_interval() {
+        // 静止档 40ms = 25fps：用户要求的液态玻璃背景帧率下限。
         assert_eq!(
-            LIQUID_GLASS_RENDER_INTERVAL_MS, 200,
-            "液态玻璃渲染间隔应为 100ms（从 33ms 优化而来）"
+            LIQUID_GLASS_RENDER_INTERVAL_MS, 40,
+            "静止档渲染间隔应为 40ms（25fps 下限）"
         );
     }
 
@@ -1597,8 +2968,8 @@ mod liquid_glass_timer_tests {
     #[test]
     fn test_liquid_glass_render_interval_minimum() {
         assert!(
-            LIQUID_GLASS_RENDER_INTERVAL_MS >= 50,
-            "渲染间隔不应低于 50ms，避免过高 GPU 负载"
+            LIQUID_GLASS_RENDER_INTERVAL_MS >= 33,
+            "静止档不应快于 ~30fps，避免空转 GPU"
         );
     }
 
@@ -1608,6 +2979,42 @@ mod liquid_glass_timer_tests {
         assert!(
             LIQUID_GLASS_RENDER_INTERVAL_MS <= 200,
             "渲染间隔不应超过 200ms，避免视觉卡顿"
+        );
+    }
+
+    /// 拖拽档必须显著快于静止档，否则「拖拽走高频路径」等于没做。
+    #[test]
+    fn drag_interval_is_faster_than_idle_interval() {
+        assert!(
+            LIQUID_GLASS_DRAG_INTERVAL_MS < LIQUID_GLASS_RENDER_INTERVAL_MS,
+            "拖拽档 {}ms 必须小于静止档 {}ms",
+            LIQUID_GLASS_DRAG_INTERVAL_MS,
+            LIQUID_GLASS_RENDER_INTERVAL_MS
+        );
+    }
+
+    /// 拖拽档必须能支撑「至少 25 帧」的下限。
+    ///
+    /// Windows 定时器默认粒度约 15.6ms：请求值小于粒度时实际按粒度触发，
+    /// 因此真实间隔上限是 `max(请求值, 15.6)` 再向上取一个粒度。
+    /// 这里按最坏情况（实际间隔 = 请求值 + 一个粒度）校验仍有 ≥25fps。
+    #[test]
+    fn drag_interval_meets_25fps_floor() {
+        let worst_case_ms = LIQUID_GLASS_DRAG_INTERVAL_MS as f64 + 15.6;
+        let fps = 1000.0 / worst_case_ms;
+        assert!(
+            fps >= 25.0,
+            "拖拽档最坏情况 {fps:.1}fps 低于 25fps 下限（间隔 {worst_case_ms:.1}ms）"
+        );
+    }
+
+    /// 拖拽档不能快到把定时器打成忙等：请求值不低于 8ms。
+    #[test]
+    fn drag_interval_is_not_busy_loop() {
+        assert!(
+            LIQUID_GLASS_DRAG_INTERVAL_MS >= 8,
+            "拖拽档 {}ms 过短，会退化成忙等",
+            LIQUID_GLASS_DRAG_INTERVAL_MS
         );
     }
 }

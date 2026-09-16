@@ -17,7 +17,7 @@ use super::overlay_window::{
     dpi_at_screen_point, get_overlay_data, overlay_icon_cell_x, overlay_icon_cell_y,
     overlay_layout_params, OverlayIconItem, OverlayWindowData,
 };
-use crate::platform::windows::d2d_render::draw_icon_with_label;
+use crate::platform::windows::d2d_render::{cached_brush, draw_icon_with_label};
 
 /// 初始化覆盖窗口的 D2D/DirectWrite/WIC 设备。
 ///
@@ -211,11 +211,11 @@ pub(crate) fn render_desktop_overlay(hwnd: HWND) {
         let top = my1.min(my2) as f32;
         let right = mx1.max(mx2) as f32;
         let bottom = my1.max(my2) as f32;
-        let fill_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(0, 120, 215, 40), None) };
+        let fill_brush = cached_brush(target, 0, 120, 215, 40);
         if let Ok(ref fb) = fill_brush {
             unsafe { target.FillRectangle(&d2d_rect(left, top, right, bottom), fb) };
         }
-        let border_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(0, 120, 215, 200), None) };
+        let border_brush = cached_brush(target, 0, 120, 215, 200);
         if let Ok(ref bb) = border_brush {
             let bw = 1.0_f32;
             unsafe {
@@ -274,9 +274,9 @@ fn draw_desktop_icons(
     // 网格定位仍使用窗口级 DPI（保持网格一致性）
     let grid_layout = overlay_layout_params(width, dpi);
 
-    let hover_brush = unsafe { target.CreateSolidColorBrush(&d2d_color(70, 90, 130, 70), None) };
+    let hover_brush = cached_brush(target, 70, 90, 130, 70);
     let selected_brush =
-        unsafe { target.CreateSolidColorBrush(&d2d_color(60, 80, 120, 120), None) };
+        cached_brush(target, 60, 80, 120, 120);
 
     // per-DPI 缓存：避免同一 DPI 的图标重复创建 DirectWrite 资源
 
@@ -388,7 +388,7 @@ fn draw_desktop_icons(
         let sep_pad = scale_for_dpi(4, local_dpi) as f32;
 
         let insert_brush =
-            unsafe { target.CreateSolidColorBrush(&d2d_color(255, 255, 255, 255), None) };
+            cached_brush(target, 255, 255, 255, 255);
         if let Ok(ref ib) = insert_brush {
             let line_rect = d2d_rect(
                 separator_x - separator_w / 2.0,

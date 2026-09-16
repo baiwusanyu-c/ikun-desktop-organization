@@ -26,13 +26,28 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use windows::core::Interface;
+use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-    D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
-    D2D1_RENDER_TARGET_USAGE_NONE,
+    D2D1CreateDevice, ID2D1Device, ID2D1DeviceContext, D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
+};
+use windows::Win32::Graphics::Direct2D::{
+    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, ID2D1SolidColorBrush,
+    D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES,
+    D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_USAGE_NONE,
+};
+use windows::Win32::Graphics::Direct3D::{
+    D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_11_0,
+};
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+    D3D11_SDK_VERSION,
+};
+use windows::Win32::Graphics::DirectComposition::{
+    DCompositionCreateDevice2, IDCompositionDesktopDevice,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory, IDWriteInlineObject, IDWriteTextFormat, IDWriteTextLayout,
@@ -41,6 +56,7 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
+use windows::Win32::Graphics::Dxgi::{IDXGIDevice, IDXGIFactory2};
 use windows::Win32::Graphics::Imaging::{CLSID_WICImagingFactory, IWICImagingFactory};
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 
@@ -98,7 +114,13 @@ impl TextFormatSpec {
 
 // 所有共享状态都是线程本地的：`ID2D1Factory` 有线程亲和性，缓存本身也不需要
 // 跨线程可见，因此用 `RefCell` 而不是 `Mutex`，既省一次锁开销也不会锁中毒。
+/// 纯色画刷缓存上限，见 `solid_brush_rgba`。
+const SOLID_BRUSH_CACHE_LIMIT: usize = 512;
+
 thread_local! {
+    /// (渲染目标裸指针, 打包 RGBA) → 画刷
+    static SOLID_BRUSHES: RefCell<HashMap<(usize, u32), ID2D1SolidColorBrush>> =
+        RefCell::new(HashMap::new());
     static D2D_FACTORY: RefCell<Option<ID2D1Factory>> = RefCell::new(None);
     static DW_FACTORY: RefCell<Option<IDWriteFactory>> = RefCell::new(None);
     static WIC_FACTORY: RefCell<Option<IWICImagingFactory>> = RefCell::new(None);
@@ -110,6 +132,180 @@ thread_local! {
     /// 条目数天然收敛到几百条，而命中时能直接比较借用的 `&[u16]`，
     /// 不用为了查一次而先克隆一个 owned key。
     static TEXT_LAYOUTS: RefCell<Vec<TextLayoutEntry>> = RefCell::new(Vec::new());
+    /// 渲染线程共享的 GPU 设备组（见 `SharedGpu`）
+    static SHARED_GPU: RefCell<Option<SharedGpu>> = const { RefCell::new(None) };
+    /// 渲染线程共享的 DirectComposition 设备。
+    ///
+    /// 必须是 `IDCompositionDesktopDevice` 而不是 `IDCompositionDevice2`：
+    /// `CreateTargetForHwnd` 只在前者上，拿 v2 接口编译期就找不到方法。
+    static DCOMP_DEVICE: RefCell<Option<IDCompositionDesktopDevice>> = const { RefCell::new(None) };
+}
+
+/// 取（必要时创建）当前渲染线程共享的 DirectComposition 设备。
+///
+/// 建在**共享的那个** D3D11 设备上（`shared_gpu().dxgi_device`）：
+/// DComp 视觉树里的合成交换链必须与渲染它的 D3D11 设备同源，
+/// 否则 `Present` 会失败或退化成一次跨设备拷贝。
+///
+/// 返回 `None` 表示这台机器/这次会话用不了 DComp（远程桌面、
+/// 极旧系统等），调用方必须退回 `WS_EX_LAYERED` + `UpdateLayeredWindow`。
+pub(crate) fn dcomp_device() -> Option<IDCompositionDesktopDevice> {
+    if let Some(existing) = DCOMP_DEVICE.with(|cell| cell.borrow().clone()) {
+        return Some(existing);
+    }
+    let gpu = shared_gpu()?;
+    unsafe {
+        // windows 0.62 的签名是 `DCompositionCreateDevice2<P0, T>(renderingdevice) -> Result<T>`，
+        // IID 与出参由泛型 T 推导，不要手写 &mut raw。
+        let device: IDCompositionDesktopDevice = match DCompositionCreateDevice2(&gpu.dxgi_device) {
+            Ok(device) => device,
+            Err(error) => {
+                log::error!("创建 DirectComposition 设备失败，分类框退回分层窗口呈现: {error:?}");
+                return None;
+            }
+        };
+        log::info!("线程共享 DirectComposition 设备已创建");
+        DCOMP_DEVICE.with(|cell| *cell.borrow_mut() = Some(device.clone()));
+        Some(device)
+    }
+}
+
+/// 渲染线程内共享的一组 GPU 设备。
+///
+/// # 为什么全线程必须只有一个 D3D11 设备
+///
+/// 旧实现里进程内同时存在**两个** D3D11 设备：一个由
+/// `liquid_glass::create_device()` 显式创建（桌面捕获 + 模糊 + 玻璃着色器），
+/// 另一个由 `D2D1CreateFactory` 内部隐式创建（分类框合成用的 DC 渲染目标）。
+///
+/// D3D11 纹理**不能跨设备直接共享**，于是玻璃每帧都要：
+/// GPU 渲染 → `CopySubresourceRegion` 到 staging → `Map` 阻塞等 GPU 排空
+/// → 逐行 memcpy 到 CPU → `CopyFromMemory` 上传给**另一个**设备 → 软件光栅。
+/// 实测这条往返占单帧 20ms 里的 16ms，而真正的模糊 + 着色只有 0.44ms ——
+/// 也就是说 97% 的时间花在搬像素，3% 花在画画。
+///
+/// 统一到一个设备之后，玻璃的输出纹理可以用
+/// `ID2D1DeviceContext::CreateBitmapFromDxgiSurface` **零拷贝**包成 D2D 位图
+/// 直接参与合成，整条 GPU→CPU→GPU 往返彻底消失。
+///
+/// 顺带也省掉一个设备本身：每个额外 D3D11 设备连同显卡用户态驱动的
+/// 私有分配约占 50MB（见本模块开头对旧「每窗口一个工厂」的实测记录）。
+///
+/// # 为什么仍是线程本地而不是全进程一份
+///
+/// `ID3D11DeviceContext` 不是线程安全的（immidate context 明确要求单线程
+/// 串行使用），而分类框、桌面覆盖、菜单、对齐参考线都在同一条平台渲染
+/// 线程上创建。按线程缓存既拿到全部收益，又不引入跨线程同步。
+#[derive(Clone)]
+pub(crate) struct SharedGpu {
+    pub device: ID3D11Device,
+    pub context: ID3D11DeviceContext,
+    pub dxgi_device: IDXGIDevice,
+    /// 建 composition swap chain 用（`CreateSwapChainForComposition` 需要 factory2）
+    pub factory2: IDXGIFactory2,
+    pub d2d_device: ID2D1Device,
+}
+
+/// 取（必要时创建）当前渲染线程共享的 GPU 设备组。
+///
+/// 任一步失败都记日志并返回 `None`，由调用方退回原有路径；
+/// 绝不 panic —— 建不出设备只意味着玻璃不可用，不该让整个应用挂掉。
+pub(crate) fn shared_gpu() -> Option<SharedGpu> {
+    if let Some(existing) = SHARED_GPU.with(|cell| cell.borrow().clone()) {
+        return Some(existing);
+    }
+    let built = unsafe { build_shared_gpu() };
+    match built {
+        Some(gpu) => {
+            log::info!("线程共享 GPU 设备组已创建（D3D11 + DXGI + D2D1 单一设备）");
+            SHARED_GPU.with(|cell| *cell.borrow_mut() = Some(gpu.clone()));
+            Some(gpu)
+        }
+        None => {
+            log::error!("创建线程共享 GPU 设备组失败，液态玻璃将退回半透明背景");
+            None
+        }
+    }
+}
+
+/// 实际创建共享设备组。任一步失败返回 `None`（已就地记日志）。
+unsafe fn build_shared_gpu() -> Option<SharedGpu> {
+    let levels = [D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0];
+    let mut device: Option<ID3D11Device> = None;
+    let mut context: Option<ID3D11DeviceContext> = None;
+    let mut chosen = D3D_FEATURE_LEVEL::default();
+    if let Err(error) = D3D11CreateDevice(
+        None,
+        D3D_DRIVER_TYPE_HARDWARE,
+        HMODULE::default(),
+        // BGRA 支持是 D2D1 的硬性要求，缺了 CreateDeviceContext 会直接失败
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+        Some(&levels),
+        D3D11_SDK_VERSION,
+        Some(&mut device),
+        Some(&mut chosen),
+        Some(&mut context),
+    ) {
+        log::error!("创建共享 D3D11 设备失败: {error:?}");
+        return None;
+    }
+    let device = device?;
+    let context = context?;
+
+    let dxgi_device: IDXGIDevice = match device.cast() {
+        Ok(d) => d,
+        Err(error) => {
+            log::error!("D3D11 设备转 IDXGIDevice 失败: {error:?}");
+            return None;
+        }
+    };
+    let adapter = match dxgi_device.GetAdapter() {
+        Ok(a) => a,
+        Err(error) => {
+            log::error!("取 DXGI 适配器失败: {error:?}");
+            return None;
+        }
+    };
+    let factory2: IDXGIFactory2 = match adapter.GetParent() {
+        Ok(f) => f,
+        Err(error) => {
+            log::error!("取 IDXGIFactory2 失败: {error:?}");
+            return None;
+        }
+    };
+    let d2d_device = match D2D1CreateDevice(&dxgi_device, None) {
+        Ok(d) => d,
+        Err(error) => {
+            log::error!("从共享 D3D11 设备创建 D2D1 Device 失败: {error:?}");
+            return None;
+        }
+    };
+    Some(SharedGpu {
+        device,
+        context,
+        dxgi_device,
+        factory2,
+        d2d_device,
+    })
+}
+
+/// 在共享设备上创建一个新的 D2D1 设备上下文。
+///
+/// 每个窗口一个：`ID2D1DeviceContext` 同一时刻只能 `SetTarget` 一个目标，
+/// 多窗口共用会在并发渲染时互相踩画面（与 DC 渲染目标必须按窗口持有
+/// 是同一个理由）。上下文本身很轻，重的是它背后的设备 —— 那个是共享的。
+pub(crate) fn new_d2d_context() -> Option<ID2D1DeviceContext> {
+    let gpu = shared_gpu()?;
+    match unsafe {
+        gpu.d2d_device
+            .CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)
+    } {
+        Ok(context) => Some(context),
+        Err(error) => {
+            log::error!("创建共享设备上的 D2D1 DeviceContext 失败: {error:?}");
+            None
+        }
+    }
 }
 
 /// 获取（必要时创建）当前渲染线程共享的 Direct2D 工厂。
@@ -172,6 +368,72 @@ pub(crate) fn wic_factory() -> Option<IWICImagingFactory> {
     }
 }
 
+/// 纯色画刷缓存键：(渲染目标裸指针, 打包后的 RGBA)。
+///
+/// 单独抽出来是为了可测：键算错会让两个不同颜色命中同一条目，
+/// 画出来的东西就错了，而这种错误没有任何报错。
+fn brush_cache_key(target_ptr: usize, r: u8, g: u8, b: u8, a: u8) -> (usize, u32) {
+    (target_ptr, u32::from_be_bytes([r, g, b, a]))
+}
+
+/// 取（必要时创建并缓存）指定渲染目标上的纯色画刷。
+///
+/// # 为什么要缓存
+///
+/// `ID2D1SolidColorBrush` 是 COM 对象，每次 `CreateSolidColorBrush`
+/// 都从 Windows 进程堆上分配。分类框一帧要在 16 处各建一个，
+/// 加上每个图标标签的阴影与正文两把，5 个框 × 每秒 2.5 帧就是
+/// **每秒七百多次 COM 对象的申请/归还**。
+///
+/// 这些对象都会释放，Rust 侧分配器实测活跃字节恒定在 6.4MB 一动不动，
+/// 但进程私有字节仍以 ~1MB/分 爬升 —— 涨的是 Windows 堆为这类
+/// 高频申请/归还保留的已提交容量。按「渲染目标 × 颜色」缓存之后，
+/// 稳态下一次都不再创建。
+///
+/// # 为什么按渲染目标分开缓存
+///
+/// 画刷归属于创建它的渲染目标，跨目标复用会被 D2D 运行期拒绝。
+pub(crate) fn solid_brush_rgba(
+    target: &ID2D1DCRenderTarget,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+) -> Option<ID2D1SolidColorBrush> {
+    let key = brush_cache_key(target.as_raw() as usize, r, g, b, a);
+    if let Some(hit) = SOLID_BRUSHES.with(|cell| cell.borrow().get(&key).cloned()) {
+        return Some(hit);
+    }
+    let created =
+        unsafe { target.CreateSolidColorBrush(&super::ffi_types::d2d_color(r, g, b, a), None) }
+            .ok()?;
+    SOLID_BRUSHES.with(|cell| {
+        let mut cache = cell.borrow_mut();
+        // 颜色绝大多数是编译期常量，正常十几个分类框也就一两百条。
+        // 上限只防「配置里出现逐帧变化的动态颜色」导致无界增长，
+        // 触顶直接清空重建，代价是下一帧重新创建十几把画刷。
+        if cache.len() >= SOLID_BRUSH_CACHE_LIMIT {
+            log::debug!("纯色画刷缓存触顶 {} 条，清空重建", cache.len());
+            cache.clear();
+        }
+        cache.insert(key, created.clone());
+    });
+    Some(created)
+}
+
+/// 丢弃当前渲染线程缓存的全部纯色画刷。
+///
+/// 画刷归属于创建它的渲染目标，目标销毁后缓存里会留下悬空条目；
+/// 而 COM 对象地址会被系统复用，新目标可能拿到与旧目标**相同的地址**，
+/// 那时命中悬空条目就会画出错误内容甚至直接被 D2D 拒绝，而且没有任何报错。
+///
+/// 所有 DC 渲染目标都由 `create_dc_render_target` 创建，因此在新目标
+/// 诞生时整体清空即可保证：任何地址被复用的那一刻，缓存里一定没有
+/// 它的旧条目。
+pub(crate) fn clear_solid_brush_cache() {
+    SOLID_BRUSHES.with(|cell| cell.borrow_mut().clear());
+}
+
 /// 用共享工厂创建一个 GDI DC 渲染目标（预乘 alpha，BGRA）。
 ///
 /// `dpi` 传 `0.0` 表示沿用系统 DPI（分类框与覆盖窗口的既有行为）；
@@ -191,7 +453,22 @@ pub(crate) fn create_dc_render_target(dpi: f32) -> Option<ID2D1DCRenderTarget> {
         minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
     };
     match unsafe { factory.CreateDCRenderTarget(&props) } {
-        Ok(target) => Some(target),
+        Ok(target) => {
+            // 新目标可能复用了已销毁目标的地址，先清掉旧画刷条目
+            clear_solid_brush_cache();
+            // 整套渲染代码都把 D2D 坐标当**物理像素**用（几何取自
+            // GetWindowRect，字号自己乘 dpi_scale），这只有在渲染目标
+            // DPI == 96 时才成立。这里把真实 DPI 打出来做一次性核对：
+            // 若哪天不是 96，画面会整体缩放，而这条日志就是唯一线索。
+            let mut dpi_x = 0.0f32;
+            let mut dpi_y = 0.0f32;
+            unsafe { target.GetDpi(&mut dpi_x, &mut dpi_y) };
+            log::info!(
+                "DC RenderTarget 已创建: 请求 dpi={dpi:.1} → 实际 dpiX={dpi_x:.1} dpiY={dpi_y:.1}",
+                dpi = dpi
+            );
+            Some(target)
+        }
         Err(error) => {
             log::error!("创建共享工厂的 DC RenderTarget 失败: {error:?}");
             None
@@ -269,7 +546,7 @@ struct TextLayoutEntry {
 /// 条目数天然收敛到「不同文本 × 不同换行宽度」，几十个分类框
 /// 也就几百条。上限只是防极端情况（不停重命名、不停拖拽改宽度）
 /// 下无界增长，触顶直接清空重来。
-const TEXT_LAYOUT_CACHE_LIMIT: usize = 2048;
+pub(crate) const TEXT_LAYOUT_CACHE_LIMIT: usize = 2048;
 
 /// 获取（必要时创建并缓存）DirectWrite 文字布局。
 ///
@@ -354,6 +631,22 @@ pub(crate) fn text_layout(
     Some(layout)
 }
 
+/// 当前渲染线程三级文字缓存的条目数（只读诊断，供 `mem_probe` 输出）。
+///
+/// 返回 (文字格式, 省略号裁剪对象, 文字布局)。
+///
+/// 布局缓存是运行期唯一可能持续变大的文字缓存：键里含文本与换行尺寸，
+/// 只要标签文字或列宽抖动就会不断产生新条目，直到 2048 条触顶清空，
+/// 表现为内存缓慢爬升后突然掉一截。把条目数打进日志就能一眼看出
+/// 是不是它在涨。
+pub(crate) fn text_cache_sizes() -> (usize, usize, usize) {
+    (
+        TEXT_FORMATS.with(|cell| cell.borrow().len()),
+        ELLIPSIS_SIGNS.with(|cell| cell.borrow().len()),
+        TEXT_LAYOUTS.with(|cell| cell.borrow().len()),
+    )
+}
+
 /// 清空当前线程的文字格式缓存（仅测试使用）。
 ///
 /// 运行期缓存条目由「字体族 × 字号 × 对齐」组合天然收敛，分类框最多产生十余条。
@@ -367,6 +660,35 @@ pub(crate) fn clear_text_format_cache() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 画刷缓存键必须同时区分渲染目标与颜色：
+    /// 键碰撞会让两个不同颜色拿到同一把画刷，画面直接画错且无报错。
+    #[test]
+    fn brush_key_separates_target_and_color() {
+        let a = brush_cache_key(0x1000, 255, 255, 255, 255);
+        let b = brush_cache_key(0x1000, 255, 255, 255, 254);
+        let c = brush_cache_key(0x2000, 255, 255, 255, 255);
+        assert_ne!(a, b, "alpha 差 1 也必须是不同的键");
+        assert_ne!(a, c, "不同渲染目标必须是不同的键");
+        assert_eq!(
+            a,
+            brush_cache_key(0x1000, 255, 255, 255, 255),
+            "同参数必须稳定"
+        );
+    }
+
+    /// RGBA 四个分量都要进键，不能被移位吃掉。
+    #[test]
+    fn brush_key_uses_every_channel() {
+        let base = brush_cache_key(1, 10, 20, 30, 40);
+        assert_ne!(base, brush_cache_key(1, 20, 10, 30, 40), "红绿互换必须不同");
+        assert_ne!(
+            base,
+            brush_cache_key(1, 10, 20, 40, 30),
+            "蓝 alpha 互换必须不同"
+        );
+        assert_ne!(base, brush_cache_key(1, 40, 30, 20, 10), "整体反序必须不同");
+    }
     use windows::Win32::Graphics::DirectWrite::{
         DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL,
         DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_NEAR,

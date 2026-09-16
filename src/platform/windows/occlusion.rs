@@ -163,6 +163,75 @@ fn intersect(a: &RECT, b: &RECT) -> Option<RECT> {
     })
 }
 
+/// 虚拟屏幕的四个 `GetSystemMetrics` 索引。
+const SM_XVIRTUALSCREEN: i32 = 76;
+const SM_YVIRTUALSCREEN: i32 = 77;
+const SM_CXVIRTUALSCREEN: i32 = 78;
+const SM_CYVIRTUALSCREEN: i32 = 79;
+
+/// 把矩形夹进边界内；完全落在边界外时返回一个空矩形（right<=left）。
+///
+/// 纯函数，便于单测：夹错方向会让「看得见」的部分被当成看不见，
+/// 分类框就会冻在旧画面上，而这种错误不会有任何报错。
+fn clamp_rect_to(rect: &RECT, bounds: &RECT) -> RECT {
+    let left = rect.left.max(bounds.left);
+    let top = rect.top.max(bounds.top);
+    let right = rect.right.min(bounds.right);
+    let bottom = rect.bottom.min(bounds.bottom);
+    RECT {
+        left,
+        top,
+        // 交叉时收敛成空矩形，而不是反过来变成负尺寸
+        right: right.max(left),
+        bottom: bottom.max(top),
+    }
+}
+
+/// 把分类框外框夹到**虚拟屏幕**（所有显示器的外接矩形）范围内。
+///
+/// # 为什么必须先夹一次，否则遮挡判定形同虚设
+///
+/// 分类框可以被拖到部分伸出屏幕外的位置。实测就有 5 个框的右边缘在
+/// x=5154，而所在副屏的右边界是 5040 —— 有 114 物理像素在屏幕外。
+/// 此时即便别的应用把**屏幕上看得见的那部分**盖得严严实实，
+/// 覆盖率也只有 71%~84%：剩下那块是屏幕外根本不存在的区域，
+/// 永远不可能被任何窗口覆盖。`fully_covered` 于是永远返回 `false`，
+/// `遮挡状态切换` 一条都不会打，分类框照旧每帧跑完整条
+/// DXGI 取帧 → D2D 模糊 → D3D 着色 → GDI 回读 → 提交管线。
+/// 实测这条管线每渲染一次就在显卡用户态驱动里留下约 22KB 不还的
+/// 已提交内存（Rust 堆全程恒定 6.4MB），27.7 次/秒就是 **36MB/分**。
+///
+/// # 为什么夹到虚拟屏幕是安全的
+///
+/// 虚拟屏幕**之外**的像素一定不落在任何显示器上，夹掉它不可能把
+/// 「其实看得见」的部分误判成看不见 —— 判定只会变保守的反面，
+/// 也就是更容易判成遮挡，而被夹掉的区域本来就没人看得见。
+///
+/// 反过来不成立：虚拟屏幕的外接矩形里可能包含显示器之间的空隙，
+/// 那部分仍会被当作可见。所以这个夹取是**偏保守**的，只会少省一点，
+/// 不会误判。要精确到显示器并集得枚举所有 monitor，收益不抵复杂度。
+fn clamp_to_virtual_screen(target: &RECT) -> RECT {
+    let (vx, vy, vw, vh) = unsafe {
+        (
+            GetSystemMetrics(SM_XVIRTUALSCREEN),
+            GetSystemMetrics(SM_YVIRTUALSCREEN),
+            GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            GetSystemMetrics(SM_CYVIRTUALSCREEN),
+        )
+    };
+    if vw <= 0 || vh <= 0 {
+        // 拿不到虚拟屏幕尺寸就不夹，保持原有的保守行为
+        return copy_rect(target);
+    }
+    let bounds = RECT {
+        left: vx,
+        top: vy,
+        right: vx + vw,
+        bottom: vy + vh,
+    };
+    clamp_rect_to(target, &bounds)
+}
+
 fn same_rect(a: &RECT, b: &RECT) -> bool {
     a.left == b.left && a.top == b.top && a.right == b.right && a.bottom == b.bottom
 }
@@ -243,6 +312,16 @@ pub(crate) fn is_window_occluded(hwnd: HWND, target: &RECT) -> bool {
         return false;
     }
 
+    // 只在「屏幕上真的看得见的那部分」上做覆盖判定，理由见
+    // clamp_to_virtual_screen 的说明。整框都在屏幕外时一个像素都
+    // 看不见，等同于被完全遮挡。
+    let visible = clamp_to_virtual_screen(target);
+    if visible.right <= visible.left || visible.bottom <= visible.top {
+        return true;
+    }
+    // 之后一律用夹取后的可见矩形：中心点快路径、遮挡物交集、覆盖判定
+    let target = &visible;
+
     // 快路径：中心点上最顶层的窗口就是自己 → 什么都没盖住，
     // 不用枚举全部顶层窗口。
     //
@@ -293,6 +372,93 @@ mod tests {
             top,
             right,
             bottom,
+        }
+    }
+
+    /// 夹取必须只砍掉屏幕外的部分，屏幕内的一个像素都不能少。
+    ///
+    /// 砍多了 = 把看得见的区域当成看不见 = 分类框冻在旧画面上，
+    /// 这是本模块最危险的错误方向，必须有测试钉死。
+    #[test]
+    fn clamp_rect_keeps_every_visible_pixel() {
+        let bounds = rect(0, 0, 5040, 2080);
+        // 完全在内 → 原样返回
+        assert!(same_rect(
+            &clamp_rect_to(&rect(100, 100, 400, 400), &bounds),
+            &rect(100, 100, 400, 400)
+        ));
+        // 右边越界 → 只把右边夹到边界，其余不动
+        assert!(
+            same_rect(
+                &clamp_rect_to(&rect(4560, 365, 5154, 865), &bounds),
+                &rect(4560, 365, 5040, 865)
+            ),
+            "实测场景：框右边缘 5154 超出副屏右边界 5040"
+        );
+        // 左边/上边越界 → 夹到边界
+        assert!(same_rect(
+            &clamp_rect_to(&rect(-200, -300, 400, 400), &bounds),
+            &rect(0, 0, 400, 400)
+        ));
+        // 完全在外 → 空矩形，且不能出现 right < left 的负尺寸
+        let outside = clamp_rect_to(&rect(6000, 3000, 6400, 3400), &bounds);
+        assert!(
+            outside.right <= outside.left && outside.bottom <= outside.top,
+            "屏幕外必须夹成空矩形，实际 ({},{})-({},{})",
+            outside.left,
+            outside.top,
+            outside.right,
+            outside.bottom
+        );
+        assert!(
+            outside.right >= outside.left && outside.bottom >= outside.top,
+            "不允许出现负尺寸"
+        );
+    }
+
+    /// 副屏在虚拟屏幕坐标系里原点不是 (0,0)，夹取必须按虚拟屏幕原点算，
+    /// 不能假设从 0 开始。
+    #[test]
+    fn clamp_rect_handles_offset_virtual_screen() {
+        // 双屏：主屏 (0,0)-(3120,2080)，副屏 (3120,0)-(5040,1080)
+        let bounds = rect(-1920, 0, 5040, 2080);
+        assert!(
+            same_rect(
+                &clamp_rect_to(&rect(-2000, 100, -100, 300), &bounds),
+                &rect(-1920, 100, -100, 300)
+            ),
+            "负坐标侧越界也要夹到虚拟屏幕左边界"
+        );
+        assert!(same_rect(
+            &clamp_rect_to(&rect(4560, 365, 5154, 865), &bounds),
+            &rect(4560, 365, 5040, 865)
+        ));
+    }
+
+    /// 端到端：框有 114px 伸出屏幕外、可见部分被一个窗口完全盖住时，
+    /// 必须判成遮挡。这正是"用户全程盖着分类框、内存却照样暴涨"的现场。
+    #[test]
+    fn offscreen_sliver_does_not_block_occlusion() {
+        let box_rect = rect(4560, 365, 5154, 865); // 右边缘超出屏幕 114px
+        let visible = clamp_to_virtual_screen(&box_rect);
+        // 本机虚拟屏幕宽 5040；若测试机不同，这里退化成"至少夹掉了一部分或全都在屏内"
+        if visible.right > visible.left {
+            // 一个窗口把可见部分盖满（RECT 不是 Copy，显式复制一份进 covers）
+            let mut covers = vec![copy_rect(&visible)];
+            assert!(
+                fully_covered(&visible, &covers, 0),
+                "可见部分被盖满就必须判成遮挡，visible=({},{})-({},{})",
+                visible.left,
+                visible.top,
+                visible.right,
+                visible.bottom
+            );
+            // 而用未夹取的原始外框判定必然失败 —— 这就是修复前的 bug
+            covers = vec![rect(4560, 365, 5040, 865)];
+            assert!(
+                !fully_covered(&box_rect, &covers, 0),
+                "不夹取时屏幕外那条永远盖不住，复现修复前的误判"
+            );
         }
     }
 

@@ -161,14 +161,12 @@ fn get_guide_color() -> windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F
             }
         }
     }
-    // Cache empty - lazy init (overlay should be hidden when first render is called)
-    log::warn!("[GuideColor] Cache empty during render, lazy-initializing...");
-    init_guide_color();
-    if let Ok(guard) = CACHED_GUIDE_COLOR.lock() {
-        if let Some(c) = *guard {
-            return c;
-        }
-    }
+    // 渲染路径绝不同步采样：实测首次拖拽时在此卡死整条
+    // 渲染线程（2026-09-14）。改为后台线程采样，本帧先用默认色。
+    static INIT_SPAWNED: std::sync::Once = std::sync::Once::new();
+    INIT_SPAWNED.call_once(|| {
+        std::thread::spawn(|| init_guide_color());
+    });
     // Ultimate fallback: white
     D2D1_COLOR_F {
         r: 1.0,
@@ -390,6 +388,69 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
     }
 
     // ��ʼ�� D2D �豸
+    // 参考线更新节流 33ms：每次鼠标移动都做全屏 5040x2080
+    // DIB 重建 + 全屏 ULW 会拖垮 DWM（实测拖拽掉帧主因），30Hz 足够跟手。
+    {
+        use std::time::Instant;
+        static LAST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+        let now = Instant::now();
+        let due = match LAST.lock() {
+            Ok(mut g) => {
+                let d = g.map(|t| now.duration_since(t).as_millis() >= 100).unwrap_or(true);
+                if d {
+                    *g = Some(now);
+                }
+                d
+            }
+            Err(_) => true,
+        };
+        if !due {
+            return;
+        }
+    }
+    // 参考线包围盒：overlay 窗口只覆盖线条区域（加少量边距），
+    // ULW 表面从全屏 5040x2080(42MB) 降到约百 KB 级，DWM 合成开销
+    // 与面积成正比，这是拖拽掉帧的根因（2026-09-15 实测）。
+    let margin = GUIDE_LINE_WIDTH as i32 + 4;
+    let mut bx0 = i32::MAX;
+    let mut by0 = i32::MAX;
+    let mut bx1 = i32::MIN;
+    let mut by1 = i32::MIN;
+    for m in &alignment.horizontal_matches {
+        let y = m.position - work_area_offset.1;
+        let x0 = m.line_start.0 - work_area_offset.0;
+        let x1 = m.line_end.0 - work_area_offset.0;
+        bx0 = bx0.min(x0).min(x1);
+        bx1 = bx1.max(x0).max(x1);
+        by0 = by0.min(y);
+        by1 = by1.max(y);
+    }
+    for m in &alignment.vertical_matches {
+        let x = m.position - work_area_offset.0;
+        let y0 = m.line_start.1 - work_area_offset.1;
+        let y1 = m.line_end.1 - work_area_offset.1;
+        bx0 = bx0.min(x);
+        bx1 = bx1.max(x);
+        by0 = by0.min(y0).min(y1);
+        by1 = by1.max(y0).max(y1);
+    }
+    if bx0 >= bx1 || by0 >= by1 {
+        unsafe {
+            ShowWindow(hwnd, SW_HIDE);
+        }
+        return;
+    }
+    bx0 -= margin;
+    by0 -= margin;
+    bx1 += margin;
+    by1 += margin;
+    let off_x = bx0;
+    let off_y = by0;
+    let bw = bx1 - bx0;
+    let bh = by1 - by0;
+    unsafe {
+        SetWindowPos(hwnd, HWND_TOPMOST, bx0, by0, bw, bh, SWP_NOACTIVATE);
+    }
     init_d2d_devices(data);
 
     let (Some(ref _factory), Some(ref target)) = (&data.d2d_factory, &data.d2d_target) else {
@@ -397,8 +458,8 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
         return;
     };
 
-    let w = data.width;
-    let h = data.height;
+    let w = bw;
+    let h = bh;
     if w <= 0 || h <= 0 {
         return;
     }
@@ -500,9 +561,9 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
 
     // 绘制水平参考线（动态对比色）
     for m in &alignment.horizontal_matches {
-        let y = (m.position - work_area_offset.1) as f32;
-        let x0 = (m.line_start.0 - work_area_offset.0) as f32;
-        let x1 = (m.line_end.0 - work_area_offset.0) as f32;
+        let y = (m.position - work_area_offset.1 - off_y) as f32;
+        let x0 = (m.line_start.0 - work_area_offset.0 - off_x) as f32;
+        let x1 = (m.line_end.0 - work_area_offset.0 - off_x) as f32;
         let p0 = Vector2 { X: x0, Y: y };
         let p1 = Vector2 { X: x1, Y: y };
 
@@ -523,9 +584,9 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
 
     // 绘制垂直参考线（动态对比色）
     for m in &alignment.vertical_matches {
-        let x = (m.position - work_area_offset.0) as f32;
-        let y0 = (m.line_start.1 - work_area_offset.1) as f32;
-        let y1 = (m.line_end.1 - work_area_offset.1) as f32;
+        let x = (m.position - work_area_offset.0 - off_x) as f32;
+        let y0 = (m.line_start.1 - work_area_offset.1 - off_y) as f32;
+        let y1 = (m.line_end.1 - work_area_offset.1 - off_y) as f32;
         let p0 = Vector2 { X: x, Y: y0 };
         let p1 = Vector2 { X: x, Y: y1 };
 
@@ -576,16 +637,6 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
 
         // ��ʾ����
         ShowWindow(hwnd, SW_SHOWNA);
-        SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        );
-
         // ����
         SelectObject(mem_dc, old_bmp);
         DeleteObject(dib as HGDIOBJ);

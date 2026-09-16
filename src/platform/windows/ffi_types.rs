@@ -133,6 +133,12 @@ pub const WS_VISIBLE: u32 = 0x10000000;
 pub const WS_CHILD: u32 = 0x40000000;
 pub const WS_THICKFRAME: u32 = 0x00040000;
 pub const WS_EX_LAYERED: u32 = 0x00080000;
+/// 窗口不带 DWM 重定向表面：所有像素都由 DirectComposition 视觉树提供。
+///
+/// 与 `WS_EX_LAYERED` **互斥**。分层窗口的画面来自 `UpdateLayeredWindow`
+/// 提交的 GDI DIB，DComp 的画面来自合成交换链；两者同时存在时
+/// DWM 用哪一个没有保证，表现为窗口全黑或闪烁。
+pub const WS_EX_NOREDIRECTIONBITMAP: u32 = 0x00200000;
 pub const WS_EX_TOOLWINDOW: u32 = 0x00000080;
 #[allow(dead_code)]
 pub const GWL_EXSTYLE: i32 = -20;
@@ -224,6 +230,8 @@ pub const SW_SHOWNA: i32 = 8;
 pub const SW_HIDE: i32 = 0;
 pub const SWP_NOZORDER: u32 = 0x0004;
 pub const SWP_NOACTIVATE: u32 = 0x0010;
+/// 扩展样式改动后必须带上它，否则 DWM 不会重建窗口表面
+pub const SWP_FRAMECHANGED: u32 = 0x0020;
 pub const SWP_NOMOVE: u32 = 0x0002;
 pub const SWP_NOSIZE: u32 = 0x0001;
 pub const HWND_BOTTOM: HWND = std::ptr::dangling_mut::<c_void>();
@@ -622,6 +630,7 @@ pub const WM_USER_DRAG_ITEM_REMOVED: u32 = WM_APP + 10;
 pub const WM_USER_DRAG_ITEM_ADDED: u32 = WM_APP + 11;
 /// 通知框：拖拽悬停进入（设置高亮）
 pub const WM_USER_DRAG_ENTER: u32 = WM_APP + 12;
+pub const WM_USER_DESTROY_GUIDE: u32 = WM_APP + 30; // 延迟销毁全屏参考线 overlay
 /// 通知框：拖拽悬停离开（清除高亮）
 pub const WM_USER_DRAG_LEAVE: u32 = WM_APP + 13;
 /// 通知框：拖拽放置完成（处理 pending drop）

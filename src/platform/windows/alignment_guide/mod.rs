@@ -12,11 +12,15 @@ use guide_overlay::{
     create_guide_overlay, hide_guide_lines, is_guide_overlay_created, update_guide_lines,
 };
 
+pub use guide_overlay::destroy_guide_overlay;
+
 #[allow(unused_imports)]
 pub use alignment_detect::{AlignmentDirection, AlignmentMatch, AlignmentResult};
 
-use crate::platform::windows::ffi_imports::{GetDpiForWindow, KillTimer, SetTimer};
-use crate::platform::windows::ffi_types::{RECT, TIMER_ID_ALIGNMENT};
+use crate::platform::windows::ffi_imports::{
+    GetDpiForWindow, KillTimer, PostMessageW, SetTimer,
+};
+use crate::platform::windows::ffi_types::{RECT, TIMER_ID_ALIGNMENT, WM_USER_DESTROY_GUIDE};
 use crate::platform::windows::grid_window;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -30,7 +34,8 @@ pub fn on_enter_size_move(hwnd: *mut std::ffi::c_void) {
     if let Ok(mut guard) = MOVING_WINDOW.lock() {
         *guard = Some(SendHwnd(hwnd));
     }
-    if !is_guide_overlay_created() {
+    let no_guide = std::env::var("IKUN_NO_GUIDE").map(|v| v == "1").unwrap_or(false);
+    if !no_guide && !is_guide_overlay_created() {
         if let Err(e) = create_guide_overlay() {
             log::error!("create guide overlay failed: {}", e);
         }
@@ -49,6 +54,14 @@ pub fn on_exit_size_move(hwnd: *mut std::ffi::c_void) {
     unsafe { KillTimer(hwnd, TIMER_ID_ALIGNMENT) };
     hide_guide_lines();
     log::debug!("exit size/move, timer stopped");
+    // 参考线只在移动/缩放期间有用：退出时销毁全屏 overlay
+    // （3120x2080 分层窗 + 全屏 DIB 约 50MB+），否则首次拖拽后常驻进程一生
+    // （2026-09-14 内存台阶根因）。下次进入移动时 on_enter_size_move 重建。
+    // 同步 DestroyWindow 在模态移动退出路径上有重入风险（实测卡死 tick），
+    // 改为 PostMessage 延迟到消息循环空闲时销毁。
+    unsafe {
+        PostMessageW(hwnd, WM_USER_DESTROY_GUIDE, 0, 0);
+    }
 }
 
 /// Timer 回调：检测对齐并更新参考线

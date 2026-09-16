@@ -6,3 +6,4 @@
 
 # Build artifacts (scripts/build.mjs output)
 /dist
+/target_dbg

@@ -25,6 +25,13 @@ mod tauri_commands;
 #[cfg(all(windows, feature = "gpui-ui"))]
 mod gpui_app;
 
+/// 全局分配器：透传 `System`，只做计数。
+///
+/// 用途见 `utils::alloc_probe` —— 把「Rust 堆」从「D2D / D3D11 /
+/// 显卡驱动私有分配」里切出来，否则进程私有字节缓慢爬升时无法归因。
+#[global_allocator]
+static ALLOCATOR: utils::alloc_probe::CountingAllocator = utils::alloc_probe::CountingAllocator;
+
 fn main() -> anyhow::Result<()> {
     utils::init_logger();
     install_panic_hook();
@@ -104,6 +111,20 @@ fn install_panic_hook() {
         }
         let backtrace = std::backtrace::Backtrace::force_capture();
         log::error!("[PANIC] 回溯:\n{backtrace}");
+        // 旁路直写文件：日志器本身卡死时 panic 也要留下证据
+        // （2026-09-15 拖拽后线程死亡且日志全停，无从查起）。
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(std::env::temp_dir().join("ikun_panic.log"))
+        {
+            use std::io::Write;
+            let _ = writeln!(f, "[PANIC] {info}");
+            if let Some(location) = info.location() {
+                let _ = writeln!(f, "[PANIC] loc {}:{}:{}", location.file(), location.line(), location.column());
+            }
+            let _ = writeln!(f, "{}", std::backtrace::Backtrace::force_capture());
+        }
         default_hook(info);
     }));
 }
