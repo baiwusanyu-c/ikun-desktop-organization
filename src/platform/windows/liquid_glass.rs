@@ -16,26 +16,25 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use windows::core::{Interface, PCSTR};
 use windows::Win32::Foundation::{POINT, RECT as WinRect};
-use windows_numerics::{Matrix3x2, Vector2};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_IGNORE, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COMPOSITE_MODE_SOURCE_COPY,
     D2D1_PIXEL_FORMAT, D2D_MATRIX_5X4_F, D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    CLSID_D2D1Border, CLSID_D2D1ColorMatrix, CLSID_D2D1Crop, CLSID_D2D1GaussianBlur, CLSID_D2D1Scale,
-    D2D1_PROPERTY_TYPE_VECTOR2, D2D1_SCALE_PROP_SCALE, ID2D1Bitmap1,
-    ID2D1DeviceContext, ID2D1Effect, ID2D1Image, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-    D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
-    D2D1_BORDER_EDGE_MODE_MIRROR, D2D1_BORDER_PROP_EDGE_MODE_X, D2D1_BORDER_PROP_EDGE_MODE_Y,
-    D2D1_COLORMATRIX_PROP_COLOR_MATRIX, D2D1_CROP_PROP_RECT, D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
-    D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION, D2D1_INTERPOLATION_MODE_LINEAR,
-    D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT, D2D1_PROPERTY_TYPE_MATRIX_5X4,
-    D2D1_PROPERTY_TYPE_VECTOR4,
+    CLSID_D2D1Border, CLSID_D2D1ColorMatrix, CLSID_D2D1Crop, CLSID_D2D1GaussianBlur,
+    CLSID_D2D1Scale, ID2D1Bitmap1, ID2D1DeviceContext, ID2D1Effect, ID2D1Image,
+    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_OPTIONS_TARGET,
+    D2D1_BITMAP_PROPERTIES1, D2D1_BORDER_EDGE_MODE_MIRROR, D2D1_BORDER_PROP_EDGE_MODE_X,
+    D2D1_BORDER_PROP_EDGE_MODE_Y, D2D1_COLORMATRIX_PROP_COLOR_MATRIX, D2D1_CROP_PROP_RECT,
+    D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION,
+    D2D1_INTERPOLATION_MODE_LINEAR, D2D1_PROPERTY_TYPE_ENUM, D2D1_PROPERTY_TYPE_FLOAT,
+    D2D1_PROPERTY_TYPE_MATRIX_5X4, D2D1_PROPERTY_TYPE_VECTOR2, D2D1_PROPERTY_TYPE_VECTOR4,
+    D2D1_SCALE_PROP_SCALE,
 };
 use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
 use windows::Win32::Graphics::Direct3D::{ID3DBlob, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST};
-use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Direct3D11::D3D11_MAP_FLAG_DO_NOT_WAIT;
+use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM,
     DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_SAMPLE_DESC,
@@ -46,6 +45,7 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_OUTDUPL_MOVE_RECT,
 };
 use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+use windows_numerics::{Matrix3x2, Vector2};
 
 use super::ffi_types::Pixel32;
 use crate::config::{BoxStyleConfig, LiquidGlassConfig};
@@ -536,6 +536,8 @@ struct RegionWatch {
     hash: u64,
 }
 
+// GlassRenderer 体积大是有意的（持有整套设备/纹理资源）；拆 Box 属于过度设计
+#[allow(clippy::large_enum_variant)]
 enum GlassState {
     Uninitialized,
     Ready(GlassRenderer),
@@ -634,8 +636,7 @@ pub fn memory_stats() -> GlassMemoryStats {
                 if let Some(surface) = &renderer.surfaces {
                     stats.surface_cache_entries = 1;
                     // 输出纹理 1 张；暂存改每框私有，逐框累加
-                    stats.surface_cache_bytes =
-                        surface.width as u64 * surface.height as u64 * 4;
+                    stats.surface_cache_bytes = surface.width as u64 * surface.height as u64 * 4;
                     for rb in renderer.readbacks.values() {
                         stats.surface_cache_bytes += rb.width as u64 * rb.height as u64 * 4;
                     }
@@ -1895,11 +1896,13 @@ fn build_blur_chain(
         let scale = d2d_context.CreateEffect(&CLSID_D2D1Scale)?;
         scale.SetInput(0, &border.GetOutput()?, true);
         let sv = if half { 0.5f32 } else { 1.0f32 };
-        let sv_bytes = std::slice::from_raw_parts(
-            (&Vector2 { X: sv, Y: sv } as *const _) as *const u8,
-            8,
-        );
-        scale.SetValue(D2D1_SCALE_PROP_SCALE.0 as u32, D2D1_PROPERTY_TYPE_VECTOR2, sv_bytes)?;
+        let sv_bytes =
+            std::slice::from_raw_parts((&Vector2 { X: sv, Y: sv } as *const _) as *const u8, 8);
+        scale.SetValue(
+            D2D1_SCALE_PROP_SCALE.0 as u32,
+            D2D1_PROPERTY_TYPE_VECTOR2,
+            sv_bytes,
+        )?;
         let blur = d2d_context.CreateEffect(&CLSID_D2D1GaussianBlur)?;
         blur.SetInput(0, &scale.GetOutput()?, true);
         let saturate = d2d_context.CreateEffect(&CLSID_D2D1ColorMatrix)?;
@@ -2148,7 +2151,7 @@ impl GlassRenderer {
                 rasterizer: rasterizer.context("创建光栅化器未返回对象")?,
                 outputs,
                 readbacks: std::collections::HashMap::new(),
-                    surfaces: None,
+                surfaces: None,
                 displacement_maps: [std_map, pol_map, pro_map],
                 light_direction: [0.0, 0.0],
                 startup_black_frames_remaining: 3,
@@ -2897,7 +2900,6 @@ impl GlassRenderer {
                 .CreateRenderTargetView(&output_texture, None, Some(&mut output_target))?;
             let output_target = output_target.context("创建输出渲染目标视图未返回对象")?;
 
-
             // 把输出纹理零拷贝包成 D2D 位图。失败不致命：
             // 记一条日志、留 None，合成端会自动退回 CPU 回读路径。
             let output_bitmap = (|| -> Option<ID2D1Bitmap1> {
@@ -3279,7 +3281,7 @@ impl GlassRenderer {
             };
             if need_new {
                 let mut odesc = D3D11_TEXTURE2D_DESC::default();
-                unsafe { surfaces.output_texture.GetDesc(&mut odesc) };
+                surfaces.output_texture.GetDesc(&mut odesc);
                 let staging_desc = D3D11_TEXTURE2D_DESC {
                     Width: surface_width,
                     Height: surface_height,
@@ -3316,7 +3318,7 @@ impl GlassRenderer {
 
             let needed = (surface_width * surface_height) as usize;
             let row_bytes = surface_width as usize * size_of::<Pixel32>();
-            let copy_rows = |mapped: &D3D11_MAPPED_SUBRESOURCE, out: &mut Vec<Pixel32>| unsafe {
+            let copy_rows = |mapped: &D3D11_MAPPED_SUBRESOURCE, out: &mut Vec<Pixel32>| {
                 if out.len() != needed {
                     out.clear();
                     out.resize(
@@ -3332,7 +3334,11 @@ impl GlassRenderer {
                 let src_base = mapped.pData.cast::<u8>();
                 let dst_base = out.as_mut_ptr().cast::<u8>();
                 if mapped.RowPitch as usize == row_bytes {
-                    std::ptr::copy_nonoverlapping(src_base, dst_base, needed * size_of::<Pixel32>());
+                    std::ptr::copy_nonoverlapping(
+                        src_base,
+                        dst_base,
+                        needed * size_of::<Pixel32>(),
+                    );
                 } else {
                     for row in 0..surface_height as usize {
                         std::ptr::copy_nonoverlapping(

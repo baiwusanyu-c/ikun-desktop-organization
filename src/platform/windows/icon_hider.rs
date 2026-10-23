@@ -1685,7 +1685,7 @@ fn restore_icons_from_dir(managed_dir: &Path) -> (u32, u32) {
 /// 遍历 managed_icons/ 目录，根据仓库文件名前缀还原原始桌面路径，
 /// 为每个仓库中的图标创建 DesktopIcon 对象。
 /// 这些图标在桌面上不可见（已被移入仓库），但在分类框中应可见。
-pub fn list_vault_icons() -> Vec<crate::platform::types::DesktopIcon> {
+pub fn list_vault_icons() -> Vec<crate::platform::windows::types::DesktopIcon> {
     let managed_dir = match get_managed_dir() {
         Ok(d) => d,
         Err(e) => {
@@ -1758,7 +1758,7 @@ pub fn list_vault_icons() -> Vec<crate::platform::types::DesktopIcon> {
                 Some(logical_path.clone())
             };
 
-            icons.push(crate::platform::types::DesktopIcon {
+            icons.push(crate::platform::windows::types::DesktopIcon {
                 id: uuid::Uuid::new_v4(),
                 display_name,
                 path: logical_path,

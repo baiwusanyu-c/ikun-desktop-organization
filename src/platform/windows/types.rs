@@ -1,12 +1,12 @@
-//! Cross-platform data types
+//! Windows 层共享数据类型
 //!
-//! Desktop icons, screen info, icon data etc shared across platforms.
+//! 桌面图标、屏幕信息、图标像素数据等共享数据结构。
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Desktop icon info (cross-platform)
+/// 桌面图标信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesktopIcon {
     pub id: uuid::Uuid,
@@ -34,7 +34,7 @@ pub struct ScreenInfo {
     pub dpi: u32,
 }
 
-/// Extracted icon pixel data (cross-platform)
+/// 提取出的图标像素数据
 #[derive(Debug, Clone)]
 pub struct IconData {
     /// RGBA pixel data (row-major, top-to-bottom)
@@ -44,9 +44,3 @@ pub struct IconData {
     /// Image height in pixels
     pub height: u32,
 }
-
-/// Raw icon handle (platform opaque)
-#[cfg(windows)]
-pub type RawIconHandle = *mut std::ffi::c_void;
-#[cfg(not(windows))]
-pub type RawIconHandle = *mut std::ffi::c_void; // placeholder for macOS

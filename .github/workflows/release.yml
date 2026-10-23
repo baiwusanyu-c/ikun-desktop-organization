@@ -4,11 +4,11 @@
 # Flow:
 #   1. Triggered by a version tag (v*) push or manual dispatch.
 #   2. Test gate: fmt + clippy + cargo test must pass first.
-#   3. Only then are artifacts packaged (Windows now, macOS reserved).
+#   3. Only then are Windows artifacts packaged.
 #   4. Artifacts + SHA256 are published to the GitHub Releases page.
 #
 # Trigger from local (recommended):
-#   npm run release -- --bump beta --push     (scripts/release.mjs)
+#   pnpm run release -- --bump beta --push     (scripts/release.mjs)
 # =============================================================================
 name: Release
 
@@ -41,8 +41,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          package_manager: pnpm
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -61,14 +62,14 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Install frontend dependencies
-        run: npm --prefix frontend ci
+        run: pnpm -C frontend install --frozen-lockfile
 
       - name: Build frontend
         # tauri::generate_context! requires frontendDist to exist at compile time
-        run: npm --prefix frontend run build
+        run: pnpm -C frontend run build
 
       - name: Check frontend types (svelte-check + tsc)
-        run: npm --prefix frontend run check
+        run: pnpm -C frontend run check
 
       - name: Format check
         run: cargo fmt -- --check
@@ -135,7 +136,7 @@ jobs:
           $version = "${{ steps.ver.outputs.version }}"
           $versionLine = Get-Content Cargo.toml | Where-Object { $_ -match '^\s*version\s*=' } | Select-Object -First 1
           if (-not $versionLine -or $versionLine -notmatch [regex]::Escape($version)) {
-            Write-Error "Cargo.toml version ($versionLine) does not match release version ($version). Bump the project version first (npm run release -- --bump <level>)."
+            Write-Error "Cargo.toml version ($versionLine) does not match release version ($version). Bump the project version first (pnpm run release -- --bump <level>)."
             exit 1
           }
           Write-Host "Version check passed: $versionLine"
@@ -144,8 +145,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          package_manager: pnpm
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -161,21 +163,18 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Install Tauri CLI
-        run: npm install -g @tauri-apps/cli@2
-
       - name: Build Windows artifacts
         run: node scripts/build.mjs --platform win --mode release
 
       - name: Generate SHA256 checksums
         shell: pwsh
         run: |
-          $lines = Get-ChildItem dist -File | ForEach-Object {
+          $lines = Get-ChildItem target/dist -File | ForEach-Object {
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
             "$hash  $($_.Name)"
           }
-          $lines | Out-File -FilePath dist/SHA256SUMS.txt -Encoding utf8
-          Get-Content dist/SHA256SUMS.txt
+          $lines | Out-File -FilePath target/dist/SHA256SUMS.txt -Encoding utf8
+          Get-Content target/dist/SHA256SUMS.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -186,7 +185,7 @@ jobs:
           generate_release_notes: true
           append_body: true
           files: |
-            dist/*
+            target/dist/*
           body: |
             > **Beta notice**: this build is unsigned and only smoke-tested.
             > Windows SmartScreen may warn on first run ("More info" -> "Run anyway").
@@ -200,36 +199,3 @@ jobs:
             | `SHA256SUMS.txt` | SHA256 checksums |
 
             Verify integrity (PowerShell): `Get-FileHash <file> -Algorithm SHA256`
-
-  # ------------------------------------------------------------------
-  # Job 3: macOS - RESERVED (not implemented yet).
-  # Kept commented so enabling later is a one-block change; it already
-  # declares `needs: test` to keep the same quality gate.
-  # ------------------------------------------------------------------
-  # release-macos:
-  #   name: Release (macOS)
-  #   needs: test
-  #   runs-on: macos-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-node@v4
-  #       with:
-  #         node-version: "20"
-  #         cache: npm
-  #         cache-dependency-path: frontend/package-lock.json
-  #     - uses: dtolnay/rust-toolchain@stable
-  #     - uses: actions/cache@v4
-  #       with:
-  #         path: |
-  #           ~/.cargo/registry
-  #           ~/.cargo/git
-  #           target
-  #         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-  #     - run: npm install -g @tauri-apps/cli@2
-  #     - run: node scripts/build.mjs --platform mac --mode release
-  #     - uses: softprops/action-gh-release@v2
-  #       with:
-  #         files: |
-  #           dist/*.dmg
-  #           dist/*.app
-  #           dist/*.zip

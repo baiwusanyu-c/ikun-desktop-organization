@@ -396,6 +396,13 @@ pub fn add_visual_range(
 mod tests {
     use super::*;
 
+    /// 串行化锁：本模块所有测试共享全局 STATE，必须互斥执行，
+    /// 否则并行 cargo test 下 reset() 会清掉其他测试的状态。
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        static M: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        M.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn grid_key(id: u64, idx: usize) -> SelectionKey {
         SelectionKey {
             container_type: ContainerType::GridBox,
@@ -418,6 +425,7 @@ mod tests {
 
     #[test]
     fn test_set_range_basic() {
+        let _serial = serial();
         reset();
         let added = set_range(ContainerType::GridBox, 1, 2, 5);
         assert_eq!(added.len(), 4);
@@ -428,6 +436,7 @@ mod tests {
 
     #[test]
     fn test_set_range_reversed() {
+        let _serial = serial();
         reset();
         let added = set_range(ContainerType::GridBox, 1, 5, 2);
         assert_eq!(added.len(), 4);
@@ -438,6 +447,7 @@ mod tests {
 
     #[test]
     fn test_set_range_clears_previous() {
+        let _serial = serial();
         reset();
         add(grid_key(1, 10));
         assert_eq!(count(), 1);
@@ -449,6 +459,7 @@ mod tests {
 
     #[test]
     fn test_add_range_preserves_existing() {
+        let _serial = serial();
         reset();
         add(grid_key(1, 0));
         add(grid_key(1, 1));
@@ -461,6 +472,7 @@ mod tests {
 
     #[test]
     fn test_anchor_management() {
+        let _serial = serial();
         reset();
         assert!(anchor().is_none());
         let k = grid_key(1, 3);
@@ -472,6 +484,7 @@ mod tests {
 
     #[test]
     fn test_clear_resets_everything() {
+        let _serial = serial();
         reset();
         add(grid_key(1, 0));
         add(grid_key(1, 1));
@@ -491,6 +504,7 @@ mod tests {
 
     #[test]
     fn test_container_id_from_uuid_consistency() {
+        let _serial = serial();
         let id = uuid::Uuid::new_v4();
         let cid1 = container_id_from_uuid(id);
         let cid2 = container_id_from_uuid(id);
@@ -502,12 +516,14 @@ mod tests {
 
     #[test]
     fn test_container_id_from_uuid_uses_high_bits() {
+        let _serial = serial();
         let id = uuid::Uuid::from_u64_pair(0xDEAD_BEEF_CAFE_BABE, 0x1234_5678_9ABC_DEF0);
         assert_eq!(container_id_from_uuid(id), 0xDEAD_BEEF_CAFE_BABE);
     }
 
     #[test]
     fn test_has_selection() {
+        let _serial = serial();
         reset();
         assert!(!has_selection());
         add(overlay_key(0));
@@ -518,6 +534,7 @@ mod tests {
 
     #[test]
     fn test_count_in_container() {
+        let _serial = serial();
         reset();
         add(grid_key(1, 0));
         add(grid_key(1, 1));
@@ -530,6 +547,7 @@ mod tests {
 
     #[test]
     fn test_marquee_container() {
+        let _serial = serial();
         reset();
         assert!(marquee_container().is_none());
         set_marquee_container(Some((ContainerType::GridBox, 42)));
@@ -540,6 +558,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_add_is_idempotent() {
+        let _serial = serial();
         reset();
         let k = grid_key(1, 0);
         add(k);
@@ -550,6 +569,7 @@ mod tests {
 
     #[test]
     fn test_remove_nonexistent_is_safe() {
+        let _serial = serial();
         reset();
         let k = grid_key(1, 99);
         remove(k);
@@ -558,6 +578,7 @@ mod tests {
 
     #[test]
     fn test_set_range_visual() {
+        let _serial = serial();
         reset();
         let indices = vec![5, 2, 8, 1];
         let added = set_range_visual(ContainerType::GridBox, 1, &indices);
@@ -569,6 +590,7 @@ mod tests {
 
     #[test]
     fn test_add_range_visual() {
+        let _serial = serial();
         reset();
         add(grid_key(1, 0));
         add(grid_key(1, 3));

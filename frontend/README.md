@@ -10,6 +10,6 @@ Rust IPC 统一封装在 `src/lib/api/tauri-api.ts`，窗口关闭行为统一�
 `src/lib/window-lifecycle.ts` 转换为隐藏。
 
 ```powershell
-npm run check
-npm run build
+pnpm run check
+pnpm run build
 ```

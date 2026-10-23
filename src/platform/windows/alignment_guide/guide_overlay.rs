@@ -165,7 +165,7 @@ fn get_guide_color() -> windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F
     // 渲染线程（2026-09-14）。改为后台线程采样，本帧先用默认色。
     static INIT_SPAWNED: std::sync::Once = std::sync::Once::new();
     INIT_SPAWNED.call_once(|| {
-        std::thread::spawn(|| init_guide_color());
+        std::thread::spawn(init_guide_color);
     });
     // Ultimate fallback: white
     D2D1_COLOR_F {
@@ -396,7 +396,9 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
         let now = Instant::now();
         let due = match LAST.lock() {
             Ok(mut g) => {
-                let d = g.map(|t| now.duration_since(t).as_millis() >= 100).unwrap_or(true);
+                let d = g
+                    .map(|t| now.duration_since(t).as_millis() >= 100)
+                    .unwrap_or(true);
                 if d {
                     *g = Some(now);
                 }

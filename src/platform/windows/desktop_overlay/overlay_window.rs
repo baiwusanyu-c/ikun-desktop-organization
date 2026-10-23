@@ -18,7 +18,6 @@ use crate::box_core::view_engine::get_view_params;
 use crate::config::app_config::{AppConfig, ViewMode};
 use crate::platform::windows::ffi_imports::*;
 use crate::platform::windows::ffi_types::*;
-use crate::platform::DesktopManagerTrait;
 
 use super::overlay_grid::{overlay_first_free_cell, overlay_grid_to_logical, overlay_snap_to_grid};
 use super::overlay_render::render_desktop_overlay;

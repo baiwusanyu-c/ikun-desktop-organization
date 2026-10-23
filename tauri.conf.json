@@ -5,7 +5,7 @@
   "identifier": "com.ikun.organizer",
   "build": {
     "frontendDist": "frontend/dist",
-    "beforeBuildCommand": "cd frontend && npm run build"
+    "beforeBuildCommand": "cd frontend && pnpm run build"
   },
   "app": {
     "windows": [
@@ -78,12 +78,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "nsis",
-      "msi",
-      "app",
-      "dmg"
-    ],
+    "targets": ["nsis", "msi"],
     "icon": [
       "tauri/icons/icon.ico"
     ],

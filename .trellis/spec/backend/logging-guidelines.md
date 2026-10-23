@@ -32,7 +32,7 @@
 log = "0.4"           # 日志 facade
 env_logger = "0.11"   # 日志实现
 chrono = "0.4"        # 时间处理（日志日期格式化）
-dirs = "5.0"          # 跨平台目录获取
+dirs = "5.0"          # 用户目录/配置路径获取
 ```
 
 **初始化日志系统**（main.rs）：
@@ -293,12 +293,12 @@ log::info!("加载了 {} 个桌面图标", icons.len());
 
 ```rust
 // ❌ 错误：每帧都记录日志（性能问题）
-fn update(&mut self, ctx: &egui::Context) {
-    log::debug!("更新帧");  // 每秒 60 次！
+fn on_paint(&mut self) {
+    log::debug!("更新帧");  // 每秒数十次！
 }
 
 // ✅ 正确：只在重要事件时记录
-fn update(&mut self, ctx: &egui::Context) {
+fn on_paint(&mut self) {
     if self.classification_changed {
         log::info!("分类已更新");
     }

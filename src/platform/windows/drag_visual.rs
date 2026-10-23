@@ -2,13 +2,13 @@
 //!
 //! Provides HWND-aware handlers for computing and
 //! rendering drag-over visual states during grid drag operations.
-//! Pure logic functions have been extracted to \crate::shared::drag_logic\.
+//! Pure logic functions have been extracted to \crate::box_core::drag_logic\.
 
 use super::d2d_render::render_layered_window;
 use super::ffi_imports::*;
 use super::ffi_types::*;
 use super::grid_window::{get_data, get_grid_content_rect};
-pub(crate) use crate::shared::drag_logic::{apply_shift_insert, compute_drag_over_state};
+pub(crate) use crate::box_core::drag_logic::{apply_shift_insert, compute_drag_over_state};
 
 /// 清除拖拽覆盖可视化状态
 pub(crate) fn clear_drag_over_visual(data: &mut super::grid_window::GridWindowData) {
@@ -172,7 +172,7 @@ pub(crate) fn update_drag_over_visual(hwnd: HWND, screen_x: i32, screen_y: i32) 
     }
 }
 
-/// 计算 shift-drag 插入后的新位置布局（委托到 shared::drag_logic）
+/// 计算 shift-drag 插入后的新位置布局（委托到 box_core::drag_logic）
 pub(crate) fn compute_shift_insert_positions(
     positions: &[(i32, i32)],
     dragged_idx: usize,

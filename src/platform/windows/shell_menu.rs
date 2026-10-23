@@ -1142,7 +1142,7 @@ pub fn setup_desktop_registry() {
         }
     };
 
-    // 图标路径：使用可执行文件本身（内嵌 logo.ico 资源）
+    // 图标路径：使用可执行文件本身（内嵌应用图标资源）
     let icon_path = format_registry_icon_path(&exe_path);
 
     unsafe {

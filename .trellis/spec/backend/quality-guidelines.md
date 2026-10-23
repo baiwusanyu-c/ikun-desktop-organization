@@ -224,13 +224,14 @@ let content = std::fs::read_to_string(&path)
     .context(format!("无法读取文件: {}", path.display()))?;
 ```
 
-### 5. 平台特定代码必须使用条件编译
+### 5. 平台实现集中在 `platform/windows/`（Windows-only）
 
 ```rust
-// ✅ 正确：条件编译
-#[cfg(windows)]
-mod windows;
+// ✅ 正确：共享模块中的 Windows 专属行为用 cfg(windows) 分支
+#[cfg(target_os = "windows")]
+crate::platform::windows::liquid_glass::update_liquid_glass_config(&cfg);
 
+// ❌ 错误：为未实现的操作系统添加 cfg 分支或"跨平台预留" trait 抽象
 #[cfg(target_os = "macos")]
 mod macos;
 ```

@@ -672,7 +672,7 @@ mod tests {
             local,
             shared: 0,
         };
-        let adapters = vec![
+        let adapters = [
             // 本机实况：同一块 Intel Arc 被枚举 3 次，每个条目都报 139MB
             make("Intel Arc|128", 0xFFC5, 139),
             make("Intel Arc|128", 0x3E11F, 139),
@@ -748,15 +748,24 @@ pub fn last_glass_breakdown() -> (u64, u64, u64, u64) {
     })
 }
 
-pub fn record_drag_frame(hwnd: usize, dragging: bool, at: std::time::Instant, cost: std::time::Duration) {
+pub fn record_drag_frame(
+    hwnd: usize,
+    dragging: bool,
+    at: std::time::Instant,
+    cost: std::time::Duration,
+) {
     if !dragging {
         return;
     }
-    let Ok(mut st) = DRAG_STATS.lock() else { return };
+    let Ok(mut st) = DRAG_STATS.lock() else {
+        return;
+    };
     if st.hwnd != hwnd {
         drop(st);
         flush_drag_stats();
-        let Ok(mut st) = DRAG_STATS.lock() else { return };
+        let Ok(mut st) = DRAG_STATS.lock() else {
+            return;
+        };
         log::warn!("[dragdbg] record session start hwnd={:x}", hwnd);
         st.hwnd = hwnd;
         st.last = None;
@@ -767,7 +776,8 @@ pub fn record_drag_frame(hwnd: usize, dragging: bool, at: std::time::Instant, co
         return;
     }
     if let Some(l) = st.last {
-        st.intervals.push(at.saturating_duration_since(l).as_millis() as u32);
+        st.intervals
+            .push(at.saturating_duration_since(l).as_millis() as u32);
     }
     st.last = Some(at);
     st.costs.push(cost.as_micros() as u32);
@@ -787,7 +797,9 @@ pub fn record_drag_frame(hwnd: usize, dragging: bool, at: std::time::Instant, co
 /// 拖拽结束时汇总输出：帧间隔分布 + 单帧成本，
 /// 间隔 >33ms 视为掉帧（16ms 档的两倍）。
 pub fn flush_drag_stats() {
-    let Ok(mut st) = DRAG_STATS.lock() else { return };
+    let Ok(mut st) = DRAG_STATS.lock() else {
+        return;
+    };
     let n = st.intervals.len();
     log::warn!("[dragdbg] flush hwnd={:x} n={}", st.hwnd, n);
     if n == 0 {

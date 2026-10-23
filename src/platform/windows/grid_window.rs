@@ -31,7 +31,7 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
 };
 use windows::Win32::Graphics::DirectComposition::{
-    IDCompositionTarget, IDCompositionVisual, IDCompositionVisual2, IDCompositionVisual3,
+    IDCompositionTarget, IDCompositionVisual, IDCompositionVisual2,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_UNKNOWN,
@@ -575,7 +575,7 @@ pub(crate) const LIQUID_GLASS_SHADOW_PADDING: i32 = 48;
 /// 液态玻璃渲染定时器间隔（毫秒）
 ///
 /// 从原始的 33ms (~30 FPS) 降低到 200ms (~10 FPS)，
-/// 大幅减少 GPU 负载和与 GPUI 渲染帧的 RefCell 冲突频率。
+/// 大幅减少 GPU 负载和与渲染回调的 RefCell 借用冲突频率。
 /// 视觉差异极小（液态玻璃效果变化较慢），但 GPU 开销降低约 70%。
 pub(crate) const LIQUID_GLASS_RENDER_INTERVAL_MS: u32 = 40;
 
@@ -1147,14 +1147,14 @@ pub(crate) fn teardown_dcomp(hwnd: HWND) {
     // dcomp 存在 GridWindowData（挂在 GWLP_USERDATA）里，从那里取走所有权
     let taken = unsafe { get_data(hwnd) }.and_then(|data| data.dcomp.take());
     let Some(state) = taken else { return };
-    teardown_dcomp_state(state);
+    teardown_dcomp_state(*state);
 }
 
 /// 把一份 DComp 状态从 DWM 合成树上摘下来。
 ///
 /// WM_DESTROY 兑底路径拿到的是 GridWindowData 里的所有权，不经 hwnd 查表，
 /// 所以抆树动作单独抽出来两边共用。
-pub(crate) fn teardown_dcomp_state(state: Box<DcompState>) {
+pub(crate) fn teardown_dcomp_state(state: DcompState) {
     unsafe {
         let _ = state.target.SetRoot(None::<&IDCompositionVisual>);
         if let Some(dcomp) = super::render_devices::dcomp_device() {
@@ -1388,7 +1388,7 @@ pub(crate) fn attach_dcomp(
         // （DComp 视觉不被窗口矩形裁剪），表现为桌面上到处是
         // 「白顶条 + 半透明大方块」。缩到 96/dpi 后表面像素
         // 与窗口物理像素 1:1。
-        let dpi = unsafe { GetDpiForWindow(hwnd) };
+        let dpi = GetDpiForWindow(hwnd);
         let dpi = if dpi > 0 { dpi } else { 96 };
         // topmost = false：分类框压在桌面底部，绝不能盖住别的应用窗口
         let target: IDCompositionTarget = match dcomp.CreateTargetForHwnd(WindowsHwnd(hwnd), false)
@@ -1416,7 +1416,7 @@ pub(crate) fn attach_dcomp(
             M31: 0.0,
             M32: 0.0,
         };
-        if let Err(error) = unsafe { root.SetTransform2(&scale_matrix) } {
+        if let Err(error) = root.SetTransform2(&scale_matrix) {
             log::error!("[DComp] 视觉缩放设置失败 dpi={dpi}: {error:?}");
             return None;
         }
@@ -1551,8 +1551,8 @@ pub(crate) fn dump_dcomp_backbuffer(state: &mut DcompState) {
     use std::io::Write;
     use windows::Win32::Graphics::Direct3D11::ID3D11Device;
     use windows::Win32::Graphics::Direct3D11::{
-        D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
-        ID3D11Texture2D,
+        ID3D11Texture2D, D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_TEXTURE2D_DESC,
+        D3D11_USAGE_STAGING,
     };
 
     static DUMPED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -1611,7 +1611,7 @@ pub(crate) fn dump_dcomp_backbuffer(state: &mut DcompState) {
         {
             return;
         }
-        let mapped = unsafe { mapped.assume_init() };
+        let mapped = mapped.assume_init();
         let w = desc.Width as usize;
         let h = desc.Height as usize;
         let mut px = vec![0u8; w * h * 4];
@@ -1623,7 +1623,7 @@ pub(crate) fn dump_dcomp_backbuffer(state: &mut DcompState) {
             px[row * w * 4..(row + 1) * w * 4].copy_from_slice(src_row);
         }
         context.Unmap(&staging, 0);
-    
+
         let dir = std::env::temp_dir().join("ikun_mem2");
         let _ = std::fs::create_dir_all(&dir);
         let tag = format!("frame{}_{}x{}", idx, w, h);
@@ -1809,7 +1809,10 @@ pub(crate) fn exit_drag_refresh(hwnd: HWND) {
 fn set_grid_refresh_interval(hwnd: HWND, interval_ms: u32) {
     unsafe { KillTimer(hwnd, TIMER_ID_LIQUID_GLASS) };
     if !super::liquid_glass::is_liquid_glass_enabled() {
-        log::warn!("[timerdbg] set_interval {} skipped: glass disabled", interval_ms);
+        log::warn!(
+            "[timerdbg] set_interval {} skipped: glass disabled",
+            interval_ms
+        );
         return;
     }
     let id = unsafe {
@@ -1820,7 +1823,11 @@ fn set_grid_refresh_interval(hwnd: HWND, interval_ms: u32) {
             std::ptr::null_mut(),
         )
     };
-    log::warn!("[timerdbg] set_interval {}ms -> timer id {}", interval_ms, id);
+    log::warn!(
+        "[timerdbg] set_interval {}ms -> timer id {}",
+        interval_ms,
+        id
+    );
 }
 
 /// 读取当前光标的屏幕坐标（失败时返回 None）。
@@ -2115,7 +2122,8 @@ pub(crate) fn on_grid_refresh_tick(hwnd: HWND) {
         // 重跑二十几次字形光栅化（实测占整帧 27.6ms 里的 17.4ms）。
         // 所有显式重绘入口仍然走 render_layered_window（全量重画），
         // 所以任何状态变化都不会因为复用而漏掉。
-        let dragging = super::wnd_proc::in_modal_move_or_resize() && super::wnd_proc::drag_hwnd() == hwnd;
+        let dragging =
+            super::wnd_proc::in_modal_move_or_resize() && super::wnd_proc::drag_hwnd() == hwnd;
         let t0 = std::time::Instant::now();
         super::d2d_render::render_layered_window_glass_only(hwnd);
         super::mem_probe::record_drag_frame(hwnd as usize, dragging, t0, t0.elapsed());

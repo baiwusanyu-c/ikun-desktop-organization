@@ -103,7 +103,7 @@ if let Err(e) = layout.save() {
 
 ```rust
 // ✅ 正确：致命错误记录并返回
-fn main() -> eframe::Result<()> {
+fn main() -> anyhow::Result<()> {
     if let Err(e) = init_critical_components() {
         log::error!("初始化失败: {}", e);
         return Err(e.into());
@@ -113,37 +113,28 @@ fn main() -> eframe::Result<()> {
 ```
 
 **适用场景**：
-- egui 窗口创建失败
+- Tauri 运行时启动失败
 - 关键依赖缺失
 
 ---
 
-### Pattern 4: 框架层 panic 捕获（GPUI 专用）
+### Pattern 4: 无控制台进程的崩溃兜底（panic hook）
 
-**当第三方框架（如 GPUI）的 panic 无法通过 Result 传播时，使用 catch_unwind 降级为跳过操作**：
+**`windows_subsystem = "windows"` 下启动早期 panic 会静默退出，必须安装全局 panic hook 留痕**：
 
-`
-ust
-/// 安全执行 GPUI update 操作，捕获 RefCell 借用冲突 panic
-fn safe_gpui_update<T>(
-    cx: &gpui::AsyncApp,
-    operation_name: &str,
-    f: impl FnOnce(&mut gpui::App) -> T,
-) -> Result<anyhow::Result<T>, RefCellBorrowConflict> {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cx.update(f))) {
-        Ok(result) => Ok(result),
-        Err(_) => {
-            log::debug!("定时器跳过 {}: RefCell 借用冲突", operation_name);
-            Err(RefCellBorrowConflict)
-        }
-    }
-}
-`
+```rust
+// main.rs::install_panic_hook
+std::panic::set_hook(Box::new(move |info| {
+    log::error!("[PANIC] {info}");
+    log::error!("[PANIC] 回溯:\n{}", std::backtrace::Backtrace::force_capture());
+    // 旁路直写 %TEMP%\ikun_panic.log：日志器本身卡死时也要留下证据
+}));
+```
 
 **适用场景**：
-- GPUI 定时器回调与渲染循环的 RefCell 借用冲突
-- 第三方 UI 框架内部 panic 无法通过 Result 传播时
-- **不适用于**业务逻辑中的可恢复错误（应使用 nyhow::Result）
+- 开机自启场景需要区分"Windows 没拉起"与"拉起后崩溃"
+- 线程死亡、日志停写时用旁路文件保留崩溃证据
+- **不得**用 `catch_unwind` 吞掉业务可恢复错误（应使用 `anyhow::Result`）
 
 ---
 

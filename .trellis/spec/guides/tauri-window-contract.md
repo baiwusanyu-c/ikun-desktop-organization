@@ -8,7 +8,7 @@
 
 ## 共享状态契约
 
-`main.rs` 在 Tauri `setup` 中创建一个 `SharedTauriRuntime = Arc<Mutex<TauriRuntime>>`，先通过 `app.manage(...)` 注入 Commands，再把同一个实例交给 `start_platform_runtime`。`TauriRuntime` 持有唯一的 `AppContext` 与 `PluginRegistry`。
+`main.rs` 在 Tauri `setup` 中创建一个 `SharedTauriRuntime = Arc<Mutex<TauriRuntime>>`，先通过 `app.manage(...)` 注入 Commands，再把同一个实例交给 `start_platform_runtime`。`TauriRuntime` 持有唯一的 `AppContext`。
 
 - `config_cmd.rs` 和 `box_cmd.rs` 必须使用 `State<'_, SharedTauriRuntime>` 读写配置。
 - 成功保存配置后必须调用 `TauriRuntime::replace_config`，同步 `ctx.config` 与依赖分类规则创建的 `ctx.classifier`。
@@ -51,7 +51,7 @@
 `control-panel`、`create-box`、`edit-box` 的关闭都必须是 `prevent_close + hide`，不能调用 `close()`。
 Rust `on_window_event` 和前端 `installHideOnClose` 双重拦截；托盘/信号再次打开时使用同一个 WebView 实例并 `show + set_focus`。
 
-真正退出应用必须设置共享运行时的 `quit_requested`，由平台轮询线程调用 `PluginRegistry::cleanup_all`、清理注册表/托盘并销毁原生分类框后再执行 `app.exit(0)`。Tauri Command 不得直接退出进程而绕过这条清理路径。
+真正退出应用必须设置共享运行时的 `quit_requested`，由平台轮询线程保存分类框布局、清理注册表/托盘、销毁原生分类框并恢复桌面图标后再执行 `app.exit(0)`。Tauri Command 不得直接退出进程而绕过这条清理路径。
 所有 Rust 入口必须复用 `window_cmd::{show_managed_window, hide_managed_window, toggle_managed_window}`，不得在轮询线程复制标签和窗口操作。
 
 ## Svelte 配置状态

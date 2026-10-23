@@ -15,13 +15,13 @@ This guide helps developers identify and prevent bugs that arise from **implicit
 `
 ┌─────────────────────────────────────┐
 │         UI Layer                    │  ← User interactions, visual feedback
-│  (GPUI views, dialogs, panels)      │
+│  (Svelte pages, WebView windows)    │
 ├─────────────────────────────────────┤
 │       Business Layer                │  ← State management, data flow
 │  (AppContext, AppConfig, services)  │
 ├─────────────────────────────────────┤
 │      Platform Layer                 │  ← OS APIs, window management, rendering
-│  (Windows/macOS/Linux specifics)    │
+│  (Win32 / D2D / Shell COM)          │
 └─────────────────────────────────────┘
 `
 

@@ -1,213 +1,113 @@
-# Desktop Organizer (ikun-desktop-organization)
+# Desktop Organizer（ikun 桌面整理）
 
-> 桌面图标智能分类管理工具
-
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-blue)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)
 ![Language](https://img.shields.io/badge/language-Rust-orange)
-![GUI](https://img.shields.io/badge/GUI-egui-green)
+![UI](https://img.shields.io/badge/UI-Tauri%202%20%2B%20Svelte%205-green)
 
-## 项目简介
+> 桌面图标智能分类管理工具：**分类框直接渲染在桌面之上**，不是窗口式文件夹。
 
-Desktop Organizer 是一个基于 Rust + egui 的桌面图标智能分类管理应用，帮助你整理混乱的桌面，让图标井井有条。
+## 产品形态
+
+Desktop Organizer 是一个 **Windows 原生**桌面整理工具。分类框是贴在桌面图标层的
+原生 Win32 分层窗口，使用 Direct2D/DirectWrite 渲染，支持（Win11 风格）液态玻璃效果；
+控制面板与创建/编辑弹窗使用 Tauri 2 + Svelte 5（WebView2）。
 
 ### 核心功能
 
-- ✅ **一键智能分类** - 自动识别应用类型并分类
-- ✅ **分类框管理** - 类似手机文件夹的分类容器
-- ✅ **自由布局** - 分类框可拖拽摆放任意位置
-- ✅ **尺寸调整** - 拖拽边缘调整分类框大小
-- ✅ **样式自定义** - 圆角、背景色、毛玻璃效果
-- ✅ **布局记忆** - 自动保存布局，重启后恢复
-- ✅ **锁定保护** - 锁定分类框防止误操作
-
-### 支持平台
-
-| 平台 | 状态 | 说明 |
-|------|------|------|
-| Windows 10/11 | ✅ 核心支持 | 使用 Windows Shell API |
-| macOS | ⚠️ 实验性支持 | 需要特殊权限 |
-
-## 项目结构
-
-```
-ikun-desktop-organization/
-├── Cargo.toml              # 项目配置
-├── src/
-│   ├── main.rs             # 应用入口
-│   ├── app.rs              # egui 应用实现
-│   ├── desktop/            # 桌面管理（平台区分）
-│   │   ├── mod.rs
-│   │   ├── icons.rs        # 图标数据结构
-│   │   ├── windows.rs      # Windows 实现
-│   │   └── macos.rs        # macOS 实现
-│   ├── classification/     # 分类系统
-│   │   ├── mod.rs
-│   │   ├── database.rs     # 分类数据库
-│   │   ├── matcher.rs      # 匹配算法
-│   ├── ui/                 # UI 组件
-│   │   ├── mod.rs
-│   │   ├── box_widget.rs   # 分类框组件
-│   │   ├── icon_widget.rs  # 图标组件
-│   ├── config/             # 配置管理
-│   │   ├── mod.rs
-│   │   ├── layout.rs       # 布局管理
-│   │   ├── settings.rs     # 应用设置
-│   └── utils/              # 工具函数
-│       ├── mod.rs
-│       └── platform.rs     # 平台工具
-├── data/
-│   └── categories.yaml     # 分类数据库
-└── README.md
-```
+- ✅ **一键 AI 智能分类** - 兼容 OpenAI 格式 API，按文件类型/名称自动归类
+- ✅ **分类框管理** - 类似手机文件夹的桌面分类容器，创建/编辑/删除/锁定
+- ✅ **自由拖拽** - 文件从资源管理器拖入框、框内排序、框间移动、Shift 插入
+- ✅ **对齐辅助线** - 多框移动时的智能对齐引导
+- ✅ **液态玻璃样式** - 折射/模糊/饱和度/弹性形变可调（DXGI 桌面捕获 + D3D11）
+- ✅ **桌面接管** - 隐藏原生桌面图标入"仓库"，右击菜单注入（创建框/一键分类/面板/退出）
+- ✅ **多显示器 & DPI** - Per-Monitor V2 感知，物理像素布局
+- ✅ **系统托盘 + 全局热键 + 开机自启**
+- ✅ **布局记忆** - 自动保存分类框布局，重启后恢复
 
 ## 技术栈
 
-- **Rust 1.82+** - 编程语言
-- **egui + eframe** - 即时模式 GUI 框架
-- **serde** - 数据序列化
-- **windows-rs** - Windows API 绑定
-- **cocoa/objc** - macOS API 绑定
+| 层 | 技术 |
+|----|------|
+| 控制面板 / 弹窗 UI | Tauri 2 + Svelte 5 + TypeScript |
+| 分类框 / 桌面覆盖层 | Win32 分层窗口 + Direct2D/DirectWrite + DWM |
+| 液态玻璃 | DirectComposition + D3D11 + DXGI 桌面复制，着色器运行时 D3DCompile |
+| Shell 集成 | windows-rs（Shell/COM：托盘、右键菜单、OLE 拖放、图标提取） |
+| 业务核心 | Rust（box_core 纯逻辑 + classification AI 分类 + config JSON） |
 
 ## 快速开始
 
-### 安装依赖
+### 环境要求
+
+- Windows 10/11（本项目**仅支持 Windows**，不做跨平台承诺）
+- Rust（rustup 按 `rust-toolchain.toml` 自动锁定版本；需 MSVC 工具链）
+- Node.js ≥ 18 + pnpm（包管理器统一使用 pnpm；未安装时 `corepack enable` 即可）
+- WebView2 Runtime（安装包 embedBootstrapper 自动处理）
+
+### 构建与运行
 
 ```bash
-# 确保 Rust 已安装
-rustc --version
+# 1. 构建前端（首次必须）
+# tauri.conf.json 的 frontendDist 指向 frontend/dist，
+# 该目录不存在时 tauri::generate_context!() 会在编译期直接 panic。
+cd frontend
+pnpm install
+pnpm run build
+cd ..
 
-# 克隆项目
-cd /Users/baiwusanyu/RustroverProjects/ikun-desktop-organization
-
-# 构建项目
-cargo build
-```
-
-### 运行应用
-
-```bash
-# 开发模式
+# 2. 开发运行（Tauri 是唯一 UI 路径）
 cargo run
 
-# 发布模式
-cargo run --release
+# 调试日志
+RUST_LOG=debug cargo run
 ```
 
-## 开发进度
+> 也可以直接用 `pnpm run pack:fast`（debug 模式、跳过安装包）一键完成前端 + Rust 构建。
+> 若报错 `The \`frontendDist\` configuration is set to "frontend/dist" but this path doesn't exist`，
+> 说明前端还没构建，回到第 1 步即可。
 
-### MVP 阶段（当前）
+### 常用命令
 
-- [x] 项目结构搭建
-- [x] 基础 egui 窗口
-- [x] 分类数据库设计
-- [x] 分类匹配算法
-- [ ] Windows Shell API 集成
-- [ ] macOS 桌面集成
-- [ ] 分类框 UI 完善
-- [ ] 拖拽功能实现
-- [ ] 布局保存/恢复
-
-### 后续计划
-
-- [ ] 开机自启功能
-- [ ] 多显示器支持
-- [ ] 高级样式系统
-- [ ] MCP + Agent 智能分类
-- [ ] 安装包制作
-
-## 贡献指南
-
-欢迎提交 Issue 和 Pull Request！
-
-## 许可证
-
-MIT License
-
-## 架构演进方案
-
-### 背景
-
-当前每个分类框是独立的 `WS_EX_LAYERED` 分层窗口，删除一个分类框时 `DestroyWindow` 会触发 Windows DWM 重新合成桌面，导致其他分层窗口短暂失效（一帧闪烁）。这是 Windows DWM 对分层窗口的固有行为，无法通过 API 调用顺序绕过。
-
-### 当前架构：N 个分层窗口
-
-```
-分类框 A → WS_EX_LAYERED 窗口 → UpdateLayeredWindow
-分类框 B → WS_EX_LAYERED 窗口 → UpdateLayeredWindow
-分类框 C → WS_EX_LAYERED 窗口 → UpdateLayeredWindow
-```
-
-- **优势**：事件由系统分发（各窗口独立 wnd_proc），拖拽/缩放/Z-order 由 Windows 原生管理
-- **劣势**：N 套 D2D 资源（factory/target/DIB），删除时闪烁无法消除
-
-### 方案一：单窗口渲染（推荐）
-
-所有分类框渲染到一个分层窗口内，"删除"只是移除内部数据，不销毁窗口。
-
-```
-单一分层窗口 → UpdateLayeredWindow
-  ├── 分类框 A（内部区域）
-  ├── 分类框 B（内部区域）
-  └── 分类框 C（内部区域）
-```
-
-**渲染管线**（不变）：
-```
-D2D DC RenderTarget → BindDC(GDI mem_dc) → EndDraw → UpdateLayeredWindow
-```
-
-| 维度 | 对比 |
+| 命令 | 说明 |
 |------|------|
-| D2D 资源 | N 套 → 1 套 |
-| UpdateLayeredWindow | N 次 → 1 次 |
-| 删除闪烁 | ✅ 彻底消除（无窗口销毁） |
-| 内存 | N × (位图 + COM) → 1 个大位图 |
-| 事件分发 | 需自行 hit-test 路由到对应分类框 |
-| 拖拽/缩放 | 需自行实现内部拖拽逻辑 |
-| 改造成本 | 中等（渲染代码几乎不变，需重写事件分发） |
+| `cargo run` | 开发运行 |
+| `cargo test` | 全量单元测试（590+） |
+| `cargo fmt` / `cargo clippy` | 格式化 / Lint |
+| `pnpm -C frontend run check` | 前端类型检查（svelte-check + tsc） |
+| `pnpm run pack:win` | 发布构建，产出 NSIS/MSI 安装包到 `target/dist/` |
+| `pnpm run pack:fast` | 快速打包（debug、无安装包） |
+| `pnpm run release:beta:push` | 版本号 +1、打 tag、推送触发发布流水线 |
 
-### 方案二：DirectComposition
+## 项目结构
 
-每个分类框作为 DComp visual tree 中的一个节点，DWM 原生增量合成。
-
-```
-DCompositionTarget (绑定 HWND)
-  ├── IDCompositionVisual (分类框 A)
-  ├── IDCompositionVisual (分类框 B)
-  └── IDCompositionVisual (分类框 C)
-```
-
-**渲染管线**（需重写）：
-```
-D3D11 Device → DXGI Surface → D2D DXGI RenderTarget → EndDraw
-     ↓
-DCompositionDevice → DCompositionVisual → SetContent(surface) → Commit
-```
-
-| 维度 | 对比 |
-|------|------|
-| D2D 资源 | N 套 → 共享 D3D11 设备 + 每个 visual 一个 DXGI surface |
-| UpdateLayeredWindow | N 次 → 不需要（DComp 原生合成） |
-| 删除闪烁 | ✅ 彻底消除（移除 visual，DWM 增量更新） |
-| 内存 | 最省（GPU 纹理共享） |
-| 动画 | DComp 原生支持（淡入淡出、弹性动画） |
-| 事件分发 | 需自行 hit-test |
-| 拖拽/缩放 | 需自行实现 |
-| 改造成本 | 高（需引入 D3D11 + DXGI，重写整个渲染管线） |
-
-### 性能总结
-
-```
-DirectComposition > 单窗口渲染 > 当前架构（N 个分层窗口）
+```text
+.
+├── src/
+│   ├── main.rs            # 入口：单例信号文件协议 + DPI/OLE 初始化 + Tauri 启动
+│   ├── context.rs         # AppContext（唯一配置模型，共享运行时注入）
+│   ├── tauri_commands/    # IPC 适配层：config/box/window/app/ai/log 命令 + 平台轮询运行时
+│   ├── box_core/          # 平台无关业务逻辑：布局/排序/视图/分组引擎 + 拖拽/多选/几何纯逻辑
+│   ├── classification/    # 分类规则匹配 + AI 分类器
+│   ├── config/            # 统一 JSON 配置（~/.ikun_organizer.json）
+│   ├── platform/
+│   │   └── windows/       # Windows 实现主体（窗口/渲染/Shell/托盘/拖拽/覆盖层，47 文件）
+│   └── utils/             # 日志、DPI、注册表自启、分配探针
+├── frontend/              # Svelte 5 + Vite（控制面板/创建/编辑/AI 分类窗口）
+├── scripts/               # build.mjs 打包、release.mjs 发版
+├── build/                 # build.rs（清单嵌入 + tauri-build）
+├── tauri/icons/           # 应用图标唯一来源（icon.ico：exe 嵌入与安装包共用）
+├── capabilities/          # Tauri 窗口权限清单（tauri-build 约定扫描路径，不可移动）
+├── tauri.conf.json        # Tauri 配置（4 个 WebView 窗口 + NSIS/MSI 打包）
+├── .trellis/spec/         # 开发规范（backend/frontend/guides）
+└── .github/workflows/     # Windows CI + Release 流水线
 ```
 
-### 建议
+## 发布
 
-**单窗口渲染**投入产出比最高 — 渲染代码几乎不变（仍用 `ID2D1DCRenderTarget` + `UpdateLayeredWindow`），只需合并窗口 + 重写事件分发。可作为中期优化目标。
+见 [RELEASE.md](RELEASE.md)。打 tag（`v*`）触发 Release 流水线：质量门禁（fmt/clippy/test）
+通过后构建 NSIS（预发布版）或 NSIS + MSI（正式版），发布 GitHub Release 并附 SHA256SUMS。
 
-**DirectComposition** 性能最优且支持原生动画，但需要将渲染管线从 GDI DC 模式切换到 DXGI Surface 模式（引入 D3D11 依赖），适合作为长期架构方向。
+## 已知边界
 
----
-
-**开发时间**: 2026-06-08
-**版本**: v0.1.0 MVP
+- 仅支持 Windows 10/11；没有 macOS/Linux 移植计划。
+- Beta 安装包未做代码签名，首次运行会有 SmartScreen 提示。
+- 管理员权限（高完整性级别）运行时，UIPI 会阻止从资源管理器拖入。

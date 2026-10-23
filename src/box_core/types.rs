@@ -2,7 +2,7 @@
 //!
 //! 平台无关的基础类型，供 shared/ 各子模块和 platform/ 各平台实现共用。
 
-/// 跨平台矩形（对应 Windows RECT / macOS CGRect 的逻辑抽象）
+/// 逻辑矩形（与 Win32 RECT 互转）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Rect {
     pub left: i32,
@@ -37,7 +37,7 @@ pub struct Point {
     pub y: i32,
 }
 
-/// 32-bit RGBA 像素（对应 Windows Pixel32 / macOS RGBA）
+/// 32-bit RGBA 像素（Pixel32）
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Pixel32 {
     pub b: u8,

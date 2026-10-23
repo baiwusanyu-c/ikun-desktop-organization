@@ -141,7 +141,7 @@ pub fn get_virtual_desktop_bounds() -> (i32, i32, i32, i32) {
 
 /// 通过 Win32 \SetWindowPos\ 将指定标题的窗口移动到目标物理像素位置
 ///
-/// 用于修正 egui viewport 在多屏 + DPI 缩放下的定位错误。
+/// 用于修正 WebView/原生窗口在多屏 + DPI 缩放下的定位错误。
 pub fn reposition_window_by_title(title: &str, target_x: i32, target_y: i32) -> bool {
     unsafe {
         let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();

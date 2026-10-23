@@ -8,7 +8,7 @@
 //! - WM_MOUSELEAVE：重置所有 hover 状态
 //! - WM_LBUTTONDOWN：编辑模式清除/保存按钮 + 锁定按钮切换 + 图标选中 + "更多"菜单
 //! - WM_LBUTTONDBLCLK：标题栏双击进入名称编辑 + 双击打开文件
-//! - WM_CHAR / WM_KEYDOWN：默认处理（编辑已由 GPUI 编辑对话框实现）
+//! - WM_CHAR / WM_KEYDOWN：默认处理（名称编辑由 rename_editor 独立线程 EDIT 控件实现）
 //! - WM_IME_COMPOSITION：默认处理
 //! - WM_RBUTTONUP：Shell 上下文菜单
 //! - WM_DESTROY：释放图标句柄 + D2D/DW/WIC 资源
@@ -1193,7 +1193,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 log::info!("[MENU-DEBUG] wnd_proc: 右键点击框空白区域, 调用 show_desktop_context_menu(include_ikun_items=true)");
                 show_desktop_context_menu(hwnd, true); // 显式注入 Ikun 菜单项
                                                        // shell_menu.rs 会在用户点击「创建分类框」时设置 PENDING_CREATE_BOX 标志，
-                                                       // app.rs 的 update 循环轮询该标志并打开 egui viewport 对话框。
+                                                       // 平台轮询线程消费该标志并打开创建分类框窗口。
             }
             0
         }
@@ -1368,7 +1368,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 // dcomp 为 None）；任何绕过 teardown 的销毁路径在这里补摘，
                 // 否则旧视觉冻结在合成树上变成永久残影。
                 if let Some(state) = data.dcomp.take() {
-                    super::grid_window::teardown_dcomp_state(state);
+                    super::grid_window::teardown_dcomp_state(*state);
                 }
                 // DC 渲染目标通过 Drop 释放（windows crate COM 包装器）；
                 // D2D / DirectWrite / WIC 工厂是渲染线程共享的，不能在这里 drop。
@@ -1519,24 +1519,24 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             }
             if wparam == TIMER_ID_LIQUID_GLASS {
                 {
-                use std::sync::atomic::{AtomicU32, Ordering};
-                static MODAL_TICKS: AtomicU32 = AtomicU32::new(0);
-                if IN_DRAG.get() {
-                    let n = MODAL_TICKS.fetch_add(1, Ordering::Relaxed);
-                    if n % 64 == 0 {
-                        log::warn!("[dragdbg] modal tick #{}", n);
+                    use std::sync::atomic::{AtomicU32, Ordering};
+                    static MODAL_TICKS: AtomicU32 = AtomicU32::new(0);
+                    if IN_DRAG.get() {
+                        let n = MODAL_TICKS.fetch_add(1, Ordering::Relaxed);
+                        if n.is_multiple_of(64) {
+                            log::warn!("[dragdbg] modal tick #{}", n);
+                        }
                     }
                 }
-            }
-            {
-                use std::sync::atomic::{AtomicU32, Ordering};
-                static WT: AtomicU32 = AtomicU32::new(0);
-                let n = WT.fetch_add(1, Ordering::Relaxed);
-                if n % 500 == 0 {
-                    log::warn!("[timerdbg] WM_TIMER #{}", n);
+                {
+                    use std::sync::atomic::{AtomicU32, Ordering};
+                    static WT: AtomicU32 = AtomicU32::new(0);
+                    let n = WT.fetch_add(1, Ordering::Relaxed);
+                    if n.is_multiple_of(500) {
+                        log::warn!("[timerdbg] WM_TIMER #{}", n);
+                    }
                 }
-            }
-            super::grid_window::on_grid_refresh_tick(hwnd);
+                super::grid_window::on_grid_refresh_tick(hwnd);
             }
             0
         }

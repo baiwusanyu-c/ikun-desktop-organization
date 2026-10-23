@@ -224,25 +224,6 @@ fn render() {
 
 ---
 
-## Cross-Platform Comparison
-
-### Windows (WS_EX_LAYERED)
-- Pixel-level alpha testing
-- Alpha=0 → pass-through + WM_MOUSELEAVE
-- Solution: Dynamic background alpha
-
-### macOS (NSWindow)
-- ignoresMouseEvents property (boolean)
-- No pixel-level testing
-- Solution: Toggle ignoresMouseEvents based on state
-
-### Linux (X11/Wayland)
-- Shape extension for non-rectangular windows
-- Input region can be set explicitly
-- Solution: XShapeCombineRegion or Wayland input region
-
----
-
 ## Related Files
 
 - src/platform/windows/desktop_overlay/overlay_render.rs - Background alpha logic

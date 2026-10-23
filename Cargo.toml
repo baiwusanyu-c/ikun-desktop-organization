@@ -9,15 +9,10 @@ build = "build/build.rs"
 
 [dependencies]
 lazy_static = "1.4"
-# ===== GUI frameworks =====
-egui = { version = "0.27", optional = true }
-eframe = { version = "0.27", default-features = false, features = ["glow"], optional = true }
-epaint = { version = "0.27", optional = true }
-
-# ===== Tauri 2.0 =====
-tauri = { version = "2", optional = true, features = [] }
-tauri-plugin-opener = { version = "2", optional = true }
-tauri-plugin-dialog = { version = "2", optional = true }
+# ===== Tauri 2.0 (sole UI runtime) =====
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
 
 # ===== HTTP / Async =====
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
@@ -37,10 +32,8 @@ env_logger = "0.11"
 
 # ===== Windows API =====
 [target.'cfg(windows)'.dependencies]
-# Legacy GPUI fallback UI: only compiled with the `gpui-ui` feature, so the
-# default (Tauri) build does not pay for gpui or its shader toolchain (fxc).
-gpui = { version = "0.2.2", optional = true }
-gpui-component = { version = "0.5.1", optional = true }
+# 注：Win32_Graphics_Direct3D_Fxc 供 liquid_glass 运行时 D3DCompile 编译
+# 着色器使用，不是可选 UI 的遗留依赖，勿删。
 windows-numerics = "0.3"
 windows = { version = "0.62", features = [
     "Win32_UI_Shell",
@@ -74,21 +67,9 @@ windows = { version = "0.62", features = [
     "Foundation_Numerics",
 ] }
 
-# ===== macOS API =====
-[target.'cfg(target_os = "macos")'.dependencies]
-cocoa = "0.25"
-objc = "0.2"
-objc-foundation = "0.1"
-core-foundation = "0.9"
-core-graphics = "0.23"
-core-text = "20"
-foreign-types-shared = "0.3"
-block = "0.1"
-libc = "0.2"
-
 # ===== Build Dependencies =====
 [build-dependencies]
-tauri-build = { version = "2", optional = true, features = [] }
+tauri-build = { version = "2", features = [] }
 # 与 tauri-build 相同的资源编译器发现机制（PATH + Windows SDK 注册表 + vswhom），
 # 保证 rc.exe/windres 不在 PATH 的机器上也能嵌入图标与清单。
 embed-resource = "3"
@@ -100,10 +81,3 @@ tempfile = "3.0"
 [profile.release]
 opt-level = 3
 lto = true
-
-[features]
-default = ["tauri-ui"]
-eframe-ui = ["dep:egui", "dep:eframe", "dep:epaint"]
-tauri-ui = ["dep:tauri", "dep:tauri-plugin-opener", "dep:tauri-plugin-dialog", "dep:tauri-build"]
-# Legacy GPUI fallback UI (Windows). Requires Windows SDK fxc.exe for release builds.
-gpui-ui = ["dep:gpui", "dep:gpui-component"]

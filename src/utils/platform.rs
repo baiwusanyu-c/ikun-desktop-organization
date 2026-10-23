@@ -408,14 +408,6 @@ pub fn diagnose_auto_start_state() {
     }
 }
 
-/// 设置开机自启
-#[cfg(target_os = "macos")]
-pub fn set_auto_start(enabled: bool) -> anyhow::Result<()> {
-    // TODO: macOS LaunchAgent 实现
-    log::info!("macOS 开机自启设置: {}", enabled);
-    Ok(())
-}
-
 /// 获取用户主目录
 ///
 /// 配置文件 `~/.ikun_organizer.json` 存放在此目录。

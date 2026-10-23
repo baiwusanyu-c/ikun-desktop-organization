@@ -3,7 +3,7 @@
 //! 确保 Windows 识别 Per-Monitor DPI V2 感知，
 //! 防止窗口跨不同 DPI 显示器移动时被 bitmap-stretch。
 //!
-//! 应用图标统一由 tauri-build 嵌入（`WindowsAttributes::window_icon_path`，
+//! 应用图标统一由 tauri-build 嵌入（`window_icon_path = tauri/icons/icon.ico`，
 //! RT_GROUP_ICON ID=32512）。本文件不再另行嵌入 ICON 资源：
 //! 同一个 .ico 被两处嵌入时，各自拆出的 RT_ICON 子图像 ID 都从 1 开始，
 //! MSVC 链接器 cvtres 会报 CVT1100 duplicate resource（GNU ld 容忍重复，
@@ -18,13 +18,13 @@
 //! 也能成功嵌入清单。
 
 fn main() {
-    // Tauri 2.0 构建集成（仅在 tauri-ui feature 启用时）
-    #[cfg(feature = "tauri-ui")]
+    // Tauri 2.0 构建集成（唯一 UI 运行时）
     {
-        // 使用 logo.ico 作为 Tauri 窗口图标（嵌入资源 ID 32512），
+        // 使用 tauri/icons/icon.ico 作为应用/窗口图标（嵌入资源 ID 32512），
         // 并关闭 tauri 默认 manifest，避免与本项目 manifest 重复嵌入 RT_MANIFEST。
         let attrs = tauri_build::Attributes::new().windows_attributes(
-            tauri_build::WindowsAttributes::new_without_app_manifest().window_icon_path("logo.ico"),
+            tauri_build::WindowsAttributes::new_without_app_manifest()
+                .window_icon_path("tauri/icons/icon.ico"),
         );
         if let Err(error) = tauri_build::try_build(attrs) {
             panic!("tauri_build 构建失败: {error:#}");
@@ -88,15 +88,6 @@ fn embed_manifest() {
                 "cargo:warning=The .exe will have no DPI manifest. \
                  Install Windows SDK (rc.exe) or MinGW-w64 (windres), then rebuild."
             );
-
-            // 仅在非 tauri-ui 模式中断构建（Tauri 有自己的资源处理）
-            #[cfg(not(feature = "tauri-ui"))]
-            {
-                panic!(
-                    "Resource compiler unavailable: neither windres nor rc.exe found.\n\
-                     Install MinGW-w64 or Visual Studio Build Tools / Windows SDK, then rebuild."
-                );
-            }
         }
     }
 }

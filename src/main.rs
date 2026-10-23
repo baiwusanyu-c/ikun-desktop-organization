@@ -3,27 +3,13 @@
 // Windows subsystem (no console window), logs written to file
 #![windows_subsystem = "windows"]
 
-#[cfg(feature = "eframe-ui")]
-mod app;
 mod box_core;
 mod classification;
 mod config;
 mod context;
-#[allow(dead_code)]
-mod ipc;
 mod platform;
-mod plugin;
-mod shared;
-#[cfg(feature = "eframe-ui")]
-mod ui;
-mod utils;
-
-// Tauri commands module (new for Tauri migration)
-#[cfg(feature = "tauri-ui")]
 mod tauri_commands;
-
-#[cfg(all(windows, feature = "gpui-ui"))]
-mod gpui_app;
+mod utils;
 
 /// 全局分配器：透传 `System`，只做计数。
 ///
@@ -38,7 +24,7 @@ fn main() -> anyhow::Result<()> {
     #[cfg(windows)]
     log_boot_context();
     log::info!("========================================");
-    log::info!("Starting Desktop Organizer (Rewrite)");
+    log::info!("Starting Desktop Organizer");
     log::info!("========================================");
 
     // Set Per-Monitor DPI V2 awareness (runtime setting, supplement to manifest)
@@ -65,31 +51,8 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    // === Tauri 2.0 entry (new migration path) ===
-    #[cfg(feature = "tauri-ui")]
-    {
-        run_tauri_app()?;
-        Ok(())
-    }
-
-    // Legacy GPUI fallback (only with the gpui-ui feature)
-    #[cfg(all(target_os = "windows", feature = "gpui-ui"))]
-    {
-        gpui_app::windows_main::run_gpui_app();
-        return Ok(());
-    }
-
-    // eframe fallback (only when eframe-ui feature is enabled)
-    #[cfg(feature = "eframe-ui")]
-    {
-        run_eframe_app()?;
-        Ok(())
-    }
-
-    #[cfg(not(any(feature = "gpui-ui", feature = "eframe-ui", feature = "tauri-ui")))]
-    {
-        anyhow::bail!("Current platform not supported");
-    }
+    // Tauri 2.0 is the sole UI runtime (Windows-only product).
+    run_tauri_app()
 }
 
 /// 安装全局 panic hook：panic 时把信息与回溯写入日志文件。
@@ -121,7 +84,13 @@ fn install_panic_hook() {
             use std::io::Write;
             let _ = writeln!(f, "[PANIC] {info}");
             if let Some(location) = info.location() {
-                let _ = writeln!(f, "[PANIC] loc {}:{}:{}", location.file(), location.line(), location.column());
+                let _ = writeln!(
+                    f,
+                    "[PANIC] loc {}:{}:{}",
+                    location.file(),
+                    location.line(),
+                    location.column()
+                );
             }
             let _ = writeln!(f, "{}", std::backtrace::Backtrace::force_capture());
         }
@@ -157,7 +126,6 @@ fn log_boot_context() {
 }
 
 /// Run Tauri 2.0 application
-#[cfg(feature = "tauri-ui")]
 fn run_tauri_app() -> anyhow::Result<()> {
     log::info!("Starting Tauri 2.0 application...");
 
@@ -233,71 +201,6 @@ fn run_tauri_app() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Tauri runtime error: {}", e))?;
 
     Ok(())
-}
-
-/// Run eframe application (fallback UI runtime)
-#[cfg(feature = "eframe-ui")]
-fn run_eframe_app() -> anyhow::Result<()> {
-    use eframe::egui;
-
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title(app::CONTROL_PANEL_TITLE)
-            .with_inner_size([320.0, 380.0])
-            .with_position([-32000.0, -32000.0])
-            .with_decorations(true)
-            .with_always_on_top()
-            .with_resizable(true)
-            .with_visible(true)
-            .with_taskbar(false),
-        ..Default::default()
-    };
-
-    eframe::run_native(
-        "Desktop Organizer",
-        options,
-        Box::new(|cc| {
-            setup_chinese_fonts(&cc.egui_ctx);
-            Box::new(app::MyApp::new(cc))
-        }),
-    )
-    .map_err(|e| anyhow::anyhow!("eframe run failed: {}", e))?;
-
-    Ok(())
-}
-
-#[cfg(feature = "eframe-ui")]
-fn setup_chinese_fonts(ctx: &eframe::egui::Context) {
-    let mut fonts = eframe::egui::FontDefinitions::default();
-
-    let font_paths = [
-        "C:\\Windows\\Fonts\\msyh.ttc",
-        "C:\\Windows\\Fonts\\msyhbd.ttc",
-        "C:\\Windows\\Fonts\\simhei.ttf",
-        "C:\\Windows\\Fonts\\simsun.ttc",
-    ];
-
-    for path in &font_paths {
-        if let Ok(font_data) = std::fs::read(path) {
-            log::info!("Loading Chinese font: {}", path);
-            fonts.font_data.insert(
-                "chinese".to_owned(),
-                eframe::egui::FontData::from_owned(font_data),
-            );
-            if let Some(f) = fonts
-                .families
-                .get_mut(&eframe::egui::FontFamily::Proportional)
-            {
-                f.insert(0, "chinese".to_owned());
-            }
-            if let Some(f) = fonts.families.get_mut(&eframe::egui::FontFamily::Monospace) {
-                f.insert(0, "chinese".to_owned());
-            }
-            ctx.set_fonts(fonts);
-            return;
-        }
-    }
-    log::warn!("Chinese font not found");
 }
 
 /// Set Per-Monitor DPI V2 awareness

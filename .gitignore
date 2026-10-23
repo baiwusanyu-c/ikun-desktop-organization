@@ -1,9 +1,21 @@
 /target
+/node_modules
 /gen/schemas
+
+# macOS metadata (project is Windows-only)
+.DS_Store
 
 # User config files (contain API Key, must not be committed)
 *ikun_organizer*.json
 
-# Build artifacts (scripts/build.mjs output)
-/dist
-/target_dbg
+# Build artifacts (scripts/build.mjs output, 位于 target/dist)
+
+# pnpm 在仓库根目录执行 pnpm run 时生成的空锁文件（真实锁文件在 frontend/）
+/pnpm-lock.yaml
+
+# JetBrains IDE 工作区杂项（runConfigurations 有意保留在版本库）
+.idea/workspace.xml
+.idea/dictionaries
+
+# 本地工作文档（PRD、重构记录等），不入库
+/docs/

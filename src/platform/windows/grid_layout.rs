@@ -21,7 +21,7 @@ pub(crate) fn reflow_items(data: &mut super::grid_window::GridWindowData) {
         .iter()
         .map(|item| (item.grid_col, item.grid_row))
         .collect();
-    crate::shared::layout::reflow_positions(&mut positions, new_cols);
+    crate::box_core::layout::reflow_positions(&mut positions, new_cols);
     for (item, (col, row)) in data.items.iter_mut().zip(positions) {
         item.grid_col = col;
         item.grid_row = row;

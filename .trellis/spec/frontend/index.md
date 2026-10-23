@@ -22,6 +22,6 @@
 ## Required Checks
 
 ```text
-npm --prefix frontend run check
-npm --prefix frontend run build
+pnpm -C frontend run check
+pnpm -C frontend run build
 ```

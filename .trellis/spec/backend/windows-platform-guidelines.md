@@ -1064,8 +1064,8 @@ pub fn compute_edge_rect(
 
 ### Problem
 
-GPUI's message loop does not dispatch Windows messages to child controls. A synchronous EDIT control
-created on the main thread blocks the GPUI event loop and cannot receive keyboard input (especially IME
+The grid window's message loop does not dispatch Windows messages to child controls. A synchronous EDIT control
+created on the message thread blocks message processing and cannot receive keyboard input (especially IME
 for CJK characters).
 
 ### Solution

@@ -4,9 +4,9 @@
 //! - HICON（系统托盘图标）
 //! - HBITMAP（菜单项图标）
 //!
-//! 图标通过 `build.rs`（embed-resource）从项目根目录的 `logo.ico` 嵌入到
-//! 可执行文件中（资源 ID=1）。tauri-build 也会把 `logo.ico` 以资源 ID=32512
-//! 嵌入，作为加载回退链的第二环。替换 `logo.ico` 文件后重新编译即可更换图标。
+//! 图标资源统一为 `tauri/icons/icon.ico`（唯一图标源）：
+//! tauri-build 将其嵌入可执行文件（资源 ID=32512）；替换该文件后
+//! 重新编译即可更换图标。
 
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 
@@ -102,7 +102,7 @@ fn load_icon_from_resource(size: i32) -> Option<HICON> {
 
     log::warn!(
         "[app_icon] 嵌入图标加载失败 (ID={} 与 ID={})。\
-         请确认：1) logo.ico 存在于项目根目录 2) 编译时资源编译器（rc.exe/windres）可用 \
+         请确认：1) tauri/icons/icon.ico 存在 2) 编译时资源编译器（rc.exe/windres）可用 \
          3) 重新执行 cargo build（建议先 cargo clean 清除缓存）",
         APP_ICON_RESOURCE_ID,
         TAURI_ICON_RESOURCE_ID
@@ -293,7 +293,7 @@ pub fn diagnose_icon_availability() {
         release_warn!(
             "[app_icon] ✗ 所有图标资源均未找到！可能的原因：\n\
              1. 编译时资源编译器（rc.exe / windres）不可用，图标未嵌入到 .exe\n\
-             2. logo.ico 文件在编译时不存在于项目根目录\n\
+             2. tauri/icons/icon.ico 文件在编译时不存在\n\
              建议：执行 `cargo clean` 后重新 `cargo build`，\
              观察编译输出中是否有 build.rs 的 warning。"
         );

@@ -1,16 +1,15 @@
 #!/usr/bin/env node
 
 /**
- * Desktop Organizer - Cross-platform build script
+ * Desktop Organizer - Windows build script
  *
  * Usage:
  *   node scripts/build.mjs                        # release build (default)
  *   node scripts/build.mjs --mode debug           # debug build
- *   node scripts/build.mjs --no-installer         # skip NSIS/MSI/DMG
+ *   node scripts/build.mjs --no-installer         # skip NSIS/MSI
  *   node scripts/build.mjs --no-frontend          # skip frontend build
- *   node scripts/build.mjs --target aarch64-apple-darwin
  *   node scripts/build.mjs --platform win         # Windows packaging (one-click)
- *   node scripts/build.mjs --platform mac         # macOS packaging (RESERVED, macOS host only)
+ *   node scripts/build.mjs --bundles nsis         # NSIS installer only (skip MSI)
  */
 
 import { execSync, spawnSync } from "node:child_process";
@@ -25,9 +24,11 @@ import { createHash } from "node:crypto";
 // ─── Configuration ──────────────────────────────────────────────
 const PROJECT_ROOT = resolve(import.meta.dirname, "..");
 const FRONTEND_DIR = join(PROJECT_ROOT, "frontend");
-const DIST_DIR = join(PROJECT_ROOT, "dist");
+const DIST_DIR = join(PROJECT_ROOT, "target", "dist");
 const IS_WINDOWS = platform() === "win32";
-const IS_MACOS = platform() === "darwin";
+
+// Tauri CLI：通过 pnpm dlx 按大版本固定临时获取，避免依赖全局安装
+const TAURI_CLI = "pnpm dlx --package @tauri-apps/cli@2 tauri";
 
 // ─── CLI Argument Parsing ───────────────────────────────────────
 function parseArgs() {
@@ -72,57 +73,40 @@ Usage: node scripts/build.mjs [options]
 
 Options:
   --mode <release|debug>  Build mode (default: release)
-  --no-installer          Skip installer generation (NSIS/MSI/DMG)
+  --no-installer          Skip installer generation (NSIS/MSI)
   --no-frontend           Skip frontend build (dev/debug only)
-  --platform <win|mac>    Target platform (default: current host OS, one-click)
-                          win: Windows host only; mac: RESERVED, macOS host only
+  --platform <win>        Packaging target; Windows is the only supported platform
   --bundles <list>        Tauri bundle targets, comma-separated (e.g. nsis / msi / nsis,msi).
                           Default: all configured targets. Useful to skip MSI where WiX download is blocked.
-  --target <triple>       Cross-compilation target (e.g. aarch64-apple-darwin)
+  --target <triple>       Rust target triple (e.g. x86_64-pc-windows-msvc)
   -h, --help              Show this help
   `);
 }
 
 // ─── Platform Resolution ────────────────────────────────────
-const PLATFORM_ALIASES = {
-  win: "win", windows: "win", win32: "win",
-  mac: "mac", macos: "mac", darwin: "mac",
-  linux: "linux",
-};
 
 /**
- * Resolve --platform argument:
- * - defaults to the current host platform;
- * - win: Windows host only (no cross-compilation);
- * - mac: RESERVED, macOS host only, fails explicitly on other hosts;
- * - linux: Linux host only (dev convenience, not a release target).
+ * Resolve --platform argument. Desktop Organizer is a Windows-only product:
+ * packaging must run on a Windows host and only "win" is a valid target.
  */
 function resolvePlatform(opts) {
-  const host = IS_WINDOWS ? "win" : IS_MACOS ? "mac" : "linux";
-  if (!opts.platform) return host;
+  if (!IS_WINDOWS) {
+    logError("Desktop Organizer is Windows-only; packaging must run on a Windows host");
+    process.exit(1);
+  }
+  if (!opts.platform) return "win";
 
   const requested = PLATFORM_ALIASES[String(opts.platform).toLowerCase()];
-  if (!requested) {
-    logError(`Unknown platform: ${opts.platform} (valid: win | mac | linux)`);
+  if (requested !== "win") {
+    logError(`Unknown platform: ${opts.platform} (only "win" is supported)`);
     process.exit(1);
-  }
-
-  if (requested !== host) {
-    if (requested === "mac") {
-      logError("macOS packaging is RESERVED: cross-platform packaging is not supported yet, please run on a macOS host (not enabled)");
-      process.exit(1);
-    }
-    logError(`Cannot package ${requested} on a ${host} host: cross-compilation is not supported, run on the matching platform`);
-    process.exit(1);
-  }
-
-  if (requested === "mac") {
-    log("Note: macOS packaging is RESERVED and has not been validated yet");
   }
   return requested;
 }
+const PLATFORM_ALIASES = {
+  win: "win", windows: "win", win32: "win",
+};
 
-// ─── Utility ────────────────────────────────────────────────────
 function log(msg) {
   const ts = new Date().toISOString().slice(11, 19);
   console.log(`[${ts}] ${msg}`);
@@ -182,21 +166,21 @@ function checkEnv() {
     process.exit(1);
   }
 
-  // npm
+  // pnpm
   try {
-    const npmVersion = runCapture("npm --version");
-    log(`  npm: ${npmVersion}`);
+    const pnpmVersion = runCapture("pnpm --version");
+    log(`  pnpm: ${pnpmVersion}`);
   } catch {
-    logError("npm not found.");
+    logError("pnpm not found. Install: corepack enable || https://pnpm.io/installation");
     process.exit(1);
   }
 
-  // Tauri CLI
+  // Tauri CLI (auto-fetched via pnpm dlx, major version pinned)
   try {
-    const tauriVersion = runCapture("npx --yes @tauri-apps/cli@2 --version");
+    const tauriVersion = runCapture(`${TAURI_CLI} --version`);
     log(`  tauri-cli: ${tauriVersion}`);
   } catch {
-    logError("@tauri-apps/cli not available. Install: npm install -g @tauri-apps/cli");
+    logError("@tauri-apps/cli not available via pnpm dlx (check network).");
     process.exit(1);
   }
 
@@ -218,12 +202,12 @@ function getVersion() {
 // ─── Frontend ───────────────────────────────────────────────────
 function installFrontend() {
   log("Installing frontend dependencies...");
-  run(`npm --prefix frontend install`);
+  run(`pnpm -C frontend install`);
 }
 
 // ─── Tauri Build ────────────────────────────────────────────────
 function buildTauri(opts) {
-  const parts = ["npx --yes @tauri-apps/cli@2 build"];
+  const parts = [`${TAURI_CLI} build`];
 
   if (opts.mode === "debug") {
     parts.push("--debug");
@@ -239,7 +223,7 @@ function buildTauri(opts) {
 
   if (opts.bundles) {
     parts.push(`--bundles ${opts.bundles}`);
-  } else if (opts.resolvedPlatform === "win" && getVersion().includes("-")) {
+  } else if (getVersion().includes("-")) {
     // MSI (WiX) requires fully numeric versions; pre-release identifiers such
     // as "beta.2" are rejected. NSIS has no such restriction, so pre-release
     // builds ship NSIS only; stable releases get NSIS + MSI automatically.
@@ -272,7 +256,7 @@ function ensureDir(dir) {
 
 function copyIf(src, dest) {
   if (existsSync(src)) {
-    log(`  Copy: ${basename(src)} -> dist/`);
+    log(`  Copy: ${basename(src)} -> target/dist/`);
     copyFileSync(src, dest);
     return true;
   }
@@ -318,62 +302,12 @@ function collectWindowsArtifacts(version) {
   );
 }
 
-function collectMacOSArtifacts(version, opts) {
-  const targetDir = join(PROJECT_ROOT, "target", "release");
-  const bundleDir = join(targetDir, "bundle");
-  const osArch = opts.target || (arch() === "arm64" ? "aarch64" : "x64");
-  const prefix = `ikun_organizer-v${version}-macos-${osArch}`;
-
-  log("Collecting macOS artifacts...");
-  ensureDir(DIST_DIR);
-
-  // .app bundle
-  const macosDir = join(bundleDir, "macos");
-  const appDirs = findFiles(macosDir, /\.app$/);
-  for (const appDir of appDirs) {
-    const dest = join(DIST_DIR, `${prefix}.app`);
-    copyDirectory(appDir, dest);
-    log(`  Copy: ${basename(appDir)} -> dist/${prefix}.app`);
-  }
-
-  // DMG
-  const dmgDir = join(bundleDir, "dmg");
-  for (const f of findFiles(dmgDir, /\.dmg$/i)) {
-    copyIf(f, join(DIST_DIR, `${prefix}.dmg`));
-  }
-
-  // Portable zip
-  const mainBin = join(targetDir, "ikun_organizer");
-  if (existsSync(mainBin)) {
-    copyIf(mainBin, join(DIST_DIR, `${prefix}`));
-    createPortableZip(
-      join(DIST_DIR, `${prefix}`),
-      join(DIST_DIR, `${prefix}.zip`),
-      `${prefix}`
-    );
-  }
-}
-
-function copyDirectory(src, dest) {
-  ensureDir(dest);
-  for (const entry of readdirSync(src, { withFileTypes: true })) {
-    const srcPath = join(src, entry.name);
-    const destPath = join(dest, entry.name);
-    if (entry.isDirectory()) {
-      copyDirectory(srcPath, destPath);
-    } else {
-      copyFileSync(srcPath, destPath);
-    }
-  }
-}
-
 /**
  * Create a zip archive using Node.js built-in capabilities.
  * Uses the 'zlib' module for deflate compression and manual zip format construction.
  *
- * For simplicity and to avoid external dependencies, we use platform-native tools:
- * - Windows: PowerShell Compress-Archive
- * - macOS/Linux: zip command
+ * Packaging runs on Windows hosts only, so the archive is created with
+ * PowerShell Compress-Archive.
  */
 function createPortableZip(sourceFile, zipPath, entryName) {
   if (!existsSync(sourceFile)) {
@@ -382,22 +316,13 @@ function createPortableZip(sourceFile, zipPath, entryName) {
   }
 
   log(`  Creating zip: ${basename(zipPath)}`);
-  const sourceDir = resolve(sourceFile, "..");
-
-  if (IS_WINDOWS) {
-    // PowerShell Compress-Archive
-    const srcEsc = sourceFile.replace(/'/g, "''");
-    const zipEsc = zipPath.replace(/'/g, "''");
-    run(
-      `powershell -NoProfile -Command "Compress-Archive -Force -LiteralPath '${srcEsc}' -DestinationPath '${zipEsc}'"`,
-      { stdio: "pipe" }
-    );
-  } else {
-    // Unix zip
-    run(`cd "${sourceDir}" && zip -j "${zipPath}" "${basename(sourceFile)}"`, {
-      stdio: "pipe",
-    });
-  }
+  // PowerShell Compress-Archive
+  const srcEsc = sourceFile.replace(/'/g, "''");
+  const zipEsc = zipPath.replace(/'/g, "''");
+  run(
+    `powershell -NoProfile -Command "Compress-Archive -Force -LiteralPath '${srcEsc}' -DestinationPath '${zipEsc}'"`,
+    { stdio: "pipe" }
+  );
 }
 
 // ─── Main ───────────────────────────────────────────────────────
@@ -436,19 +361,7 @@ async function main() {
   const version = getVersion();
   log(`Version: ${version}`);
 
-  if (targetPlatform === "win") {
-    collectWindowsArtifacts(version);
-  } else if (targetPlatform === "mac") {
-    collectMacOSArtifacts(version, opts);
-  } else {
-    log(`Linux build - artifacts in target/release/`);
-    ensureDir(DIST_DIR);
-    const bin = join(PROJECT_ROOT, "target", "release", "ikun_organizer");
-    if (existsSync(bin)) {
-      const prefix = `ikun_organizer-v${version}-linux-x64`;
-      copyIf(bin, join(DIST_DIR, prefix));
-    }
-  }
+  collectWindowsArtifacts(version);
 
   // Summary
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);

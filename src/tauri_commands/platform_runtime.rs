@@ -11,7 +11,6 @@ use crate::platform::{
     take_pending_create_box, take_pending_tray_action, GridCreateParams, GridFileItem,
     SystemTrayAction,
 };
-use crate::plugin::{builtin::register_builtin_plugins, PluginRegistry};
 use crate::tauri_commands::window_cmd::{
     show_managed_window, toggle_managed_window, ManagedWindow,
 };
@@ -30,7 +29,6 @@ const DESKTOP_RESTORE_RETRY_DELAYS_MS: [u64; 4] = [500, 1000, 1500, 2000];
 /// Shared state for the Tauri runtime
 pub struct TauriRuntime {
     pub ctx: AppContext,
-    pub plugins: PluginRegistry,
     pub initialized: bool,
     pub quit_requested: bool,
     pub toggle_panel_requested: bool,
@@ -41,19 +39,14 @@ pub struct TauriRuntime {
 }
 
 impl TauriRuntime {
-    /// 创建尚未初始化的平台运行时，并注册内置插件。
+    /// 创建尚未初始化的平台运行时。
     pub fn new() -> Self {
         let ctx = AppContext::new().unwrap_or_else(|e| {
             log::warn!("Failed to init AppContext: {}, using defaults", e);
             AppContext::default()
         });
-        let mut plugins = PluginRegistry::new();
-        if let Err(error) = register_builtin_plugins(&mut plugins) {
-            log::error!("注册内置插件失败: {error:#}");
-        }
         Self {
             ctx,
-            plugins,
             initialized: false,
             quit_requested: false,
             toggle_panel_requested: false,
@@ -86,34 +79,25 @@ impl TauriRuntime {
         let _ = std::fs::remove_file(ai_classify_signal_path());
         let _ = std::fs::remove_file(quit_signal_path());
         log::info!("[TauriRuntime] Cleared stale signal files");
-        // 1. In-process plugins
-        let plugin_report = self.plugins.init_all(&mut self.ctx);
-        log::info!(
-            "[TauriRuntime] Plugins initialized: {}, failed: {}, menu items: {}",
-            plugin_report.initialized.len(),
-            plugin_report.failed.len(),
-            self.plugins.all_menu_items().len()
-        );
-
-        // 2. System tray
+        // 1. System tray
         if let Err(e) = setup_system_tray() {
             log::warn!("[TauriRuntime] System tray setup failed: {}", e);
         } else {
             log::info!("[TauriRuntime] System tray initialized");
         }
 
-        // 3. Restore overlay layout
+        // 2. Restore overlay layout
         crate::tauri_commands::config_cmd::apply_runtime_config(&self.ctx.config);
         // 先恢复并整理桌面图标状态，再创建分类框，确保液态玻璃首个快照不含残留图标层。
         crate::platform::restore_all_hidden_icons();
         self.snapshot_desktop_positions();
         self.restore_layout(app);
 
-        // 4. Desktop icon diagnostics
+        // 3. Desktop icon diagnostics
         #[cfg(windows)]
         crate::platform::windows::icon_manager::diagnose();
 
-        // 5. Desktop right-click registry
+        // 4. Desktop right-click registry
         cleanup_desktop_registry();
         setup_desktop_registry();
         log::info!("[TauriRuntime] Desktop registry initialized");
@@ -140,8 +124,8 @@ impl TauriRuntime {
     /// 2. 配置加载失败时直接跳过（不能按默认值删除用户已开启的条目）；
     /// 3. 同步失败最多重试 3 次，每次失败都记日志。
     ///
-    /// 注册表写入通过 `ctx.platform_service`（PlatformService trait）完成，
-    /// 遵循"运行时层经平台抽象访问系统能力"的架构约束，不直连工具函数。
+    /// 注册表写入统一走 `utils::platform::set_auto_start`（开机自启唯一写入口），
+    /// 运行时层不直连注册表 API。
     #[cfg(windows)]
     fn sync_auto_start(&mut self) {
         crate::utils::platform::diagnose_auto_start_state();
@@ -157,7 +141,7 @@ impl TauriRuntime {
         set_tray_auto_start_state(auto_start);
 
         for attempt in 1..=3u32 {
-            match self.ctx.platform_service.set_auto_start(auto_start) {
+            match crate::utils::platform::set_auto_start(auto_start) {
                 Ok(()) => {
                     log::info!(
                         "[TauriRuntime] 开机自启同步完成: auto_start={auto_start}（第 {attempt} 次尝试）"
@@ -285,33 +269,12 @@ impl TauriRuntime {
         );
     }
 
-    fn dispatch_plugin_command(&mut self, command: &str) -> bool {
-        match self.plugins.dispatch_command(command, &mut self.ctx) {
-            Ok(true) => true,
-            Ok(false) => {
-                log::warn!("没有已初始化的插件处理命令: {command}");
-                false
-            }
-            Err(error) => {
-                log::warn!("插件命令分发失败 '{command}': {error:#}");
-                false
-            }
-        }
-    }
-
     fn request_create_box(&mut self) -> bool {
-        if !self.dispatch_plugin_command("box.create") {
-            return false;
-        }
         self.create_box_requested = true;
         true
     }
 
     fn request_auto_classify(&mut self) -> bool {
-        // AI 分类归属分类插件；插件卸载后阻断该动作（与 request_create_box 一致）
-        if !self.dispatch_plugin_command("classify.auto") {
-            return false;
-        }
         self.ai_classify_requested = true;
         true
     }
@@ -346,7 +309,7 @@ impl TauriRuntime {
         for (i, box_data) in boxes.iter().enumerate() {
             let mut items: Vec<GridFileItem> = Vec::new();
             for (idx, file_path) in box_data.icon_names.iter().enumerate() {
-                // Skip deleted icons (same logic as GPUI version)
+                // 跳过已删除的图标
                 if !icon_exists_for_box(file_path) {
                     log::info!("[TauriRuntime] Skipping deleted icon: {}", file_path);
                     continue;
@@ -357,7 +320,7 @@ impl TauriRuntime {
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|| file_path.clone());
 
-                // Extract file icon (same as GPUI version)
+                // 提取文件图标
                 let hicon = extract_file_icon(&read_path)
                     .map(|fi| fi.hicon)
                     .unwrap_or(std::ptr::null_mut());
@@ -470,8 +433,8 @@ impl TauriRuntime {
                         log::warn!("保存开机自启配置失败: {error}");
                     }
                     self.replace_config(config);
-                    // 通过平台抽象（PlatformService）写入/删除自启条目
-                    if let Err(error) = self.ctx.platform_service.set_auto_start(enabled) {
+                    // 通过 utils::platform 写入/删除自启条目
+                    if let Err(error) = crate::utils::platform::set_auto_start(enabled) {
                         log::warn!("切换开机自启失败: {error}");
                     }
                     set_tray_auto_start_state(enabled);
@@ -491,7 +454,7 @@ impl TauriRuntime {
             changed |= self.request_create_box();
         }
 
-        // 4. Second-instance signal files use the same plugin-gated request path.
+        // 4. Second-instance signal files reuse the same request path.
         if signal_file_path().exists() {
             let _ = std::fs::remove_file(signal_file_path());
             changed |= self.request_create_box();
@@ -626,14 +589,12 @@ pub fn start_platform_runtime(app: tauri::AppHandle, runtime: SharedTauriRuntime
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
 
-        // 先保存布局并清理插件
+        // 退出前保存分类框布局
         if let Ok(mut runtime) = runtime_for_poll.lock() {
             runtime.ctx.config.layout.boxes = crate::platform::collect_grid_layout();
             if let Err(error) = runtime.ctx.config.save() {
                 log::warn!("退出前保存分类框布局失败: {error}");
             }
-            let TauriRuntime { ctx, plugins, .. } = &mut *runtime;
-            plugins.cleanup_all(ctx);
         }
 
         // 销毁分类框窗口（必须在主线程中执行）
@@ -688,15 +649,6 @@ pub fn start_platform_runtime(app: tauri::AppHandle, runtime: SharedTauriRuntime
 mod tests {
     use super::*;
 
-    #[test]
-    fn new_runtime_registers_builtin_plugins_before_initialization() {
-        let runtime = TauriRuntime::new();
-        assert!(runtime.plugins.contains("builtin.classification"));
-        assert!(runtime.plugins.contains("builtin.style"));
-        assert!(!runtime.plugins.is_initialized("builtin.classification"));
-        assert!(!runtime.plugins.is_initialized("builtin.style"));
-    }
-
     /// 配置加载失败（config_loaded=false）时，sync_auto_start 必须跳过
     /// 注册表同步——否则回退的默认值（auto_start=false）会删掉用户
     /// 已开启的自启条目（自毁路径）。
@@ -736,23 +688,5 @@ mod tests {
 
         assert_eq!(runtime.ctx.config.ai.model, "architecture-test-model");
         assert!(runtime.ctx.config.classification.is_empty());
-    }
-
-    #[test]
-    fn unplugged_classification_plugin_blocks_owned_runtime_actions() {
-        let mut runtime = TauriRuntime::new();
-        runtime.plugins.init_all(&mut runtime.ctx);
-
-        assert!(runtime.request_create_box());
-        assert!(runtime.create_box_requested);
-        runtime.create_box_requested = false;
-
-        assert!(runtime
-            .plugins
-            .uninstall("builtin.classification", &mut runtime.ctx));
-        assert!(!runtime.request_create_box());
-        assert!(!runtime.create_box_requested);
-        assert!(!runtime.request_auto_classify());
-        assert!(!runtime.ai_classify_requested);
     }
 }

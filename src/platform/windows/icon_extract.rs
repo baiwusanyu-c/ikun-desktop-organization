@@ -169,7 +169,7 @@ pub struct FileIconInfo {
 pub fn resolve_shortcut_target(lnk_path: &str) -> Option<String> {
     let lnk_wide: Vec<u16> = lnk_path.encode_utf16().chain(std::iter::once(0)).collect();
 
-    // COM 可能已被 eframe 初始化，RPC_E_CHANGED_MODE 表示已有 COM 环境可用
+    // COM 可能已被 Tauri/WebView 线程初始化，RPC_E_CHANGED_MODE 表示已有 COM 环境可用
     let hr = unsafe { CoInitializeEx(std::ptr::null_mut(), COINIT_APARTMENTTHREADED) };
     let we_initialized_com = hr == S_OK;
 

@@ -1,16 +1,15 @@
 # Release Process
 
-How to publish a Desktop Organizer release (currently Windows-only beta).
+How to publish a Desktop Organizer release (Windows-only product).
 
 ## Pipeline overview
 
-```
-Local:  npm run release:beta:push          (scripts/release.mjs)
+```text
+Local:  pnpm run release:beta:push          (scripts/release.mjs)
           bump version -> commit -> tag -> push
 GitHub: tag push triggers Release workflow
           Job 1 test (fmt + clippy + cargo test)   <- quality gate
           Job 2 release-windows (needs: test)      <- package + publish
-          Job 3 release-macos (reserved, commented out)
 Result: GitHub Releases page with installers + SHA256SUMS.txt
 ```
 
@@ -18,8 +17,8 @@ Result: GitHub Releases page with installers + SHA256SUMS.txt
 
 - Version lives in **four places** that must stay in sync (release.mjs
   updates all of them):
-  - `Cargo.toml` -> `[package] version`
-  - `tauri.conf.json` -> `"version"`
+  - `[package] version` in `Cargo.toml`
+  - `"version"` in `tauri.conf.json`
   - `package.json` (root, build tooling)
   - `Cargo.lock` (package entry)
 - Use [semantic versioning](https://semver.org/). Pre-releases carry a suffix,
@@ -31,7 +30,7 @@ Result: GitHub Releases page with installers + SHA256SUMS.txt
 One command (bumps beta number, commits, tags, pushes):
 
 ```bash
-npm run release:beta:push
+pnpm run release:beta:push
 # equivalent to: node scripts/release.mjs --bump beta --push
 ```
 
@@ -68,22 +67,12 @@ must already be present in `Cargo.toml`.
 ## Local one-click packaging
 
 ```bash
-npm run pack:win     # full release build into dist/
+pnpm run pack:win    # full release build into target/dist/
 ```
 
 The same script runs in CI; local and CI artifacts use the identical
-pipeline (`scripts/build.mjs --platform win`).
-
-## Build features
-
-| Feature | Default | UI path |
-|---------|---------|---------|
-| `tauri-ui` | yes | Tauri 2 + Svelte (the shipped product) |
-| `gpui-ui` | no | Legacy GPUI fallback (needs Windows SDK fxc.exe for release builds) |
-| `eframe-ui` | no | Legacy egui/eframe fallback |
-
-The default release build does not compile gpui, keeping CI and local
-machines free of the shader toolchain requirement.
+pipeline (`scripts/build.mjs --platform win`). See
+[scripts/README.md](scripts/README.md) for all options.
 
 ## Quality gate details
 
@@ -91,24 +80,12 @@ The test job enforces:
 
 - `cargo fmt -- --check` - formatting must be clean.
 - `cargo clippy --all-targets -- -D warnings` with an explicit **lint-debt
-  allowlist** for legacy platform code (dead code in legacy UI paths,
-  duplicated FFI declarations pending consolidation, style lints). New
-  warnings outside the allowlist fail CI. Please shrink the list when
-  touching those modules instead of extending it.
+  allowlist** for the native platform layer (dead code / duplicated FFI
+  declarations pending consolidation, style lints). New warnings outside
+  the allowlist fail CI. Shrink the list when touching those modules instead
+  of extending it.
 - `cargo test` - full unit test suite.
-
-## macOS (reserved)
-
-macOS packaging is **not implemented yet**. Everything is wired up so that
-enabling it later is small:
-
-- `scripts/build.mjs --platform mac` exists (fails explicitly on non-macOS
-  hosts; unvalidated on macOS hosts);
-- `build.yml` keeps a non-blocking macOS job (`continue-on-error: true`);
-- `release.yml` contains a commented-out `release-macos` job to re-enable;
-- macOS bundling will additionally need `tauri/icons/icon.icns` (and PNGs).
-  Generate the full set from a 1024x1024 PNG source with `npx tauri icon <logo.png>`.
-  The icon list in `tauri.conf.json` currently references only files that exist.
+- `pnpm -C frontend run check` - svelte-check + tsc.
 
 ## Code signing (not configured)
 
@@ -123,6 +100,5 @@ before the build step.
 | Release workflow fails at version check | Tag and `Cargo.toml` version differ - bump version first |
 | Release workflow fails at test gate | Fix fmt/clippy/test locally, push the fix, delete + re-push the tag |
 | Build fails with `os error 32` (file in use) | A running `ikun_organizer.exe` or stale cargo process holds a lock - close the app and retry |
-| Release build fails with `Failed to find fxc.exe` | Only happens when building the legacy `gpui-ui` feature (needs Windows SDK). Default builds no longer compile gpui, so this should not occur |
 | Pre-release has no `.msi` | Expected: MSI (WiX) only accepts numeric versions. `build.mjs` auto-selects NSIS-only for pre-releases; stable releases get NSIS + MSI automatically |
 | SmartScreen warning | Expected for unsigned builds |

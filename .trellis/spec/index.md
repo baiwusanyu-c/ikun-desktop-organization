@@ -1,30 +1,32 @@
 # Trellis Spec 索引
 
-> 项目规范和指南文档索引（v2.0 架构）
+> 项目规范与指导文档总览（v3.0 架构：Windows-only，单一 Tauri 运行时）
 
 ---
 
 ## 目录结构
 
-```
+```text
 .trellis/spec/
 ├── backend/          # Rust 后端开发指南
-│   ├── index.md                  # Backend 指南索引
+│   ├── index.md                  # Backend 指南入口
 │   ├── directory-structure.md    # 模块组织规则
-│   ├── plugin-architecture.md    # 进程内插件生命周期与热安装/卸载契约
-│   ├── database-guidelines.md    # 数据持久化模式
+│   ├── database-guidelines.md    # 数据持久化模式（统一 JSON 配置）
 │   ├── error-handling.md         # 错误处理规范
-│   ├── quality-guidelines.md     # 代码质量要求
-│   └── logging-guidelines.md     # 日志系统规范
+│   ├── icon-specification.md     # 图标规范
+│   ├── logging-guidelines.md     # 日志系统规范
+│   ├── quality-guidelines.md     # 质量红线（禁止/必须模式）
+│   └── windows-platform-guidelines.md  # Windows 平台行为规范（分层窗口/Shell/D2D）
 ├── frontend/         # Tauri + Svelte 5 前端规范
-│   ├── index.md                  # Frontend 指南索引
-│   └── tauri-svelte-architecture.md # IPC、状态和持久窗口契约
-│
-└── guides/           # 思维指南
-    ├── index.md                  # 思维指南索引
-    ├── code-reuse-thinking-guide.md    # 代码复用思维
-    ├── cross-layer-thinking-guide.md   # 跨层思维
-    └── windows-shell-api-guide.md      # Windows Shell API 指南
+│   ├── index.md
+│   └── tauri-svelte-architecture.md  # IPC、状态和持久化契约
+└── guides/           # 思维与方法指南
+    ├── index.md
+    ├── tauri-window-contract.md          # 共享运行时与窗口策略契约
+    ├── code-reuse-thinking-guide.md
+    ├── cross-layer-thinking-guide.md
+    ├── windows-layered-window-guide.md
+    └── windows-shell-api-guide.md
 ```
 
 ---
@@ -33,73 +35,76 @@
 
 ### Backend 开发指南
 
-**必读文档**（开始开发前）：
+**必读文档**（开始任务前）：
 
-1. [Backend Index](backend/index.md) - 总览和快速参考
+1. [Backend Index](backend/index.md) - 概览和快速参考
 2. [Directory Structure](backend/directory-structure.md) - 模块组织规则
 3. [Error Handling](backend/error-handling.md) - 错误处理规范
 4. [Quality Guidelines](backend/quality-guidelines.md) - 禁止和必须模式
 5. [Logging Guidelines](backend/logging-guidelines.md) - 日志规范
-6. [Plugin Architecture](backend/plugin-architecture.md) - 插件生命周期与扩展边界
+6. [Windows Platform Guidelines](backend/windows-platform-guidelines.md) - 分层窗口/Shell/渲染行为
 
 ### Frontend 开发指南
 
-1. [Frontend Index](frontend/index.md) - 前端开发入口
-2. [Tauri + Svelte Architecture](frontend/tauri-svelte-architecture.md) - IPC、响应式状态和窗口生命周期
+1. [Frontend Index](frontend/index.md) - 前端开发规则
+2. [Tauri + Svelte Architecture](frontend/tauri-svelte-architecture.md) - IPC、响应式状态与持久化
 
-**数据持久化相关**：
+### 数据持久化设计
+
 - [Database Guidelines](backend/database-guidelines.md) - 统一 JSON 配置管理
 
 ### 思维指南
 
-- [Guides Index](guides/index.md) - 思维指南总览
-- [Code Reuse Thinking](guides/code-reuse-thinking-guide.md) - 识别重复模式
-- [Cross-Layer Thinking](guides/cross-layer-thinking-guide.md) - 跨层数据流思考
-- [Windows Shell API](guides/windows-shell-api-guide.md) - Shell/COM API 调用模式
+- [Guides Index](guides/index.md)
+- [Tauri Window Contract](guides/tauri-window-contract.md) - 共享运行时、命令与窗口生命周期
+- [Code Reuse Thinking](guides/code-reuse-thinking-guide.md)
+- [Cross-Layer Thinking](guides/cross-layer-thinking-guide.md)
+- [Windows Shell API](guides/windows-shell-api-guide.md)
+- [Windows Layered Window Guide](guides/windows-layered-window-guide.md)
 
 ---
 
-## 核心架构
+## 核心架构（v3.0）
 
 ### 技术栈
 
-- **Tauri 2 + Svelte 5**：Windows 默认控制面板与创建/编辑弹窗
-- **Win32 + Direct2D/DirectWrite**：原生分类框与桌面覆盖层
-- **Trait-based 设计**：跨平台功能通过 trait 统一接口
-- **条件编译**：平台特定代码使用 `#[cfg(...)]` 隔离
-- **SharedTauriRuntime 上下文注入**：Commands、后台线程和插件共享同一个 `AppContext`
-- **进程内插件化**：trait 插件支持运行时安装/卸载，不提供动态库 ABI 加载
-- **统一 JSON 配置**：单一 config.json 管理所有设置
+- **Windows 10/11 专属产品**：无跨平台承诺，禁止 macOS/Linux 预留代码与"回退路径"残留。
+- **Tauri 2 + Svelte 5**：控制面板、创建/编辑弹窗、AI 分类弹窗（WebView2）。
+- **Win32 + Direct2D/DirectWrite**：分类框与桌面覆盖层原生窗口（不进 WebView）。
+- **DirectComposition + D3D11 + DXGI 桌面复制**：液态玻璃效果（着色器由 D3DCompile 运行时编译）。
+- **单一运行时注入**：Tauri Commands 与平台轮询线程共享唯一 `SharedTauriRuntime`（内含 `AppContext`）。
+- **无插件体系**：自研 PluginRegistry 已移除；Tauri 官方插件（opener/dialog）正常使用。
+- **无 trait 平台抽象**：平台能力直接调用 `platform/windows` 具体实现。
+- **统一 JSON 配置**：单一 config.json 管理所有设置。
 
-### 模块层次
+### 模块依赖
 
+```text
+Svelte(frontend) → tauri_commands(IPC) → TauriRuntime/AppContext
+  ├── box_core/          分类框业务逻辑 + 拖拽/多选/几何纯逻辑（平台无关）
+  ├── classification/    规则匹配 + AI 分类
+  ├── config/            统一 JSON 配置
+  ├── platform/windows/  Win32/COM/D2D 全部原生实现
+  └── utils/             日志、DPI、自启注册表、分配探针
 ```
-UI adapter (frontend/ + tauri_commands/) → IPC 与原生服务编排
-运行时层 (SharedTauriRuntime) → AppContext + PluginRegistry
-上下文层 (context.rs)        → 配置、分类器、平台 trait 对象
-  ├── 平台层 (platform/)     → 平台抽象 + Windows/macOS 实现
-  ├── 业务层 (box_core/)     → 分类框业务逻辑（平台无关）
-  ├── 分类层 (classification/) → 分类规则 + AI 分类
-  ├── 配置层 (config/)       → 统一 JSON 配置
-  └── 插件层 (plugin/)       → Plugin trait + Registry
-legacy UI (gpui_app/, ui/)   → 显式回退路径
-工具层 (utils/)              → 日志、DPI、字符串
-```
+
+方向约束：只能自上而下依赖；platform 内不得引用 tauri_commands；box_core 不得引用 windows。
 
 ---
 
 ## 常用命令
 
 ```bash
-cargo run                       # 运行
-RUST_LOG=debug cargo run        # 调试日志
-cargo check                     # 快速检查
+cargo run                       # 运行（唯一 Tauri 路径）
+RUST_LOG=debug cargo run        # 调试日志运行
+cargo check --all-targets       # 快速检查
+cargo test                      # 单元测试（门禁）
 cargo fmt                       # 格式化
 cargo clippy                    # Lint
-cargo test                      # 测试
-cargo watch -x check            # 自动检查
+pnpm run pack:win               # 发布打包（NSIS/MSI）→ target/dist/
+pnpm -C frontend run check      # 前端类型检查
 ```
 
 ---
 
-**更新时间**：2026-06-12
+**更新时间**：2026-10-23

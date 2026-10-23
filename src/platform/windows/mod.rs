@@ -18,7 +18,6 @@
 
 pub mod alignment_guide;
 pub mod app_icon;
-mod control_panel_window;
 mod d2d_render;
 pub mod desktop_manager;
 pub mod desktop_utils;
@@ -47,11 +46,12 @@ pub mod rename_editor;
 pub(crate) mod render_devices;
 pub mod shell_menu;
 mod sys_tray;
+pub mod types;
 mod wnd_proc;
 pub mod zorder;
 
 // Re-export key items
-pub use control_panel_window::{hide_control_panel_window, show_control_panel_window};
+#[allow(unused_imports)] // 公共 API 预留
 pub use desktop_manager::{clsid_display_name, DesktopManager};
 #[allow(unused_imports)] // 公共 API 预留
 pub use drop_target::{
@@ -62,6 +62,7 @@ pub use drop_target::{
 pub use ffi_types::{IkunBoxDragData, IkunDragItemData};
 #[allow(unused_imports)]
 pub use global_hotkey::{setup_global_hotkey, take_hotkey_toggle, unregister_global_hotkey};
+#[allow(unused_imports)] // 公共 API 预留
 pub use grid_window::{
     collect_grid_layout, create_grid_window, destroy_all_grid_windows, get_grid_count,
     rerender_all_grid_windows, update_grid_window_title, GridCreateParams, GridFileItem,
@@ -74,12 +75,14 @@ pub use icon_hider::{
 };
 #[allow(unused_imports)] // 公共 API 预留
 pub use icon_manager::DesktopIconManager;
+#[allow(unused_imports)] // 公共 API 预留
 pub use monitor_utils::{
     get_cursor_monitor_work_area_phys, get_primary_monitor_dpi, get_primary_monitor_work_area_phys,
     get_screen_resolution, reposition_and_resize_window, reposition_window_by_title,
 };
 #[allow(unused_imports)] // 公共 API 预留
 pub use ole_dnd::{get_box_drag_format_id, start_box_drag};
+#[allow(unused_imports)] // 公共 API 预留
 pub use shell_menu::{
     cleanup_desktop_registry, setup_desktop_registry, show_desktop_context_menu,
     take_pending_create_box,
@@ -89,6 +92,8 @@ pub use sys_tray::{
     cleanup_system_tray, register_tray_action_waker, set_tray_auto_start_state, setup_system_tray,
     take_pending_tray_action,
 };
+#[allow(unused_imports)] // 公共 API 预留
+pub use types::*;
 #[allow(unused_imports)] // Z-order 公共 API 预留
 pub use zorder::{find_grid_window_at_point, push_other_grids_below, set_drag_in_progress};
 
@@ -98,55 +103,3 @@ pub use multi_select::{
     has_selection, is_selected, remove, selected_in_container, selected_paths_in_container,
     set_anchor, set_range, toggle, ContainerType, SelectionKey,
 };
-
-// =============================================================================
-// WindowsPlatformService: implements crate::platform::PlatformService
-// =============================================================================
-
-/// Windows platform service implementation.
-///
-/// Consolidates Windows-specific platform operations into a single struct
-/// that implements the cross-platform PlatformService trait.
-pub struct WindowsPlatformService;
-
-impl crate::platform::PlatformService for WindowsPlatformService {
-    fn get_grid_count(&self) -> usize {
-        grid_window::get_grid_count()
-    }
-
-    fn collect_grid_layout(&self) -> Vec<crate::config::app_config::BoxLayoutData> {
-        grid_window::collect_grid_layout()
-    }
-
-    fn setup_system_tray(&self) -> anyhow::Result<()> {
-        sys_tray::setup_system_tray()
-    }
-
-    fn cleanup_system_tray(&self) {
-        sys_tray::cleanup_system_tray()
-    }
-
-    fn take_pending_tray_action(&self) -> Option<crate::platform::SystemTrayAction> {
-        sys_tray::take_pending_tray_action()
-    }
-
-    fn set_tray_auto_start_state(&self, enabled: bool) {
-        sys_tray::set_tray_auto_start_state(enabled)
-    }
-
-    fn show_control_panel(&self) -> bool {
-        control_panel_window::show_control_panel_window("Desktop Organizer")
-    }
-
-    fn hide_control_panel(&self) -> bool {
-        control_panel_window::hide_control_panel_window("Desktop Organizer")
-    }
-
-    fn set_auto_start(&self, enabled: bool) -> anyhow::Result<()> {
-        crate::utils::platform::set_auto_start(enabled)
-    }
-
-    fn is_auto_start_enabled(&self) -> bool {
-        crate::utils::platform::is_auto_start_enabled()
-    }
-}

@@ -3131,7 +3131,7 @@ mod tests {
             (W * H) as usize
         ];
         for x in 0..W as usize {
-            src[1 * W as usize + x] = Pixel32 {
+            src[W as usize + x] = Pixel32 {
                 b: 200,
                 g: 100,
                 r: 50,

@@ -17,9 +17,7 @@ pub use guide_overlay::destroy_guide_overlay;
 #[allow(unused_imports)]
 pub use alignment_detect::{AlignmentDirection, AlignmentMatch, AlignmentResult};
 
-use crate::platform::windows::ffi_imports::{
-    GetDpiForWindow, KillTimer, PostMessageW, SetTimer,
-};
+use crate::platform::windows::ffi_imports::{GetDpiForWindow, KillTimer, PostMessageW, SetTimer};
 use crate::platform::windows::ffi_types::{RECT, TIMER_ID_ALIGNMENT, WM_USER_DESTROY_GUIDE};
 use crate::platform::windows::grid_window;
 
@@ -34,7 +32,9 @@ pub fn on_enter_size_move(hwnd: *mut std::ffi::c_void) {
     if let Ok(mut guard) = MOVING_WINDOW.lock() {
         *guard = Some(SendHwnd(hwnd));
     }
-    let no_guide = std::env::var("IKUN_NO_GUIDE").map(|v| v == "1").unwrap_or(false);
+    let no_guide = std::env::var("IKUN_NO_GUIDE")
+        .map(|v| v == "1")
+        .unwrap_or(false);
     if !no_guide && !is_guide_overlay_created() {
         if let Err(e) = create_guide_overlay() {
             log::error!("create guide overlay failed: {}", e);

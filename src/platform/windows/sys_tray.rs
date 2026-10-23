@@ -3,7 +3,7 @@
 #![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
 //!
 //! 创建隐藏消息窗口承载 `Shell_NotifyIconW` 回调，并把原生菜单点击转换为
-//! `SystemTrayAction`，由 `app.rs` 在 egui 主循环中消费。
+//! `SystemTrayAction`，由平台轮询线程（tauri_commands/platform_runtime.rs）消费。
 
 use crate::platform::SystemTrayAction;
 
@@ -58,7 +58,7 @@ static ACTION_WAKER: OnceLock<Mutex<Option<TrayActionWaker>>> = OnceLock::new();
 
 /// 注册托盘动作唤醒回调。
 ///
-/// 托盘消息来自 Win32 消息窗口。写入 `PENDING_ACTION` 后主动唤醒 egui 主循环，
+/// 托盘消息来自 Win32 消息窗口。写入 `PENDING_ACTION` 后主动唤醒平台轮询线程，
 /// 避免控制面板隐藏时菜单动作长时间不被消费。
 pub fn register_tray_action_waker(waker: impl Fn() + Send + Sync + 'static) {
     let slot = ACTION_WAKER.get_or_init(|| Mutex::new(None));

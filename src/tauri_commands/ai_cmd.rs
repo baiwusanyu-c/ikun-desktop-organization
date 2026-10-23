@@ -105,12 +105,8 @@ async fn perform_ai_classification_async(
     use std::collections::HashMap;
 
     // 获取桌面图标
-    let icons = {
-        let rt = runtime
-            .lock()
-            .map_err(|e| format!("无法访问运行时状态: {e}"))?;
-        rt.ctx.desktop_manager.get_desktop_icons()
-    };
+    // 桌面图标枚举无共享状态，直接使用平台实现
+    let icons = crate::platform::windows::DesktopManager.get_desktop_icons();
 
     if icons.is_empty() {
         return Err("桌面没有图标".to_string());

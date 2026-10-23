@@ -1,7 +1,7 @@
 //! 几何计算
 //!
 //! 从 platform/windows/alignment_detect.rs 和 icon_bitmap.rs 提取的平台无关几何算法。
-//! macOS 重新实现时可直接复用。
+//! 分类框与桌面覆盖层共用的纯逻辑，无平台依赖。
 
 use super::types::{Pixel32, Rect};
 
@@ -25,7 +25,7 @@ pub struct AlignmentMatch {
     pub direction: AlignmentDirection,
     /// 对齐位置（像素坐标）
     pub position: i32,
-    /// 匹配的对象标识（平台无关，Windows 用 HWND，macOS 用窗口 ID）
+    /// 匹配的对象标识（当前实现为 HWND）
     pub matched_ids: Vec<u64>,
     /// 参考线起点（屏幕坐标）
     pub line_start: (i32, i32),

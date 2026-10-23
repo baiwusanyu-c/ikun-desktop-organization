@@ -1,382 +1,120 @@
 # Directory Structure
 
-> 项目代码组织方式（v2.0 架构）
+> 项目代码组织方式（v3.0 架构：Windows-only，单一 Tauri 运行时）
 
 ---
 
 ## Overview
 
-本项目使用模块化架构设计。每个功能领域都有独立的模块，平台特定代码通过条件编译隔离。
+模块化架构：每个功能领域一个独立模块；平台实现全部收敛在 `platform/windows/`。
 
 **核心设计原则**：
-- **共享运行时注入**：Tauri Commands、轮询线程和插件通过 `SharedTauriRuntime` 共享唯一 `AppContext`
-- **Tauri 默认 UI shell（Windows）**：`frontend/` 只负责页面，`tauri_commands/` 负责 IPC adapter 与原生编排
-- **GPUI 回退 shell（Windows）**：`gpui_app/` 仅在关闭默认 feature 时使用
-- **legacy eframe 回退**：`app.rs` + `ui/` 仅作为 `eframe-ui` feature 回退路径
-- **平台抽象**：`platform/` 通过 trait 统一接口，各平台独立实现
-- **业务解耦**：`box_core/` 分类框业务逻辑与平台渲染完全分离
-- **插件扩展边界**：`PluginRegistry` 接入 Tauri 生命周期，支持进程内安装/卸载；平台渲染与 Shell 集成不作为业务插件注册
-- **条件编译隔离**：平台特定代码使用 `#[cfg(...)]` 隔离
-- **层次清晰**：Svelte → Tauri Commands → SharedTauriRuntime/AppContext → 业务/平台，单向依赖
+- **单一运行路径**：`cargo build` 即完整应用；无 Cargo features、无插件注册表、无 legacy UI 回退
+- **共享运行时注入**：Tauri Commands、平台轮询线程共享唯一 `AppContext`（`SharedTauriRuntime`）
+- **具体实现优先**：禁止为假设性跨平台引入 trait 抽象；调用方直接使用 `crate::platform::xxx`
+- **业务解耦**：`box_core/` 为平台无关纯逻辑（含自原 shared/ 并入的拖拽/多选/几何），由 platform 层调用
+- **单向依赖**：Svelte → tauri_commands → AppContext → box_core/classification/config → platform/windows → utils
 
 ---
 
 ## Directory Layout
 
-```
+```text
 src/
-├── main.rs                    # 入口：默认启动 Tauri，按 feature 分发 legacy UI
-├── app.rs                     # legacy eframe::App 控制面板（eframe-ui feature）
-├── context.rs                 # AppContext（持有 Box<dyn DesktopManagerTrait> + Box<dyn PlatformService>）
+├── main.rs                 # 入口：信号文件单例协议、DPI V2/OLE 初始化、panic hook、Tauri builder
+├── context.rs              # AppContext（AppConfig + config_loaded；不持有平台对象）
 │
-├── shared/                    # 🆕 跨平台共享逻辑层（从 Windows 提取的平台无关代码）
-│   ├── mod.rs                 #   模块导出
-│   ├── selection.rs           #   全局多选注册表（跨容器选择/锚点/框选）~526行
-│   ├── drag_logic.rs          #   拖拽纯逻辑（compute_drag_over_state/apply_shift_insert）~185行
-│   ├── geometry.rs            #   几何计算（对齐检测/像素边界/等比居中）~325行
-│   ├── layout.rs              #   布局重排逻辑（reflow_positions）~96行
-│   ├── drag_state.rs          #   拖拽生命周期状态机+常量 ~32行
-│   └── types.rs               #   跨平台共享类型定义（Rect/Point/Pixel32）~52行
+├── tauri_commands/         # IPC 适配层 + 原生编排
+│   ├── mod.rs              #   命令聚合导出
+│   ├── platform_runtime.rs #   TauriRuntime、平台轮询线程、托盘/热键/信号分发、退出清理序列
+│   ├── config_cmd.rs       #   配置读写/主题/样式/AI 配置命令 + apply_runtime_config
+│   ├── box_cmd.rs          #   分类框 CRUD 与格子窗口创建参数
+│   ├── window_cmd.rs       #   持久 WebView 窗口生命周期（show/hide/toggle/复用）
+│   ├── app_cmd.rs          #   应用信息/退出/屏幕查询
+│   ├── ai_cmd.rs           #   AI 分类命令（异步执行 + 结果落框）
+│   └── log_cmd.rs          #   前端日志转发
 │
-├── tauri_commands/            # 默认 Tauri IPC adapter 与运行时
-│   ├── mod.rs                 #   命令导出
-│   ├── app_cmd.rs             #   应用信息与进程控制
-│   ├── box_cmd.rs             #   原生分类框创建/编辑与 pending payload
-│   ├── config_cmd.rs          #   共享 AppContext 配置读写与实时重绘
-│   ├── window_cmd.rs          #   持久 WebView 标签与 hide 生命周期
-│   └── platform_runtime.rs    #   AppContext + PluginRegistry + 原生服务编排
+├── box_core/               # 平台无关业务逻辑（禁止 use windows / HWND）
+│   ├── box_model.rs        #   分类框数据模型
+│   ├── box_manager.rs      #   框生命周期管理
+│   ├── layout_calc.rs      #   网格布局计算（calculate_grid/hit_test）
+│   ├── view_engine.rs      #   视图参数（get_view_params）
+│   ├── sort_engine.rs      #   排序引擎
+│   ├── group_engine.rs     #   分组引擎
+│   ├── interaction.rs      #   交互状态
+│   ├── drag_logic.rs       #   拖拽纯逻辑（compute_drag_over_state/apply_shift_insert）
+│   ├── drag_state.rs       #   拖拽生命周期状态机 + 常量
+│   ├── geometry.rs         #   几何计算（对齐检测/像素边界/等比居中）
+│   ├── layout.rs           #   布局重排（reflow_positions）
+│   ├── selection.rs        #   全局多选注册表（跨容器选择/锚点/框选；测试带 serial() 串行锁）
+│   └── types.rs            #   共享几何类型（Rect/Point/Pixel32）
 │
-├── gpui_app/                  # legacy Windows GPUI UI shell
-│   ├── mod.rs                 #   模块导出
-│   ├── app_runtime.rs         #   UI 框架无关运行时/命令层（持有 AppContext）
-│   ├── control_panel.rs       #   GPUI 控制面板视图
-│   ├── create_box_dialog.rs   #   独立 GPUI 创建分类框窗口
-│   ├── edit_box_dialog.rs    #   独立 GPUI 编辑分类框窗口（双击标题打开）
-│   ├── windows_main.rs        #   GPUI Application 事件循环与轮询调度（safe_gpui_update 防崩溃）
-│   └── settings_view.rs       #   液态玻璃效果设置面板（GPUI 独立窗口）
+├── classification/         # 分类系统
+│   ├── matcher.rs          #   规则匹配
+│   ├── database.rs         #   分类数据库
+│   └── ai_classifier.rs    #   OpenAI 兼容 AI 分类器
 │
-├── platform/                  # 平台抽象层
-│   ├── mod.rs                 #   DesktopManagerTrait(7方法) + PlatformService(10方法) + 工厂函数 + re-exports
-│   ├── types.rs               #   跨平台类型：DesktopIcon, IconInfo, ScreenInfo, IconData, IconData
-│   ├── windows/
-│   │   ├── mod.rs             #   Windows 平台入口
-│   │   ├── ffi_types.rs       #   Win32 FFI 类型/常量
-│   │   ├── ffi_imports.rs     #   Win32 extern "system" 声明
-│   │   ├── desktop_manager.rs #   桌面图标枚举（文件系统 + 虚拟 Shell 对象 CLSID）
-│   │   ├── desktop_overlay/   #   桌面覆盖窗口（渲染未管理图标 + Grid 吸附布局 + 桌面接管生命周期 + 文件监听刷新）
-│   │   │   ├── overlay_mouse_hook.rs   # 全局鼠标钩子（WH_MOUSE_LL + 独立线程消息泵）
-│   │   │   └── overlay_drop_target.rs  # OLE 拖放目标（IDropTarget 实现）
-│   │   ├── alignment_guide/   #   对齐参考线（对齐检测 + 动态对比色 + overlay 渲染）
-│   │   ├── d2d_render.rs      #   D2D/DirectWrite 渲染引擎
-│   │   ├── icon_bitmap.rs     #   图标透明边界与等比居中计算（纯逻辑）
-│   │   ├── grid_window.rs     #   窗口创建/销毁/数据模型/Z-order 管理（push_other_grids_below + 递归抑制）
-│   │   ├── grid_layout.rs     #   布局计算/按钮矩形/命中测试（reflow_items 委托到 shared/layout.rs）
-│   │   ├── monitor_utils.rs   #   显示器查询/窗口定位工具
-│   │   ├── wnd_proc.rs        #   窗口消息处理 wnd_proc
-│   │   ├── zorder.rs          #   Z-order 层级管理（HWND_BOTTOM + 递归抑制 + 坐标查找）
-│   │   ├── menu_window.rs     #   自定义分层窗口深色菜单（D2D/DirectWrite）
-│   │   ├── shell_menu.rs      #   Shell 右键菜单（单选+多选）+ 桌面背景注册表菜单（覆盖区域含 Ikun 动作）
-│   │   ├── app_icon.rs        #   嵌入 logo.ico 项目图标（托盘/菜单）
-│   │   ├── icon_extract.rs    #   图标提取（内容缩略图/应用 HICON 分流 + .lnk 目标解析）
-│   │   ├── icon_hider.rs      #   图标隐藏/恢复 + managed_icons vault + get_vault_display_names
-│   │   ├── liquid_glass.rs    #   液态玻璃 GPU 渲染器（DXGI + D2D + HLSL）
-│   │   ├── multi_select.rs    #   全局多选 re-export（实际实现在 shared/selection.rs）
-│   │   ├── desktop_utils.rs   #   桌面工具函数（自动排列检测/图标定位）
-├── rename_editor.rs   #   内联重命名编辑器（独立线程 EDIT 控件 + 异步消息通信） + 删除分类框后还原非管理图标
-│   │   ├── drag_image.rs      #   拖拽残影覆盖窗口（单选/多选图标残影，D2D 渲染 + 跨显示器 DPI 自适应）
-│   │   ├── ole_dnd.rs         #   OLE 拖拽源（IDropSource + IDataObject 实现）
-│   │   ├── drop_target.rs     #   分类框拖放目标（IDropTarget 实现）
-│   │   ├── drag_handler.rs    #   拖拽协调器（拖拽生命周期：阈值检测/位置更新/释放分发）
-│   │   ├── drag_drop.rs       #   拖拽放置操作（同框/跨框/桌面/OLE drop + 回收站文件恢复）
-│   │   ├── drag_visual.rs     #   拖拽可视化反馈（HWND 感知部分，纯逻辑已提取到 shared/drag_logic.rs）
-│   │   ├── icon_manager.rs    #   图标管理器（SysListView32 跨进程操作 + 图像列表提取 + 位置快照/恢复）
-│   │   ├── control_panel_window.rs # 控制面板 Win32 显示/隐藏辅助（托盘优先生命周期）
-│   │   ├── sys_tray.rs        #   系统托盘入口（隐藏消息窗口 + 固定菜单动作队列）
-│   │   └── global_hotkey.rs   #   全局热键（RegisterHotKey + 消息窗口 + 快捷键解析）
-│   └── macos/
-│       ├── mod.rs             #   macOS 平台入口 + stub 函数
-│       ├── desktop_manager.rs #   桌面图标枚举（NSWorkspace + FileManager）
-│       ├── ffi_imports.rs     #   macOS FFI 声明（CoreGraphics 等）
-│       ├── icon_extract.rs    #   图标提取（NSWorkspace iconForFile）
-│       └── desktop_overlay/   #   桌面覆盖窗口
-│           ├── mod.rs             #   模块导出
-│           ├── overlay_window.rs  #   NSWindow 创建/销毁 + 鼠标穿透
-│           ├── overlay_render.rs  #   渲染编排（分类框 + 图标）
-│           ├── box_render.rs      #   分类框渲染（背景/标题/图标网格/标签）
-│           └── icon_layout.rs     #   图标网格布局计算
+├── config/
+│   └── app_config.rs       # 统一 JSON 配置（~/.ikun_organizer.json）；字段为外部契约
 │
-├── box_core/                  # 分类框核心业务逻辑（平台无关）
-│   ├── mod.rs                 #   模块导出
-│   ├── box_model.rs           #   ClassificationBox 数据模型 + BoxItem
-│   ├── box_manager.rs         #   分类框管理器（CRUD + 持久化）
-│   ├── sort_engine.rs         #   排序引擎：8 种维度 × 升降序
-│   ├── view_engine.rs         #   视图引擎：8 种视图模式布局参数
-│   ├── group_engine.rs        #   分组引擎：按名称/类型/时间等
-│   ├── layout_calc.rs         #   网格布局计算 + 命中测试
-│   └── interaction.rs         #   交互状态：选中/hover/锁定/拖拽
+├── platform/
+│   ├── mod.rs              # 薄壳：SystemTrayAction 枚举 + pub use windows::*
+│   └── windows/            # 全部 Windows 原生实现（47 文件，分区如下）
+│       ├── types.rs        #   共享数据结构（DesktopIcon/IconData/...）
+│       ├── 窗口            #   grid_window / menu_window / control_panel_window / wnd_proc /
+│       │                   #   zorder / occlusion / grid_layout
+│       ├── 渲染            #   d2d_render / render_devices / liquid_glass / icon_bitmap
+│       ├── 图标与桌面      #   desktop_manager / desktop_utils / icon_manager / icon_hider /
+│       │                   #   icon_extract / app_icon
+│       ├── 拖拽            #   drag_drop / drag_handler / drag_visual / drag_image / ole_dnd /
+│       │                   #   drop_target / multi_select（re-export box_core::selection）
+│       ├── Shell/系统      #   shell_menu / global_hotkey / sys_tray / rename_editor /
+│       │                   #   ffi_imports / ffi_types
+│       ├── 对齐辅助线      #   alignment_guide/
+│       ├── 桌面覆盖层      #   desktop_overlay/（overlay_window / overlay_render / overlay_wnd_proc /
+│       │                   #   overlay_mouse_hook / overlay_grid / overlay_drag_ops /
+│       │                   #   overlay_drop_target / desktop_watcher）
+│       └── 监控            #   monitor_utils / mem_probe
 │
-├── classification/            # 分类系统
-│   ├── mod.rs                 #   AppClassifier
-│   ├── database.rs            #   AppCategoryDB（YAML 兼容 + Default 内嵌规则）
-│   ├── matcher.rs             #   AppMatcher 通配符匹配算法
-│   └── ai_classifier.rs       #   AI 分类器（TODO：LLM API 调用）
-│
-├── config/                    # 统一配置系统
-│   ├── mod.rs                 #   模块导出
-│   └── app_config.rs          #   统一 JSON 配置结构（AppConfig）+ 单元测试
-│
-├── plugin/                    # 插件系统
-│   ├── mod.rs                 #   Plugin trait + PluginRegistry
-│   └── builtin/
-│       ├── mod.rs             #   register_builtin_plugins()
-│       ├── classification_plugin.rs  #   分类功能插件
-│       └── style_plugin.rs    #   样式设置插件
-│
-├── ui/                        # legacy eframe UI 层（eframe-ui feature）
-│   ├── mod.rs                 #   模块导出
-│   ├── control_panel.rs       #   控制面板主界面
-│   ├── settings_panel.rs      #   设置面板（样式/AI/热键/调试）
-│   └── tray_menu.rs           #   托盘菜单逻辑
-│
-├── utils/                     # 工具层
-│   ├── mod.rs                 #   模块导出
-│   ├── logger.rs              #   日志系统（滚动文件输出 + 自定义宏 + 发行版日志）
-│   ├── platform.rs            #   跨平台工具（开机自启、配置目录）
-│   ├── dpi.rs                 #   DPI 缩放工具
-│   └── string_utils.rs        #   UTF-16 字符串转换
-│
-└── ipc/                       # 进程间通信（TODO 占位）
-    └── mod.rs                 #   热键唤醒、单实例检测
+└── utils/
+    ├── logger.rs           # 文件轮转日志（中文日志规范见 logging-guidelines）
+    ├── dpi.rs              # DPI 换算
+    ├── platform.rs         # 开机自启注册表（唯一写入入口 + test_support 串行锁）
+    ├── alloc_probe.rs      # 全局分配计数探针（Rust 堆归因）
+    └── string_utils.rs     # 字符串工具
+
+frontend/                   # Svelte 5 + Vite（详见 spec/frontend/）
+build/                      # build.rs（tauri-build + embed-resource 清单嵌入）+ app.manifest
+scripts/                    # build.mjs（Windows 打包）/ release.mjs（发版）
+tauri.conf.json             # 4 个 WebView 窗口 + NSIS/MSI bundle
 ```
 
-### scripts/
-
-跨平台打包脚本（Node.js）：
-
-| 文件 | 职责 |
-|------|------|
-| `build.mjs` | 入口脚本：环境检查、前端安装、Tauri 构建、产物收集 |
-| `README.md` | 使用说明和 CLI 参数文档 |
-
-
-
-**非代码目录**：
-```
-build/
-├── build.rs                   # 嵌入 manifest 到 Windows 可执行文件
-└── app.manifest               # Per-Monitor DPI V2 感知清单
-```
-
-**配置存储位置**（用户主目录）：
-- 所有平台: `~/.ikun_organizer.json`
-
-**Windows 图标仓库存储位置**：
-- 当前用户桌面图标: `~/.ikun_organizer/managed_icons/`
-- Public 桌面图标: `C:\Users\Public\.ikun_organizer\managed_icons/`
-- Public 图标在配置中仍保存 `C:\Users\Public\Desktop\<文件名>` 作为逻辑路径，读取时解析到公共仓库。
+已删除模块（2026-10 重构）：`src/plugin/`（自研插件体系）、`src/gpui_app/` + `src/ui/` + `src/app.rs`
+（legacy UI 回退）、`src/ipc/`（空占位）、`src/shared/`（并入 box_core）、`platform` trait 抽象层、
+macOS 依赖与构建面。**不得复活**。
 
 ---
 
-## Module Organization Rules
+## Module Rules
 
-### 新功能模块组织规则
+### 新代码放哪里
 
-**步骤 1：确定模块层级**
+| 代码类型 | 位置 | 理由 |
+|----------|------|------|
+| 可单测的纯计算（布局/命中/重排/选择） | `box_core/` | 平台无关，保持可测试 |
+| Win32 句柄、消息循环、COM、渲染 | `platform/windows/` | 平台实现唯一归属地 |
+| 前端可调用的新能力 | `tauri_commands/` 加命令 + mod.rs 注册 | IPC 适配层职责 |
+| 配置字段 | `config/app_config.rs` + 前端 tauri-api.ts 类型同步 | 外部契约 |
 
-| 层级 | 模块 | 职责 |
-|------|------|------|
-| **上下文** | `context.rs` | 中心依赖注入，串联所有子系统 |
-| **平台层** | `platform/` | 操作系统 API：渲染、窗口、图标、托盘 |
-| **业务层** | `box_core/` | 分类框业务逻辑（排序/视图/分组/布局/交互） |
-| **分类层** | `classification/` | 分类规则匹配、AI 分类 |
-| **配置层** | `config/` | 统一 JSON 配置管理 |
-| **插件层** | `plugin/` | 进程内功能插件注册、初始化、安装/卸载、定向分发和清理 |
-| **UI adapter（默认）** | `tauri_commands/` | Tauri IPC、共享运行时、持久窗口和原生服务编排 |
-| **前端 UI（默认）** | `frontend/` | Svelte 控制面板与创建/编辑窗口 |
-| **UI 层（Windows legacy）** | `gpui_app/` | GPUI 控制面板/弹窗 View + AppRuntime 命令调度 |
-| **UI 层（legacy）** | `app.rs`, `ui/` | eframe 控制面板回退路径（`eframe-ui` feature） |
-| **工具层** | `utils/` | 通用辅助函数 |
+### 命名与结构规范
 
-**步骤 2：创建模块结构**
+- 文件/函数 snake_case；模块目录即领域名；一个领域一个 mod.rs 导出公共 API
+- 平台实现文件内按"窗口/渲染/图标/拖拽/Shell/覆盖层/监控"分区，新增文件归入对应前缀
+  （grid_* / overlay_* / icon_* / drag_* / ffi_*）
+- 手写 FFI 只允许在 ffi_imports.rs / ffi_types.rs；新代码优先 `windows` crate
+- 单文件 ≤ 1500 行（渲染引擎可放宽）；超过则按职责拆子模块
 
-每个模块必须包含：
-- `mod.rs`：模块入口和导出
-- 具体实现文件（按功能拆分，单文件 ≤ 1500 行，渲染引擎等复杂模块可适当放宽）
+### 测试布局
 
-### 平台特定代码规则
-
-**规则 1：使用 Trait 定义统一接口**
-
-```rust
-// src/platform/mod.rs
-pub trait DesktopManagerTrait {
-    fn new() -> anyhow::Result<Self> where Self: Sized;
-    fn get_desktop_icons(&self) -> Vec<DesktopIcon>;
-    fn watch_desktop(&self) -> anyhow::Result<()>;
-}
-```
-
-**规则 2：条件编译隔离平台实现**
-
-```rust
-// src/platform/mod.rs
-#[cfg(windows)]
-pub mod windows;
-#[cfg(target_os = "macos")]
-pub mod macos;
-
-#[cfg(windows)]
-pub use windows::DesktopManager;
-#[cfg(target_os = "macos")]
-pub use macos::DesktopManager;
-```
-
-**规则 3：Windows 平台实现放在 `platform/windows/` 子模块**
-
-```
-platform/windows/
-├── mod.rs             # 入口 + re-exports
-├── ffi_types.rs       # FFI 类型定义
-├── ffi_imports.rs     # FFI 函数声明
-├── desktop_manager.rs # DesktopManagerTrait 实现 + 虚拟 Shell 对象（CLSID）枚举
-├── desktop_overlay/   # 桌面覆盖窗口（渲染/交互/Grid 吸附/DPI 自适应）
-│   ├── overlay_mouse_hook.rs # 全局鼠标钩子（WH_MOUSE_LL + 独立线程消息泵）
-│   └── overlay_drop_target.rs  # OLE 拖放目标（IDropTarget 实现）
-├── alignment_guide/   # 对齐参考线（对齐检测 + 动态对比色 + overlay 渲染）
-├── d2d_render.rs      # D2D/DirectWrite 渲染（draw_icon_with_label 统一图标+文本渲染）
-├── icon_bitmap.rs     # 图标透明边界与等比居中计算（纯逻辑 + 单元测试）
-├── grid_window.rs     # 窗口创建/销毁/数据模型
-├── grid_layout.rs     # 布局计算/按钮矩形/命中测试（reflow_items 委托到 shared/layout.rs）
-├── monitor_utils.rs   # 显示器查询/窗口定位工具
-├── wnd_proc.rs        # 窗口消息处理
-├── menu_window.rs     # 自定义分层窗口深色菜单（D2D/DirectWrite）
-├── shell_menu.rs      # Shell 右键菜单（单选+多选上下文菜单）+ 注册表菜单动作（覆盖区域含 Ikun 动作）
-├── app_icon.rs        # 项目图标资源加载
-├── icon_extract.rs    # 图标提取（内容缩略图/应用 HICON 分流 + .lnk 目标解析）
-├── icon_hider.rs      # 图标隐藏/恢复 + managed_icons vault + get_vault_display_names
-├── liquid_glass.rs    # 液态玻璃 GPU 渲染器（DXGI + D2D + HLSL）
-├── multi_select.rs    # 全局多选 re-export（实际实现在 shared/selection.rs）
-├── desktop_utils.rs   # 桌面工具函数（自动排列检测/图标定位）
-├── drag_image.rs      # 拖拽残影覆盖窗口（单选/多选图标残影，跨显示器 DPI 自适应重建）
-├── ole_dnd.rs         # OLE 拖拽源（IDropSource + IDataObject）
-├── drop_target.rs     # 分类框拖放目标（IDropTarget）
-├── drag_handler.rs    # 拖拽协调器（拖拽生命周期：阈值检测/位置更新/释放分发）
-├── drag_drop.rs       # 拖拽放置操作（同框/跨框/桌面/OLE drop + 回收站文件恢复）
-├── drag_visual.rs     # 拖拽可视化反馈（HWND 感知部分，纯逻辑已提取到 shared/drag_logic.rs）
-├── icon_manager.rs    # 图标管理器（SysListView32 跨进程操作 + 图像列表提取）
-├── control_panel_window.rs # GPUI/eframe 控制面板 Win32 显示/隐藏辅助
-├── sys_tray.rs        # 系统托盘入口
-└── global_hotkey.rs   # 全局热键模块
-```
-
----
-
-## Naming Conventions
-
-### 文件命名
-
-| 类型 | 规则 | 示例 |
-|------|------|------|
-| 模块入口 | `mod.rs` | `platform/mod.rs` |
-| 业务实现 | 功能名称小写 | `sort_engine.rs`, `box_model.rs` |
-| UI 组件 | 功能名称 | `control_panel.rs`, `settings_panel.rs` |
-| 平台实现 | 功能名称 | `desktop_manager.rs`, `d2d_render.rs` |
-| FFI 定义 | `ffi_` 前缀 | `ffi_types.rs`, `ffi_imports.rs` |
-| 插件 | `_plugin` 后缀 | `classification_plugin.rs` |
-
-### Rust 代码命名
-
-| 类型 | 规则 | 示例 |
-|------|------|------|
-| Trait | `<Name>Trait` | `DesktopManagerTrait`, `Plugin` |
-| Struct | PascalCase | `AppContext`, `ClassificationBox` |
-| Function | snake_case | `get_desktop_icons`, `classify` |
-| Module | snake_case | `box_core`, `classification` |
-| 常量 | UPPER_CASE | `SM_CXSCREEN` |
-| 枚举 | PascalCase | `SortMode`, `ViewMode` |
-
----
-
-## Dependency Rules
-
-**允许的依赖方向**：
-
-```
-main.rs → tauri_commands, context, platform, plugin
-frontend pages → frontend api adapter（IPC 边界）
-tauri_commands → context, platform, plugin
-tauri_commands::platform_runtime → context, platform, plugin
-gpui_app/*_view.rs → gpui_app::app_runtime（legacy）
-gpui_app::app_runtime → context, platform（legacy）
-app.rs → context, platform, ui（仅 eframe-ui feature）
-context.rs → config, platform, classification, (plugin, box_core)
-ui/ → context (通过参数传递，仅 legacy eframe)
-plugin/ → context (仅通过生命周期参数传递)
-shared/ → (无内部依赖，仅 std + serde + uuid + lazy_static)
-platform/ → shared (允许：平台实现复用共享逻辑)
-box_core/ → config (枚举类型)
-classification/ → platform (仅 DesktopIcon 类型)
-platform/ → (无 UI/业务反向依赖，仅外部 crate 或平台子模块)
-platform/windows/liquid_glass → config (LiquidGlassConfig)
-platform/windows/multi_select → shared/selection (re-export)
-platform/windows/desktop_overlay/overlay_drop_target → ffi_imports, ole_dnd
-platform/windows/desktop_overlay/overlay_mouse_hook → ffi_imports, zorder
-utils/ → (无内部依赖)
-```
-
-**禁止的依赖方向**：
-
-```
-❌ platform/ → ui/         (平台层不依赖 UI)
-❌ platform/ → tauri_commands/ (平台层不依赖 Tauri adapter)
-❌ box_core/ → platform/   (业务层不直接调用平台 API)
-❌ config/ → context/       (配置层不依赖上下文)
-❌ classification/ → ui/   (分类层不依赖 UI)
-❌ shared/ → platform/    (共享层不依赖平台)
-❌ shared/ → ui/          (共享层不依赖 UI)
-❌ shared/ → gpui_app/    (共享层不依赖 GPUI)
-❌ frontend components → invoke (通用组件不得绕过前端 API adapter)
-```
-
----
-
-## Forbidden Patterns
-
-**❌ 不要在平台通用代码中硬编码平台特定逻辑**
-
-```rust
-// ❌ 错误
-pub fn get_icons() -> Vec<DesktopIcon> {
-    if cfg!(windows) { /* Windows */ } else { /* macOS */ }
-}
-
-// ✅ 正确：通过 trait 抽象
-pub fn get_icons(manager: &dyn DesktopManagerTrait) -> Vec<DesktopIcon> {
-    manager.get_desktop_icons()
-}
-```
-
-**❌ 不要跨层级反向依赖**
-
-```rust
-// ❌ 错误：业务层直接依赖 UI
-use crate::ui::control_panel;
-
-// ✅ 正确：UI 层通过 AppContext 与业务交互
-```
-
----
-
-## Quick Checklist for New Module
-
-- [ ] 确定模块层级（tauri_commands/platform/box_core/classification/config/plugin/frontend/utils）
-- [ ] 创建 `mod.rs` 入口文件
-- [ ] 定义公开 API（struct/trait/function）
-- [ ] 添加必要的 `pub use` 导出
-- [ ] 如果跨平台，定义 Trait 并条件编译实现
-- [ ] 如果是新功能，更新 `src/main.rs` 的 `mod` 声明
-- [ ] 如果是跨平台纯逻辑，放入 shared/ 而非 platform/<os>/
-- [ ] 单文件不超过 1500 行（渲染引擎等复杂模块可适当放宽）
-
-
-
+- 单元测试与被测模块同文件 `#[cfg(test)]`（项目惯例）
+- 共享进程级全局状态（selection 注册表、注册表 Run 键）的测试**必须**获取串行锁后再断言
