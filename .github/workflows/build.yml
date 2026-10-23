@@ -19,11 +19,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        # 版本取自根 package.json 的 packageManager 字段（pnpm@11.5.1）；
+        # 必须先于 setup-node，否则其 cache: pnpm 找不到 pnpm 可执行文件
+        uses: pnpm/action-setup@v4
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          package_manager: pnpm
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
 
