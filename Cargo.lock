@@ -1857,7 +1857,7 @@ dependencies = [
 
 [[package]]
 name = "ikun_organizer"
-version = "0.1.0-beta.4"
+version = "0.1.0-beta.5"
 dependencies = [
  "anyhow",
  "chrono",
