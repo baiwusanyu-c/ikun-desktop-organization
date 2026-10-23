@@ -40,7 +40,7 @@ Desktop Organizer 是一个 **Windows 原生**桌面整理工具。分类框是�
 
 - Windows 10/11（本项目**仅支持 Windows**，不做跨平台承诺）
 - Rust（rustup 按 `rust-toolchain.toml` 自动锁定版本；需 MSVC 工具链）
-- Node.js ≥ 18 + pnpm（包管理器统一使用 pnpm；未安装时 `corepack enable` 即可）
+- Node.js ≥ 22.13 + pnpm 11（pnpm 11 依赖新版 Node 的 `node:sqlite`；推荐与 CI 一致的 24 LTS，pnpm 可用 `corepack enable` 启用）
 - WebView2 Runtime（安装包 embedBootstrapper 自动处理）
 
 ### 构建与运行

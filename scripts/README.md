@@ -6,7 +6,7 @@ Windows build/release scripts for Desktop Organizer.
 
 - Windows 10/11 (the product is Windows-only; packaging requires a Windows host)
 - [Rust](https://rustup.rs/) (pinned by `rust-toolchain.toml`)
-- [Node.js](https://nodejs.org/) (v18+) + [pnpm](https://pnpm.io/) (推荐 `corepack enable` 启用仓库锁定的版本)
+- [Node.js](https://nodejs.org/) (v22.13+，推荐 24 LTS) + [pnpm](https://pnpm.io/) 11（`corepack enable` 启用仓库锁定版本）
 - [@tauri-apps/cli](https://tauri.app/) v2 (auto-fetched via `pnpm dlx`, major version pinned)
 
 ## Usage
