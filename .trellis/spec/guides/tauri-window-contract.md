@@ -22,7 +22,7 @@
 | `get_config` | 无 | `AppConfig` 对象 | 返回中文错误字符串，页面显示加载错误 |
 | `update_theme_color` | `{ color: string }` | 最新 `AppConfig` | 不写入不完整颜色 |
 | `update_box_style` | `{ style: BoxStyleConfig }` | 最新 `AppConfig` | Rust `normalize` 后持久化并重绘所有分类框 |
-| `update_liquid_glass` | `{ config: LiquidGlassConfig }` | 最新 `AppConfig` | 归一化参数后重绘，单帧失败保留上一帧 |
+| `update_liquid_glass` | `{ config: LiquidGlassConfig }`（嵌套：liquid 37 项 / transparent / resize / engine） | 最新 `AppConfig` | 归一化后实时下发玻璃引擎样式；引擎级参数变化触发引擎自动重建 |
 | `update_ai_config` | `{ config: AiConfig }` | 最新 `AppConfig` | 保留其它配置字段，仅更新 AI 部分 |
 | `create_box` | `{ name: string, description: string }` | `BoxData` | 空名、超过 16 字符、同名或原生创建失败时返回错误 |
 | `edit_box` | `{ id: string, name: string, description: string }` | `BoxData` | 无效 UUID、空名、同名或不存在时返回错误 |
@@ -63,9 +63,9 @@ Rust `on_window_event` 和前端 `installHideOnClose` 双重拦截；托盘/信�
 主题色更新还必须通过 `theme-color-changed` 事件广播到持久的 `create-box` 和 `edit-box` WebView；
 两个窗口重新收到 `window-opened` 时应再次调用 `get_config`，作为事件丢失或外部配置变更时的兜底。
 
-## DXGI 液态玻璃帧
+## 液态玻璃引擎帧（liquid-verre-rs）
 
-`src/platform/windows/liquid_glass.rs` 必须持续调用 `AcquireNextFrame` 更新 `desktop_texture`，不能在启动时捕获一次后永久冻结。
+液态玻璃由 `liquid-verre-rs` 引擎（`src/platform/windows/glass_engine.rs` 适配层）在独立渲染线程持续采集/合成；平台层不得自行启动第二个采集器或把玻璃像素画回内容 DIB。分类框内容窗口只是玻璃之上的前景层。
 DXGI 初始化阶段可能返回平均 RGB 接近 `(1,1,1)` 的不透明占位黑帧；渲染器最多跳过前三帧，并由
 `src/platform/windows/d2d_render.rs` 使用白色半透明回退，取得真实桌面帧后立即缓存。单帧捕获失败继续使用上一成功帧。
 

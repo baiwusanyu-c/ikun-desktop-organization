@@ -57,16 +57,16 @@ fn update_config(
 pub fn apply_runtime_config(config: &AppConfig) {
     #[cfg(windows)]
     {
-        use crate::platform::windows::{grid_window, liquid_glass};
+        use crate::platform::windows::{glass_engine, grid_window};
 
-        let glass_was_enabled = liquid_glass::is_liquid_glass_enabled();
-        liquid_glass::update_box_style_config(&config.box_style);
-        if liquid_glass::is_liquid_glass_enabled() != glass_was_enabled {
-            grid_window::sync_all_grid_windows_to_glass_state();
-        } else {
-            // 周期重绘定时器只在玻璃开启时装配，样式改动必须显式请求重绘
-            grid_window::request_all_grid_windows_redraw();
-        }
+        // 样式缓存先行（内容层渲染读它），再确保引擎存活（首次调用即启动；
+        // 此前启动失败时每次配置应用都会重试一次），最后应用玻璃参数。
+        glass_engine::set_box_style_cache(&config.box_style);
+        glass_engine::ensure_engine(config);
+        glass_engine::apply_settings(config);
+        // 引擎路径下内容层不画底板，但命中捕获带宽度随 grip 配置变化，
+        // 任何样式改动都必须显式重绘一帧；外投影留白恒为 0，无需重建窗口外框。
+        grid_window::request_all_grid_windows_redraw();
     }
 }
 
@@ -128,7 +128,9 @@ pub fn update_liquid_glass(
     config.normalize();
     update_config(runtime.inner(), |app_config| {
         app_config.box_style.liquid_glass = config;
-        app_config.box_style.liquid_glass.corner_radius = app_config.box_style.border_radius;
+        // 透明模式圆角继续联动分类框整体圆角（液态模式圆角独立可调）
+        app_config.box_style.liquid_glass.transparent.corner_radius =
+            app_config.box_style.border_radius;
     })
 }
 

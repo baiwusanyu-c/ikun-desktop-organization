@@ -483,20 +483,10 @@ fn content_fingerprint(
 /// 对 WS_POPUP|WS_THICKFRAME 分层窗口，UpdateLayeredWindow 的 psize 参数
 /// 会直接设置窗口尺寸。
 pub fn render_layered_window(hwnd: HWND) {
-    render_layered_window_inner(hwnd, false)
+    render_layered_window_inner(hwnd)
 }
 
-/// 周期 tick 专用的重绘入口：**允许复用内容层缓存**。
-///
-/// 与 `render_layered_window` 的唯一区别是 `glass_only = true`：
-/// 内容层（图标/标签/标题/按钮/各种交互反馈）状态指纹没变就不重画，
-/// 每帧只重画玻璃背景再做一次合成。所有显式重绘入口都必须继续走
-/// `render_layered_window`（全量），否则可能停在旧内容上。
-pub(crate) fn render_layered_window_glass_only(hwnd: HWND) {
-    render_layered_window_inner(hwnd, true)
-}
-
-fn render_layered_window_inner(hwnd: HWND, glass_only: bool) {
+fn render_layered_window_inner(hwnd: HWND) {
     // 递归保护：防止 UpdateLayeredWindow 触发 WM_SIZE → 再次进入本函数
     use std::sync::atomic::{AtomicBool, Ordering};
     static RENDERING: AtomicBool = AtomicBool::new(false);
@@ -607,11 +597,20 @@ fn render_layered_window_inner(hwnd: HWND, glass_only: bool) {
     };
 
     // ===== 两趟共用的参数 =====
-    let box_style = super::liquid_glass::get_box_style_config();
-    let glass_config = box_style.liquid_glass.clone();
+    let box_style = super::glass_engine::box_style();
     let dpi_scale = dpi as f32 / 96.0;
-    // border_radius 为逻辑像素值；render_background 内部会自行乘以 dpi_scale
-    let corner_radius = box_style.border_radius;
+    // 引擎接管判定：has_box=false（引擎不可用 / 该框玻璃块创建失败）时
+    // 走 D2D 回退背景（优雅降级）。玻璃底板、外投影与缩放反馈在引擎路径下
+    // 全部由 liquid-verre-rs 画布在内容窗口之下渲染。
+    let glass_active =
+        super::glass_engine::is_active() && super::glass_engine::has_box(data.config_id);
+    // 库缩放把手带物理宽度：内容层在 ULW/DComp 前景里留出这条全透明带，
+    // 点击自动穿透到下层画布，由库完成边缘缩放与悬停加粗 border 反馈。
+    let grip_band = if glass_active {
+        super::glass_engine::resize_grip_band(data.config_id)
+    } else {
+        0.0
+    };
     // D2D 坐标系为物理像素，回退路径需手动缩放以与液态玻璃路径保持一致
     let fallback_radius = box_style.border_radius * dpi_scale;
 
@@ -669,8 +668,7 @@ fn render_layered_window_inner(hwnd: HWND, glass_only: bool) {
     // 因此「状态变了但没人显式重绘」这种漏网情况由指纹兜住，而指纹
     // 漏字段的后果只是少省一次重画，方向是安全的。
     let fingerprint = content_fingerprint(data, w, h, dpi, &box_style);
-    let need_content = !glass_only
-        || !data.content_valid
+    let need_content = !data.content_valid
         || data.content_w != content_w
         || data.content_h != content_h
         || data.content_fingerprint != fingerprint
@@ -1074,16 +1072,14 @@ fn render_layered_window_inner(hwnd: HWND, glass_only: bool) {
                 outer_h,
                 w,
                 h,
-                wr.left,
-                wr.top,
                 shadow_padding,
                 content_margin,
                 content_w,
                 content_h,
-                corner_radius,
                 dpi_scale,
                 need_content,
-                &glass_config,
+                glass_active,
+                grip_band,
                 &box_style,
             )
         };
@@ -1092,11 +1088,9 @@ fn render_layered_window_inner(hwnd: HWND, glass_only: bool) {
         // 呈现失败时**不退回 ULW**：这个窗口没有 WS_EX_LAYERED，
         // UpdateLayeredWindow 必然失败。DComp 会保留上一次 Present 的画面，
         // 所以跳过一帧表现为画面静止而不是闪黑 —— 比硬凑一张错的画面安全。
-        let dib_us = (dib_started.elapsed().as_micros() as u64)
-            .saturating_sub(super::mem_probe::take_last_glass_us());
+        let dib_us = dib_started.elapsed().as_micros() as u64;
         if presented {
             super::mem_probe::add_frame_timing_ex(dib_us, 0, content_us, !need_content);
-            super::grid_window::note_grid_frame_rendered(data);
         } else {
             log::debug!("[DComp] 本帧未提交，保留上一次画面");
         }
@@ -1107,157 +1101,108 @@ fn render_layered_window_inner(hwnd: HWND, glass_only: bool) {
         return;
     }
 
-    // ===== 第二趟：玻璃直写主 DIB，D2D 只负责叠内容层 =====
+    // ===== 第二趟：D2D 合成「底板 + 内容层」并提交主 DIB =====
     //
-    // 玻璃像素此刻已完整躺在 `data.glass_pixels`：预乘 BGRA、自上而下、
-    // 行距 = 表面宽 × 4，与主 DIB 的布局**逐字节一致**（32bpp DIB 每行
-    // 天然 DWORD 对齐，没有行尾填充），尺寸也都等于
-    // (w + 2·padding) × (h + 2·padding)。所以一次顺序 memcpy 就是完整背景。
-    //
-    // 这替代了原来每框每帧的三次全窗内存往返：
-    //   ① `Clear` 整窗
-    //   ② `CopyFromMemory` 把玻璃上传成 D2D 位图
-    //   ③ `DrawBitmap` 全窗软件混合
-    // 顺带让常驻的整窗玻璃 D2D 位图彻底消失（5 框合计 24MB）。
-    //
-    // 能这么做的前提是 D2D1 的 DC 渲染目标在 `BeginDraw` 时**保留** DC
-    // 既有像素、同一 DC 上重复 `BindDC` 每帧都重新读入、且半透明像素
-    // 字节级原样往返。这三条不是推测，由本模块两条单测钉死：
-    // `dc_render_target_preserves_existing_dib_pixels`、
-    // `dc_render_target_rereads_dib_on_repeated_binddc`。
-    let glass_drawn = if glass_config.enabled {
-        render_glass_into_dib(
-            data,
-            wr.left,
-            wr.top,
-            w,
-            h,
-            shadow_padding,
-            corner_radius,
-            dpi_scale,
-            &glass_config,
-        )
-    } else {
-        false
-    };
-
-    // ===== 快路径：玻璃已直写 DIB，内容合成完全不进 D2D =====
-    //
-    // `ID2D1DCRenderTarget` 绑定 GDI DC 后，`BeginDraw` 必须先把**整张**
-    // GDI 表面读进 D2D 内部缓冲（否则无法保留既有像素 —— 这正是
-    // `dc_render_target_preserves_existing_dib_pixels` 证明的行为），
-    // `EndDraw` 再整张写回：每帧两次全窗搬运，实测约 6.8ms，占单帧
-    // 三分之一，而真正要画的只是内容层里非透明的那一小部分。
-    //
-    // 玻璃既然已经 memcpy 进 DIB，剩下的就只是「内容矩形内的预乘
-    // source-over」这件纯算术的事，逐像素做反而快一个数量级：
-    // alpha=0 的像素（内容层的绝大多数）直接跳过，alpha=255 直接覆盖。
-    //
-    // 内容层缺失时（首帧就失败等极端情况）退回 D2D 慢路径：
-    // 宁可慢，也绝不能把没有图标标题的画面提交上去。
-    let cpu_composited = glass_drawn && !data.content_bits.is_null() && data.content_valid;
-    if cpu_composited {
-        let origin = shadow_padding - content_margin;
+    // 引擎激活（玻璃/透明都算）：底板 = 全透明 + 命中捕获层（alpha=1，
+    // 视觉不可辨）。捕获层覆盖除边缘把手带以外的整块矩形：
+    //   - 带内像素 alpha=0 → ULW 对全透明像素自动穿透鼠标 → 库画布收到
+    //     hover/按压，驱动边缘缩放会话并绘制加粗 border 反馈；
+    //   - 带内像素 alpha=1 → 分类框照常点选图标、拖拽标题、框选。
+    // 引擎不可用：回退旧「圆角半透明纯色背景 + 内容」（与重构前关玻璃一致）。
+    if unsafe { target.BindDC(GdiHDC(mem_dc), &bind_rect) }.is_err() {
+        log::error!("BindDC 失败");
+        release_grid_dib(data);
         unsafe {
-            composite_premultiplied_over(
-                data.dib_bits,
-                outer_w,
-                outer_h,
-                data.content_bits,
-                content_w,
-                content_h,
-                origin,
-                origin,
-            );
+            ReleaseDC(std::ptr::null_mut(), screen_dc);
         }
+        RENDERING.store(false, Ordering::SeqCst);
+        return;
     }
+    unsafe { target.BeginDraw() };
+    unsafe { target.SetTransform(&identity) };
+    unsafe { target.Clear(Some(&transparent)) };
 
-    // ===== 慢路径：玻璃不可用或内容层缺失，仍用 D2D 画回退背景 + 内容 =====
-    if !cpu_composited {
-        if unsafe { target.BindDC(GdiHDC(mem_dc), &bind_rect) }.is_err() {
-            log::error!("BindDC 失败");
-            release_grid_dib(data);
-            unsafe {
-                ReleaseDC(std::ptr::null_mut(), screen_dc);
-            }
-            RENDERING.store(false, Ordering::SeqCst);
-            return;
-        }
-        unsafe { target.BeginDraw() };
-        unsafe { target.SetTransform(&identity) };
-
-        // 玻璃直写成功时，DIB 每个像素都已经是本帧内容，Clear 是纯浪费；
-        // 失败或玻璃关闭时 DIB 里还是上一帧残留，必须清干净再画回退背景。
-        if !glass_drawn {
-            unsafe { target.Clear(Some(&transparent)) };
-            let [red, green, blue] = box_style.background_color;
-            let bg_brush = cached_brush(&target, red, green, blue, box_style.background_alpha);
-            if let Ok(ref brush) = bg_brush {
-                let rounded_rect = D2D1_ROUNDED_RECT {
-                    rect: d2d_rect(
-                        shadow_padding as f32,
-                        shadow_padding as f32,
-                        shadow_padding as f32 + ww,
-                        shadow_padding as f32 + hh,
-                    ),
-                    radiusX: fallback_radius,
-                    radiusY: fallback_radius,
-                };
-                unsafe { target.FillRoundedRectangle(&rounded_rect, brush) };
-            }
-        }
-
-        // 后续标题、图标与交互反馈继续使用原有内容坐标系；仅在提交位图时
-        // 平移到透明外投影留白之内。
-
-        // 内容层盖在玻璃之上。
-        //
-        // 用 D2D 的 source-over 合成而不是 GDI AlphaBlend：改造前是
-        // 「同一次 BeginDraw 里先画玻璃、再画内容」，premultiplied source-over
-        // 满足结合律，(玻璃 ⊕ A) ⊕ B == 玻璃 ⊕ (A ⊕ B)，因此分层合成与
-        // 一次性绘制在数学上等价，只有 8 位取整的舍入路径不同（±1 LSB）。
-        //
-        // destinationRectangle 必须显式传，不能图省事传 None：
-        // None 时 D2D 用「位图自己的 DIP 尺寸」当目标矩形，而内容层位图
-        // 是按 96 DPI 建的，DIP 尺寸 == 像素尺寸只在渲染目标也是 96 DPI
-        // 时才成立。玻璃那一趟一直是显式传 `surface_w × surface_h`，
-        // 内容层用同一套写法（outer_w == surface_w、outer_h == surface_h）
-        // 就与玻璃严格同构，DPI 语义上不存在第二种解释。
-        if let Some(bitmap) = data.content_bitmap.clone() {
-            // 内容层位图带 content_margin 外扩，合成时要把它落回
-            // 「留白内缩 margin」的位置，内容本体才恰好压在内容矩形上。
-            let origin = (shadow_padding - content_margin) as f32;
-            let content_dst = d2d_rect(
-                origin,
-                origin,
-                origin + content_w as f32,
-                origin + content_h as f32,
-            );
-            unsafe {
-                target.DrawBitmap(
-                    &bitmap,
-                    Some(&content_dst),
-                    1.0,
-                    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
-                    None,
-                )
+    if glass_active {
+        // 命中捕获层：预乘 alpha=1/255 的近隐形填充，四周内缩 grip_band。
+        let left = grip_band.min(ww.max(0.0));
+        let top = grip_band.min(hh.max(0.0));
+        let right = (ww - grip_band).max(left);
+        let bottom = (hh - grip_band).max(top);
+        if right - left >= 1.0 && bottom - top >= 1.0 {
+            let capture_color = D2D1_COLOR_F {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0 / 255.0,
             };
+            if let Ok(brush) = unsafe { target.CreateSolidColorBrush(&capture_color, None) } {
+                unsafe {
+                    target.FillRectangle(
+                        &D2D_RECT_F {
+                            left,
+                            top,
+                            right,
+                            bottom,
+                        },
+                        &brush,
+                    )
+                };
+            }
         }
-
-        // ===== D2D 渲染结束 =====
-        unsafe { target.SetTransform(&identity) };
-        let mut tag1: u64 = 0;
-        let mut tag2: u64 = 0;
-        if let Err(e) = unsafe { target.EndDraw(Some(&mut tag1), Some(&mut tag2)) } {
-            log::error!("D2D EndDraw 失败: {:?}", e);
+    } else {
+        let [red, green, blue] = box_style.background_color;
+        let bg_brush = cached_brush(&target, red, green, blue, box_style.background_alpha);
+        if let Ok(ref brush) = bg_brush {
+            let rounded_rect = D2D1_ROUNDED_RECT {
+                rect: d2d_rect(
+                    shadow_padding as f32,
+                    shadow_padding as f32,
+                    shadow_padding as f32 + ww,
+                    shadow_padding as f32 + hh,
+                ),
+                radiusX: fallback_radius,
+                radiusY: fallback_radius,
+            };
+            unsafe { target.FillRoundedRectangle(&rounded_rect, brush) };
         }
     }
 
-    // `dib_started` 包住了第二趟整段，而玻璃那一段（`render_background`）
-    // 是在第二趟**内部**跑的、已经单独记过账。这里必须扣掉，
-    // 否则「玻璃 + 光栅合成」会把玻璃算两遍（实测虚高 52%）。
-    let dib_us = (dib_started.elapsed().as_micros() as u64)
-        .saturating_sub(super::mem_probe::take_last_glass_us());
+    // 内容层盖在底板之上。
+    //
+    // destinationRectangle 必须显式传，不能图省事传 None：
+    // None 时 D2D 用「位图自己的 DIP 尺寸」当目标矩形，而内容层位图
+    // 是按 96 DPI 建的，DIP 尺寸 == 像素尺寸只在渲染目标也是 96 DPI
+    // 时才成立；显式矩形让两条 DPI 语义只有一种解释。
+    // 引擎路径留白为 0，origin 即 content_margin 的负外扩归位量。
+    if let Some(bitmap) = data.content_bitmap.clone() {
+        let origin = (shadow_padding - content_margin) as f32;
+        let content_dst = d2d_rect(
+            origin,
+            origin,
+            origin + content_w as f32,
+            origin + content_h as f32,
+        );
+        unsafe {
+            target.DrawBitmap(
+                &bitmap,
+                Some(&content_dst),
+                1.0,
+                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                None,
+            )
+        };
+    }
+
+    // ===== D2D 渲染结束 =====
+    unsafe { target.SetTransform(&identity) };
+    let mut tag1: u64 = 0;
+    let mut tag2: u64 = 0;
+    if let Err(e) = unsafe { target.EndDraw(Some(&mut tag1), Some(&mut tag2)) } {
+        log::error!("D2D EndDraw 失败: {:?}", e);
+    }
+
+    // `dib_started` 包住第二趟整段（引擎路径下不再有独立玻璃记账段）。
+    let dib_us = dib_started.elapsed().as_micros() as u64;
 
     // ===== 调用 UpdateLayeredWindow 提交渲染结果 =====
     let submit_started = std::time::Instant::now();
@@ -1317,229 +1262,16 @@ fn render_layered_window_inner(hwnd: HWND, glass_only: bool) {
         ReleaseDC(std::ptr::null_mut(), screen_dc);
     }
 
-    // 记一笔「已渲染」，下一个 200ms tick 据此判断能不能跳帧。
-    // 必须放在渲染完成之后：本帧自己的那次 capture_output 会推进
-    // 桌面代号，提前记会漏掉这一步，下一个 tick 就得白扫一遍队列。
-    super::grid_window::note_grid_frame_rendered(data);
-
     RENDERING.store(false, Ordering::SeqCst);
 }
-/// 把液态玻璃表面**直接写进分类框主 DIB**，不经过 D2D。
-///
-/// # 为什么可以绕过 D2D
-///
-/// `render_background` 返回后，玻璃像素已完整躺在 `data.glass_pixels`：
-/// 预乘 BGRA、自上而下、行距 = 表面宽 × 4。主 DIB 是 32bpp 自上而下
-/// DIB Section，每行天然 DWORD 对齐、行距同样是宽 × 4，两者尺寸都等于
-/// `(w + 2·padding) × (h + 2·padding)`。布局逐字节一致，因此一次
-/// `copy_nonoverlapping` 就是完整背景。写完后 D2D 的 `BeginDraw` 会把
-/// 这些像素当作既有内容保留，内容层直接叠在上面。
-///
-/// # 相比旧实现省掉了什么
-///
-/// 旧路径是「回读 → `CopyFromMemory` 上传成整窗 D2D 位图 → `Clear` 整窗
-/// → `DrawBitmap` 全窗软件混合」，每框每帧三次全窗内存往返，外加一张
-/// 常驻整窗位图。现在只剩一次顺序 memcpy，那张位图整个消失。
-///
-/// # 返回 false 的含义
-///
-/// 这一帧拿不到玻璃（捕获失败 / 尺寸对不上）。调用方**必须**先 `Clear`
-/// 再画回退背景 —— 此时 DIB 里是上一帧残留，不清就会留下重影。
-#[allow(clippy::too_many_arguments)]
-fn render_glass_into_dib(
-    data: &mut GridWindowData,
-    screen_x: i32,
-    screen_y: i32,
-    width: i32,
-    height: i32,
-    padding: i32,
-    corner_radius: f32,
-    dpi_scale: f32,
-    glass_config: &crate::config::LiquidGlassConfig,
-) -> bool {
-    if !super::liquid_glass::render_background(
-        screen_x,
-        screen_y,
-        width,
-        height,
-        padding,
-        corner_radius,
-        dpi_scale,
-        glass_config,
-        &mut data.glass_pixels,
-        // UpdateLayeredWindow 路径必须拿到 CPU 像素：画面最终要落进 GDI DIB。
-        true,
-        data.grid_id,
-        // 拖拽期不再同步读当前帧：阻塞 Map 会等整个 GPU 队列排空
-        // （实测单帧 100-400ms 卡顿）。WM_MOVING 已把渲染节奏拉到 8ms，
-        // 读上一帧的背景滞后仅 8ms，视觉不可感知。
-        false,
-    ) {
-        return false;
-    }
-
-    let surface_w = width.saturating_add(padding.saturating_mul(2));
-    let surface_h = height.saturating_add(padding.saturating_mul(2));
-    if surface_w <= 0 || surface_h <= 0 {
-        return false;
-    }
-    let surface_pixels = surface_w as usize * surface_h as usize;
-    // 回读缓冲必须刚好是一张完整表面：直写没有 D2D 的裁剪保护，
-    // 长度对不上就是越界写主 DIB，属于内存破坏而不是画面错误。
-    if data.glass_pixels.len() != surface_pixels {
-        log::warn!(
-            "液态玻璃回读尺寸不匹配: {} != {surface_pixels}",
-            data.glass_pixels.len()
-        );
-        return false;
-    }
-    // 主 DIB 由 `ensure_grid_dib` 按 outer_w × outer_h 建好，而
-    // outer_w == surface_w、outer_h == surface_h。这里再校一次是纵深防御：
-    // 留白切换的那一帧窗口外框可能还没收缩完。
-    if data.dib_bits.is_null() || data.dib_w != surface_w || data.dib_h != surface_h {
-        log::warn!(
-            "主 DIB({}x{}) 与玻璃表面({surface_w}x{surface_h}) 尺寸不符，本帧回退半透明背景",
-            data.dib_w,
-            data.dib_h
-        );
-        return false;
-    }
-
-    let dst = data.dib_bits;
-    let src = data.glass_pixels.as_ptr();
-    // SAFETY: 上面已校验两边长度都恰好是 surface_pixels 个 Pixel32，
-    // 且分属 DIB 段与 Vec 两块互不重叠的内存。
-    unsafe { std::ptr::copy_nonoverlapping(src, dst, surface_pixels) };
-    true
-}
-
-/// 预乘 source-over 的单通道计算：`src + round(dst × inv / 255)`。
-///
-/// `inv` 是 `255 - srcAlpha`。除以 255 用「先加 128 再 folded-shift」的
-/// 恒等式代替整数除法：
-///
-/// ```text
-/// t = dst × inv;  u = t + 128;  result = (u + (u >> 8)) >> 8
-/// ```
-///
-/// 对 `0..=255 × 0..=255` 的全部 65536 种输入都与四舍五入的精确除法
-/// **逐位相同**（`over_channel_matches_exact_rounding_division` 穷举验证）。
-///
-/// # 一个踩过就写进测试的坑
-///
-/// 直觉写法 `(t + 128 + (t >> 8)) >> 8` 是**错的**：移位取的是 `t`
-/// 而不是 `t + 128` 的高位，进位少算一次。穷举测试当场抓到
-/// `dst=152, inv=229` 时得 136 而正确答案是 137。差值只有 1/255，
-/// 肉眼绝对看不出来，日志也干净 —— 正是那种只能靠穷举才发现的错误。
-#[inline]
-fn over_channel(src: u8, dst: u8, inv: u32) -> u8 {
-    let t = dst as u32 * inv;
-    let u = t + 128;
-    let scaled = (u + (u >> 8)) >> 8;
-    (src as u32 + scaled).min(255) as u8
-}
-
-/// 把内容层（预乘 BGRA）以 source-over 叠到已写好玻璃的主 DIB 上。
-///
-/// # 为什么这一步不用 D2D
-///
-/// `ID2D1DCRenderTarget` 绑定 GDI DC 之后，`BeginDraw` 必须先把**整张**
-/// GDI 表面读进 D2D 内部缓冲（否则无法保留既有像素 —— 这正是
-/// `dc_render_target_preserves_existing_dib_pixels` 证明的行为），
-/// `EndDraw` 再整张写回。每帧两次全窗搬运，实测约 6.8ms，
-/// 占单帧三分之一，而真正要画的只是内容层里非透明的那一小部分。
-///
-/// 玻璃已经用 memcpy 直写进 DIB 了，合成只剩「内容矩形内的预乘
-/// source-over」这一件纯算术的事，逐像素做反而快得多：alpha=0 的像素
-/// （内容层的绝大多数）直接跳过，alpha=255 的直接覆盖。
-///
-/// # 越界保护
-///
-/// 内容层带 `content_margin` 外扩，贴边或留白为 0（玻璃关闭）时
-/// 原点可能是负数、右下也可能超出主 DIB，因此先夹到目标范围内。
-/// 夹错方向会写坏相邻堆内存，且不会有任何报错。
-#[allow(clippy::too_many_arguments)]
-unsafe fn composite_premultiplied_over(
-    dst: *mut Pixel32,
-    dst_w: i32,
-    dst_h: i32,
-    src: *const Pixel32,
-    src_w: i32,
-    src_h: i32,
-    origin_x: i32,
-    origin_y: i32,
-) {
-    if dst.is_null() || src.is_null() {
-        return;
-    }
-    if dst_w <= 0 || dst_h <= 0 || src_w <= 0 || src_h <= 0 {
-        return;
-    }
-    let x0 = origin_x.max(0);
-    let y0 = origin_y.max(0);
-    let x1 = origin_x.saturating_add(src_w).min(dst_w);
-    let y1 = origin_y.saturating_add(src_h).min(dst_h);
-    if x1 <= x0 || y1 <= y0 {
-        return;
-    }
-    for y in y0..y1 {
-        let srow = src.add((y - origin_y) as usize * src_w as usize);
-        let drow = dst.add(y as usize * dst_w as usize);
-        for x in x0..x1 {
-            let s = *srow.add((x - origin_x) as usize);
-            let sa = s.a as u32;
-            // 全透明：目标像素原样保留。内容层里这是绝大多数像素。
-            if sa == 0 {
-                continue;
-            }
-            let slot = drow.add(x as usize);
-            // 完全不透明：直接覆盖，省掉三次乘法
-            if sa == 255 {
-                *slot = s;
-                continue;
-            }
-            let d = *slot;
-            let inv = 255 - sa;
-            *slot = Pixel32 {
-                b: over_channel(s.b, d.b, inv),
-                g: over_channel(s.g, d.g, inv),
-                r: over_channel(s.r, d.r, inv),
-                a: over_channel(s.a, d.a, inv),
-            };
-        }
-    }
-}
-
-/// DirectComposition 呈现路径：玻璃与内容全程留在 GPU，不回读、不走 GDI。
+/// DirectComposition 呈现路径：内容层全程留在 GPU，不回读、不走 GDI。
 ///
 /// # 与 `UpdateLayeredWindow` 路径的关系
 ///
-/// **画的内容完全一样**：同一个玻璃着色器（`PSMain`）、同一份内容层
-/// DIB（仍由 `ID2D1DCRenderTarget` 以 GDI 兼容方式光栅化，所以文字
-/// hinting 与改造前逐字节一致）、同一套预乘 source-over 合成顺序。
-/// 变的只有「像素怎么到屏幕」这一段。
-///
-/// # 省掉了什么
-///
-/// 实测 `UpdateLayeredWindow` 那条链每框每帧要付：
-///
-/// | 段 | 耗时 | DComp 下 |
-/// |---|---|---|
-/// | `Map` 阻塞等 GPU 排空 | 4.90ms | **消失**（不回读） |
-/// | 逐行 memcpy 出映射内存 | 0.57ms | **消失** |
-/// | 光栅合成（GDI 表面搬进搬出） | 3.32ms | **消失**（GPU 合成） |
-/// | `UpdateLayeredWindow` | 0.68ms | `Present` ≈0.2ms |
-/// | 模糊 + 着色（真正的渲染） | 0.44ms | 不变 |
-///
-/// 关键前提是玻璃输出纹理与合成端现在同属**一个** D3D11/D2D1 设备
-/// （见 `render_devices::SharedGpu`），所以能用
-/// `glass_output_bitmap()` 零拷贝包成 D2D 位图直接采样。
-///
-/// # 返回 false 的含义
-///
-/// 这一帧没能提交。调用方**不会**退回 `UpdateLayeredWindow`（窗口没有
-/// `WS_EX_LAYERED`，ULW 必然失败），而是直接跳过：DComp 会保留上一次
-/// `Present` 的画面，所以表现为画面静止一帧而不是闪黑。
+/// **画的内容完全一样**：同一份内容层 DIB（仍由 `ID2D1DCRenderTarget`
+/// 以 GDI 兼容方式光栅化，文字 hinting 逐字节一致）、同一套预乘
+/// source-over 合成顺序；底板合成同样区分「引擎接管」与「D2D 回退背景」。
+/// 变的只有「像素怎么到屏幕」这一段（DComp 省掉回读与 GDI 搬运）。
 #[allow(clippy::too_many_arguments)]
 fn render_via_dcomp(
     state: &mut DcompState,
@@ -1548,26 +1280,18 @@ fn render_via_dcomp(
     outer_h: i32,
     w: i32,
     h: i32,
-    screen_x: i32,
-    screen_y: i32,
     shadow_padding: i32,
     content_margin: i32,
     content_w: i32,
     content_h: i32,
-    corner_radius: f32,
     dpi_scale: f32,
     content_redrawn: bool,
-    glass_config: &crate::config::LiquidGlassConfig,
+    glass_active: bool,
+    grip_band: f32,
     box_style: &crate::config::BoxStyleConfig,
 ) -> bool {
     if outer_w <= 0 || outer_h <= 0 {
         return false;
-    }
-
-    // DComp 路径永远不回读，那块每框约 4.8MB 的回读缓冲应当归还系统。
-    // 只在还有分配时做一次，之后每帧都是空操作。
-    if data.glass_pixels.capacity() > 0 {
-        data.glass_pixels = Vec::new();
     }
 
     // 1) 交换链尺寸跟上窗口外框（DPI 变化 / 用户缩放都会走到这里）
@@ -1578,29 +1302,8 @@ fn render_via_dcomp(
         return false;
     };
 
-    // 2) 玻璃：渲染进共享输出纹理，need_pixels=false → 整段回读跳过
-    let mut glass_ok = false;
-    if glass_config.enabled {
-        glass_ok = super::liquid_glass::render_background(
-            screen_x,
-            screen_y,
-            w,
-            h,
-            shadow_padding,
-            corner_radius,
-            dpi_scale,
-            glass_config,
-            &mut data.glass_pixels,
-            false,
-            data.grid_id,
-            false,
-        );
-        // 玻璃开着却拿不到画面：这一帧不提交，DComp 保留上一次画面。
-        // 比画一张半透明回退背景更稳 —— 后者会在 DXGI 偶发抖动时闪一下。
-        if !glass_ok {
-            return false;
-        }
-    }
+    // 2) 玻璃底板不在本进程合成：liquid-verre-rs 画布位于内容窗口之下，
+    //    自行渲染折射/透明底板/外投影/缩放反馈。这里只合成前景。
 
     // 3) 内容层上传到**共享设备**。只在内容真的重画过、或尺寸变了时做，
     //    稳态下每帧零上传（内容层命中率实测 100%）。
@@ -1667,35 +1370,35 @@ fn render_via_dcomp(
         // 后缓冲保留着上一帧，必须清成全透明再画，否则会叠影
         state.context.Clear(Some(&transparent));
 
-        if glass_ok {
-            // 零拷贝：直接采样玻璃着色器的输出纹理。
-            // 输出纹理是所有分类框**共享**的一张（尺寸取历史最大），
-            // 所以必须用 source rect 只取左上角本框那一块，
-            // 否则会画到别的框留下的残留像素。
-            if let Some(glass) = super::liquid_glass::glass_output_bitmap() {
-                let dst = d2d_rect(0.0, 0.0, outer_w as f32, outer_h as f32);
-                let src = D2D_RECT_F {
-                    left: 0.0,
-                    top: 0.0,
-                    right: outer_w as f32,
-                    bottom: outer_h as f32,
+        if glass_active {
+            // 命中捕获层（与 ULW 引擎路径同一口径）：预乘 alpha=1/255 的
+            // 近隐形填充，四周内缩 grip_band 让边缘把手带保持全透明，
+            // 点击经 DWM 穿透到下层的库画布。
+            let l = (shadow_padding as f32 + grip_band).min(outer_w as f32);
+            let t = (shadow_padding as f32 + grip_band).min(outer_h as f32);
+            let r = (shadow_padding as f32 + w as f32 - grip_band).max(l);
+            let b = (shadow_padding as f32 + h as f32 - grip_band).max(t);
+            if r - l >= 1.0 && b - t >= 1.0 {
+                let capture_color = D2D1_COLOR_F {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0 / 255.0,
                 };
-                state.context.DrawBitmap(
-                    &glass,
-                    Some(&dst),
-                    1.0,
-                    D2D1_INTERPOLATION_MODE_LINEAR,
-                    Some(&src),
-                    // 透视变换：不用，传 None
-                    None,
-                );
-            } else {
-                log::warn!("[DComp] 拿不到玻璃零拷贝位图，本帧跳过");
-                state.context.SetTarget(None::<&ID2D1Image>);
-                return false;
+                if let Ok(brush) = state.context.CreateSolidColorBrush(&capture_color, None) {
+                    state.context.FillRectangle(
+                        &D2D_RECT_F {
+                            left: l,
+                            top: t,
+                            right: r,
+                            bottom: b,
+                        },
+                        &brush,
+                    );
+                }
             }
         } else {
-            // 玻璃关闭：画原来那张半透明圆角背景
+            // 引擎不可用：画回退半透明圆角背景
             let [red, green, blue] = box_style.background_color;
             let color = d2d_color(red, green, blue, box_style.background_alpha);
             if let Ok(brush) = state.context.CreateSolidColorBrush(&color, None) {
@@ -1714,7 +1417,7 @@ fn render_via_dcomp(
             }
         }
 
-        // 内容层盖在玻璃之上。落点与 CPU 快路径完全一致：
+        // 内容层盖在底板之上。落点与 ULW 路径完全一致：
         // 内容层带 content_margin 外扩，所以要放在 (padding - margin) 处，
         // 内容本体才恰好压在内容矩形上。
         if let Some(content) = state.content.clone() {
@@ -2790,579 +2493,5 @@ mod tests {
             b
         );
         assert_eq!(b - t, 8.0, "edge height should be 40 - 16*2 = 8");
-    }
-    // ===== ID2D1DCRenderTarget 是否保留 DC 既有内容 =====
-    //
-    // 这条测试是一个**架构决策的前置事实**，不是普通的回归防护。
-    //
-    // 液态玻璃的像素在 `render_background` 之后已经完整躺在
-    // `data.glass_pixels`（CPU 侧、预乘 BGRA、行距与主 DIB 完全一致）。
-    // 现在的做法是：把它 `CopyFromMemory` 上传成一张 D2D 位图，
-    // 再 `Clear` 整窗、再 `DrawBitmap` 全窗软件混合 —— 三次全窗
-    // 内存往返，实测占单帧 18.07ms 里的 4~5ms，另外还常驻一张
-    // 整窗 D2D 位图（5 框合计 24MB）。
-    //
-    // 如果 D2D1 的 DC 渲染目标在 `BeginDraw` 时**保留** DC 里已有的
-    // 像素，就可以直接 memcpy 玻璃进主 DIB，然后只让 D2D 在上面叠
-    // 一层内容：省掉 Clear、省掉玻璃那次全窗 blit、省掉整张玻璃位图。
-    // 如果不保留，memcpy 会被 BeginDraw 抹掉，画面直接变黑 ——
-    // 而这类错误不会有任何返回值或日志，只能靠像素级验证。
-    //
-    // 所以这里用一个 8x8 的最小 DIB 把这件事钉死：先自己填红，
-    // 再让 D2D 只画左上角 4x4 蓝块且**不 Clear**，最后逐像素回读。
-    #[test]
-    fn dc_render_target_preserves_existing_dib_pixels() {
-        const W: i32 = 8;
-        const H: i32 = 8;
-        unsafe {
-            let screen_dc = GetDC(std::ptr::null_mut());
-            assert!(!screen_dc.is_null(), "拿不到屏幕 DC，无法验证");
-            let mem_dc = CreateCompatibleDC(screen_dc);
-            ReleaseDC(std::ptr::null_mut(), screen_dc);
-            assert!(!mem_dc.is_null(), "CreateCompatibleDC 失败");
-
-            let bi = BITMAPINFOHEADER {
-                bi_size: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                bi_width: W,
-                bi_height: -H, // 自上而下，与分类框主 DIB 一致
-                bi_planes: 1,
-                bi_bit_count: 32,
-                bi_compression: 0,
-                bi_size_image: 0,
-                bi_x_pels_per_meter: 0,
-                bi_y_pels_per_meter: 0,
-                bi_clr_used: 0,
-                bi_clr_important: 0,
-            };
-            let mut bits: *mut Pixel32 = std::ptr::null_mut();
-            let dib = CreateDIBSection(
-                mem_dc,
-                &bi as *const BITMAPINFOHEADER as *const c_void,
-                DIB_RGB_COLORS,
-                &mut bits as *mut *mut Pixel32 as *mut *mut c_void,
-                std::ptr::null_mut(),
-                0,
-            );
-            if dib.is_null() || bits.is_null() {
-                DeleteDC(mem_dc);
-                panic!("CreateDIBSection 失败，无法验证 DC 渲染目标语义");
-            }
-            let old_bmp = SelectObject(mem_dc, dib as HGDIOBJ);
-
-            // 整张填不透明红（预乘 BGRA：b=0 g=0 r=255 a=255）
-            for index in 0..(W * H) as isize {
-                *bits.offset(index) = Pixel32 {
-                    b: 0,
-                    g: 0,
-                    r: 255,
-                    a: 255,
-                };
-            }
-
-            let Some(target) = super::super::render_devices::create_dc_render_target(96.0) else {
-                SelectObject(mem_dc, old_bmp);
-                DeleteObject(dib as HGDIOBJ);
-                DeleteDC(mem_dc);
-                eprintln!("跳过：当前环境建不出 DC RenderTarget");
-                return;
-            };
-
-            let bind = windows::Win32::Foundation::RECT {
-                left: 0,
-                top: 0,
-                right: W,
-                bottom: H,
-            };
-            target.BindDC(GdiHDC(mem_dc), &bind).expect("BindDC 失败");
-            target.BeginDraw();
-            // 关键：**不调用 Clear**，只在左上角画 4x4 不透明蓝
-            let blue = target
-                .CreateSolidColorBrush(
-                    &D2D1_COLOR_F {
-                        r: 0.0,
-                        g: 0.0,
-                        b: 1.0,
-                        a: 1.0,
-                    },
-                    None,
-                )
-                .expect("建画刷失败");
-            target.FillRectangle(&d2d_rect(0.0, 0.0, 4.0, 4.0), &blue);
-            let mut tag1: u64 = 0;
-            let mut tag2: u64 = 0;
-            target
-                .EndDraw(Some(&mut tag1), Some(&mut tag2))
-                .expect("EndDraw 失败");
-
-            let top_left = *bits; // (0,0) 应为蓝
-            let bottom_right = *bits.offset((W * H - 1) as isize); // (7,7) 应仍为红
-
-            SelectObject(mem_dc, old_bmp);
-            DeleteObject(dib as HGDIOBJ);
-            DeleteDC(mem_dc);
-
-            assert_eq!(
-                (top_left.b, top_left.g, top_left.r, top_left.a),
-                (255, 0, 0, 255),
-                "D2D 画的蓝块没落到 DIB 上（预乘 BGRA 里蓝是 b=255）"
-            );
-            assert_eq!(
-                (
-                    bottom_right.b,
-                    bottom_right.g,
-                    bottom_right.r,
-                    bottom_right.a
-                ),
-                (0, 0, 255, 255),
-                "BeginDraw 抹掉了 DC 既有内容：不能直接把玻璃 memcpy 进主 DIB"
-            );
-        }
-    }
-    /// 连续两帧都「先直写 DIB、再 BindDC + BeginDraw（不 Clear）」，
-    /// 第二帧的直写内容必须照样保留。
-    ///
-    /// 单帧通过不足以支撑改造：真实渲染循环是**同一个 mem_dc 上反复
-    /// BindDC**。如果 D2D1 在首次 BindDC 时缓存了表面、之后不再从 DC
-    /// 重新读入，第二帧的 memcpy 就会被上一帧的内部表面覆盖掉 ——
-    /// 表现为玻璃「冻在第一帧」，而且没有任何报错。
-    #[test]
-    fn dc_render_target_rereads_dib_on_repeated_binddc() {
-        const W: i32 = 8;
-        const H: i32 = 8;
-        unsafe {
-            let screen_dc = GetDC(std::ptr::null_mut());
-            assert!(!screen_dc.is_null(), "拿不到屏幕 DC");
-            let mem_dc = CreateCompatibleDC(screen_dc);
-            ReleaseDC(std::ptr::null_mut(), screen_dc);
-            assert!(!mem_dc.is_null(), "CreateCompatibleDC 失败");
-            let bi = BITMAPINFOHEADER {
-                bi_size: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                bi_width: W,
-                bi_height: -H, // 自上而下，与分类框主 DIB 一致
-                bi_planes: 1,
-                bi_bit_count: 32,
-                bi_compression: 0,
-                bi_size_image: 0,
-                bi_x_pels_per_meter: 0,
-                bi_y_pels_per_meter: 0,
-                bi_clr_used: 0,
-                bi_clr_important: 0,
-            };
-            let mut bits: *mut Pixel32 = std::ptr::null_mut();
-            let dib = CreateDIBSection(
-                mem_dc,
-                &bi as *const BITMAPINFOHEADER as *const c_void,
-                DIB_RGB_COLORS,
-                &mut bits as *mut *mut Pixel32 as *mut *mut c_void,
-                std::ptr::null_mut(),
-                0,
-            );
-            if dib.is_null() || bits.is_null() {
-                DeleteDC(mem_dc);
-                panic!("CreateDIBSection 失败");
-            }
-            let old_bmp = SelectObject(mem_dc, dib as HGDIOBJ);
-            let Some(target) = super::super::render_devices::create_dc_render_target(96.0) else {
-                SelectObject(mem_dc, old_bmp);
-                DeleteObject(dib as HGDIOBJ);
-                DeleteDC(mem_dc);
-                eprintln!("跳过：当前环境建不出 DC RenderTarget");
-                return;
-            };
-            let bind = windows::Win32::Foundation::RECT {
-                left: 0,
-                top: 0,
-                right: W,
-                bottom: H,
-            };
-            let fill = |value: Pixel32| {
-                for index in 0..(W * H) as isize {
-                    *bits.offset(index) = value;
-                }
-            };
-            // 每帧只在左上角画一个 4x4 蓝块，其余像素全靠直写 DIB 提供
-            let draw_corner = |target: &ID2D1DCRenderTarget| {
-                target.BindDC(GdiHDC(mem_dc), &bind).expect("BindDC 失败");
-                target.BeginDraw();
-                let blue = target
-                    .CreateSolidColorBrush(
-                        &D2D1_COLOR_F {
-                            r: 0.0,
-                            g: 0.0,
-                            b: 1.0,
-                            a: 1.0,
-                        },
-                        None,
-                    )
-                    .expect("建画刷失败");
-                target.FillRectangle(&d2d_rect(0.0, 0.0, 4.0, 4.0), &blue);
-                let mut t1: u64 = 0;
-                let mut t2: u64 = 0;
-                target
-                    .EndDraw(Some(&mut t1), Some(&mut t2))
-                    .expect("EndDraw 失败");
-            };
-
-            // 第 1 帧：底色填红
-            fill(Pixel32 {
-                b: 0,
-                g: 0,
-                r: 255,
-                a: 255,
-            });
-            draw_corner(&target);
-            let frame1_corner = *bits;
-            let frame1_rest = *bits.offset((W * H - 1) as isize);
-
-            // 第 2 帧：同一个 DC 再 BindDC 一次，底色改填**半透明**绿。
-            //
-            // 必须用半透明：不透明像素下「预乘」与「直通」alpha 的字节
-            // 完全相同，测不出 D2D 有没有在读入/写回时偷偷做一次
-            // premultiply ↔ unpremultiply 转换。液态玻璃的外投影整圈
-            // 都是低 alpha 像素，一旦被转换过就会整体发灰或发黑，
-            // 而这种损坏不会有任何返回值或日志。
-            // 取 a=128、g=200：预乘值 200*128/255=100.4 → 若 D2D 当作
-            // 直通 alpha 再乘一次，写回会变成 200*128/255*128/255≈50，
-            // 与 200 差 150，断言必然炸。
-            fill(Pixel32 {
-                b: 0,
-                g: 200,
-                r: 0,
-                a: 128,
-            });
-            draw_corner(&target);
-            let frame2_corner = *bits;
-            let frame2_rest = *bits.offset((W * H - 1) as isize);
-
-            SelectObject(mem_dc, old_bmp);
-            DeleteObject(dib as HGDIOBJ);
-            DeleteDC(mem_dc);
-
-            assert_eq!(
-                (frame1_corner.b, frame1_corner.a),
-                (255, 255),
-                "第1帧蓝块未画上"
-            );
-            assert_eq!(
-                (frame1_rest.g, frame1_rest.r),
-                (0, 255),
-                "第1帧直写的红底被 BeginDraw 抹掉"
-            );
-            assert_eq!(
-                (frame2_corner.b, frame2_corner.a),
-                (255, 255),
-                "第2帧蓝块未画上"
-            );
-            assert_eq!(
-                (frame2_rest.b, frame2_rest.g, frame2_rest.r, frame2_rest.a),
-                (0, 200, 0, 128),
-                "半透明像素未字节级原样往返：D2D 在 BindDC/EndDraw 之间做了 \
-                 premultiply/unpremultiply 转换，不能把玻璃直接 memcpy 进主 DIB"
-            );
-        }
-    }
-    // ===== 纯 CPU 预乘合成的正确性 =====
-    //
-    // 这条路径取代了 D2D 的 `DrawBitmap`，一旦公式写错就是**静默的**
-    // 全画面偏色：不崩、不报错、日志干净，只有肉眼能发现。
-    // 所以这里对 `over_channel` 做 256×256 全输入穷举，
-    // 与「四舍五入的精确除法」逐位对齐。
-
-    /// `(t + 128 + (t >> 8)) >> 8` 必须等于 round(dst × inv / 255)，
-    /// 对全部 65536 种 (dst, inv) 组合成立。
-    #[test]
-    fn over_channel_matches_exact_rounding_division() {
-        for dst in 0u32..=255 {
-            for inv in 0u32..=255 {
-                // 必须调**生产函数**本身。src=0 时返回值就是
-                // round(dst*inv/255)（dst*inv/255 恒 <= 255，不会被 clamp 改变）。
-                //
-                // 这里曾经把公式在测试里重抄一遍再自比 —— 那样即使
-                // 生产代码写错也照样通过，等于没测。抄写版本还恰好
-                // 抄的是错误公式，掩盖了真实的 off-by-one。
-                let fast = super::over_channel(0, dst as u8, inv) as u32;
-                // 精确值：四舍五入的 dst*inv/255
-                let exact = ((dst * inv) as f64 / 255.0).round() as u32;
-                assert_eq!(
-                    fast, exact,
-                    "dst={dst} inv={inv}: 快速除法 {fast} != 精确 {exact}"
-                );
-            }
-        }
-    }
-
-    /// 结果必须落在 [0,255]，且 inv=0（源完全不透明）时只剩 src。
-    #[test]
-    fn over_channel_stays_in_range() {
-        for dst in 0u16..=255 {
-            for inv in 0u16..=255 {
-                let v = super::over_channel(200, dst as u8, inv as u32);
-                assert!((v as u16) <= 255);
-            }
-        }
-        // inv=0 意味着 srcAlpha=255：目标完全不参与
-        assert_eq!(super::over_channel(37, 255, 0), 37);
-        // inv=255 意味着 srcAlpha=0：只剩目标
-        assert_eq!(super::over_channel(0, 123, 255), 123);
-    }
-
-    /// 合成的三条硬性质：全透明不动目标、全不透明完全覆盖、
-    /// 越界原点被夹住而不是写坏相邻内存。
-    #[test]
-    fn composite_respects_alpha_and_clips() {
-        const W: i32 = 6;
-        const H: i32 = 4;
-        let glass = Pixel32 {
-            b: 10,
-            g: 20,
-            r: 30,
-            a: 255,
-        };
-        let mut dst = vec![glass; (W * H) as usize];
-
-        // 源：第 0 行全透明、第 1 行全不透明、第 2 行半透明、第 3 行全透明
-        let mut src = vec![
-            Pixel32 {
-                b: 0,
-                g: 0,
-                r: 0,
-                a: 0
-            };
-            (W * H) as usize
-        ];
-        for x in 0..W as usize {
-            src[W as usize + x] = Pixel32 {
-                b: 200,
-                g: 100,
-                r: 50,
-                a: 255,
-            };
-            src[2 * W as usize + x] = Pixel32 {
-                b: 128,
-                g: 128,
-                r: 128,
-                a: 128,
-            };
-        }
-
-        unsafe {
-            super::composite_premultiplied_over(dst.as_mut_ptr(), W, H, src.as_ptr(), W, H, 0, 0);
-        }
-        // 第 0 行：全透明 → 原样
-        assert_eq!((dst[0].b, dst[0].g, dst[0].r, dst[0].a), (10, 20, 30, 255));
-        // 第 1 行：全不透明 → 完全覆盖
-        let r1 = dst[W as usize];
-        assert_eq!((r1.b, r1.g, r1.r, r1.a), (200, 100, 50, 255));
-        // 第 2 行：半透明 → src + round(dst*(255-128)/255)
-        let r2 = dst[2 * W as usize];
-        assert_eq!(r2.b, 128 + ((10u32 * 127 + 128) / 255) as u8);
-        assert_eq!(r2.a, 128 + ((255u32 * 127 + 128) / 255) as u8);
-
-        // 越界：原点 (-3,-2) 且源比目标大，必须夹住且不 panic / 不越界写
-        let mut small = vec![glass; 4];
-        let big = vec![
-            Pixel32 {
-                b: 9,
-                g: 9,
-                r: 9,
-                a: 255
-            };
-            100
-        ];
-        unsafe {
-            super::composite_premultiplied_over(
-                small.as_mut_ptr(),
-                2,
-                2,
-                big.as_ptr(),
-                10,
-                10,
-                -3,
-                -2,
-            );
-        }
-        assert_eq!(small.len(), 4);
-        assert_eq!((small[0].b, small[0].r), (9, 9), "夹取后应只覆盖可见部分");
-
-        // 完全在目标之外：一个像素都不该动
-        let mut untouched = vec![glass; 4];
-        unsafe {
-            super::composite_premultiplied_over(
-                untouched.as_mut_ptr(),
-                2,
-                2,
-                big.as_ptr(),
-                2,
-                2,
-                50,
-                50,
-            );
-        }
-        assert!(untouched.iter().all(|p| p.b == 10 && p.r == 30));
-    }
-    /// **A/B 等价性验证**：纯 CPU 合成必须与 D2D `DrawBitmap` 逐像素一致。
-    ///
-    /// 快路径把「内容层叠到玻璃上」从 D2D 换成了手写循环。这类替换的
-    /// 失败模式是最坏的一种 —— 不崩、不报错、日志干净，只是整幅画面
-    /// 偏色或边缘发虚，只有肉眼能发现。所以这里用真实 D2D 做对照：
-    /// 同一张玻璃底、同一张内容层，一份走 CPU 合成、一份走 D2D
-    /// `DrawBitmap`，然后逐像素比。
-    ///
-    /// 允许 ±1 LSB：两条路径的中间舍入位置不同（D2D 内部精度更高），
-    /// 但预乘 source-over 满足结合律，理论上最多差一个最低位。
-    /// 超过 1 就说明公式或 alpha 语义写错了。
-    #[test]
-    fn cpu_composite_matches_d2d_drawbitmap() {
-        const W: usize = 64;
-        const H: usize = 48;
-        // 确定性伪随机：同一个种子两次运行必须给出同一张图，
-        // 否则测试失败时无法复现。
-        let mut state: u32 = 0x1234_5678;
-        let mut rnd = move || {
-            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            (state >> 24) as u8
-        };
-        // 合法预乘像素：先取 alpha，再取不超过 alpha 的颜色分量
-        let mut premultiplied_pixel = |rnd: &mut dyn FnMut() -> u8| {
-            let a = rnd();
-            let pick = |v: u8| ((v as u16 * a as u16) / 255) as u8;
-            Pixel32 {
-                b: pick(rnd()),
-                g: pick(rnd()),
-                r: pick(rnd()),
-                a,
-            }
-        };
-        let glass: Vec<Pixel32> = (0..W * H).map(|_| premultiplied_pixel(&mut rnd)).collect();
-        let content: Vec<Pixel32> = (0..W * H).map(|_| premultiplied_pixel(&mut rnd)).collect();
-
-        // ---- 路径 A：纯 CPU 合成 ----
-        let mut cpu = glass.clone();
-        unsafe {
-            super::composite_premultiplied_over(
-                cpu.as_mut_ptr(),
-                W as i32,
-                H as i32,
-                content.as_ptr(),
-                W as i32,
-                H as i32,
-                0,
-                0,
-            );
-        }
-
-        // ---- 路径 B：真实 D2D DrawBitmap ----
-        unsafe {
-            let screen_dc = GetDC(std::ptr::null_mut());
-            assert!(!screen_dc.is_null());
-            let mem_dc = CreateCompatibleDC(screen_dc);
-            ReleaseDC(std::ptr::null_mut(), screen_dc);
-            assert!(!mem_dc.is_null());
-            let bi = BITMAPINFOHEADER {
-                bi_size: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                bi_width: W as i32,
-                bi_height: -(H as i32),
-                bi_planes: 1,
-                bi_bit_count: 32,
-                bi_compression: 0,
-                bi_size_image: 0,
-                bi_x_pels_per_meter: 0,
-                bi_y_pels_per_meter: 0,
-                bi_clr_used: 0,
-                bi_clr_important: 0,
-            };
-            let mut bits: *mut Pixel32 = std::ptr::null_mut();
-            let dib = CreateDIBSection(
-                mem_dc,
-                &bi as *const BITMAPINFOHEADER as *const c_void,
-                DIB_RGB_COLORS,
-                &mut bits as *mut *mut Pixel32 as *mut *mut c_void,
-                std::ptr::null_mut(),
-                0,
-            );
-            if dib.is_null() || bits.is_null() {
-                DeleteDC(mem_dc);
-                panic!("CreateDIBSection 失败");
-            }
-            let old_bmp = SelectObject(mem_dc, dib as HGDIOBJ);
-            std::ptr::copy_nonoverlapping(glass.as_ptr(), bits, W * H);
-
-            let Some(target) = super::super::render_devices::create_dc_render_target(96.0) else {
-                SelectObject(mem_dc, old_bmp);
-                DeleteObject(dib as HGDIOBJ);
-                DeleteDC(mem_dc);
-                eprintln!("跳过：建不出 DC RenderTarget");
-                return;
-            };
-            let props = D2D1_BITMAP_PROPERTIES {
-                pixelFormat: D2D1_PIXEL_FORMAT {
-                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                    alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-                },
-                dpiX: 96.0,
-                dpiY: 96.0,
-            };
-            let bitmap = target
-                .CreateBitmap(
-                    D2D_SIZE_U {
-                        width: W as u32,
-                        height: H as u32,
-                    },
-                    Some(content.as_ptr() as *const c_void),
-                    (W * 4) as u32,
-                    &props,
-                )
-                .expect("CreateBitmap 失败");
-            let bind = windows::Win32::Foundation::RECT {
-                left: 0,
-                top: 0,
-                right: W as i32,
-                bottom: H as i32,
-            };
-            target.BindDC(GdiHDC(mem_dc), &bind).expect("BindDC 失败");
-            target.BeginDraw();
-            // 故意不 Clear：与生产快路径一致，玻璃已经在 DIB 里
-            target.DrawBitmap(
-                &bitmap,
-                Some(&d2d_rect(0.0, 0.0, W as f32, H as f32)),
-                1.0,
-                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
-                None,
-            );
-            let mut t1: u64 = 0;
-            let mut t2: u64 = 0;
-            target
-                .EndDraw(Some(&mut t1), Some(&mut t2))
-                .expect("EndDraw 失败");
-
-            let mut max_diff: i32 = 0;
-            let mut differing = 0usize;
-            for i in 0..W * H {
-                let a = *cpu.get_unchecked(i);
-                let b = *bits.add(i);
-                for (x, y) in [(a.b, b.b), (a.g, b.g), (a.r, b.r), (a.a, b.a)] {
-                    let d = (x as i32 - y as i32).abs();
-                    if d > max_diff {
-                        max_diff = d;
-                    }
-                }
-                if a.b != b.b || a.g != b.g || a.r != b.r || a.a != b.a {
-                    differing += 1;
-                }
-            }
-            SelectObject(mem_dc, old_bmp);
-            DeleteObject(dib as HGDIOBJ);
-            DeleteDC(mem_dc);
-
-            eprintln!(
-                "A/B 比对: {W}x{H} = {} 像素，最大通道差 {max_diff}，有差异的像素 {differing} 个",
-                W * H
-            );
-            assert!(
-                max_diff <= 1,
-                "CPU 合成与 D2D DrawBitmap 偏差 {max_diff} LSB（> 1）：\
-                 预乘/alpha 语义或舍入公式写错了"
-            );
-        }
     }
 }

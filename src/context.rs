@@ -52,11 +52,10 @@ impl AppContext {
             config.general.restore_layout_on_start
         );
 
-        // Initialize global liquid glass config
+        // 初始化平台层样式缓存（引擎启动与参数应用发生在 platform_runtime::initialize，
+        // 这里只保证渲染线程在引擎就绪前也能读到一致的分类框样式）。
         #[cfg(target_os = "windows")]
-        crate::platform::windows::liquid_glass::update_liquid_glass_config(
-            &config.box_style.liquid_glass,
-        );
+        crate::platform::windows::glass_engine::set_box_style_cache(&config.box_style);
 
         Ok(Self {
             config,

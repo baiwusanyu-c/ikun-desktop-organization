@@ -49,32 +49,6 @@ use windows::Win32::System::Threading::{
 pub(crate) struct FrameTimings {
     /// 完成的帧数
     pub frames: u64,
-    /// `render_background` 全程（DXGI 取帧 + D2D 模糊 + D3D 着色 + 回读）
-    pub glass_us: u64,
-    /// 其中 D2D 模糊 effect 图那一段
-    pub blur_us: u64,
-    /// 其中 DXGI 取帧那一段（`AcquireNextFrame` + 整屏 `CopyResource`）
-    pub capture_us: u64,
-    /// 其中 GPU→CPU 回读那一段（`Map` 阻塞 + 逐行 memcpy + `Unmap`）
-    ///
-    /// # 为什么必须单独量这一段
-    ///
-    /// `Map` 用 `D3D11_MAP_READ` 且 flags=0，会**阻塞到 GPU 把前面排队的
-    /// 活全干完** —— 这是整条管线里唯一的硬同步点，也是「继续保留
-    /// `UpdateLayeredWindow`」与「换 DirectComposition」两条路线的分水岭：
-    /// 只要最终画面还要落进 GDI DIB，这次回读就必须付；换成 DComp 之后
-    /// 玻璃纹理可零拷贝直接参与合成，这一段整体消失。不量出来就只能
-    /// 靠猜来决定要不要动窗口模型。
-    pub readback_us: u64,
-    /// 其中 `Map` 阻塞等 GPU 排空的时间（回读减去行拷贝）
-    ///
-    /// # 为什么要把「等 GPU」和「搬字节」分开
-    ///
-    /// 这两者的修法完全相反，混在一个数字里就会开错刀：
-    /// - `Map` 占大头 = GPU 真的算了这么久（模糊 + 着色器），
-    ///   换 DirectComposition 也**省不掉**，必须缩小 GPU 工作量；
-    /// - 行拷贝占大头 = 纯粹是 CPU 搬 4.8MB，DComp 零拷贝直接归零。
-    pub map_us: u64,
     /// D2D DC 渲染目标的 BeginDraw..EndDraw（软件光栅化）
     pub dib_us: u64,
     /// 其中「第一趟：内容层」那一段（命中缓存时应接近 0）
@@ -87,74 +61,22 @@ pub(crate) struct FrameTimings {
     pub submit_us: u64,
 }
 
-thread_local! {
-    /// 本帧 `render_background` 的耗时（微秒），供调用方从「软件光栅」段里扣掉。
-    ///
-    /// # 为什么必须有这个
-    ///
-    /// 玻璃那一段是在**第二趟合成内部**被调用的，而第二趟整段都算在
-    /// `dib_us` 里。直接报 `玻璃 + 软件光栅 + 提交` 会把玻璃算两遍 ——
-    /// 实测这个重复计数把 25.2ms/帧虚报成 38.3ms/帧，虚高 52%，
-    /// 足以让「单线程天花板」的结论整整错一档。
-    static LAST_GLASS_US: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    static FRAME_TIMINGS: RefCell<FrameTimings> = const {
-        RefCell::new(FrameTimings {
-            frames: 0,
-            glass_us: 0,
-            blur_us: 0,
-            capture_us: 0,
-            readback_us: 0,
-            map_us: 0,
-            dib_us: 0,
-            content_us: 0,
-            content_hits: 0,
-            content_misses: 0,
-            submit_us: 0,
-        })
-    };
-}
-
-/// 记一次玻璃渲染的耗时（`render_background` 全程）。
+/// 分段耗时累计。
 ///
-/// 不计帧数：玻璃可能没开、也可能这一帧失败，帧数由
-/// `add_frame_timing` 在分类框真正提交画面时统一记。
-pub(crate) fn add_glass_timing(glass_us: u64) {
-    LAST_GLASS_US.with(|cell| cell.set(glass_us));
-    FRAME_TIMINGS.with(|cell| cell.borrow_mut().glass_us += glass_us);
-}
-
-/// 取走并清零「本帧玻璃段耗时」。
-///
-/// 只有第二趟真的调过 `render_background` 才非 0；玻璃关闭、
-/// 或本帧在调用前就失败返回时为 0，此时扣减是空操作，安全。
-pub(crate) fn take_last_glass_us() -> u64 {
-    LAST_GLASS_US.with(|cell| cell.replace(0))
-}
-
-/// 记 D2D 模糊 effect 图那一段（已包含在玻璃耗时内，单独列出便于归因）。
-pub(crate) fn add_blur_timing(blur_us: u64) {
-    FRAME_TIMINGS.with(|cell| cell.borrow_mut().blur_us += blur_us);
-}
-
-/// 记 DXGI 取帧那一段（已包含在玻璃耗时内，单独列出便于归因）。
-pub(crate) fn add_capture_timing(capture_us: u64) {
-    FRAME_TIMINGS.with(|cell| cell.borrow_mut().capture_us += capture_us);
-}
-
-/// 记 GPU→CPU 回读那一段（已包含在玻璃耗时内，单独列出便于归因）。
-pub(crate) fn add_readback_timing(readback_us: u64) {
-    FRAME_TIMINGS.with(|cell| cell.borrow_mut().readback_us += readback_us);
-}
-
-/// 记回读里 `Map` 阻塞那一段（已包含在 `readback_us` 内）。
-pub(crate) fn add_map_timing(map_us: u64) {
-    FRAME_TIMINGS.with(|cell| cell.borrow_mut().map_us += map_us);
-}
-
-/// 记一帧分类框的软件光栅化与提交耗时，并把帧数 +1。
-pub(crate) fn add_frame_timing(dib_us: u64, submit_us: u64) {
-    add_frame_timing_ex(dib_us, submit_us, 0, false)
-}
+/// 必须是进程级共享状态：渲染在分类框窗口线程记账，而输出方是
+/// runtime 轮询线程（60 秒一次的 `[内存分解]`）。历史版本用
+/// thread_local，把输出迁到轮询线程后就会永远读到空表，
+/// 「帧耗时」列静默归零 —— 正是当年「渲染到底有没有在跑」最难
+/// 排查的那类假象。锁只在每帧一次累加与每分钟一次 take 时出现，
+/// 竞争可以忽略。
+static FRAME_TIMINGS: std::sync::Mutex<FrameTimings> = std::sync::Mutex::new(FrameTimings {
+    frames: 0,
+    dib_us: 0,
+    content_us: 0,
+    content_hits: 0,
+    content_misses: 0,
+    submit_us: 0,
+});
 
 /// 记一帧的软件光栅化 / 提交耗时，并额外报告内容层缓存的命中情况。
 ///
@@ -171,8 +93,7 @@ pub(crate) fn add_frame_timing_ex(
     content_us: u64,
     content_reused: bool,
 ) {
-    FRAME_TIMINGS.with(|cell| {
-        let mut t = cell.borrow_mut();
+    if let Ok(mut t) = FRAME_TIMINGS.lock() {
         t.frames += 1;
         t.dib_us += dib_us;
         t.content_us += content_us;
@@ -182,16 +103,15 @@ pub(crate) fn add_frame_timing_ex(
             t.content_misses += 1;
         }
         t.submit_us += submit_us;
-    });
+    }
 }
 
 /// 取走并清零分段耗时。
 fn take_frame_timings() -> FrameTimings {
-    FRAME_TIMINGS.with(|cell| {
-        let snapshot = *cell.borrow();
-        *cell.borrow_mut() = FrameTimings::default();
-        snapshot
-    })
+    match FRAME_TIMINGS.lock() {
+        Ok(mut t) => std::mem::take(&mut *t),
+        Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
+    }
 }
 
 /// 输出间隔。60 秒一条，一天约 1440 行，占日志配额很小。
@@ -487,21 +407,24 @@ pub(crate) fn log_breakdown() {
         video_detail.join(" / ")
     };
     let (kids, kid_ws, kid_priv) = query_descendants();
-    let glass = super::liquid_glass::memory_stats();
     let grid = super::grid_window::memory_stats();
     let (text_formats, ellipsis_signs, text_layouts) = super::render_devices::text_cache_sizes();
     let timings = take_frame_timings();
     // 注意别叫 frames：那个名字已经被 DXGI 取帧计数占用，会遮蔽
     let timed_frames = timings.frames.max(1) as f64;
-    let (frames, mouse_only, no_rects) = super::liquid_glass::frame_counters();
-    let (region_checks, region_changed) = super::liquid_glass::region_check_counters();
-    // 命中率 = 报「变了」的次数 / 比对次数。接近 0 说明驱动在空报整屏矩形、
-    // 像素比对正在把渲染挡下来；接近 1 说明桌面确实在变，渲染省不掉。
-    let region_hit_percent = if region_checks > 0 {
-        region_changed as f64 * 100.0 / region_checks as f64
-    } else {
-        0.0
+    // 玻璃引擎指标（liquid-verre-rs）：fps / 自适应质量档位 / 参与渲染屏数。
+    let engine = super::glass_engine::engine_metrics();
+    let (eng_state, eng_fps, eng_quality, eng_monitors, eng_boxes) = match engine {
+        Some((fps, quality, monitors)) => (
+            "运行中".to_string(),
+            fps,
+            quality,
+            monitors,
+            super::glass_engine::box_count(),
+        ),
+        None => ("未启用".to_string(), 0.0_f32, 0_u8, 0_usize, 0_usize),
     };
+
     let alloc = crate::utils::alloc_probe::snapshot();
     // churn 速率 = 这段时间里向分配器申请了多少字节 / 经过的分钟数
     let alloc_window_minutes = {
@@ -537,18 +460,13 @@ pub(crate) fn log_breakdown() {
     log::info!(
         "[内存分解] 进程 WS={:.0}MB 私有={:.0}MB 峰值WS={:.0}MB 分页={:.0}MB GDI={gdi} USER={user} 句柄={handles} \
          | 显存 专用={vlocal:.0}MB 共享={vshared:.0}MB（{adapter_n} 个适配器: {video_detail}）\
-         | 玻璃[{state}] 捕获纹理={cap_n}张/{cap_mb:.1}MB 模糊纹理={blur_n}张/{blur_mb:.1}MB \
-         共享渲染表面={surf_n}份/{surf_mb:.1}MB 模糊链={chain_n}条/累计建{chain_total}次 \
-         输出={out_active}/{out_total}个有分类框 \
-         取帧={frames}（仅鼠标={mouse_only} 无矩形={no_rects}）\
-         区域像素比对={checks}次/命中{changed}次（{hit:.0}%）\
-         | 分类框 {boxes}个/{items}条 DIB={dib_mb:.1}MB 回读缓冲={pixels_mb:.1}MB \
-         玻璃位图={bmp_mb:.1}MB 图标位图={icon_n}项/{icon_mb:.1}MB \
+         | 玻璃引擎[{eng_state}] fps={eng_fps:.0} 质量档={eng_quality} 屏={eng_monitors} 玻璃块={eng_boxes} \
+         | 分类框 {boxes}个/{items}条 DIB={dib_mb:.1}MB \
+         图标位图={icon_n}项/{icon_mb:.1}MB \
          文字缓存 格式={tf}条 省略号={es}条 布局={tl}条/{tl_limit}上限 \
          | Rust堆 活跃={live_mb:.1}MB 峰值={peak_mb:.1}MB 块数={live_blocks} \
          分配速率={churn:.0}MB/分（累计 {total_gb:.2}GB/{total_count} 次）\
-         | 帧耗时 {frames_n}帧 平均{total_ms:.2}ms（玻璃{glass_ms:.2} = 取帧{cap_ms:.2} \
-         + 模糊{blur_ms:.2} + 回读{rb_ms:.2}（等GPU {map_ms:.2} + 搬运 {copy_ms:.2}） + 着色{shade_ms:.2}）\
+         | 帧耗时 {frames_n}帧 平均{total_ms:.2}ms \
          光栅合成{dib_ms:.2}（内容层{content_ms:.2} 命中{hits}/未命中{misses}）\
          提交{submit_ms:.2}）\
          | 子进程 {kids}个 WS={kid_ws_mb:.1}MB 私有={kid_priv_mb:.1}MB",
@@ -560,28 +478,14 @@ pub(crate) fn log_breakdown() {
         vshared = mb(video_shared),
         adapter_n = adapters.len(),
         video_detail = video_detail,
-        state = glass.state_name,
-        cap_n = glass.capture_texture_count,
-        cap_mb = mb(glass.capture_texture_bytes),
-        blur_n = glass.blurred_texture_count,
-        blur_mb = mb(glass.blurred_texture_bytes),
-        surf_n = glass.surface_cache_entries,
-        surf_mb = mb(glass.surface_cache_bytes),
-        chain_n = glass.blur_chain_count,
-        chain_total = glass.blur_chains_created,
-        out_active = glass.active_output_count,
-        out_total = glass.output_count,
-        frames = frames,
-        mouse_only = mouse_only,
-        no_rects = no_rects,
-        checks = region_checks,
-        changed = region_changed,
-        hit = region_hit_percent,
+        eng_state = eng_state,
+        eng_fps = eng_fps,
+        eng_quality = eng_quality,
+        eng_monitors = eng_monitors,
+        eng_boxes = eng_boxes,
         boxes = grid.windows,
         items = grid.items,
         dib_mb = mb(grid.dib_bytes),
-        pixels_mb = mb(grid.glass_pixels_bytes),
-        bmp_mb = mb(grid.glass_bitmap_bytes),
         icon_n = grid.icon_bitmap_entries,
         icon_mb = mb(grid.icon_bitmap_bytes),
         tf = text_formats,
@@ -598,20 +502,7 @@ pub(crate) fn log_breakdown() {
         kid_ws_mb = mb(kid_ws),
         kid_priv_mb = mb(kid_priv),
         frames_n = timings.frames,
-        total_ms = (timings.glass_us + timings.dib_us + timings.submit_us) as f64 / 1000.0 / timed_frames,
-        glass_ms = timings.glass_us as f64 / 1000.0 / timed_frames,
-        blur_ms = timings.blur_us as f64 / 1000.0 / timed_frames,
-        cap_ms = timings.capture_us as f64 / 1000.0 / timed_frames,
-        rb_ms = timings.readback_us as f64 / 1000.0 / timed_frames,
-        map_ms = timings.map_us as f64 / 1000.0 / timed_frames,
-        copy_ms = (timings.readback_us - timings.map_us) as f64 / 1000.0 / timed_frames,
-        // 着色 = 玻璃总耗时扣掉已单独归因的三段；saturating_sub 保证计时
-        // 抖动导致负数时显示 0，而不是回绕成一个巨大的数。
-        shade_ms = timings
-            .glass_us
-            .saturating_sub(timings.capture_us + timings.blur_us + timings.readback_us) as f64
-            / 1000.0
-            / timed_frames,
+        total_ms = (timings.dib_us + timings.submit_us) as f64 / 1000.0 / timed_frames,
         dib_ms = timings.dib_us as f64 / 1000.0 / timed_frames,
         content_ms = timings.content_us as f64 / 1000.0 / timed_frames,
         hits = timings.content_hits,
@@ -723,113 +614,4 @@ pub fn dump_frame_enabled() -> bool {
             .map(|v| !(v.is_empty() || v == "0" || v.eq_ignore_ascii_case("false")))
             .unwrap_or(false)
     })
-}
-
-/// 拖拽/移动期每帧统计：帧间隔分布 + 单帧成本，
-/// 退出拖拽时汇总一行日志，用于客观衡量掉帧（间隔>33ms 即掉帧）。
-struct DragStats {
-    hwnd: usize,
-    last: Option<std::time::Instant>,
-    intervals: Vec<u32>,
-    costs: Vec<u32>,
-}
-static DRAG_STATS: std::sync::Mutex<DragStats> = std::sync::Mutex::new(DragStats {
-    hwnd: 0,
-    last: None,
-    intervals: Vec::new(),
-    costs: Vec::new(),
-});
-
-/// 取最近一帧玻璃管线分段耗时（微秒）：取帧/模糊/回读/等GPU。
-pub fn last_glass_breakdown() -> (u64, u64, u64, u64) {
-    FRAME_TIMINGS.with(|cell| {
-        let t = cell.borrow();
-        (t.capture_us, t.blur_us, t.readback_us, t.map_us)
-    })
-}
-
-pub fn record_drag_frame(
-    hwnd: usize,
-    dragging: bool,
-    at: std::time::Instant,
-    cost: std::time::Duration,
-) {
-    if !dragging {
-        return;
-    }
-    let Ok(mut st) = DRAG_STATS.lock() else {
-        return;
-    };
-    if st.hwnd != hwnd {
-        drop(st);
-        flush_drag_stats();
-        let Ok(mut st) = DRAG_STATS.lock() else {
-            return;
-        };
-        log::warn!("[dragdbg] record session start hwnd={:x}", hwnd);
-        st.hwnd = hwnd;
-        st.last = None;
-        st.intervals.clear();
-        st.costs.clear();
-        st.last = Some(at);
-        st.costs.push(cost.as_micros() as u32);
-        return;
-    }
-    if let Some(l) = st.last {
-        st.intervals
-            .push(at.saturating_duration_since(l).as_millis() as u32);
-    }
-    st.last = Some(at);
-    st.costs.push(cost.as_micros() as u32);
-    if cost.as_millis() > 30 {
-        let (cap, blur, rb, map) = last_glass_breakdown();
-        log::warn!(
-            "[dragdbg] stall cost={}ms capture={}us blur={}us readback={}us map={}us",
-            cost.as_millis(),
-            cap,
-            blur,
-            rb,
-            map
-        );
-    }
-}
-
-/// 拖拽结束时汇总输出：帧间隔分布 + 单帧成本，
-/// 间隔 >33ms 视为掉帧（16ms 档的两倍）。
-pub fn flush_drag_stats() {
-    let Ok(mut st) = DRAG_STATS.lock() else {
-        return;
-    };
-    let n = st.intervals.len();
-    log::warn!("[dragdbg] flush hwnd={:x} n={}", st.hwnd, n);
-    if n == 0 {
-        st.hwnd = 0;
-        st.last = None;
-        return;
-    }
-    let mut sorted = st.intervals.clone();
-    sorted.sort_unstable();
-    let mean_i = sorted.iter().sum::<u32>() as f64 / n as f64;
-    let p95_i = sorted[((n as f64 * 0.95) as usize).min(n - 1)];
-    let max_i = sorted[n - 1];
-    let gaps33 = sorted.iter().filter(|v| **v > 33).count();
-    let gaps50 = sorted.iter().filter(|v| **v > 50).count();
-    let mean_c = st.costs.iter().sum::<u32>() as f64 / st.costs.len() as f64 / 1000.0;
-    let max_c = *st.costs.iter().max().unwrap_or(&0) as f64 / 1000.0;
-    log::warn!(
-        "[拖拽帧统计] hwnd={:x} 帧数={} 平均间隔={:.1}ms p95={}ms max={}ms 掉帧(>33ms)={} (>50ms)={} | 单帧成本 平均={:.2}ms max={:.2}ms",
-        st.hwnd,
-        n,
-        mean_i,
-        p95_i,
-        max_i,
-        gaps33,
-        gaps50,
-        mean_c,
-        max_c
-    );
-    st.hwnd = 0;
-    st.last = None;
-    st.intervals.clear();
-    st.costs.clear();
 }

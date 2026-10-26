@@ -63,7 +63,7 @@ src/
 │       ├── types.rs        #   共享数据结构（DesktopIcon/IconData/...）
 │       ├── 窗口            #   grid_window / menu_window / control_panel_window / wnd_proc /
 │       │                   #   zorder / occlusion / grid_layout
-│       ├── 渲染            #   d2d_render / render_devices / liquid_glass / icon_bitmap
+│       ├── 渲染            #   d2d_render / render_devices / glass_engine（liquid-verre-rs 适配层）/ icon_bitmap
 │       ├── 图标与桌面      #   desktop_manager / desktop_utils / icon_manager / icon_hider /
 │       │                   #   icon_extract / app_icon
 │       ├── 拖拽            #   drag_drop / drag_handler / drag_visual / drag_image / ole_dnd /

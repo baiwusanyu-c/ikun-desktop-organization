@@ -184,6 +184,8 @@ pub const MOD_WIN: u32 = 0x0008;
 pub const MOD_NOREPEAT: u32 = 0x4000;
 pub const WM_ACTIVATE: u32 = 0x0006;
 pub const WM_WINDOWPOSCHANGING: u32 = 0x0046;
+/// 窗口位置已变化（完成后可安全读取新几何并同步玻璃块）
+pub const WM_WINDOWPOSCHANGED: u32 = 0x0047;
 
 // ===== Alignment guide constants =====
 pub const WM_ENTERSIZEMOVE: u32 = 0x0231;
@@ -668,7 +670,8 @@ pub const WM_USER_DRAG_OVER_UPDATE: u32 = WM_APP + 22;
 pub const WM_USER_GRID_REDRAW: u32 = WM_APP + 23;
 
 /// 按当前液态玻璃开关重设分类框留白、定时器并重绘。
-pub const WM_USER_GRID_SYNC_GLASS: u32 = WM_APP + 24;
+/// 引擎缩放会话开始/结束转发（wParam=1 开始，0 结束）
+pub const WM_USER_GLASS_RESIZE: u32 = WM_APP + 25;
 pub const WM_USER_CUT_FILE_MOVED: u32 = WM_APP + 17;
 /// 通知覆盖窗口：外部文件拖拽放置完成（由 overlay IDropTarget PostMessage 触发）
 pub const WM_USER_OVERLAY_DROP: u32 = WM_APP + 18;

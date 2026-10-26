@@ -407,6 +407,17 @@ impl TauriRuntime {
     pub fn tick(&mut self) -> (bool, bool) {
         let mut changed = false;
 
+        // 0. 玻璃引擎事件 → 项目日志系统（低频轮询消费，事件本身只在
+        //    启动/显示器变化/采集失效等场景出现，不属于热路径）。
+        //    同时驱动内存分解周期日志（原挂在渲染 tick 上，现随渲染定时器退役）。
+        #[cfg(windows)]
+        {
+            crate::platform::windows::glass_engine::poll_events_to_log();
+            if crate::platform::windows::mem_probe::due() {
+                crate::platform::windows::mem_probe::log_breakdown();
+            }
+        }
+
         // 1. Tray actions
         if let Some(action) = take_pending_tray_action() {
             match action {
@@ -603,6 +614,8 @@ pub fn start_platform_runtime(app: tauri::AppHandle, runtime: SharedTauriRuntime
         let _ = app_handle_for_destroy.run_on_main_thread(move || {
             log::info!("[TauriRuntime] 主线程: 开始销毁分类框窗口");
             destroy_all_grid_windows();
+            // 玻璃引擎在所有内容窗口解除登记后统一关闭（渲染线程 join）
+            crate::platform::windows::glass_engine::shutdown();
             log::info!("[TauriRuntime] 主线程: 分类框窗口已销毁");
         });
         // 等待主线程完成销毁

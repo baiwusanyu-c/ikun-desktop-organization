@@ -229,7 +229,7 @@ let content = std::fs::read_to_string(&path)
 ```rust
 // ✅ 正确：共享模块中的 Windows 专属行为用 cfg(windows) 分支
 #[cfg(target_os = "windows")]
-crate::platform::windows::liquid_glass::update_liquid_glass_config(&cfg);
+crate::platform::windows::glass_engine::apply_settings(&cfg);
 
 // ❌ 错误：为未实现的操作系统添加 cfg 分支或"跨平台预留" trait 抽象
 #[cfg(target_os = "macos")]
@@ -421,7 +421,8 @@ impl MyApp {
 - **逻辑像素（Logical Pixels）**：96 DPI 基准下的像素值，用于配置存储和跨 DPI 计算
 
 **转换公式**：
-`ust
+`
+ust
 // 物理像素 → 逻辑像素
 let logical_px = (physical_px * 96) / dpi;
 
@@ -433,7 +434,8 @@ let physical_px = (logical_px * dpi) / 96;
 
 **规则 1：GridCreateParams 使用逻辑像素**
 
-`ust
+`
+ust
 // ✅ 正确：x/y 是逻辑像素（96 DPI 基准）
 let params = GridCreateParams {
     x: logical_x,
@@ -448,7 +450,8 @@ let params = GridCreateParams {
 
 **规则 2：GetSystemMetrics 返回物理像素**
 
-`ust
+`
+ust
 // ❌ 错误：直接使用物理像素计算居中
 let (screen_w, screen_h) = get_screen_resolution();  // 物理像素
 let x = (screen_w - box_w) / 2;  // box_w 是逻辑像素，单位不匹配！
@@ -465,7 +468,8 @@ let x = (screen_w - box_w) / 2;  // 现在单位一致
 
 **规则 3：拖拽残影使用光标所在显示器的 DPI**
 
-`ust
+`
+ust
 // ✅ 正确：获取光标位置的 DPI
 let cursor_dpi = dpi_at_screen_point(cursor_x, cursor_y);
 

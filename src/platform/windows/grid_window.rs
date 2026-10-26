@@ -300,10 +300,8 @@ pub(crate) struct GridWindowData {
     pub(crate) dib_old_bmp: HGDIOBJ,
     /// `dib_section` 的像素首地址（预乘 BGRA、自上而下、行距 = dib_w × 4）。
     ///
-    /// 存下来是为了让液态玻璃能**直接 memcpy 进主 DIB**：玻璃回读缓冲
-    /// `glass_pixels` 与本 DIB 的尺寸、格式、行距逐字节一致，直写即可，
-    /// 不必再上传成 D2D 位图做全窗软件混合。详见
-    /// `d2d_render::render_glass_into_dib`。
+    /// 引擎架构下该指针只承载「命中捕获层 + 内容层」的预乘 BGRA 像素，
+    /// 玻璃底板由 liquid-verre-rs 画布在窗口之下渲染，不再回读进 DIB。
     pub(crate) dib_bits: *mut Pixel32,
     /// 当前 DIB 宽度（物理像素），0 表示尚未创建
     pub(crate) dib_w: i32,
@@ -353,56 +351,15 @@ pub(crate) struct GridWindowData {
 
     /// 当前生效的外投影留白（物理像素）。
     ///
-    /// 留白随液态玻璃开关变化，渲染、布局与命中测试都必须读这个字段而不是
-    /// 每次按 DPI 重新推算：否则玻璃刚关闭时窗口外框还没收缩，渲染却已经
-    /// 按新留白计算，会出现整框错位一帧。
+    /// 引擎架构下恒为 0；读取方（渲染、布局、命中测试、跟随）统一读这个字段，
+    /// 不再按 DPI 现算，保留历史换算错位防护的读取口径。
     pub(crate) render_padding: i32,
 
-    /// 液态玻璃像素回读缓冲，跨帧复用。
+    /// 是否正处于库驱动的缩放会话（引擎块矩形为真值，内容窗口跟随）。
     ///
-    /// 玻璃开启时每帧要接收一张 1~5MB 的 GPU 回读表面，
-    /// 旧实现每帧新分配一块再丢掉；5 个框 × 5fps 就是每秒
-    /// 上百 MB 的大对象申请/归还，堆的已提交容量会单调上涨。
-    /// 注意：D2D 位图不能同样跨帧缓存，原因见
-    /// `draw_liquid_glass_background` 的注释。
-    pub(crate) glass_pixels: Vec<Pixel32>,
-    /// 玻璃表面对应的 D2D 位图（尺寸变化时重建，
-    /// 否则 CopyFromMemory 原地更新）
-    pub(crate) glass_bitmap: Option<ID2D1Bitmap>,
-    pub(crate) glass_bitmap_w: u32,
-    pub(crate) glass_bitmap_h: u32,
-
-    // ===== 周期重绘的变化检测状态 =====
-    //
-    // 液态玻璃不是时间驱动的动画，它只响应三件事：桌面内容变化、
-    // 光标位置（决定高光与弹性形变）、以及分类框自身状态
-    // （后者一律走显式重绘）。下面四个字段让 200ms 定时器
-    // 能判断「这一帧与上一帧完全一样」从而整帧跳过。
-    /// 上一次实际渲染时的光标屏幕坐标
-    pub(crate) last_cursor_x: i32,
-    pub(crate) last_cursor_y: i32,
-    /// 光标离开本框后经过的 tick 数。
-    ///
-    /// 用来决定「光标移动还要不要触发本框重绘」：着色器的高光/形变
-    /// 只对本框内的光标有反应，光标在别处移动时本框画出来逐像素相同。
-    pub(crate) cursor_left_ticks: u32,
-    /// 光标静止后经过的 tick 数。
-    ///
-    /// 光标停下后 `light_direction` 仍在按 0.14 的系数逐帧插值收敛，
-    /// 收敛窗口内必须继续渲染，否则形变会停在中途。
-    pub(crate) cursor_idle_ticks: u32,
-    /// 距上一次实际渲染经过的 tick 数（心跳兜底用）
-    pub(crate) ticks_since_render: u32,
-    /// 上一次实际渲染时记录的桌面代号
-    pub(crate) last_desktop_generation: u64,
-
-    // ===== 遮挡判定状态 =====
-    /// 上次判定结果：被其他应用窗口完全盖住，可以跳过渲染
-    pub(crate) occluded: bool,
-    /// 上次判定时刻。窗口枚举不便宜，按间隔限流
-    pub(crate) occlusion_checked_at: std::time::Instant,
-    /// 被判定遮挡后已跳过的 tick 数（驱动自愈心跳）
-    pub(crate) occluded_ticks: u32,
+    /// 由 `WM_USER_GLASS_RESIZE` 事件置位、跟随 tick 确认快照回落后清除；
+    /// 会话期间 `WM_WINDOWPOSCHANGED` 不得把窗口几何反向推回引擎（防止回路）。
+    pub(crate) glass_session_active: bool,
 }
 
 unsafe impl Send for GridWindowData {}
@@ -523,19 +480,7 @@ impl GridWindowData {
             content_fingerprint: 0,
             content_valid: false,
             render_padding: 0,
-            glass_pixels: Vec::new(),
-            glass_bitmap: None,
-            glass_bitmap_w: 0,
-            glass_bitmap_h: 0,
-            last_cursor_x: 0,
-            last_cursor_y: 0,
-            cursor_left_ticks: 0,
-            cursor_idle_ticks: 0,
-            ticks_since_render: 0,
-            last_desktop_generation: 0,
-            occluded: false,
-            occlusion_checked_at: std::time::Instant::now(),
-            occluded_ticks: 0,
+            glass_session_active: false,
         }
     }
 }
@@ -561,116 +506,22 @@ pub(super) fn get_grid_list() -> Result<
 }
 static CLASS_REGISTERED: Mutex<bool> = Mutex::new(false);
 
-/// 液态玻璃外投影在分类框四周预留的逻辑像素。
+/// 库缩放会话期间内容窗口的跟随定时器间隔（毫秒）。
 ///
-/// 128px 可覆盖最强亮区模式下约 3 倍高斯标准差加垂直偏移，避免投影在
-/// `WS_EX_LAYERED` 窗口边界被矩形裁切。
-pub(crate) const LIQUID_GLASS_SHADOW_PADDING: i32 = 48;
-// 旧值 128 逻辑像素。2026-09-14 对 d09da5b1 参照帧的 alpha 剖面实测：
-// 外投影在内容边缘外 ~96 物理像素处 alpha 已 ≤ 1/255，
-// 128 逻辑（192 DPI 下 256 物理）的留白绝大部分是全透明死区，
-// 却让每帧 ULW 提交面/DIB/暂存按 (content+512)^2 付钱。
-// 收到 48 逻辑（96 物理）后提交面积 -40%（DWM 带宽与拖拽跟手感直接相关），
-// 视觉上裁掉的只是 alpha≤1/255 的不可见部分。
-/// 液态玻璃渲染定时器间隔（毫秒）
-///
-/// 从原始的 33ms (~30 FPS) 降低到 200ms (~10 FPS)，
-/// 大幅减少 GPU 负载和与渲染回调的 RefCell 借用冲突频率。
-/// 视觉差异极小（液态玻璃效果变化较慢），但 GPU 开销降低约 70%。
-pub(crate) const LIQUID_GLASS_RENDER_INTERVAL_MS: u32 = 40;
-
-/// 拖拽 / 缩放分类框期间的重绘间隔（毫秒）。
-///
-/// # 为什么必须单独给拖拽一条高频路径
-///
-/// 静止时用 200ms（5fps）是划算的：桌面没变，画了也看不出差别。
-/// 但拖拽时**窗口位置每帧都在变**，玻璃要重新采样新位置背后的桌面，
-/// 5fps 的上限与渲染快慢无关 —— 即使单帧耗时降到 0，拖拽照样只有
-/// 5 帧。用户看到的「移动分类框时玻璃卡顿」根因就在这里，而不在
-/// 单帧耗时。
-///
-/// 16ms ≈ 60Hz，与 DWM 合成节奏对齐；Windows 定时器默认粒度约
-/// 15.6ms，因此实际 tick 落在 15.6~31.2ms，即 32~64fps，
-/// 稳超「至少 25 帧」的下限。
-///
-/// # 为什么不会把 CPU 打满
-///
-/// 只有**正在被拖动的那一个框**会走到渲染：拖拽时光标必然落在它
-/// 内部（`cursor_relevant = true`），`decide_tick_action` 判为
-/// `Render(Cursor)`；其余框光标不相关、桌面也没变，判为
-/// `AdvanceLightOnly`，只推进一次高光插值就返回，不进管线。
-/// 鼠标按住不动时 `cursor_moved` 转假，超过 `GLASS_CURSOR_SETTLE_TICKS`
-/// 后连被拖的框也转 `SkipIdle`，不会空转。
+/// 16ms ≈ 60Hz，与 DWM 合成节奏对齐；Windows 定时器默认粒度约 15.6ms，
+/// 实际 tick 落在 15.6~31.2ms。内容层在会话里只做「贴块矩形 + 重排」，
+/// 不跑任何玻璃渲染；静止态该定时器必须卸载（见 `exit_glass_resize_session`），
+/// 否则空转唤醒消息循环约吃 9% CPU 并放大内存抖动。
 pub(crate) const LIQUID_GLASS_DRAG_INTERVAL_MS: u32 = 16;
 
-/// 光标静止后继续渲染的 tick 数，用于等待高光/形变插值收敛。
+/// 返回当前 DPI 下分类框实际应使用的外投影留白（引擎架构下恒为 0）。
 ///
-/// `light_direction` 每帧按 `LIGHT_BLEND = 0.14` 向目标靠拢，残差为
-/// `0.86^n`；n=25 时剩 2.2%，肉眼已看不出差别，再渲染只是白白浪费。
-pub(crate) const GLASS_CURSOR_SETTLE_TICKS: u32 = 25;
-
-/// 周期重绘的心跳兜底间隔（tick 数）。
-///
-/// 200ms 一个 tick，50 个 = 10 秒。
-///
-/// # 为什么从 2 秒放宽到 10 秒
-///
-/// 心跳是**兜底**：桌面脏矩形、光标移动、光标静止后的插值收敛、
-/// 分类框自身状态变化都各有独立且更灵敏的触发路径。静止桌面上
-/// 心跳渲染出来的那一帧与上一帧逐像素相同，纯属白干。
-///
-/// 但每一次白干都要走完整条管线：DXGI 取帧 → D2D 模糊 → D3D 着色 →
-/// 暂存纹理回读 → `CopyFromMemory` → 整窗 DIB 重画 → `UpdateLayeredWindow`。
-/// 实测（`[内存分解]` 日志）这条管线在显卡用户态驱动里留下的已提交内存
-/// 以 **~1.2MB/分** 缓慢爬升，而同一时刻 Rust 堆活跃字节恒定在 6.4MB、
-/// 块数一动不动 —— 涨的部分完全与渲染次数成正比。
-/// 5 个框 × 每 2 秒一次 = 每秒 2.5 次白干，一天 21 万次。
-///
-/// 放宽到 10 秒后兜底渲染降到 1/5。代价只存在于「所有变化检测同时漏报」
-/// 的假想场景：那时画面滞后从 2 秒变成 10 秒。正常使用中一帧都不会多等。
-pub(crate) const GLASS_FORCE_RENDER_TICKS: u32 = 250;
-
-/// 单位是 tick（LIQUID_GLASS_RENDER_INTERVAL_MS = 40ms）：250 tick = 10 秒。
-/// 不要把它改回 1：那是饱和压测值，会让静止/遮挡桌面每 40ms
-/// 白烧一整条渲染管线，驱动提交内存按渲染次数正比爬升。
-
-/// 被判定为遮挡后仍然强制渲染的心跳间隔（tick 数）。
-///
-/// 遮挡判定是启发式的，万一误报（比如某个窗口报告可见
-/// 但实际没画出来），5 秒一次的自愈心跳能保证分类框
-/// 不会永久冻在旧画面上。
-pub(crate) const GLASS_OCCLUDED_HEARTBEAT_TICKS: u32 = 125;
-
-/// 单位是 tick：125 tick = 5 秒。同上，不要改回 1。
-
-/// 光标离开本框后还要继续渲染的 tick 数。
-///
-/// 着色器里 `mouse_offset` 与 `elasticity` 都只在「光标在本框内」时
-/// 才取 `light_direction`，光标一离开，输出立刻变成无高光版本 ——
-/// 所以只需要再画一帧就能把残留的高光/形变覆盖掉。给 3 个 tick 的
-/// 余量是为了容忍光标在框边缘来回抖动。
-///
-/// 注意这与 `GLASS_CURSOR_SETTLE_TICKS`（25）不是一回事：后者是
-/// 「光标停在框内不动时，等高光插值收敛完」，那期间**必须**持续渲染。
-pub(crate) const CURSOR_LEAVE_SETTLE_TICKS: u32 = 3;
-
-/// 返回当前 DPI 下液态玻璃外投影所需的物理像素留白（纯 DPI 换算，不看开关）。
-pub(crate) fn glass_shadow_padding_at_dpi(dpi: u32) -> i32 {
-    scale_for_dpi(LIQUID_GLASS_SHADOW_PADDING, dpi.max(1))
-}
-
-/// 返回当前 DPI 下分类框实际应使用的外投影留白。
-///
-/// 液态玻璃关闭时返回 0：外投影完全由玻璃着色器画在内容矩形之外，关闭后
-/// 继续保留 128 逻辑像素留白会把每帧 DIB、DWM 重定向表面和命中测试区域
-/// 一起放大到内容面积的 3 倍以上（200% DPI 下 5 个分类框每帧 23MB → 7MB），
-/// 还会在窗口四周多出一大圈能吃鼠标事件的透明区域。
-pub(crate) fn shadow_padding_for_dpi(dpi: u32) -> i32 {
-    if super::liquid_glass::is_liquid_glass_enabled() {
-        glass_shadow_padding_at_dpi(dpi)
-    } else {
-        0
-    }
+/// 玻璃底板、外投影与缩放把手反馈全部由 liquid-verre-rs 画布在内容层之下
+/// 渲染（投影画在块的矩形之外，不占用内容窗口面积）；引擎不可用回退 D2D
+/// 背景时同样不画外投影。保留函数与读取路径，是为了让渲染、布局与命中
+/// 测试沿用同一套「内容矩形 = 外框内缩留白」的换算口径。
+pub(crate) fn shadow_padding_for_dpi(_dpi: u32) -> i32 {
+    0
 }
 
 /// 读取窗口当前生效的外投影留白。
@@ -998,24 +849,29 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         content_fingerprint: 0,
         content_valid: false,
         render_padding: shadow_padding,
-        glass_pixels: Vec::new(),
-        glass_bitmap: None,
-        glass_bitmap_w: 0,
-        glass_bitmap_h: 0,
-        last_cursor_x: 0,
-        last_cursor_y: 0,
-        cursor_left_ticks: 0,
-        cursor_idle_ticks: 0,
-        ticks_since_render: 0,
-        last_desktop_generation: 0,
-        occluded: false,
-        occlusion_checked_at: std::time::Instant::now(),
-        occluded_ticks: 0,
+        glass_session_active: false,
     });
     let data_ptr = Box::into_raw(data);
     unsafe {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, data_ptr as isize);
     }
+
+    // 2.6 登记玻璃底板（liquid-verre-rs 引擎）：内容矩形 = 外框去掉留白。
+    //     引擎未激活时 attach 返回 false，该框自动走 D2D 回退背景渲染，
+    //     命中测试与原生拖拽/缩放保持不变（优雅降级，不阻塞创建）。
+    let glass_content = RECT {
+        left: outer_x + shadow_padding,
+        top: outer_y + shadow_padding,
+        right: outer_x + outer_w - shadow_padding,
+        bottom: outer_y + outer_h - shadow_padding,
+    };
+    super::glass_engine::attach_box(
+        params.config_id,
+        hwnd as isize,
+        &glass_content,
+        dpi,
+        params.locked,
+    );
 
     // 创建 tooltip 窗口（仅在有选中项时显示）
     let tooltip_hwnd = create_tooltip_window(hwnd);
@@ -1777,281 +1633,38 @@ pub(crate) fn ensure_dcomp_backbuffer(state: &mut DcompState) -> Option<ID2D1Bit
     }
 }
 
-/// 按当前液态玻璃开关装配 / 卸载分类框的周期重绘定时器。
+/// 静止态一律卸载周期重绘定时器。
 ///
-/// 玻璃关闭时画面是一张静态位图，所有会改变它的操作都走显式重绘路径，
-/// 200ms 定时器只会白白唤醒消息循环（实测约 9% CPU）并持续制造内存抖动。
+/// 引擎架构下分类框没有周期性重绘需求：玻璃动画（折射 / 鼠标光 / 缩放反馈）
+/// 由库渲染线程全权驱动，内容层所有状态变化都走显式重绘路径；定时器只在
+/// 库缩放会话期间临时装配（`begin_glass_resize_session`）。
+/// 静止期不装定时器：实测空转唤醒消息循环约吃 9% CPU，还放大内存抖动。
 pub(crate) fn sync_grid_refresh_timer(hwnd: HWND) {
-    set_grid_refresh_interval(hwnd, LIQUID_GLASS_RENDER_INTERVAL_MS);
-}
-
-/// 进入拖拽 / 缩放模态循环：把周期重绘切到高频档。
-///
-/// 只在 `WM_ENTERSIZEMOVE` 调用。玻璃关闭时不装定时器 —— 那时画面
-/// 是一张静态位图，窗口移动由 DWM 直接搬运，不需要我们重画。
-pub(crate) fn enter_drag_refresh(hwnd: HWND) {
-    set_grid_refresh_interval(hwnd, LIQUID_GLASS_DRAG_INTERVAL_MS);
-}
-
-/// 退出拖拽 / 缩放模态循环：恢复静止档间隔。
-///
-/// 必须与 `enter_drag_refresh` 严格配对。漏掉这一步会让分类框
-/// 永久以 60Hz 重绘 —— 画面看不出问题，但 CPU 与驱动内存常驻高水位
-/// 都下不来，而且没有任何报错。
-pub(crate) fn exit_drag_refresh(hwnd: HWND) {
-    sync_grid_refresh_timer(hwnd);
-}
-
-/// 按指定间隔重装周期重绘定时器；`interval_ms` 为静止档或拖拽档。
-///
-/// 玻璃关闭时一律不装：所有会改变画面的操作都走显式重绘路径，
-/// 定时器只会白白唤醒消息循环（实测约 9% CPU）并持续制造内存抖动。
-fn set_grid_refresh_interval(hwnd: HWND, interval_ms: u32) {
     unsafe { KillTimer(hwnd, TIMER_ID_LIQUID_GLASS) };
-    if !super::liquid_glass::is_liquid_glass_enabled() {
-        log::warn!(
-            "[timerdbg] set_interval {} skipped: glass disabled",
-            interval_ms
-        );
-        return;
-    }
-    let id = unsafe {
+}
+
+/// 进入库缩放会话：装配 16ms 高频跟随定时器。
+///
+/// 由 `WM_USER_GLASS_RESIZE`（引擎事件回调转发）驱动；只在库把块矩形
+/// 改掉时内容窗口才需要跟着动。
+pub(crate) fn enter_glass_resize_session(hwnd: HWND) {
+    unsafe { KillTimer(hwnd, TIMER_ID_LIQUID_GLASS) };
+    let _ = unsafe {
         SetTimer(
             hwnd,
             TIMER_ID_LIQUID_GLASS,
-            interval_ms,
+            LIQUID_GLASS_DRAG_INTERVAL_MS,
             std::ptr::null_mut(),
         )
     };
-    log::warn!(
-        "[timerdbg] set_interval {}ms -> timer id {}",
-        interval_ms,
-        id
-    );
 }
 
-/// 读取当前光标的屏幕坐标（失败时返回 None）。
-fn cursor_screen_pos() -> Option<(i32, i32)> {
-    let mut cursor = windows::Win32::Foundation::POINT { x: 0, y: 0 };
-    // SAFETY: 只往本地栈上的 POINT 里写
-    let ok = unsafe { windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut cursor) }.is_ok();
-    ok.then_some((cursor.x, cursor.y))
-}
-
-/// 记录一次实际渲染，供下一个 tick 判断画面是否会变。
+/// 退出库缩放会话：卸载跟随定时器。
 ///
-/// 无论是定时器还是显式调用触发的渲染都要记一笔，
-/// 否则下一个 tick 会误以为画面还没更新过。
-pub(crate) fn note_grid_frame_rendered(data: &mut GridWindowData) {
-    data.ticks_since_render = 0;
-    data.last_desktop_generation = super::liquid_glass::desktop_generation();
-    if let Some((x, y)) = cursor_screen_pos() {
-        data.last_cursor_x = x;
-        data.last_cursor_y = y;
-    }
-}
-
-/// 200ms 周期 tick：只有画面真的会变才渲染。
-///
-/// 旧实现每个 tick 无条件重绘，5 个框 × 5fps = 每秒 25 帧，
-/// 每帧新建上百个 DirectWrite / D2D 小对象（标题、锁定、更多、
-/// 每个标签各一个 TextLayout）。这些对象都会释放，但高频
-/// 申请/归还会让 Windows 堆的已提交容量单调上涨：
-/// 实测 +36MB/分，并伴随 ~28MB 的堆段提交台阶。
-///
-/// 判据全部保守：任一条件成立就渲染，并且有 2 秒心跳兜底。
-/// 分类框自身状态变化（hover / 选中 / 拖拽 / 滚动 / 重命名 /
-/// 配置变更）一律走显式 `render_layered_window`，不经过本函数。
-/// 周期 tick 的判定结果。
-/// 一个 tick 的动作。
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum TickAction {
-    /// 整帧重绘
-    Render(RenderReason),
-    /// 只推进共享的光标高光插值，不重绘。
-    ///
-    /// 旧逻辑里「光标动了」会让**所有**分类框重绘，而光标只影响它
-    /// 所在的那一个框。但 `light_direction` 是渲染器全局共享的，
-    /// 直接跳过重绘会改变它的插值序列、让高光突然变亮约 3.8 倍，
-    /// 所以这些框仍要按原节奏推进插值 —— 只是不必再跑
-    /// DXGI 取帧 → D2D 模糊 → D3D 着色 → GDI 回读 → 提交这条管线。
-    AdvanceLightOnly,
-    /// 桌面与光标都没动，整帧省掉
-    SkipIdle,
-    /// 被其他应用窗口完全盖住，整条管线（含 DXGI 采样）都不跑
-    SkipOccluded,
-}
-
-/// 一帧被判定为「要渲染」的原因。
-///
-/// # 为什么必须分开计数
-///
-/// 只报一个「实际渲染 N 次」是看不出脏矩形方案有没有真在工作的：
-/// N 偏大时，可能是光标在动（正常）、可能是心跳（正常）、
-/// 也可能是 `region_changed_since` 退化成了「桌面任何一处变了都返回
-/// true」（**按框判定失效**）。这三种情况的处理方式完全不同，
-/// 混在一个数字里就只能靠猜。
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum RenderReason {
-    /// 光标移动过
-    Cursor,
-    /// 这个框自己覆盖的桌面区域变了（脏矩形命中）
-    DesktopChanged,
-    /// 光标刚停下，高光/形变插值还在收敛
-    Settle,
-    /// 兜底心跳
-    Heartbeat,
-}
-
-/// 决定这个 tick 干什么：重绘 / 只推进光标插值 / 完全跳过。
-///
-/// 与「旧规则」的唯一差别是 `cursor_driven && !cursor_relevant && !must_render`
-/// 这一种组合：旧规则重绘，新规则只推进插值。其余所有组合的
-/// 渲染与否、以及上报的原因，都与旧规则逐条一致。
-fn decide_tick_action(
-    cursor_moved: bool,
-    desktop_changed: bool,
-    cursor_idle_ticks: u32,
-    ticks_since_render: u32,
-    cursor_relevant: bool,
-) -> TickAction {
-    let cursor_driven = cursor_moved || cursor_idle_ticks < GLASS_CURSOR_SETTLE_TICKS;
-    let must_render = desktop_changed || ticks_since_render >= GLASS_FORCE_RENDER_TICKS;
-    if cursor_driven && !cursor_relevant && !must_render {
-        return TickAction::AdvanceLightOnly;
-    }
-    match pick_render_reason(
-        cursor_moved,
-        desktop_changed,
-        cursor_idle_ticks,
-        ticks_since_render,
-    ) {
-        Some(reason) => TickAction::Render(reason),
-        None => TickAction::SkipIdle,
-    }
-}
-
-/// 按与判定完全一致的优先级挑出渲染原因；`None` 表示这一帧可以省掉。
-///
-/// 纯函数，便于单测：优先级排错会让统计说谎，而统计是判断
-/// 脏矩形过滤有没有退化的唯一依据。
-fn pick_render_reason(
-    cursor_moved: bool,
-    desktop_changed: bool,
-    cursor_idle_ticks: u32,
-    ticks_since_render: u32,
-) -> Option<RenderReason> {
-    if cursor_moved {
-        Some(RenderReason::Cursor)
-    } else if desktop_changed {
-        Some(RenderReason::DesktopChanged)
-    } else if cursor_idle_ticks < GLASS_CURSOR_SETTLE_TICKS {
-        Some(RenderReason::Settle)
-    } else if ticks_since_render >= GLASS_FORCE_RENDER_TICKS {
-        Some(RenderReason::Heartbeat)
-    } else {
-        None
-    }
-}
-
-/// 渲染统计的输出间隔。
-///
-/// 每 30 秒一条，用于确认帧跳过真的在生效——否则
-/// 「内存不涨了」可能只是因为根本没在渲染（画面冻住了）。
-const TICK_STATS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
-
-/// 一个统计窗口内的渲染计数。
-#[derive(Clone, Copy)]
-struct TickStats {
-    ticks: u64,
-    rendered: u64,
-    /// 只推进了光标插值、没重绘的次数（光标在别处移动时的省帧量）
-    light_only: u64,
-    occluded: u64,
-    by_cursor: u64,
-    by_desktop: u64,
-    by_settle: u64,
-    by_heartbeat: u64,
-    last_report: Option<std::time::Instant>,
-}
-
-const fn new_tick_stats() -> TickStats {
-    TickStats {
-        ticks: 0,
-        rendered: 0,
-        light_only: 0,
-        occluded: 0,
-        by_cursor: 0,
-        by_desktop: 0,
-        by_settle: 0,
-        by_heartbeat: 0,
-        last_report: None,
-    }
-}
-
-thread_local! {
-    static TICK_STATS: std::cell::RefCell<TickStats> =
-        const { std::cell::RefCell::new(new_tick_stats()) };
-}
-
-fn record_tick_stats(decision: TickAction) {
-    TICK_STATS.with(|cell| {
-        let snapshot = {
-            let mut stats = cell.borrow_mut();
-            stats.ticks += 1;
-            match decision {
-                TickAction::Render(reason) => {
-                    stats.rendered += 1;
-                    match reason {
-                        RenderReason::Cursor => stats.by_cursor += 1,
-                        RenderReason::DesktopChanged => stats.by_desktop += 1,
-                        RenderReason::Settle => stats.by_settle += 1,
-                        RenderReason::Heartbeat => stats.by_heartbeat += 1,
-                    }
-                }
-                TickAction::AdvanceLightOnly => stats.light_only += 1,
-                TickAction::SkipOccluded => stats.occluded += 1,
-                TickAction::SkipIdle => {}
-            }
-            let now = std::time::Instant::now();
-            let due = match stats.last_report {
-                Some(last) => now.duration_since(last) >= TICK_STATS_INTERVAL,
-                None => true,
-            };
-            if !due {
-                return;
-            }
-            let snapshot = *stats;
-            let keep = stats.last_report;
-            *stats = new_tick_stats();
-            stats.last_report = Some(now);
-            let _ = keep;
-            snapshot
-        };
-        let skipped = snapshot
-            .ticks
-            .saturating_sub(snapshot.rendered)
-            .saturating_sub(snapshot.occluded)
-            .saturating_sub(snapshot.light_only);
-        log::info!(
-            "[分类框渲染] 近 {} tick → 实际渲染 {}（光标 {} / 桌面变化 {} / 收敛 {} / 心跳 {}），\
-             仅推进光标插值 {}，静止跳过 {}，遮挡跳过 {}",
-            snapshot.ticks,
-            snapshot.rendered,
-            snapshot.by_cursor,
-            snapshot.by_desktop,
-            snapshot.by_settle,
-            snapshot.by_heartbeat,
-            snapshot.light_only,
-            skipped,
-            snapshot.occluded
-        );
-        // 内存分解单独节流（60 秒一条），与渲染统计错开，
-        // 便于把「渲染量」与「内存去向」两条曲线对齐看。
-        if super::mem_probe::due() {
-            super::mem_probe::log_breakdown();
-        }
-    });
+/// 必须与 `enter_glass_resize_session` 严格配对：漏掉这一步分类框会
+/// 永久以 60Hz 唤醒消息循环，CPU 与内存高水位下不来且不报任何错。
+pub(crate) fn exit_glass_resize_session(hwnd: HWND) {
+    unsafe { KillTimer(hwnd, TIMER_ID_LIQUID_GLASS) };
 }
 
 /// 分类框侧的内存占用快照（只读诊断，供 `mem_probe` 输出）。
@@ -2063,10 +1676,6 @@ pub(crate) struct GridMemoryStats {
     pub items: usize,
     /// DIB 渲染后端合计字节（每个窗口一张 outer_w × outer_h 的 32bpp DIB）
     pub dib_bytes: u64,
-    /// 玻璃像素回读缓冲合计字节
-    pub glass_pixels_bytes: u64,
-    /// 玻璃 D2D 位图合计字节（GPU 侧）
-    pub glass_bitmap_bytes: u64,
     /// 图标位图缓存条目数
     pub icon_bitmap_entries: usize,
     /// 图标位图缓存合计字节（按位图源尺寸计，往往远大于显示尺寸）
@@ -2090,11 +1699,6 @@ pub(crate) fn memory_stats() -> GridMemoryStats {
         if data.dib_w > 0 && data.dib_h > 0 {
             stats.dib_bytes += data.dib_w as u64 * data.dib_h as u64 * 4;
         }
-        stats.glass_pixels_bytes +=
-            data.glass_pixels.len() as u64 * std::mem::size_of::<Pixel32>() as u64;
-        if data.glass_bitmap.is_some() {
-            stats.glass_bitmap_bytes += data.glass_bitmap_w as u64 * data.glass_bitmap_h as u64 * 4;
-        }
         stats.icon_bitmap_entries += data.icon_bitmap_cache.len();
         for bitmap in data.icon_bitmap_cache.values() {
             let size = unsafe { bitmap.GetPixelSize() };
@@ -2105,50 +1709,27 @@ pub(crate) fn memory_stats() -> GridMemoryStats {
 }
 
 pub(crate) fn on_grid_refresh_tick(hwnd: HWND) {
-    {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        static FIRST: AtomicBool = AtomicBool::new(false);
-        if !FIRST.swap(true, Ordering::Relaxed) {
-            log::warn!("[tickdbg] first tick hwnd={:x}", hwnd as usize);
-        }
-    }
-    // 判定与渲染分两步：decide 里持有 data 的可变借用，
-    // 必须先释放才能调 render_layered_window（它会重新取一次 data）。
-    let action = decide_grid_refresh(hwnd);
-    record_tick_stats(action);
-    if matches!(action, TickAction::Render(_)) {
-        // 周期 tick 走「内容层可复用」的入口：拖拽分类框、动态壁纸这些
-        // 高频场景里内容一个像素都没变，变的只有玻璃背景，没必要每帧
-        // 重跑二十几次字形光栅化（实测占整帧 27.6ms 里的 17.4ms）。
-        // 所有显式重绘入口仍然走 render_layered_window（全量重画），
-        // 所以任何状态变化都不会因为复用而漏掉。
-        let dragging =
-            super::wnd_proc::in_modal_move_or_resize() && super::wnd_proc::drag_hwnd() == hwnd;
-        let t0 = std::time::Instant::now();
-        super::d2d_render::render_layered_window_glass_only(hwnd);
-        super::mem_probe::record_drag_frame(hwnd as usize, dragging, t0, t0.elapsed());
-    }
+    follow_glass_session(hwnd);
 }
 
-/// 判断这个 tick 是否真的需要重绘。
+/// 库缩放会话的高频跟随 tick：玻璃块矩形是真值，内容窗口保持相对留白跟随。
 ///
-/// 三层判据，从便宜到昂贵：
-/// 1. **遮挡**：被其他应用窗口完全盖住 → 整条管线都不用跑；
-/// 2. **光标**：移动过或刚停下不久（高光/形变还在插值收敛）；
-/// 3. **桌面脏矩形**：只看这个框自己覆盖的那块桌面变了没。
-///    任务栏时钟、别处光标闪烁都不会再让所有框陪绘。
-///
-/// 另外有两层兜底心跳：正常 10 秒一次，遮挡态下 5 秒一次。
-///
-/// 光标移动只对**光标所在的那个框**构成重绘理由；其余框这一帧画出来
-/// 逐像素相同，只补一次共享高光插值（见 `TickAction::AdvanceLightOnly`）。
-fn decide_grid_refresh(hwnd: HWND) -> TickAction {
+/// 会话的开始由引擎事件回调（`WM_USER_GLASS_RESIZE`）触发；本函数只做
+/// 两件事：①把内容窗口贴到块的当前矩形（物理像素换算，误差 ≤1 帧）；
+/// ②确认会话结束（快照 `resizing` 回落后收尾：卸载定时器、恢复参考线、
+/// 持久化布局）。库画布若被独占全屏让路等原因丢块，同样走收尾路径。
+fn follow_glass_session(hwnd: HWND) {
     let Some(data) = (unsafe { get_data(hwnd) }) else {
-        return TickAction::SkipIdle;
+        return;
     };
-    data.ticks_since_render = data.ticks_since_render.saturating_add(1);
-
-    // 外框矩形取一次，遮挡判定与脏矩形判定都用它
+    let box_id = data.config_id;
+    let Some(content) = super::glass_engine::block_content_rect(box_id) else {
+        if data.glass_session_active {
+            end_glass_resize_session(hwnd);
+        }
+        return;
+    };
+    let padding = data.render_padding;
     let mut outer = RECT {
         left: 0,
         top: 0,
@@ -2156,178 +1737,83 @@ fn decide_grid_refresh(hwnd: HWND) -> TickAction {
         bottom: 0,
     };
     let have_rect = unsafe { GetWindowRect(hwnd, &mut outer) } != 0;
-    // RECT 不是 Copy，后面 `content_rect_with_padding(outer, ..)` 会把它移走，
-    // 而补光标插值时还要用外框坐标，所以在这里先抄一份到函数作用域
-    let (outer_left, outer_top, outer_right, outer_bottom) =
-        (outer.left, outer.top, outer.right, outer.bottom);
-
-    // ===== 1. 全屏遮挡 =====
-    let now = std::time::Instant::now();
-    if now.duration_since(data.occlusion_checked_at) >= super::occlusion::OCCLUSION_CHECK_INTERVAL {
-        data.occlusion_checked_at = now;
-        let occluded = have_rect && super::occlusion::is_window_occluded(hwnd, &outer);
-        if occluded != data.occluded {
-            log::info!(
-                "分类框遮挡状态切换: {} → {}（上方候选窗口已逐个排除自己/不可见/cloaked）",
-                data.occluded,
-                occluded
+    let want = RECT {
+        left: content.left - padding,
+        top: content.top - padding,
+        right: content.right + padding,
+        bottom: content.bottom + padding,
+    };
+    if have_rect
+        && (outer.left != want.left
+            || outer.top != want.top
+            || outer.right - outer.left != want.right - want.left
+            || outer.bottom - outer.top != want.bottom - want.top)
+    {
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                want.left,
+                want.top,
+                want.right - want.left,
+                want.bottom - want.top,
+                SWP_NOZORDER | SWP_NOACTIVATE,
             );
         }
-        data.occluded = occluded;
     }
-    if data.occluded {
-        data.occluded_ticks = data.occluded_ticks.saturating_add(1);
-        if data.occluded_ticks < GLASS_OCCLUDED_HEARTBEAT_TICKS {
-            return TickAction::SkipOccluded;
-        }
-        data.occluded_ticks = 0;
-    } else {
-        data.occluded_ticks = 0;
+    if data.glass_session_active && !super::glass_engine::block_resizing(box_id) {
+        end_glass_resize_session(hwnd);
     }
-
-    // ===== 2. 光标 =====
-    let cursor_pos = cursor_screen_pos();
-    let cursor_moved = match cursor_pos {
-        Some((x, y)) => x != data.last_cursor_x || y != data.last_cursor_y,
-        None => false,
-    };
-    if cursor_moved {
-        data.cursor_idle_ticks = 0;
-    } else {
-        data.cursor_idle_ticks = data.cursor_idle_ticks.saturating_add(1);
-    }
-    // 光标是否落在**本框**外框内（含外投影留白：高光与弹性形变作用在整块玻璃上）。
-    // 判定口径必须与 `GlassRenderer::advance_light` 里的 cursor_in_window 一致，
-    // 否则会出现「该画的不画」或「不该画的白画」。
-    let cursor_inside = match (cursor_pos, have_rect) {
-        (Some((cx, cy)), true) => {
-            cx >= outer.left && cx < outer.right && cy >= outer.top && cy < outer.bottom
-        }
-        _ => false,
-    };
-    if cursor_inside {
-        data.cursor_left_ticks = 0;
-    } else {
-        data.cursor_left_ticks = data.cursor_left_ticks.saturating_add(1);
-    }
-    // 光标在框内、或刚离开不久（还要把残留高光那一帧覆盖掉）时，
-    // 光标移动才与本框有关；否则本框画出来逐像素相同。
-    let cursor_relevant = cursor_inside || data.cursor_left_ticks < CURSOR_LEAVE_SETTLE_TICKS;
-
-    // ===== 3. 桌面脏矩形：只看这个框自己覆盖的区域 =====
-    // 不能调 get_grid_content_rect：它内部会再取一次 data，
-    // 与此处的可变借用冲突，所以直接用 render_padding 算。
-    // 自拖期间桌面背景必变（框在移动），跳过脏矩形+像素指纹两级判定：
-    // 后者每帧一次 GPU 子区域拷贝 + Map 同步，实测是偶发 30ms+ 卡顿的来源之一。
-    let self_dragging =
-        super::wnd_proc::in_modal_move_or_resize() && super::wnd_proc::drag_hwnd() == hwnd;
-    // 自拖期间渲染完全交给 WM_MOVING 的 8ms 节流同步渲染：
-    // tick 再叠一路渲染会让 GPU 提交队列饱和（实测间隔退化到 74-114ms）。
-    let desktop_changed = if self_dragging {
-        false
-    } else if have_rect {
-        // 先把新帧取回来，否则不渲染就永远不知道桌面变了
-        super::liquid_glass::poll_desktop_changes();
-        let content = content_rect_with_padding(outer, data.render_padding);
-        let region = windows::Win32::Foundation::RECT {
-            left: content.left,
-            top: content.top,
-            right: content.right,
-            bottom: content.bottom,
-        };
-        // 两级判定，从便宜到贵：
-        //   1) 脏矩形队列里有没有矩形碰到这个框（纯 CPU，几微秒）；
-        //   2) 碰到了再比这块桌面的**像素**指纹（一次 GPU 子区域拷贝 + Map）。
-        //
-        // 为什么必须有第二级：本机驱动把「桌面每秒整块重绘一次」报成
-        // 一个覆盖整个输出的矩形，第一级于是永远命中，5 个框每秒陪绘
-        // 5 次。实测把渲染频率从 5 次/秒拉到 24.5 次/秒，取帧率纹丝不动，
-        // 说明那个整屏 present 来自外部、驱动给不出空间粒度 ——
-        // 只有比像素才能拿到真正的按框粒度。
-        //
-        // 两级任一不确定都保守放行（`region_changed_since` 的兜底、
-        // `desktop_region_changed` 失败时返回 true），再加上周期心跳，
-        // 最坏情况只是多画一帧或滞后一个心跳，绝不会永久停在旧画面。
-        super::liquid_glass::region_changed_since(&region, data.last_desktop_generation)
-            && super::liquid_glass::desktop_region_changed(&region)
-    } else {
-        // 拿不到矩形就不猜，照常渲染
-        true
-    };
-
-    let action = decide_tick_action(
-        if self_dragging { false } else { cursor_moved },
-        desktop_changed,
-        data.cursor_idle_ticks,
-        data.ticks_since_render,
-        cursor_relevant,
-    );
-    if let TickAction::AdvanceLightOnly = action {
-        // 旧逻辑在这一帧会重绘，而重绘会顺带把全局共享的 light_direction
-        // 朝 0 拉一次。直接跳过会改变插值序列、让光标所在框的高光
-        // 突然变亮约 3.8 倍，所以这里补一次「只推进插值、不重绘」。
-        let padding = data.render_padding;
-        let content_w = (outer_right - outer_left) - padding * 2;
-        let content_h = (outer_bottom - outer_top) - padding * 2;
-        super::liquid_glass::advance_light_direction(
-            outer_left, outer_top, content_w, content_h, padding,
-        );
-    }
-    action
 }
 
-/// 保持分类框内容矩形不动，按当前液态玻璃开关重设分层窗口外框。
-///
-/// 玻璃关闭后 128 逻辑像素的外投影留白失去意义，必须同步收缩窗口外框，
-/// 否则每帧 DIB、DWM 重定向表面与命中测试区域仍按放大 3 倍的面积分配。
-/// 内容矩形保持不变 = 用户看到的分类框位置尺寸完全不受开关影响。
-pub(crate) fn sync_grid_window_padding(hwnd: HWND) {
-    let dpi = unsafe { GetDpiForWindow(hwnd) };
-    let dpi = if dpi > 0 { dpi } else { 96 };
-
-    let mut rect = RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
+/// 进入库缩放会话（由 `WM_USER_GLASS_RESIZE` wParam=1 触发）。
+pub(crate) fn begin_glass_resize_session(hwnd: HWND) {
+    let Some(data) = (unsafe { get_data(hwnd) }) else {
+        return;
     };
-    if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
+    if data.glass_session_active {
         return;
     }
+    data.glass_session_active = true;
+    enter_glass_resize_session(hwnd);
+    super::alignment_guide::on_enter_size_move(hwnd);
+    log::debug!("分类框进入库缩放会话");
+}
 
-    let old_padding = unsafe { get_data(hwnd) }
-        .map(|data| data.render_padding)
-        .unwrap_or(0);
-    let new_padding = shadow_padding_for_dpi(dpi);
-    if new_padding == old_padding {
+/// 退出库缩放会话（tick 确认快照 `resizing` 回落，或 wParam=0 事件兜底）。
+pub(crate) fn end_glass_resize_session(hwnd: HWND) {
+    let Some(data) = (unsafe { get_data(hwnd) }) else {
+        return;
+    };
+    if !data.glass_session_active {
         return;
     }
-
-    let content = content_rect_with_padding(rect, old_padding);
-    // 先写回新留白：SetWindowPos 会同步派发 WM_SIZE，
-    // 处理函数按 render_padding 反算内容矩形，必须已经是新值。
-    if let Some(data) = unsafe { get_data(hwnd) } {
-        data.render_padding = new_padding;
+    data.glass_session_active = false;
+    exit_glass_resize_session(hwnd);
+    // 最后做一次几何同步，避免内容窗口停在落后玻璃块不足一 tick 的位置。
+    if let Some(content) = super::glass_engine::block_content_rect(data.config_id) {
+        let padding = data.render_padding;
+        let want = RECT {
+            left: content.left - padding,
+            top: content.top - padding,
+            right: content.right + padding,
+            bottom: content.bottom + padding,
+        };
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                want.left,
+                want.top,
+                want.right - want.left,
+                want.bottom - want.top,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
     }
-    unsafe {
-        SetWindowPos(
-            hwnd,
-            std::ptr::null_mut(),
-            content.left - new_padding,
-            content.top - new_padding,
-            (content.right - content.left) + new_padding * 2,
-            (content.bottom - content.top) + new_padding * 2,
-            SWP_NOZORDER | SWP_NOACTIVATE,
-        );
-    }
-    log::info!(
-        "分类框外投影留白切换: {} → {} (dpi={})",
-        old_padding,
-        new_padding,
-        dpi
-    );
-    // 留白变了 → 分层位图尺寸变了 → 立即重绘一帧，避免残留旧画面
-    render_layered_window(hwnd);
+    super::alignment_guide::on_exit_size_move(hwnd);
+    super::drag_handler::save_config();
+    log::debug!("分类框退出库缩放会话，布局已持久化");
 }
 
 /// 向所有分类框广播一条自定义消息（异步，不等待对方线程）。
@@ -2347,11 +1833,6 @@ fn post_to_all_grid_windows(message: u32) {
     for hwnd in hwnds {
         unsafe { PostMessageW(hwnd, message, 0, 0) };
     }
-}
-
-/// 液态玻璃开关变化后，同步所有分类框的留白与周期重绘定时器。
-pub fn sync_all_grid_windows_to_glass_state() {
-    post_to_all_grid_windows(WM_USER_GRID_SYNC_GLASS);
 }
 
 /// 请求所有分类框异步重绘一帧（配置里只改了颜色/圆角等样式时使用）。
@@ -2521,270 +2002,18 @@ mod tests {
     use super::super::grid_layout::{lock_btn_rect, more_btn_rect};
     use super::*;
 
-    /// 四个条件的优先级必须与判定一致：光标 > 桌面变化 > 收敛 > 心跳。
+    /// 引擎架构下分类框内容窗口不再预留任何外投影留白（恒为 0）。
     ///
-    /// 排错顺序会让统计把「脏矩形退化」误报成「光标在动」，
-    /// 那就再也看不出按框判定有没有失效了。
+    /// 外投影与玻璃底板由 liquid-verre-rs 画布渲染在块矩形之外，
+    /// 内容窗口面积与留白彻底解耦；回退 D2D 背景同样不画投影。
     #[test]
-    fn render_reason_priority_matches_decision() {
-        // 全部命中时取最靠前的
-        assert_eq!(
-            pick_render_reason(true, true, 0, GLASS_FORCE_RENDER_TICKS),
-            Some(RenderReason::Cursor)
-        );
-        // 光标没动，才轮到桌面变化
-        assert_eq!(
-            pick_render_reason(false, true, 0, GLASS_FORCE_RENDER_TICKS),
-            Some(RenderReason::DesktopChanged)
-        );
-        assert_eq!(
-            pick_render_reason(false, false, 0, GLASS_FORCE_RENDER_TICKS),
-            Some(RenderReason::Settle)
-        );
-        assert_eq!(
-            pick_render_reason(
-                false,
-                false,
-                GLASS_CURSOR_SETTLE_TICKS,
-                GLASS_FORCE_RENDER_TICKS
-            ),
-            Some(RenderReason::Heartbeat)
-        );
-    }
-
-    /// # 穷举证明：新判定与旧判定的**渲染集合**只差一种组合
-    ///
-    /// 这条是「少画 4/5 帧但不改变画面」的全部依据。旧规则是
-    /// `cursor_moved || desktop_changed || 光标收敛中 || 心跳到期`
-    /// 四个条件的或；新规则只允许在
-    /// 「仅因光标而触发 && 光标与本框无关 && 没有别的理由」这一种组合下
-    /// 把重绘降级成"只推进共享高光插值"，其余任何组合都必须与旧规则一致。
-    /// 32 种组合全部枚举，任何一种越界都会当场失败。
-    #[test]
-    fn decide_tick_action_only_diverges_on_irrelevant_cursor() {
-        for cursor_moved in [false, true] {
-            for desktop_changed in [false, true] {
-                for idle in [0u32, GLASS_CURSOR_SETTLE_TICKS] {
-                    for since in [0u32, GLASS_FORCE_RENDER_TICKS] {
-                        for relevant in [false, true] {
-                            let action = decide_tick_action(
-                                cursor_moved,
-                                desktop_changed,
-                                idle,
-                                since,
-                                relevant,
-                            );
-                            let cursor_driven = cursor_moved || idle < GLASS_CURSOR_SETTLE_TICKS;
-                            let must_render = desktop_changed || since >= GLASS_FORCE_RENDER_TICKS;
-                            let old_would_render = cursor_driven || must_render;
-                            let ctx = format!(
-                                "cursor_moved={cursor_moved} desktop_changed={desktop_changed} \
-                                 idle={idle} since={since} relevant={relevant}"
-                            );
-                            match action {
-                                TickAction::Render(_) => {
-                                    assert!(old_would_render, "旧规则不会渲染却渲染了: {ctx}");
-                                }
-                                TickAction::AdvanceLightOnly => {
-                                    assert!(
-                                        old_would_render,
-                                        "只推进插值的前提是旧规则本来会渲染: {ctx}"
-                                    );
-                                    assert!(
-                                        cursor_driven && !relevant && !must_render,
-                                        "只有「仅光标触发且与本框无关」才允许降级: {ctx}"
-                                    );
-                                }
-                                TickAction::SkipIdle => {
-                                    assert!(!old_would_render, "旧规则会渲染却整帧跳过了: {ctx}");
-                                }
-                                TickAction::SkipOccluded => {
-                                    panic!("decide_tick_action 不该产出遮挡跳过: {ctx}")
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// 光标在别处移动时：本框不重绘，但必须仍推进一次共享高光插值。
-    ///
-    /// 少推进就会改变 `light_direction` 的插值序列，光标所在框的高光
-    /// 会突然变亮约 3.8 倍 —— 那是肉眼可见的画面变化，不是优化。
-    #[test]
-    fn cursor_elsewhere_advances_light_without_rendering() {
-        let action = decide_tick_action(
-            true,  // 光标动了
-            false, // 桌面没变
-            GLASS_CURSOR_SETTLE_TICKS,
-            0,
-            false, // 光标与本框无关
-        );
-        assert_eq!(action, TickAction::AdvanceLightOnly);
-        // 同样的输入，只要光标与本框有关就必须重绘
-        assert_eq!(
-            decide_tick_action(true, false, GLASS_CURSOR_SETTLE_TICKS, 0, true),
-            TickAction::Render(RenderReason::Cursor)
-        );
-    }
-
-    /// 桌面变化与心跳到期时，即使光标与本框无关也**必须重绘**：
-    /// 这两条是「背景真的变了」和「兜底自愈」，降级成只推进插值就会漏更新。
-    /// 这里只断言"渲染了"，不钉死具体原因 —— 原因的优先级由
-    /// `pick_render_reason` 自己的测试保证。
-    #[test]
-    fn desktop_change_and_heartbeat_win_over_cursor_filter() {
-        // 桌面变了 + 光标在别处动 → 必须重绘
-        assert!(
-            matches!(
-                decide_tick_action(true, true, GLASS_CURSOR_SETTLE_TICKS, 0, false),
-                TickAction::Render(_)
-            ),
-            "桌面变化时必须重绘，不能降级成只推进插值"
-        );
-        // 桌面变了 + 光标没动 → 必须重绘
-        assert!(
-            matches!(
-                decide_tick_action(false, true, GLASS_CURSOR_SETTLE_TICKS, 0, false),
-                TickAction::Render(_)
-            ),
-            "桌面变化时必须重绘（光标没动也一样）"
-        );
-        // 只有心跳到期 → 必须重绘
-        assert!(
-            matches!(
-                decide_tick_action(
-                    false,
-                    false,
-                    GLASS_CURSOR_SETTLE_TICKS,
-                    GLASS_FORCE_RENDER_TICKS,
-                    false
-                ),
-                TickAction::Render(_)
-            ),
-            "心跳到期时必须重绘，这是漏更新的最后兜底"
-        );
-        // 心跳没到期、桌面没变、光标在别处 → 这才是唯一允许降级的组合
-        assert_eq!(
-            decide_tick_action(false, false, GLASS_CURSOR_SETTLE_TICKS, 0, false),
-            TickAction::SkipIdle,
-            "四条都不成立时必须整帧跳过"
-        );
-    }
-
-    /// 四条都不成立时必须能整帧省掉 —— 这是脏矩形方案省渲染的落点。
-    #[test]
-    fn render_reason_is_none_when_nothing_changed() {
-        assert_eq!(
-            pick_render_reason(false, false, GLASS_CURSOR_SETTLE_TICKS, 0),
-            None
-        );
-        assert_eq!(
-            pick_render_reason(
-                false,
-                false,
-                GLASS_CURSOR_SETTLE_TICKS,
-                GLASS_FORCE_RENDER_TICKS - 1
-            ),
-            None
-        );
-    }
-
-    /// 静止桌面上渲染次数必须只由心跳决定：5 个框、10 秒心跳、30 秒窗口
-    /// = 15 次。这条是把实测数字钉成断言，回归时一眼就能看出退化。
-    #[test]
-    fn idle_desktop_renders_only_heartbeat() {
-        const BOXES: u64 = 5;
-        const WINDOW_SECS: u64 = 30;
-        const TICK_MS: u64 = 40;
-        let mut heartbeat = 0u64;
-        for _ in 0..BOXES {
-            let ticks = WINDOW_SECS * 1000 / TICK_MS;
-            //  faithfully 复刻 decide_grid_refresh：计数器每 tick 先自增，
-            //  渲染后由 note_grid_frame_rendered 清零
-            let mut ticks_since_render = 0u32;
-            for _ in 0..ticks {
-                ticks_since_render = ticks_since_render.saturating_add(1);
-                if pick_render_reason(false, false, GLASS_CURSOR_SETTLE_TICKS, ticks_since_render)
-                    == Some(RenderReason::Heartbeat)
-                {
-                    heartbeat += 1;
-                    ticks_since_render = 0;
-                }
-            }
-        }
-        assert_eq!(
-            heartbeat,
-            BOXES * (WINDOW_SECS * 1000 / TICK_MS) / GLASS_FORCE_RENDER_TICKS as u64,
-            "静止桌面的渲染次数应当正好等于心跳次数"
-        );
-    }
-
-    #[test]
-    fn glass_shadow_padding_preserves_content_rect_at_96_dpi() {
-        let outer = RECT {
-            left: 72,
-            top: 172,
-            right: 728,
-            bottom: 828,
-        };
-        let content = content_rect_with_padding(outer, glass_shadow_padding_at_dpi(96));
-
-        // padding = 48 逻辑像素（2026-09-14 收缩：参照帧 alpha 剖面
-        // 证明 96 物理像素之外的外投影 alpha ≤ 1/255 不可见）。
-        assert_eq!(content.left, 120);
-        assert_eq!(content.top, 220);
-        assert_eq!(content.right, 680);
-        assert_eq!(content.bottom, 780);
-        assert_eq!(client_to_content_point_with_padding(48, 48, 48), (0, 0));
-        assert_eq!(
-            client_to_content_point_with_padding(48, 448, 448),
-            (400, 400)
-        );
-    }
-
-    #[test]
-    fn glass_shadow_padding_scales_with_dpi() {
-        assert_eq!(glass_shadow_padding_at_dpi(96), 48);
-        assert_eq!(glass_shadow_padding_at_dpi(144), 72);
-        assert_eq!(glass_shadow_padding_at_dpi(192), 96);
-        let content = content_rect_with_padding(
-            RECT {
-                left: -92,
-                top: 8,
-                right: 692,
-                bottom: 792,
-            },
-            glass_shadow_padding_at_dpi(144),
-        );
-
-        assert_eq!(content.left, -20);
-        assert_eq!(content.top, 80);
-        assert_eq!(content.right, 620);
-        assert_eq!(content.bottom, 720);
-        assert_eq!(client_to_content_point_with_padding(72, 72, 72), (0, 0));
-    }
-
-    /// 液态玻璃关闭时不得预留任何外投影留白。
-    ///
-    /// 留白只服务于玻璃着色器画到内容矩形之外的外投影；关闭后继续保留会把
-    /// 每帧 DIB、DWM 重定向表面和命中测试区域一起放大到内容面积的 3 倍以上
-    /// （200% DPI 下 5 个分类框每帧 23MB → 7MB）。
-    #[test]
-    fn shadow_padding_follows_liquid_glass_switch() {
-        let enabled = super::super::liquid_glass::get_liquid_glass_config().enabled;
+    fn shadow_padding_is_always_zero_in_engine_architecture() {
         for dpi in [96u32, 120, 144, 192] {
-            if enabled {
-                assert_eq!(
-                    shadow_padding_for_dpi(dpi),
-                    glass_shadow_padding_at_dpi(dpi),
-                    "玻璃开启时留白应等于 DPI 换算值"
-                );
-            } else {
-                assert_eq!(shadow_padding_for_dpi(dpi), 0, "玻璃关闭时留白必须为 0");
-            }
+            assert_eq!(
+                shadow_padding_for_dpi(dpi),
+                0,
+                "引擎架构下内容窗口留白恒为 0"
+            );
         }
     }
 
@@ -2957,51 +2186,9 @@ mod tests {
 
 #[cfg(test)]
 mod liquid_glass_timer_tests {
-    use super::{LIQUID_GLASS_DRAG_INTERVAL_MS, LIQUID_GLASS_RENDER_INTERVAL_MS};
+    use super::LIQUID_GLASS_DRAG_INTERVAL_MS;
 
-    /// 验证液态玻璃渲染定时器间隔已从 33ms 提升到 100ms
-    /// 静止档 40ms = 25fps：用户要求的液态玻璃背景帧率下限；
-    /// 拖拽档另有 16ms 高频路径。真正的省电手段是心跳
-    /// GLASS_FORCE_RENDER_TICKS=250 tick（10 秒），而不是拉长档位间隔。
-    #[test]
-    fn test_liquid_glass_render_interval() {
-        // 静止档 40ms = 25fps：用户要求的液态玻璃背景帧率下限。
-        assert_eq!(
-            LIQUID_GLASS_RENDER_INTERVAL_MS, 40,
-            "静止档渲染间隔应为 40ms（25fps 下限）"
-        );
-    }
-
-    /// 验证渲染间隔不低于合理下限（避免过于频繁的渲染）
-    #[test]
-    fn test_liquid_glass_render_interval_minimum() {
-        assert!(
-            LIQUID_GLASS_RENDER_INTERVAL_MS >= 33,
-            "静止档不应快于 ~30fps，避免空转 GPU"
-        );
-    }
-
-    /// 验证渲染间隔不超过合理上限（避免明显卡顿）
-    #[test]
-    fn test_liquid_glass_render_interval_maximum() {
-        assert!(
-            LIQUID_GLASS_RENDER_INTERVAL_MS <= 200,
-            "渲染间隔不应超过 200ms，避免视觉卡顿"
-        );
-    }
-
-    /// 拖拽档必须显著快于静止档，否则「拖拽走高频路径」等于没做。
-    #[test]
-    fn drag_interval_is_faster_than_idle_interval() {
-        assert!(
-            LIQUID_GLASS_DRAG_INTERVAL_MS < LIQUID_GLASS_RENDER_INTERVAL_MS,
-            "拖拽档 {}ms 必须小于静止档 {}ms",
-            LIQUID_GLASS_DRAG_INTERVAL_MS,
-            LIQUID_GLASS_RENDER_INTERVAL_MS
-        );
-    }
-
-    /// 拖拽档必须能支撑「至少 25 帧」的下限。
+    /// 会话跟随档必须能支撑「至少 25 帧」的下限。
     ///
     /// Windows 定时器默认粒度约 15.6ms：请求值小于粒度时实际按粒度触发，
     /// 因此真实间隔上限是 `max(请求值, 15.6)` 再向上取一个粒度。
@@ -3012,16 +2199,16 @@ mod liquid_glass_timer_tests {
         let fps = 1000.0 / worst_case_ms;
         assert!(
             fps >= 25.0,
-            "拖拽档最坏情况 {fps:.1}fps 低于 25fps 下限（间隔 {worst_case_ms:.1}ms）"
+            "跟随档最坏情况 {fps:.1}fps 低于 25fps 下限（间隔 {worst_case_ms:.1}ms）"
         );
     }
 
-    /// 拖拽档不能快到把定时器打成忙等：请求值不低于 8ms。
+    /// 跟随档不能快到把定时器打成忙等：请求值不低于 8ms。
     #[test]
     fn drag_interval_is_not_busy_loop() {
         assert!(
             LIQUID_GLASS_DRAG_INTERVAL_MS >= 8,
-            "拖拽档 {}ms 过短，会退化成忙等",
+            "跟随档 {}ms 过短，会退化成忙等",
             LIQUID_GLASS_DRAG_INTERVAL_MS
         );
     }

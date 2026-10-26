@@ -194,7 +194,6 @@ pub(crate) fn end_drag(hwnd: HWND) -> bool {
 
     let item_idx = data.drag_item_index;
     data.drag_active = false;
-    super::mem_probe::flush_drag_stats();
     data.drag_item_index = -1;
     // 物品拖拽结束同样释放全屏参考线 overlay。
     unsafe {

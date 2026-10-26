@@ -323,116 +323,420 @@ impl BoxStyleConfig {
             .border_radius
             .clamp(0.0, LIQUID_GLASS_CORNER_RADIUS_MAX);
         self.liquid_glass.normalize();
-        self.liquid_glass.corner_radius = self.border_radius;
+        // 透明模式圆角继续跟随分类框整体圆角（保持旧版联动）；液态模式圆角独立可调。
+        self.liquid_glass.transparent.corner_radius = self.border_radius;
         *self != before
     }
 }
 
 // =============================================================================
-// LiquidGlassConfig - 液态玻璃渲染参数（对齐 liquid-glass-rs EffectStyle）
+// LiquidGlassConfig - 液态玻璃配置（liquid-verre-rs 引擎，参数镜像库 API）
 // =============================================================================
 
-/// 液态玻璃圆角半径的控制面板与渲染上限。
+/// 分类框控制面板圆角半径上限（`border_radius` 的旧联动量纲，保留兼容）。
 pub const LIQUID_GLASS_CORNER_RADIUS_MAX: f32 = 30.0;
-/// 弹性形变系数最大值
-pub const LIQUID_GLASS_ELASTICITY_MAX: f32 = 0.2;
 
-/// 液态玻璃渲染参数，对齐 liquid-glass-rs FrostedLiquid 示例的 EffectStyle。
-///
-/// - 滑块参数通过 LiquidGlassParam 枚举访问
-/// - enabled 和 over_light 为 bool，通过独立方法访问
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct LiquidGlassConfig {
-    /// 液态玻璃效果开关
-    pub enabled: bool,
-    /// 位移强度（示例滑块 0~200），默认 100.0
-    pub displacement_scale: f32,
-    /// 模糊程度（示例滑块 0~1），默认 0.5
-    pub blur_amount: f32,
-    /// 饱和度（示例滑块 1~3），默认 1.40
-    pub saturation: f32,
-    /// 色差偏移（示例滑块 0~20），默认 2.0
-    pub chromatic_offset: f32,
-    /// 圆角半径（控制面板范围 0~30），默认 30.0
-    pub corner_radius: f32,
-    /// 弹性形变系数（示例滑块 0~1），默认 0.0
-    pub elasticity: f32,
-    /// 法线贴图模式：0=标准, 1=极坐标, 2=凸起, 3=程序化
-    pub refraction_mode: u32,
-    /// 亮区减弱折射（在明亮区域降低位移强度）
-    pub over_light: bool,
+/// 玻璃形状模式（对应 `liquid_verre::Shape`）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum GlassShape {
+    /// 圆角矩形（精确欧氏 SDF）
+    #[default]
+    RoundedRect,
+    /// 超椭圆 squircle（曲率连续）
+    Squircle,
 }
 
-impl Default for LiquidGlassConfig {
+/// 斜面剖面类型（对应 `liquid_verre::Profile`，决定折射 LUT 的形状）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum GlassProfile {
+    /// 圆形：边缘圆滑、放大感强（默认）
+    #[default]
+    Circular,
+    /// 抛物线：位移线性，性能最好
+    Parabolic,
+    /// 正弦：过渡最柔和
+    Sinusoidal,
+}
+
+/// 桌面采集后端偏好（对应 `liquid_verre::CaptureBackend`，引擎重建后生效）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum GlassCaptureBackend {
+    /// 自动：HDR 输出走 WGC，SDR 输出 DDA 优先、失败回退 WGC
+    #[default]
+    Auto,
+    /// 强制 DXGI Desktop Duplication
+    ForceDda,
+    /// 强制 Windows.Graphics.Capture
+    ForceWgc,
+}
+
+/// 液态玻璃模式全部可调参数（镜像 `liquid_verre::LiquidParams` 共 37 项）。
+///
+/// 字段含义与夹紧区间与库 `sanitize()` 一致；长度量纲为逻辑像素。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GlassLiquidParams {
+    // ---- 几何 ----
+    /// 圆角半径（0~400）
+    pub corner_radius: f32,
+    /// 斜面覆盖：0=仅边缘细带，1=覆盖整块（0~1）
+    pub lens_coverage: f32,
+    /// 边缘斜面带宽（1~400）
+    pub bevel_width: f32,
+    /// 形状模式
+    pub shape: GlassShape,
+    /// 超椭圆指数（Squircle 时生效，2~10）
+    pub super_n: f32,
+    /// 斜面剖面
+    pub profile: GlassProfile,
+
+    // ---- 折射 ----
+    /// 玻璃折射率 IOR（1.0~2.0）
+    pub ior: f32,
+    /// 等效厚度（0~600）
+    pub thickness: f32,
+    /// 折射强度（0~2）
+    pub refr_strength: f32,
+    /// RGB 色散（0~1）
+    pub dispersion: f32,
+    /// Beer-Lambert 吸收强度（0~2）
+    pub absorption: f32,
+
+    // ---- 毛玻璃 ↔ 全透 ----
+    /// 清晰度：0=毛玻璃，1=全透折射（0~1）
+    pub clarity: f32,
+    /// 最大模糊半径（0~96）
+    pub blur_max: f32,
+    /// 最小模糊半径（0~48，且不大于 blur_max）
+    pub blur_min: f32,
+    /// 渐进曲线指数（0~8）
+    pub progressive_curve: f32,
+    /// 边缘始终保留的清晰折射（0~1）
+    pub edge_always: f32,
+
+    // ---- 染色 ----
+    /// 染色不透明度（0~1）
+    pub tint_opacity: f32,
+    /// 自适应染色（按环境亮度，0~1）
+    pub adaptive_tint: f32,
+    /// 基础 alpha（0~1）
+    pub base_alpha: f32,
+    /// 染色颜色 RGBA（每通道 0~1）
+    pub tint_color: [f32; 4],
+    /// 环境色混入比例（0~1）
+    pub env_tint_mix: f32,
+
+    // ---- 光照 ----
+    /// 主光方向（指向光，入库前归一化）
+    pub light_dir: [f32; 3],
+    /// 主光强度（0~4）
+    pub light_intensity: f32,
+    /// 高光强度（0~4）
+    pub spec_intensity: f32,
+    /// 高光指数（1~512）
+    pub spec_power: f32,
+    /// 高光扩散（0~1）
+    pub spec_spread: f32,
+    /// Fresnel F0（0~1）
+    pub fresnel_f0: f32,
+    /// 描边宽度（0~16）
+    pub rim_width: f32,
+    /// 焦散增益（0~4）
+    pub caustic_gain: f32,
+
+    // ---- 鼠标点光 ----
+    /// 鼠标半径（20~1200）
+    pub mouse_radius: f32,
+    /// 鼠标强度（0~4）
+    pub mouse_intensity: f32,
+    /// 鼠标高光扩散（4~400）
+    pub mouse_spread: f32,
+    /// 鼠标高光颜色 RGB（每通道 0~1）
+    pub mouse_color: [f32; 3],
+    /// 邻近余晖（0~2）
+    pub proximity_glow: f32,
+
+    // ---- 其他 ----
+    /// 阴影不透明度（0~1）
+    pub shadow_opacity: f32,
+    /// 阴影边距（0~96）
+    pub shadow_margin: f32,
+    /// 拖拽滞后补偿秒数（0~0.1）
+    pub lag_seconds: f32,
+}
+
+impl Default for GlassLiquidParams {
     fn default() -> Self {
+        // 默认值对齐 liquid-verre-rs v0.4.2 的 Apple 风格液态玻璃稳态基线，
+        // 仅 corner_radius 取 16.0 以兼容本项目旧面板的圆角联动。
         Self {
-            enabled: false,
-            displacement_scale: 50.0,
-            blur_amount: 0.3,
-            saturation: 1.5,
-            chromatic_offset: 5.0,
             corner_radius: 16.0,
-            elasticity: 0.02,
-            refraction_mode: 0,
-            over_light: false,
+            lens_coverage: 0.15,
+            bevel_width: 26.0,
+            shape: GlassShape::RoundedRect,
+            super_n: 4.0,
+            profile: GlassProfile::Circular,
+
+            ior: 1.50,
+            thickness: 26.0,
+            refr_strength: 1.0,
+            dispersion: 0.25,
+            absorption: 0.18,
+
+            clarity: 0.10,
+            blur_max: 20.0,
+            blur_min: 2.4,
+            progressive_curve: 1.6,
+            edge_always: 0.55,
+
+            tint_opacity: 0.01,
+            adaptive_tint: 0.35,
+            base_alpha: 1.0,
+            tint_color: [0.92, 0.95, 1.0, 1.0],
+            env_tint_mix: 0.25,
+
+            light_dir: [-0.45, -0.72, 0.53],
+            light_intensity: 1.0,
+            spec_intensity: 0.85,
+            spec_power: 42.0,
+            spec_spread: 0.20,
+            fresnel_f0: 0.14,
+            rim_width: 1.5,
+            caustic_gain: 0.55,
+
+            mouse_radius: 220.0,
+            mouse_intensity: 1.35,
+            mouse_spread: 160.0,
+            mouse_color: [1.0, 1.0, 1.0],
+            proximity_glow: 0.35,
+
+            shadow_opacity: 0.10,
+            shadow_margin: 24.0,
+            lag_seconds: 0.012,
         }
     }
 }
 
-/// 液态玻璃参数标识（bool 字段 enabled/over_light 通过独立方法访问）
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum LiquidGlassParam {
-    DisplacementScale,
-    BlurAmount,
-    Saturation,
-    ChromaticOffset,
-    CornerRadius,
-    Elasticity,
-    RefractionMode,
+/// 透明玻璃模式全部参数（镜像 `liquid_verre::TransparentParams`）。
+///
+/// 液态玻璃关闭时使用：由引擎绘制圆角半透明底板，取代旧 D2D 回退背景。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GlassTransparentParams {
+    /// 圆角半径（0~400，逻辑像素）
+    pub corner_radius: f32,
+    /// 玻璃透明度 0~1：0=完全透明，1=完全不透明
+    pub opacity: f32,
+    /// 玻璃颜色 RGBA（每通道 0~1，alpha 与 opacity 相乘）
+    pub color: [f32; 4],
+}
+
+impl Default for GlassTransparentParams {
+    fn default() -> Self {
+        // 兼容旧默认：background_color 白、background_alpha 38/255≈0.15、border_radius 16
+        Self {
+            corner_radius: 16.0,
+            opacity: 0.15,
+            color: [1.0, 1.0, 1.0, 1.0],
+        }
+    }
+}
+
+/// 缩放悬停加粗 border 视觉反馈（镜像 `liquid_verre::ResizeFeedbackOptions`）。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GlassResizeFeedback {
+    /// 是否启用 border 反馈（关掉后仍可拖拽，只是无视觉提示）
+    pub enabled: bool,
+    /// border 细度（逻辑像素，0.5~32）
+    pub border_width: f32,
+    /// border 不透明度（0~1）
+    pub alpha: f32,
+    /// border 颜色 RGB（每通道 0~1）
+    pub color: [f32; 3],
+}
+
+impl Default for GlassResizeFeedback {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            border_width: 5.0,
+            alpha: 1.0,
+            color: [1.0, 1.0, 1.0],
+        }
+    }
+}
+
+/// 边缘/对角拖拽缩放交互（镜像 `liquid_verre::ResizeOptions`）。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GlassResizeConfig {
+    /// 总开关。关掉后玻璃块退化为只能拖位置
+    pub enabled: bool,
+    /// 允许四边拖拽缩放（左/右/上/下）
+    pub edges: bool,
+    /// 允许对角拖拽缩放（四个圆角）
+    pub corners: bool,
+    /// 把手带宽（逻辑像素，2~128，对角命中后为角部 grip x grip 方块）
+    pub grip_px: f32,
+    /// 缩放后最小宽（逻辑像素，8~4096）
+    pub min_width: f32,
+    /// 缩放后最小高（逻辑像素，8~4096）
+    pub min_height: f32,
+    /// 悬停时的加粗 border 视觉反馈
+    pub feedback: GlassResizeFeedback,
+}
+
+impl Default for GlassResizeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            edges: true,
+            corners: true,
+            grip_px: 10.0,
+            min_width: 24.0,
+            min_height: 24.0,
+            feedback: GlassResizeFeedback::default(),
+        }
+    }
+}
+
+/// 引擎级配置（对应 `liquid_verre::EngineConfig` 子集，改动后触发引擎自动重建）。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GlassEngineConfig {
+    /// 桌面采集后端偏好（引擎重建后生效）
+    pub capture_backend: GlassCaptureBackend,
+    /// 自适应质量控制器（GPU 负载高时自动降档）
+    pub adaptive_quality: bool,
+    /// 遮挡剔除：玻璃块被上层不透明窗口完整覆盖时暂停该块驱动
+    pub occlusion_culling: bool,
+    /// 独占全屏让路：检测到全屏应用时临时隐藏画布
+    pub fullscreen_hide: bool,
+    /// 帧率上限（0 = 跟随显示器刷新率，1~1000）
+    pub fps_cap: u32,
+    /// 画布限制在前 N 块显示器（0 = 全部）
+    pub monitor_limit: u32,
+}
+
+impl Default for GlassEngineConfig {
+    fn default() -> Self {
+        Self {
+            capture_backend: GlassCaptureBackend::default(),
+            adaptive_quality: true,
+            occlusion_culling: true,
+            fullscreen_hide: true,
+            fps_cap: 0,
+            monitor_limit: 0,
+        }
+    }
+}
+
+/// 液态玻璃配置（JSON 键 `box_style.liquid_glass`）。
+///
+/// - `enabled=true`：引擎以液态玻璃模式渲染分类框底板（`liquid` 参数组）；
+/// - `enabled=false`：引擎以透明玻璃模式渲染（`transparent` 参数组）；
+/// - 两种模式都由 liquid-verre-rs 承担拖拽移动与边缘缩放交互；
+/// - 引擎初始化失败时优雅降级回 D2D 回退背景与原生拖拽/缩放。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LiquidGlassConfig {
+    /// 液态玻璃效果开关（true=液态模式，false=透明模式）
+    pub enabled: bool,
+    /// 液态模式参数（37 项）
+    pub liquid: GlassLiquidParams,
+    /// 透明模式参数
+    pub transparent: GlassTransparentParams,
+    /// 缩放交互与视觉反馈
+    pub resize: GlassResizeConfig,
+    /// 引擎级参数（改动触发引擎重建）
+    pub engine: GlassEngineConfig,
+}
+
+/// NaN / inf 安全夹紧（与 liquid-verre-rs `clamp_finite` 同语义）。
+///
+/// `f32::clamp` 对 NaN 原样透传（NaN 与任何边界比较都是 false），
+/// 一旦流入 GPU 会让 SDF 运算整体失效且极难排查；非法输入一律收敛到边界。
+fn clamp_finite_glass(v: f32, lo: f32, hi: f32) -> f32 {
+    if v.is_nan() {
+        lo
+    } else if v == f32::INFINITY {
+        hi
+    } else if v == f32::NEG_INFINITY {
+        lo
+    } else {
+        v.clamp(lo, hi)
+    }
 }
 
 impl LiquidGlassConfig {
-    /// 将持久化或外部传入的配置收敛到当前支持范围。
+    /// 将持久化或外部传入的配置收敛到库支持的合法区间（镜像库 sanitize() 边界）。
     pub(crate) fn normalize(&mut self) {
-        let corner_radius = self.corner_radius;
-        self.set_param(LiquidGlassParam::CornerRadius, corner_radius);
-        let elasticity = self.elasticity;
-        self.set_param(LiquidGlassParam::Elasticity, elasticity);
-    }
-
-    /// 设置液态玻璃参数
-    pub fn set_param(&mut self, param: LiquidGlassParam, value: f32) {
-        match param {
-            LiquidGlassParam::DisplacementScale => {
-                self.displacement_scale = value.clamp(0.0, 200.0)
-            }
-            LiquidGlassParam::BlurAmount => self.blur_amount = value.clamp(0.0, 1.0),
-            LiquidGlassParam::Saturation => self.saturation = value.clamp(1.0, 3.0),
-            LiquidGlassParam::ChromaticOffset => self.chromatic_offset = value.clamp(0.0, 20.0),
-            LiquidGlassParam::CornerRadius => {
-                self.corner_radius = value.clamp(0.0, LIQUID_GLASS_CORNER_RADIUS_MAX)
-            }
-            LiquidGlassParam::Elasticity => {
-                self.elasticity = value.clamp(0.0, LIQUID_GLASS_ELASTICITY_MAX)
-            }
-            LiquidGlassParam::RefractionMode => {
-                self.refraction_mode = value.round().clamp(0.0, 3.0) as u32
-            }
+        let l = &mut self.liquid;
+        l.corner_radius = clamp_finite_glass(l.corner_radius, 0.0, 400.0);
+        l.lens_coverage = clamp_finite_glass(l.lens_coverage, 0.0, 1.0);
+        l.bevel_width = clamp_finite_glass(l.bevel_width, 1.0, 400.0);
+        l.super_n = clamp_finite_glass(l.super_n, 2.0, 10.0);
+        l.ior = clamp_finite_glass(l.ior, 1.0, 2.0);
+        l.thickness = clamp_finite_glass(l.thickness, 0.0, 600.0);
+        l.refr_strength = clamp_finite_glass(l.refr_strength, 0.0, 2.0);
+        l.dispersion = clamp_finite_glass(l.dispersion, 0.0, 1.0);
+        l.absorption = clamp_finite_glass(l.absorption, 0.0, 2.0);
+        l.clarity = clamp_finite_glass(l.clarity, 0.0, 1.0);
+        l.blur_max = clamp_finite_glass(l.blur_max, 0.0, 96.0);
+        l.blur_min = clamp_finite_glass(l.blur_min, 0.0, 48.0)
+            .min(clamp_finite_glass(l.blur_max, 0.0, 96.0));
+        l.progressive_curve = clamp_finite_glass(l.progressive_curve, 0.0, 8.0);
+        l.edge_always = clamp_finite_glass(l.edge_always, 0.0, 1.0);
+        l.tint_opacity = clamp_finite_glass(l.tint_opacity, 0.0, 1.0);
+        l.adaptive_tint = clamp_finite_glass(l.adaptive_tint, 0.0, 1.0);
+        l.base_alpha = clamp_finite_glass(l.base_alpha, 0.0, 1.0);
+        l.env_tint_mix = clamp_finite_glass(l.env_tint_mix, 0.0, 1.0);
+        l.light_intensity = clamp_finite_glass(l.light_intensity, 0.0, 4.0);
+        l.spec_intensity = clamp_finite_glass(l.spec_intensity, 0.0, 4.0);
+        l.spec_power = clamp_finite_glass(l.spec_power, 1.0, 512.0);
+        l.spec_spread = clamp_finite_glass(l.spec_spread, 0.0, 1.0);
+        l.fresnel_f0 = clamp_finite_glass(l.fresnel_f0, 0.0, 1.0);
+        l.rim_width = clamp_finite_glass(l.rim_width, 0.0, 16.0);
+        l.caustic_gain = clamp_finite_glass(l.caustic_gain, 0.0, 4.0);
+        l.mouse_radius = clamp_finite_glass(l.mouse_radius, 20.0, 1200.0);
+        l.mouse_intensity = clamp_finite_glass(l.mouse_intensity, 0.0, 4.0);
+        l.mouse_spread = clamp_finite_glass(l.mouse_spread, 4.0, 400.0);
+        l.proximity_glow = clamp_finite_glass(l.proximity_glow, 0.0, 2.0);
+        l.shadow_opacity = clamp_finite_glass(l.shadow_opacity, 0.0, 1.0);
+        l.shadow_margin = clamp_finite_glass(l.shadow_margin, 0.0, 96.0);
+        l.lag_seconds = clamp_finite_glass(l.lag_seconds, 0.0, 0.1);
+        for c in l.tint_color.iter_mut() {
+            *c = clamp_finite_glass(*c, 0.0, 1.0);
         }
-    }
-
-    /// 获取液态玻璃参数
-    pub fn get_param(&self, param: LiquidGlassParam) -> f32 {
-        match param {
-            LiquidGlassParam::DisplacementScale => self.displacement_scale,
-            LiquidGlassParam::BlurAmount => self.blur_amount,
-            LiquidGlassParam::Saturation => self.saturation,
-            LiquidGlassParam::ChromaticOffset => self.chromatic_offset,
-            LiquidGlassParam::CornerRadius => self.corner_radius,
-            LiquidGlassParam::Elasticity => self.elasticity,
-            LiquidGlassParam::RefractionMode => self.refraction_mode as f32,
+        for c in l.mouse_color.iter_mut() {
+            *c = clamp_finite_glass(*c, 0.0, 1.0);
         }
+        let ld = l.light_dir;
+        let len = (ld[0] * ld[0] + ld[1] * ld[1] + ld[2] * ld[2])
+            .sqrt()
+            .max(1e-4);
+        l.light_dir = [ld[0] / len, ld[1] / len, ld[2] / len];
+
+        let t = &mut self.transparent;
+        t.corner_radius = clamp_finite_glass(t.corner_radius, 0.0, 400.0);
+        t.opacity = clamp_finite_glass(t.opacity, 0.0, 1.0);
+        for c in t.color.iter_mut() {
+            *c = clamp_finite_glass(*c, 0.0, 1.0);
+        }
+
+        let r = &mut self.resize;
+        r.grip_px = clamp_finite_glass(r.grip_px, 2.0, 128.0);
+        r.min_width = clamp_finite_glass(r.min_width, 8.0, 4096.0);
+        r.min_height = clamp_finite_glass(r.min_height, 8.0, 4096.0);
+        r.feedback.border_width = clamp_finite_glass(r.feedback.border_width, 0.5, 32.0);
+        r.feedback.alpha = clamp_finite_glass(r.feedback.alpha, 0.0, 1.0);
+        for c in r.feedback.color.iter_mut() {
+            *c = clamp_finite_glass(*c, 0.0, 1.0);
+        }
+
+        self.engine.fps_cap = self.engine.fps_cap.clamp(0, 1000);
+        self.engine.monitor_limit = self.engine.monitor_limit.clamp(0, 16);
     }
 }
 
@@ -1369,7 +1673,7 @@ mod tests {
 }
 
 // =============================================================================
-// LiquidGlassConfig ??
+// LiquidGlassConfig 测试（liquid-verre-rs 参数镜像）
 // =============================================================================
 
 #[cfg(test)]
@@ -1377,387 +1681,95 @@ mod liquid_glass_tests {
     use super::*;
 
     #[test]
-    fn test_liquid_glass_config_default_values() {
+    fn test_glass_config_default_values() {
         let config = LiquidGlassConfig::default();
-        assert!(!config.enabled);
-        assert!((config.displacement_scale - 50.0).abs() < f32::EPSILON);
-        assert!((config.blur_amount - 0.3).abs() < f32::EPSILON);
-        assert!((config.saturation - 1.5).abs() < f32::EPSILON);
-        assert!((config.chromatic_offset - 5.0).abs() < f32::EPSILON);
-        assert!((config.corner_radius - 16.0).abs() < f32::EPSILON);
-        assert!((config.elasticity - 0.02).abs() < f32::EPSILON);
-        assert_eq!(config.refraction_mode, 0);
-        assert!(!config.over_light);
+        assert!(!config.enabled, "默认关闭液态玻璃，走透明模式");
+        assert!((config.liquid.corner_radius - 16.0).abs() < f32::EPSILON);
+        assert!((config.liquid.clarity - 0.10).abs() < f32::EPSILON);
+        assert!((config.transparent.opacity - 0.15).abs() < f32::EPSILON);
+        assert!((config.resize.grip_px - 10.0).abs() < f32::EPSILON);
+        assert!(config.resize.enabled && config.resize.edges && config.resize.corners);
+        assert!(config.resize.feedback.enabled);
+        assert!(config.engine.adaptive_quality);
+        assert!(config.engine.occlusion_culling);
+        assert_eq!(config.engine.fps_cap, 0);
+        assert_eq!(config.engine.capture_backend, GlassCaptureBackend::Auto);
     }
 
     #[test]
-    fn test_liquid_glass_config_set_and_get_param() {
+    fn test_glass_config_serialization_roundtrip() {
         let mut config = LiquidGlassConfig::default();
-
-        config.set_param(LiquidGlassParam::DisplacementScale, 150.0);
-        assert!(
-            (config.get_param(LiquidGlassParam::DisplacementScale) - 150.0).abs() < f32::EPSILON
-        );
-
-        config.set_param(LiquidGlassParam::BlurAmount, 0.75);
-        assert!((config.get_param(LiquidGlassParam::BlurAmount) - 0.75).abs() < f32::EPSILON);
-
-        config.set_param(LiquidGlassParam::Saturation, 2.5);
-        assert!((config.get_param(LiquidGlassParam::Saturation) - 2.5).abs() < f32::EPSILON);
-
-        config.set_param(LiquidGlassParam::ChromaticOffset, 5.0);
-        assert!((config.get_param(LiquidGlassParam::ChromaticOffset) - 5.0).abs() < f32::EPSILON);
-
-        config.set_param(LiquidGlassParam::CornerRadius, 24.0);
-        assert!((config.get_param(LiquidGlassParam::CornerRadius) - 24.0).abs() < f32::EPSILON);
-
-        config.set_param(LiquidGlassParam::Elasticity, 0.1);
-        assert!((config.get_param(LiquidGlassParam::Elasticity) - 0.1).abs() < f32::EPSILON);
-
-        config.set_param(LiquidGlassParam::RefractionMode, 2.0);
-        assert!((config.get_param(LiquidGlassParam::RefractionMode) - 2.0).abs() < f32::EPSILON);
-        assert_eq!(config.refraction_mode, 2);
-    }
-
-    #[test]
-    fn test_liquid_glass_config_bool_accessors() {
-        let mut config = LiquidGlassConfig::default();
-
-        // enabled defaults to false
-        assert!(!config.enabled);
         config.enabled = true;
-        assert!(config.enabled);
-
-        // over_light defaults to false
-        assert!(!config.over_light);
-        config.over_light = true;
-        assert!(config.over_light);
+        config.liquid.ior = 1.8;
+        config.liquid.tint_color[0] = 0.5;
+        config.resize.feedback.border_width = 8.0;
+        config.engine.fps_cap = 120;
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: LiquidGlassConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, config);
     }
 
     #[test]
-    fn test_liquid_glass_param_ranges_match_example_controls() {
-        let mut config = LiquidGlassConfig::default();
-        config.set_param(LiquidGlassParam::BlurAmount, 9.0);
-        assert_eq!(config.blur_amount, 1.0);
-        config.set_param(LiquidGlassParam::Saturation, -1.0);
-        assert_eq!(config.saturation, 1.0);
-        config.set_param(LiquidGlassParam::ChromaticOffset, 99.0);
-        assert_eq!(config.chromatic_offset, 20.0);
-        config.set_param(LiquidGlassParam::CornerRadius, 99.0);
-        assert_eq!(config.corner_radius, LIQUID_GLASS_CORNER_RADIUS_MAX);
-        config.set_param(LiquidGlassParam::RefractionMode, 99.0);
-        assert_eq!(config.refraction_mode, 3);
-    }
-
-    #[test]
-    fn test_liquid_glass_normalizes_legacy_corner_radius() {
-        let mut config = LiquidGlassConfig {
-            corner_radius: 100.0,
-            ..LiquidGlassConfig::default()
-        };
-
-        config.normalize();
-
-        assert_eq!(config.corner_radius, LIQUID_GLASS_CORNER_RADIUS_MAX);
-    }
-
-    #[test]
-    fn test_liquid_glass_config_serialization() {
-        let config = LiquidGlassConfig::default();
-        let json = serde_json::to_string(&config).expect("Failed to serialize");
-
-        assert!(json.contains("enabled"));
-        assert!(json.contains("displacement_scale"));
-        assert!(json.contains("blur_amount"));
-        assert!(json.contains("saturation"));
-        assert!(json.contains("chromatic_offset"));
-        assert!(json.contains("corner_radius"));
-        assert!(json.contains("elasticity"));
-        assert!(json.contains("refraction_mode"));
-        assert!(json.contains("over_light"));
-
-        let deserialized: LiquidGlassConfig =
-            serde_json::from_str(&json).expect("Failed to deserialize");
-
-        assert_eq!(deserialized.enabled, config.enabled);
-        assert!((deserialized.displacement_scale - config.displacement_scale).abs() < f32::EPSILON);
-        assert!((deserialized.blur_amount - config.blur_amount).abs() < f32::EPSILON);
-        assert!((deserialized.saturation - config.saturation).abs() < f32::EPSILON);
-        assert_eq!(deserialized.refraction_mode, config.refraction_mode);
-        assert_eq!(deserialized.over_light, config.over_light);
-    }
-
-    #[test]
-    fn test_liquid_glass_config_backward_compatibility() {
-        // Old config files with legacy fields should deserialize with new defaults
-        let old_json = r#"{
-            "blur_radius": 2.8,
-            "refraction_strength": 7.0,
-            "glass_alpha": 0.88,
-            "edge_effect_width": 26.0,
-            "chromatic_offset": 1.2,
-            "contrast": 1.04,
-            "brightness": 0.015,
-            "shadow_offset_y": 7.0,
-            "shadow_softness": 9.0,
-            "shadow_opacity": 0.28,
-            "top_light_position": 0.55,
-            "top_light_strength": 0.16,
-            "lower_shadow_position": 0.35,
-            "lower_shadow_strength": 0.10,
-            "color_gain": 1.025
+    fn test_glass_config_backward_compatible_with_legacy_flat_fields() {
+        // 旧版配置是平铺 9 字段；加载时必须忽略未知字段并用默认值填充新结构
+        let json = r#"{
+            "enabled": true,
+            "displacement_scale": 50.0,
+            "blur_amount": 0.3,
+            "saturation": 1.5,
+            "chromatic_offset": 5.0,
+            "corner_radius": 16.0,
+            "elasticity": 0.02,
+            "refraction_mode": 0,
+            "over_light": false
         }"#;
-
-        let config: LiquidGlassConfig =
-            serde_json::from_str(old_json).expect("Failed to deserialize old config");
-
-        // All new fields should have default values since old JSON doesn't contain them
-        assert!(!config.enabled);
-        assert!((config.displacement_scale - 50.0).abs() < f32::EPSILON);
-        assert!((config.blur_amount - 0.3).abs() < f32::EPSILON);
-        assert!((config.saturation - 1.5).abs() < f32::EPSILON);
-        assert_eq!(config.refraction_mode, 0);
-        assert!(!config.over_light);
+        let parsed: LiquidGlassConfig = serde_json::from_str(json).unwrap();
+        assert!(parsed.enabled);
+        assert_eq!(parsed.liquid, GlassLiquidParams::default());
     }
 
     #[test]
-    fn test_liquid_glass_param_enum_coverage() {
+    fn test_normalize_clamps_out_of_range_params() {
         let mut config = LiquidGlassConfig::default();
-
-        let params = [
-            (LiquidGlassParam::DisplacementScale, 120.0),
-            (LiquidGlassParam::BlurAmount, 0.75),
-            (LiquidGlassParam::Saturation, 2.0),
-            (LiquidGlassParam::ChromaticOffset, 3.0),
-            (
-                LiquidGlassParam::CornerRadius,
-                LIQUID_GLASS_CORNER_RADIUS_MAX,
-            ),
-            (LiquidGlassParam::Elasticity, 0.15),
-            (LiquidGlassParam::RefractionMode, 1.0),
-        ];
-
-        for (param, value) in params.iter() {
-            config.set_param(*param, *value);
-            assert!(
-                (config.get_param(*param) - *value).abs() < f32::EPSILON,
-                "Failed for param {:?}, expected {}, got {}",
-                param,
-                value,
-                config.get_param(*param)
-            );
-        }
-    }
-
-    // ===== 架构自检新增测试：LiquidGlassConfig 参数钳位边界 =====
-
-    #[test]
-    fn test_set_param_clamps_negative_values() {
-        let mut config = LiquidGlassConfig::default();
-        let negative_params = [
-            (LiquidGlassParam::DisplacementScale, -10.0, 0.0),
-            (LiquidGlassParam::BlurAmount, -0.5, 0.0),
-            (LiquidGlassParam::ChromaticOffset, -3.0, 0.0),
-            (LiquidGlassParam::CornerRadius, -5.0, 0.0),
-            (LiquidGlassParam::Elasticity, -1.0, 0.0),
-        ];
-        for (param, input, expected) in negative_params.iter() {
-            config.set_param(*param, *input);
-            assert!(
-                (config.get_param(*param) - *expected).abs() < f32::EPSILON,
-                "Negative clamp failed for {:?}: got {}",
-                param,
-                config.get_param(*param)
-            );
-        }
-    }
-
-    #[test]
-    fn test_set_param_clamps_over_max_values() {
-        let mut config = LiquidGlassConfig::default();
-        let over_max_params = [
-            (LiquidGlassParam::DisplacementScale, 999.0, 200.0),
-            (LiquidGlassParam::BlurAmount, 5.0, 1.0),
-            (LiquidGlassParam::Saturation, 10.0, 3.0),
-            (LiquidGlassParam::ChromaticOffset, 100.0, 20.0),
-            (
-                LiquidGlassParam::CornerRadius,
-                999.0,
-                LIQUID_GLASS_CORNER_RADIUS_MAX,
-            ),
-            (
-                LiquidGlassParam::Elasticity,
-                5.0,
-                LIQUID_GLASS_ELASTICITY_MAX,
-            ),
-        ];
-        for (param, input, expected) in over_max_params.iter() {
-            config.set_param(*param, *input);
-            assert!(
-                (config.get_param(*param) - *expected).abs() < f32::EPSILON,
-                "Over-max clamp failed for {:?}: got {}",
-                param,
-                config.get_param(*param)
-            );
-        }
-    }
-
-    #[test]
-    fn test_set_param_refraction_mode_rounds_and_clamps() {
-        let mut config = LiquidGlassConfig::default();
-        config.set_param(LiquidGlassParam::RefractionMode, 1.7);
-        assert_eq!(config.refraction_mode, 2);
-        config.set_param(LiquidGlassParam::RefractionMode, -1.0);
-        assert_eq!(config.refraction_mode, 0);
-        config.set_param(LiquidGlassParam::RefractionMode, 10.0);
-        assert_eq!(config.refraction_mode, 3);
-    }
-
-    #[test]
-    fn test_saturation_lower_bound_is_one() {
-        let mut config = LiquidGlassConfig::default();
-        config.set_param(LiquidGlassParam::Saturation, 0.5);
-        assert!((config.saturation - 1.0).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn test_normalize_clamps_corner_radius_over_max() {
-        let mut config = LiquidGlassConfig {
-            corner_radius: 999.0,
-            ..LiquidGlassConfig::default()
-        };
+        config.liquid.corner_radius = 999.0;
+        config.liquid.ior = 0.5;
+        config.liquid.blur_max = 10.0;
+        config.liquid.blur_min = 48.0;
+        config.resize.grip_px = f32::NAN;
+        config.transparent.opacity = 5.0;
+        config.engine.fps_cap = 5000;
         config.normalize();
-        assert!((config.corner_radius - LIQUID_GLASS_CORNER_RADIUS_MAX).abs() < f32::EPSILON);
-    }
-
-    // ===== 弹性形变参数范围测试（v2.1 新增） =====
-
-    #[test]
-    fn test_elasticity_max_constant_value() {
-        // 验证 LIQUID_GLASS_ELASTICITY_MAX 常量为 0.2
+        assert!((config.liquid.corner_radius - 400.0).abs() < f32::EPSILON);
+        assert!((config.liquid.ior - 1.0).abs() < f32::EPSILON);
         assert!(
-            (LIQUID_GLASS_ELASTICITY_MAX - 0.2).abs() < f32::EPSILON,
-            "LIQUID_GLASS_ELASTICITY_MAX should be 0.2, got {}",
-            LIQUID_GLASS_ELASTICITY_MAX
+            config.liquid.blur_min <= config.liquid.blur_max,
+            "blur_min 必须不超过 blur_max"
         );
+        assert!(config.resize.grip_px.is_finite() && config.resize.grip_px >= 2.0);
+        assert!((config.transparent.opacity - 1.0).abs() < f32::EPSILON);
+        assert_eq!(config.engine.fps_cap, 1000);
     }
 
     #[test]
-    fn test_elasticity_default_value() {
-        // 验证弹性形变默认值为 0.02
-        let config = LiquidGlassConfig::default();
-        assert!(
-            (config.elasticity - 0.02).abs() < f32::EPSILON,
-            "Default elasticity should be 0.02, got {}",
-            config.elasticity
-        );
-    }
-
-    #[test]
-    fn test_elasticity_set_param_clamps_to_max() {
-        // 验证 set_param 将超出 LIQUID_GLASS_ELASTICITY_MAX 的值钳位
+    fn test_normalize_renormalizes_light_direction() {
         let mut config = LiquidGlassConfig::default();
-        config.set_param(LiquidGlassParam::Elasticity, 0.5);
-        assert!(
-            (config.elasticity - LIQUID_GLASS_ELASTICITY_MAX).abs() < f32::EPSILON,
-            "Elasticity should be clamped to {}, got {}",
-            LIQUID_GLASS_ELASTICITY_MAX,
-            config.elasticity
-        );
-    }
-
-    #[test]
-    fn test_elasticity_set_param_clamps_negative() {
-        // 验证 set_param 将负值钳位到 0
-        let mut config = LiquidGlassConfig::default();
-        config.set_param(LiquidGlassParam::Elasticity, -0.1);
-        assert!(
-            (config.elasticity - 0.0).abs() < f32::EPSILON,
-            "Negative elasticity should be clamped to 0, got {}",
-            config.elasticity
-        );
-    }
-
-    #[test]
-    fn test_elasticity_set_param_accepts_valid_range() {
-        // 验证 set_param 接受 [0, LIQUID_GLASS_ELASTICITY_MAX] 范围内的值
-        let mut config = LiquidGlassConfig::default();
-        let valid_values = [0.0, 0.01, 0.02, 0.1, 0.15, LIQUID_GLASS_ELASTICITY_MAX];
-        for &value in &valid_values {
-            config.set_param(LiquidGlassParam::Elasticity, value);
-            assert!(
-                (config.elasticity - value).abs() < f32::EPSILON,
-                "set_param should accept {}, got {}",
-                value,
-                config.elasticity
-            );
-        }
-    }
-
-    #[test]
-    fn test_normalize_clamps_elasticity_over_max() {
-        // 验证 normalize() 将超出 LIQUID_GLASS_ELASTICITY_MAX 的值钳位
-        let mut config = LiquidGlassConfig {
-            elasticity: 0.5,
-            ..LiquidGlassConfig::default()
-        };
+        config.liquid.light_dir = [-9.0, 0.0, 0.0];
         config.normalize();
-        assert!(
-            (config.elasticity - LIQUID_GLASS_ELASTICITY_MAX).abs() < f32::EPSILON,
-            "normalize() should clamp elasticity to {}, got {}",
-            LIQUID_GLASS_ELASTICITY_MAX,
-            config.elasticity
-        );
+        let len = (config.liquid.light_dir[0] * config.liquid.light_dir[0]
+            + config.liquid.light_dir[1] * config.liquid.light_dir[1]
+            + config.liquid.light_dir[2] * config.liquid.light_dir[2])
+            .sqrt();
+        assert!((len - 1.0).abs() < 1e-3, "主光方向必须归一化");
     }
 
     #[test]
-    fn test_normalize_clamps_negative_elasticity() {
-        // 验证 normalize() 将负值钳位到 0
-        let mut config = LiquidGlassConfig {
-            elasticity: -0.1,
-            ..LiquidGlassConfig::default()
-        };
-        config.normalize();
-        assert!(
-            (config.elasticity - 0.0).abs() < f32::EPSILON,
-            "normalize() should clamp negative elasticity to 0, got {}",
-            config.elasticity
-        );
-    }
-
-    #[test]
-    fn test_normalize_preserves_valid_elasticity() {
-        // 验证 normalize() 保留 [0, LIQUID_GLASS_ELASTICITY_MAX] 范围内的值
-        let mut config = LiquidGlassConfig {
-            elasticity: 0.1,
-            ..LiquidGlassConfig::default()
-        };
-        config.normalize();
-        assert!(
-            (config.elasticity - 0.1).abs() < f32::EPSILON,
-            "normalize() should preserve valid elasticity 0.1, got {}",
-            config.elasticity
-        );
-    }
-
-    #[test]
-    fn test_elasticity_boundary_values() {
-        // 验证边界值处理：0 和 LIQUID_GLASS_ELASTICITY_MAX
-        let mut config = LiquidGlassConfig::default();
-
-        // 下边界
-        config.set_param(LiquidGlassParam::Elasticity, 0.0);
-        assert!((config.elasticity - 0.0).abs() < f32::EPSILON);
-
-        // 上边界
-        config.set_param(LiquidGlassParam::Elasticity, LIQUID_GLASS_ELASTICITY_MAX);
-        assert!((config.elasticity - LIQUID_GLASS_ELASTICITY_MAX).abs() < f32::EPSILON);
-
-        // 略超上边界
-        config.set_param(
-            LiquidGlassParam::Elasticity,
-            LIQUID_GLASS_ELASTICITY_MAX + 0.01,
-        );
-        assert!((config.elasticity - LIQUID_GLASS_ELASTICITY_MAX).abs() < f32::EPSILON);
+    fn test_box_style_normalize_syncs_transparent_corner_radius() {
+        // 分类框整体圆角继续联动透明模式圆角（旧行为），液态圆角保持独立
+        let mut style = BoxStyleConfig::default();
+        style.border_radius = 24.0;
+        style.liquid_glass.liquid.corner_radius = 40.0;
+        style.normalize();
+        assert!((style.liquid_glass.transparent.corner_radius - 24.0).abs() < f32::EPSILON);
+        assert!((style.liquid_glass.liquid.corner_radius - 40.0).abs() < f32::EPSILON);
     }
 }

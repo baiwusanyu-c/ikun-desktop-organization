@@ -14,17 +14,93 @@ export interface BoxData {
   item_count: number;
 }
 
+// --- liquid-verre-rs aligned types ---
+
+export type GlassShape = "RoundedRect" | "Squircle";
+export type GlassProfile = "Circular" | "Parabolic" | "Sinusoidal";
+export type GlassCaptureBackend = "Auto" | "ForceDda" | "ForceWgc";
+
+export interface GlassLiquidParams {
+  corner_radius: number;
+  lens_coverage: number;
+  bevel_width: number;
+  shape: GlassShape;
+  super_n: number;
+  profile: GlassProfile;
+  ior: number;
+  thickness: number;
+  refr_strength: number;
+  dispersion: number;
+  absorption: number;
+  clarity: number;
+  blur_max: number;
+  blur_min: number;
+  progressive_curve: number;
+  edge_always: number;
+  tint_opacity: number;
+  adaptive_tint: number;
+  base_alpha: number;
+  tint_color: [number, number, number, number];
+  env_tint_mix: number;
+  light_dir: [number, number, number];
+  light_intensity: number;
+  spec_intensity: number;
+  spec_power: number;
+  spec_spread: number;
+  fresnel_f0: number;
+  rim_width: number;
+  caustic_gain: number;
+  mouse_radius: number;
+  mouse_intensity: number;
+  mouse_spread: number;
+  mouse_color: [number, number, number];
+  proximity_glow: number;
+  shadow_opacity: number;
+  shadow_margin: number;
+  lag_seconds: number;
+}
+
+export interface GlassTransparentParams {
+  corner_radius: number;
+  opacity: number;
+  color: [number, number, number, number];
+}
+
+export interface GlassResizeFeedback {
+  enabled: boolean;
+  border_width: number;
+  alpha: number;
+  color: [number, number, number];
+}
+
+export interface GlassResizeConfig {
+  enabled: boolean;
+  edges: boolean;
+  corners: boolean;
+  grip_px: number;
+  min_width: number;
+  min_height: number;
+  feedback: GlassResizeFeedback;
+}
+
+export interface GlassEngineConfig {
+  capture_backend: GlassCaptureBackend;
+  adaptive_quality: boolean;
+  occlusion_culling: boolean;
+  fullscreen_hide: boolean;
+  fps_cap: number;
+  monitor_limit: number;
+}
+
 export interface LiquidGlassConfig {
   enabled: boolean;
-  displacement_scale: number;
-  blur_amount: number;
-  saturation: number;
-  chromatic_offset: number;
-  corner_radius: number;
-  elasticity: number;
-  refraction_mode: number;
-  over_light: boolean;
+  liquid: GlassLiquidParams;
+  transparent: GlassTransparentParams;
+  resize: GlassResizeConfig;
+  engine: GlassEngineConfig;
 }
+
+// --- end liquid-verre-rs types ---
 
 export interface BoxStyleConfig {
   background_color: [number, number, number];

@@ -71,7 +71,7 @@
 - **Windows 10/11 专属产品**：无跨平台承诺，禁止 macOS/Linux 预留代码与"回退路径"残留。
 - **Tauri 2 + Svelte 5**：控制面板、创建/编辑弹窗、AI 分类弹窗（WebView2）。
 - **Win32 + Direct2D/DirectWrite**：分类框与桌面覆盖层原生窗口（不进 WebView）。
-- **DirectComposition + D3D11 + DXGI 桌面复制**：液态玻璃效果（着色器由 D3DCompile 运行时编译）。
+- **liquid-verre-rs（crates.io 依赖库）**：液态玻璃 / 透明玻璃底板（WGC/DDA 采集 + D3D11 模糊金字塔 + DirectComposition 合成 + Snell 折射，着色器由 D3DCompile 运行时编译）；分类框内容层仅绘制前景（D2D/DirectWrite）。
 - **单一运行时注入**：Tauri Commands 与平台轮询线程共享唯一 `SharedTauriRuntime`（内含 `AppContext`）。
 - **无插件体系**：自研 PluginRegistry 已移除；Tauri 官方插件（opener/dialog）正常使用。
 - **无 trait 平台抽象**：平台能力直接调用 `platform/windows` 具体实现。

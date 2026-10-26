@@ -51,7 +51,8 @@ Mouse Event → Pixel Alpha Test → WM_NCHITTEST → Window Receives Event
 
 ### Pitfall 1: Trying to use WM_NCHITTEST for click-through
 
-`ust
+`
+ust
 // ❌ WRONG: This doesn't work for alpha=0 pixels
 WM_NCHITTEST => {
     if is_blank_area {
@@ -65,7 +66,8 @@ WM_NCHITTEST => {
 **Why it fails**: Alpha=0 pixels never reach WM_NCHITTEST - they pass through at the system level.
 
 **Correct approach**: Control transparency via background alpha:
-`ust
+`
+ust
 // ✅ CORRECT: Dynamic alpha based on state
 let bg_alpha = if has_selection { 1 } else { 0 };
 target.Clear(Some(&d2d_color(0, 0, 0, bg_alpha)));
@@ -73,7 +75,8 @@ target.Clear(Some(&d2d_color(0, 0, 0, bg_alpha)));
 
 ### Pitfall 2: Relying on WM_MOUSELEAVE for hover management
 
-`ust
+`
+ust
 // ❌ WRONG: Causes flickering on alpha=0 pixels
 WM_MOUSELEAVE => {
     data.hovered_item = -1;  // Keeps getting reset!
@@ -84,7 +87,8 @@ WM_MOUSELEAVE => {
 **Why it fails**: WM_MOUSELEAVE fires repeatedly on transparent pixels, causing hover state to flicker.
 
 **Correct approach**: Ignore WM_MOUSELEAVE, use WM_MOUSEMOVE hit test:
-`ust
+`
+ust
 // ✅ CORRECT: Let WM_MOUSEMOVE manage hover naturally
 WM_MOUSELEAVE => {
     // Do nothing - WS_EX_LAYERED triggers this unreliably
@@ -102,7 +106,8 @@ WM_MOUSEMOVE => {
 
 ### Pitfall 3: Forwarding events via PostMessageW
 
-`ust
+`
+ust
 // ❌ WRONG: Complex, unreliable, breaks right-click menus
 if is_blank_area {
     let desktop_hwnd = FindWindowW(...);
@@ -117,7 +122,8 @@ if is_blank_area {
 - Fighting against platform behavior instead of working with it
 
 **Correct approach**: Use alpha=0 for natural pass-through:
-`ust
+`
+ust
 // ✅ CORRECT: Let the system handle pass-through
 let bg_alpha = if has_selection { 1 } else { 0 };
 target.Clear(Some(&d2d_color(0, 0, 0, bg_alpha)));
@@ -133,7 +139,8 @@ Need click-through when idle, but need to capture clicks when in interactive sta
 
 ### Solution: Dynamic Alpha
 
-`ust
+`
+ust
 fn render() {
     // Determine if we need to capture clicks
     let need_click_capture = data.selected_item >= 0;
@@ -191,7 +198,8 @@ When debugging layered window issues:
 
 Add these logs to diagnose layered window issues:
 
-`ust
+`
+ust
 // In WM_MOUSELEAVE handler
 WM_MOUSELEAVE => {
     log::debug!("[MOUSELEAVE] fired at {:?}", std::time::Instant::now());
@@ -252,7 +260,7 @@ This guide was created after **7 failed debug attempts** (commits de9ed40 throug
 
 ### Problem
 
-`src/platform/windows/liquid_glass.rs` renders a rounded glass body and a blurred outer shadow into a D3D11 texture whose dimensions exactly match the `WS_EX_LAYERED` classification window. The glass body is rounded, but the shadow develops straight horizontal or vertical ends near the corners.
+`liquid-verre-rs` renders the rounded glass body and outer shadow on its own per-monitor DirectComposition canvas **below** the `WS_EX_LAYERED` classification window (the content window is now a transparent foreground layer). The old in-process `liquid_glass.rs` renderer has been removed; the content DIB only carries the near-invisible hit-capture fill (alpha = 1, inset by the resize-grip band) plus icons/title/buttons.
 
 ### Root Cause
 
@@ -286,7 +294,7 @@ The padded-window design must update these consumers together:
 - `d2d_render.rs`: content origin for title, icons, resize borders and bitmap draw
 - `wnd_proc.rs`: hit testing and resize edges
 - drag/drop code: screen/client coordinate conversion
-- `liquid_glass.rs`: `lens_size`, `padding`, capture rectangle and scissor rectangle
+- `glass_engine.rs`: block rect (logical px), `resize_grip_band`, hit-capture inset rectangle
 
 ### Coordinate Contract
 

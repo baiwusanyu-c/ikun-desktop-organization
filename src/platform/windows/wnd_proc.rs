@@ -48,20 +48,6 @@ thread_local! {
     static PROPOSED_Y: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
 }
 
-/// 是否处于 Windows 原生移动/缩放模态循环中。
-///
-/// 模态移动期间玻璃必须「零延迟」跟住窗口位置：
-/// 帧间读回上一帧会让背景在快速移动时滑移，
-/// 用户感知为拖拽卡顿（2026-09-14 反馈）。
-pub(crate) fn in_modal_move_or_resize() -> bool {
-    IN_DRAG.with(|c| c.get())
-}
-
-/// 当前正在被模态拖拽的分类框（统计只记它，避免多框串扰）。
-pub(crate) fn drag_hwnd() -> HWND {
-    DRAG_HWND.with(|c| c.get())
-}
-
 thread_local! { static DRAG_HWND: std::cell::Cell<HWND> = const { std::cell::Cell::new(std::ptr::null_mut()) }; }
 thread_local! { static CUSTOM_MOVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 thread_local! { static GRAB_DX: std::cell::Cell<i32> = const { std::cell::Cell::new(0) }; }
@@ -416,6 +402,34 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 return HTCLIENT as LRESULT;
             }
 
+            // ===== 引擎激活路径 =====
+            // 玻璃底板由 liquid-verre-rs 画布渲染在内容层之下：边缘/四角把手带
+            // （库命中带宽 = grip_px × 所在屏 DPI 比例，物理像素）在内容渲染时保持
+            // alpha=0，ULW 对全透明像素自动穿透鼠标 → 库画布直接收到 hover/按压，
+            // 绘制加粗 border 反馈并驱动缩放会话。这里能走到说明像素不透明：
+            // 标题栏 → HTCAPTION（原生拖拽移动，WM_MOVING 同步玻璃块矩形）；
+            // 主体 → HTCLIENT（图标点选 / 橡皮筋 / 拖出等原有交互全部保留）。
+            let has_glass = data_opt
+                .as_ref()
+                .map(|d| {
+                    super::glass_engine::is_active() && super::glass_engine::has_box(d.config_id)
+                })
+                .unwrap_or(false);
+            if has_glass {
+                // 清掉旧的边缘指示状态（引擎路径不画宿主指示条，避免残留一帧）
+                if let Some(data) = get_data(hwnd) {
+                    if data.hover_edge != 0 {
+                        data.hover_edge = 0;
+                        render_layered_window(hwnd);
+                    }
+                }
+                return if dy < title_h {
+                    HTCAPTION as LRESULT
+                } else {
+                    HTCLIENT as LRESULT
+                };
+            }
+
             // 未锁定：正常边缘缩放检测（统一计算 result，最后更新 hover_edge）
             let edge = scale_for_dpi(8, dpi);
             let result: i32;
@@ -550,8 +564,6 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         WM_DPICHANGED => {
             let new_dpi = (wparam & 0xFFFF) as u32;
             log::info!("DPI 变化: {} → 重新计算布局", new_dpi);
-            super::liquid_glass::invalidate_desktop_snapshot();
-
             let suggested_rect = lparam as *const RECT;
             let outer_w = unsafe { (*suggested_rect).right - (*suggested_rect).left };
             let outer_h = unsafe { (*suggested_rect).bottom - (*suggested_rect).top };
@@ -824,6 +836,9 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 // 切换锁定状态
                 if let Some(data) = get_data(hwnd) {
                     data.locked = !data.locked;
+                    // 固定（锁定）联动：玻璃块退出生效命中区（库把手不再响应），
+                    // 解锁时按当前配置恢复边缘缩放。
+                    super::glass_engine::set_box_locked(data.config_id, data.locked);
                     log::info!(
                         "锁定状态切换: {} → {}",
                         if data.locked {
@@ -1348,6 +1363,8 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             let data_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GridWindowData;
             if !data_ptr.is_null() {
                 let mut data = Box::from_raw(data_ptr);
+                // 解除玻璃底板（引擎未激活/无块时安全 no-op）
+                super::glass_engine::detach_box(data.config_id);
 
                 // 注销 OLE 拖拽目标
                 if !data.drop_target_ptr.is_null() {
@@ -1387,12 +1404,45 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             0
         }
 
-        // ===== 液态玻璃开关变更：重设留白 + 装配/卸载周期重绘定时器 =====
-        WM_USER_GRID_SYNC_GLASS => {
-            super::grid_window::sync_grid_window_padding(hwnd);
-            super::grid_window::sync_grid_refresh_timer(hwnd);
-            render_layered_window(hwnd);
+        // ===== 引擎缩放会话开始/结束（渲染线程事件回调转发）=====
+        WM_USER_GLASS_RESIZE => {
+            if wparam != 0 {
+                super::grid_window::begin_glass_resize_session(hwnd);
+            } else {
+                super::grid_window::end_glass_resize_session(hwnd);
+            }
             0
+        }
+
+        // ===== 位置/尺寸变化完成：把窗口几何反向同步给玻璃块 =====
+        //
+        // 只处理「非库会话」的变化（原生标题拖拽由 WM_MOVING 同步、库会话期间
+        // 块矩形是真值不得回推），覆盖程序化移动：DPI 切换、菜单位置、折叠等。
+        WM_WINDOWPOSCHANGED => {
+            if let Some(data) = get_data(hwnd) {
+                if !data.glass_session_active
+                    && super::glass_engine::is_active()
+                    && super::glass_engine::has_box(data.config_id)
+                {
+                    let mut wr = RECT {
+                        left: 0,
+                        top: 0,
+                        right: 0,
+                        bottom: 0,
+                    };
+                    if unsafe { GetWindowRect(hwnd, &mut wr) } != 0 {
+                        let dpi = unsafe { GetDpiForWindow(hwnd) };
+                        let dpi = if dpi > 0 { dpi } else { 96 };
+                        super::glass_engine::push_geometry_for_window(
+                            data.config_id,
+                            &wr,
+                            data.render_padding,
+                            dpi,
+                        );
+                    }
+                }
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
         }
 
         // ===== 延迟打开菜单（由 PostMessage 触发，用于菜单互斥切换）=====
@@ -1518,24 +1568,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 super::drag_handler::handle_grid_drag_timer(hwnd);
             }
             if wparam == TIMER_ID_LIQUID_GLASS {
-                {
-                    use std::sync::atomic::{AtomicU32, Ordering};
-                    static MODAL_TICKS: AtomicU32 = AtomicU32::new(0);
-                    if IN_DRAG.get() {
-                        let n = MODAL_TICKS.fetch_add(1, Ordering::Relaxed);
-                        if n.is_multiple_of(64) {
-                            log::warn!("[dragdbg] modal tick #{}", n);
-                        }
-                    }
-                }
-                {
-                    use std::sync::atomic::{AtomicU32, Ordering};
-                    static WT: AtomicU32 = AtomicU32::new(0);
-                    let n = WT.fetch_add(1, Ordering::Relaxed);
-                    if n.is_multiple_of(500) {
-                        log::warn!("[timerdbg] WM_TIMER #{}", n);
-                    }
-                }
+                // 库缩放会话期间的跟随 tick（会话外该定时器不会装配）
                 super::grid_window::on_grid_refresh_tick(hwnd);
             }
             0
@@ -1670,6 +1703,13 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         WM_USER_PUSH_GRIDS_BELOW => {
             // 在抑制模式下调整其他分类框 Z-order，防止递归 PostMessage
             with_zorder_suppressed(|| push_other_grids_below(hwnd));
+            // 玻璃层同步 Z 序不变量：本框块抬到画布内最前，画布整体重新压回
+            // Z 序底部（内容窗口刚被强制 HWND_BOTTOM，若画布比它更底就会
+            // 把图标盖住——见 glass_engine 模块头「Z 序不变量」）。
+            if let Some(data) = get_data(hwnd) {
+                super::glass_engine::raise_box(data.config_id);
+            }
+            super::glass_engine::reassert_canvas_bottom();
             0
         }
         // ===== Enter move/resize mode: start alignment detection =====
@@ -1677,13 +1717,9 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             IN_DRAG.set(true);
             DRAG_HWND.with(|c| c.set(hwnd));
             super::alignment_guide::on_enter_size_move(hwnd);
-            // 进入 Windows 的移动/缩放模态循环：把周期重绘切到高频档。
-            //
-            // 模态循环自己会派发 WM_TIMER，所以这里换间隔就够了，
-            // 不需要另开线程。静止档 200ms 在拖拽时意味着玻璃只有
-            // 5fps —— 那是「移动分类框时玻璃卡顿」的直接成因，
-            // 与单帧耗时无关：单帧再快， tick 不来就没有新画面。
-            super::grid_window::enter_drag_refresh(hwnd);
+            // 引擎架构下这里不再切换宿主重绘档位：玻璃动画由库渲染线程
+            // 全权驱动；标题栏拖拽只负责移动窗口 + WM_MOVING 同步块矩形，
+            // 内容层本身是静态前景，无需周期重绘。
             0
         }
 
@@ -1693,11 +1729,6 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             DRAG_HWND.with(|c| c.set(std::ptr::null_mut()));
             IN_MOVE.set(false); // 重置移动标记
             super::alignment_guide::on_exit_size_move(hwnd);
-            // 必须与 WM_ENTERSIZEMOVE 严格配对：漏掉这一步分类框会
-            // 永久以 60Hz 重绘，画面看不出问题，但 CPU 与驱动内存
-            // 常驻高水位都下不来，而且不会有任何报错。
-            super::grid_window::exit_drag_refresh(hwnd);
-            super::mem_probe::flush_drag_stats();
             // Save layout after move/resize
             super::drag_handler::save_config();
             0
@@ -1713,25 +1744,24 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 PROPOSED_X.set(rect.left);
                 PROPOSED_Y.set(rect.top);
                 super::alignment_guide::on_moving(hwnd, rect);
-            }
-            // 玻璃同步渲染：模态循环里 WM_TIMER 会被鼠标消息流饥饿
-            // （2026-09-15 实测帧间隔 24-42ms 且掉帧），改为随 WM_MOVING
-            // 节流 8ms 同步渲染，玻璃与光标移动 1:1 跟手。
-            {
-                use std::time::Instant;
-                thread_local! {
-                    static LAST_MOVE_RENDER: std::cell::Cell<Option<Instant>> =
-                        const { std::cell::Cell::new(None) };
-                }
-                let now = Instant::now();
-                let due = LAST_MOVE_RENDER.with(|c| match c.get() {
-                    None => true,
-                    Some(t) => now.duration_since(t).as_millis() >= 8,
-                });
-                if due {
-                    LAST_MOVE_RENDER.with(|c| c.set(Some(now)));
-                    super::d2d_render::render_layered_window_glass_only(hwnd);
-                    super::mem_probe::record_drag_frame(hwnd as usize, true, now, now.elapsed());
+                // 玻璃块位置同步：引擎激活时把移动后的内容矩形交给库
+                // （命令队列去重下发，渲染线程 ≤1 帧内贴上；玻璃动画由库线程
+                // 独立驱动，内容层此刻是静态前景，不需要宿主同步重绘）。
+                if let Some(data) = get_data(hwnd) {
+                    if super::glass_engine::is_active()
+                        && super::glass_engine::has_box(data.config_id)
+                    {
+                        let padding = data.render_padding;
+                        let content = RECT {
+                            left: rect.left + padding,
+                            top: rect.top + padding,
+                            right: rect.right - padding,
+                            bottom: rect.bottom - padding,
+                        };
+                        let dpi = unsafe { GetDpiForWindow(hwnd) };
+                        let dpi = if dpi > 0 { dpi } else { 96 };
+                        super::glass_engine::push_box_rect(data.config_id, &content, dpi);
+                    }
                 }
             }
             0

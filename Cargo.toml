@@ -32,8 +32,10 @@ env_logger = "0.11"
 
 # ===== Windows API =====
 [target.'cfg(windows)'.dependencies]
-# 注：Win32_Graphics_Direct3D_Fxc 供 liquid_glass 运行时 D3DCompile 编译
-# 着色器使用，不是可选 UI 的遗留依赖，勿删。
+# 液态玻璃渲染引擎库（替代自研 liquid_glass 效果实现、边缘缩放/拖拽交互与视觉反馈）
+liquid-verre-rs = "0.4.2"
+# 注：Win32_Graphics_Direct3D_Fxc 供运行时 D3DCompile 编译着色器使用
+# （主项目回退背景与 liquid-verre-rs 各自需要），不是可选 UI 的遗留依赖，勿删。
 windows-numerics = "0.3"
 windows = { version = "0.62", features = [
     "Win32_UI_Shell",
@@ -66,6 +68,7 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Imaging_D2D",
     "Foundation_Numerics",
 ] }
+
 
 # ===== Build Dependencies =====
 [build-dependencies]

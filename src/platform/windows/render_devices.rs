@@ -175,7 +175,7 @@ pub(crate) fn dcomp_device() -> Option<IDCompositionDesktopDevice> {
 /// # 为什么全线程必须只有一个 D3D11 设备
 ///
 /// 旧实现里进程内同时存在**两个** D3D11 设备：一个由
-/// `liquid_glass::create_device()` 显式创建（桌面捕获 + 模糊 + 玻璃着色器），
+/// 由渲染线程按需创建（历史：自研液态玻璃设备；现在仅内容层使用），
 /// 另一个由 `D2D1CreateFactory` 内部隐式创建（分类框合成用的 DC 渲染目标）。
 ///
 /// D3D11 纹理**不能跨设备直接共享**，于是玻璃每帧都要：
