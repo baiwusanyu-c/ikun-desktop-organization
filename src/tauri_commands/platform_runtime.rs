@@ -523,6 +523,25 @@ fn quit_signal_path() -> std::path::PathBuf {
 }
 
 /// Start the platform runtime in Tauri's setup hook.
+/// 正常退出是否已走通（`run_tauri_app` 的 Tauri 事件循环返回时置位）。
+///
+/// 退出看门狗靠它决定要不要补刀：正常退出走通就什么都不做，避免用
+/// TerminateProcess 打断别人正在跑的收尾。
+static TEARDOWN_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 由 `main.rs` 在 Tauri 事件循环返回后调用。
+pub fn mark_teardown_done() {
+    TEARDOWN_DONE.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// 立即结束进程，不跑任何 CRT / COM 收尾（清理完成后的正常收尾路径）。
+fn force_finish() {
+    use crate::platform::windows::ffi_imports::{GetCurrentProcess, TerminateProcess};
+    unsafe {
+        TerminateProcess(GetCurrentProcess(), 0);
+    }
+}
+
 pub fn start_platform_runtime(app: tauri::AppHandle, runtime: SharedTauriRuntime) {
     // Initialize platform
     match runtime.lock() {
@@ -655,14 +674,36 @@ pub fn start_platform_runtime(app: tauri::AppHandle, runtime: SharedTauriRuntime
 
         // 退出 Tauri 应用
         log::info!("[TauriRuntime] 调用 app_handle.exit(0)");
-        // 退出看门狗：清理若卡在某个等待（模态循环/跨线程同步），3 秒后强制结束进程。
-        // 尸尸进程会长期占着 DXGI 桌面复制，导致后续所有实例玻璃捕获被拒绝、
-        // 退化半透明白背景且拖拽不跟随（2026-09-16 实测案发现）。
+        // 退出看门狗：清理若卡在某个等待（模态循环/跨线程同步），最多等 3 秒后
+        // 强制结束进程 —— 尸尸进程会长期占着 DXGI 桌面复制，导致后续所有实例
+        // 玻璃捕获被拒绝、退化半透明白背景且拖拽不跟随（2026-09-16 实测案发现）。
+        //
+        // 为什么用 TerminateProcess 而不是 `std::process::exit(0)`：后者会跑 CRT
+        // atexit / DllMain 收尾，而此刻 WebView2 / D2D / DComp 线程还在飞 COM 调用，
+        // 两者对撞就崩在 KERNELBASE。`TerminateProcess` 不走任何收尾，进程立即消失，
+        // 既无崩溃也无弹窗；有意义的清理在上面已经全部做完。
         std::thread::spawn(|| {
-            std::thread::sleep(std::time::Duration::from_secs(3));
-            std::process::exit(0);
+            for _ in 0..30 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                if TEARDOWN_DONE.load(std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+            }
+            log::warn!("[TauriRuntime] 3s 内退出未走通，看门狗强制结束进程");
+            force_finish();
         });
         app_handle.exit(0);
+        // 走到这里，业务清理（分类框窗口销毁、玻璃引擎关闭、托盘注销、图标还原、
+        // 配置落盘）已经全部完成。此后**不能**把收尾交给 Tauri/WebView2：实测
+        // `app_handle.exit(0)` 之后约 1s 稳定记一次 APPCRASH（KERNELBASE.dll，
+        // 异常码 0x87A，2026-10-26~10-28 的 11 次退出全部命中），而且 Tauri 事件
+        // 循环从不返回（`.run()` 之后的日志一次都没出现过）。所以留一小段时间
+        // 让日志与落盘写完，再主动结束进程 —— 用户侧不再看到「退出即崩、
+        // 分类框消失」，WER 里也不再堆崩溃报告。
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        mark_teardown_done();
+        log::info!("[TauriRuntime] 清理完成，主动结束进程（跳过 Tauri/WebView2 收尾）");
+        force_finish();
     });
 }
 

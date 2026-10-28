@@ -1124,3 +1124,23 @@ extern "system" {
 extern "system" {
     pub fn SHFileOperationW(p_fileop: *const SHFILEOPSTRUCTW) -> i32;
 }
+
+// ===== 定时器分辨率（winmm）=====
+//
+// 会话期（拖拽移动 / 库缩放）要把跟随定时器压到 8ms 才有 120Hz 观感，
+// 而 Win32 定时器默认粒度 ~15.6ms：不 raise period 的话 SetTimer(8) 仍然
+// 15.6ms 触发，内容层就永远比玻璃背景慢一半（用户报的「掉帧」）。
+
+#[link(name = "winmm")]
+extern "system" {
+    pub fn timeBeginPeriod(uPeriod: u32) -> u32;
+    pub fn timeEndPeriod(uPeriod: u32) -> u32;
+}
+
+// ===== 进程强制收尾（kernel32）=====
+
+#[link(name = "kernel32")]
+extern "system" {
+    pub fn GetCurrentProcess() -> *mut std::ffi::c_void;
+    pub fn TerminateProcess(h_process: *mut std::ffi::c_void, exit_code: u32) -> i32;
+}

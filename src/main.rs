@@ -211,6 +211,11 @@ fn run_tauri_app() -> anyhow::Result<()> {
         .run(tauri::generate_context!())
         .map_err(|e| anyhow::anyhow!("Tauri runtime error: {}", e))?;
 
+    // 走到这里说明 Tauri 事件循环已正常返回：给退出看门狗一个明确信号，
+    // 它就不必再 TerminateProcess 补刀（顺带也验证「正常退出到底走不走得通」）。
+    log::info!("[boot] Tauri 事件循环已返回，进程正常收尾");
+    tauri_commands::platform_runtime::mark_teardown_done();
+
     Ok(())
 }
 

@@ -363,6 +363,17 @@ pub(crate) struct GridWindowData {
     /// 接管式标题拖拽会话进行中（`begin_box_drag` → SetCapture + 轮询光标 →
     /// SetWindowPos → WM_WINDOWPOSCHANGED 反向同步块矩形 → Up 收尾保存）。
     pub(crate) box_drag_active: bool,
+    /// 上次真正重画内容层的单调毫秒（会话期节流用，0 = 未知）。
+    pub(crate) content_last_render_ms: u64,
+    /// 本次库缩放会话是否已观察到过快照 `resizing=true`。
+    ///
+    /// 事件（ResizeStarted）与快照发布不是同一条通道：空闲档只有 ~4Hz 时，
+    /// 会话刚开始的几拍快照仍是 resizing=false。旧实现第一拍读到 false 就收尾，
+    /// 于是「拖框边缘 → 内容不跟尺寸 → 会话秒退 → 窗口旧矩形反推回块 →
+    /// 块自己弹回旧尺寸」（2026-10-28 用户实测）。
+    pub(crate) glass_session_seen_resizing: bool,
+    /// 会话内连续看到 resizing=false 的拍数（收尾去抖用）。
+    pub(crate) glass_session_idle_ticks: u8,
     /// 拖拽起始光标屏幕坐标
     pub(crate) box_drag_anchor_x: i32,
     pub(crate) box_drag_anchor_y: i32,
@@ -498,6 +509,9 @@ impl GridWindowData {
             render_padding: 0,
             glass_session_active: false,
             box_drag_active: false,
+            content_last_render_ms: 0,
+            glass_session_seen_resizing: false,
+            glass_session_idle_ticks: 0,
             box_drag_anchor_x: 0,
             box_drag_anchor_y: 0,
             box_drag_orig_x: 0,
@@ -535,7 +549,51 @@ static CLASS_REGISTERED: Mutex<bool> = Mutex::new(false);
 /// 实际 tick 落在 15.6~31.2ms。内容层在会话里只做「贴块矩形 + 重排」，
 /// 不跑任何玻璃渲染；静止态该定时器必须卸载（见 `exit_glass_resize_session`），
 /// 否则空转唤醒消息循环约吃 9% CPU 并放大内存抖动。
-pub(crate) const LIQUID_GLASS_DRAG_INTERVAL_MS: u32 = 16;
+pub(crate) const LIQUID_GLASS_DRAG_INTERVAL_MS: u32 = 8;
+
+/// 会话收尾：事件先到、快照后补的宽限拍数（8ms 档约 640ms）。
+const SESSION_ARM_TIMEOUT_TICKS: u8 = 80;
+/// 会话收尾：看到 resizing 回落后，还要连续这么多拍才真收尾。
+const SESSION_END_CONFIRM_TICKS: u8 = 3;
+
+/// 库缩放会话收尾判定（纯函数，可单测）。
+///
+/// 返回 `(是否已观察到 resizing, 连续未观察到的拍数, 是否应结束会话)`。
+#[must_use]
+pub(crate) fn session_next(resizing: bool, seen: bool, idle: u8) -> (bool, u8, bool) {
+    if resizing {
+        return (true, 0, false);
+    }
+    let next = idle.saturating_add(1);
+    if !seen {
+        // 还没见过 resizing：只按宽限期兜底，绝不第一拍就收尾。
+        return (false, next, next >= SESSION_ARM_TIMEOUT_TICKS);
+    }
+    (true, next, next >= SESSION_END_CONFIRM_TICKS)
+}
+
+/// 定时器分辨率引用计数（会话期抬到 1ms，会话全部结束还原）。
+static TIMER_PERIOD_REF: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+/// 会话开始：把系统定时器粒度抬到 1ms。不抬的话 `SetTimer(8)` 实际仍按约 15.6ms
+/// 触发，内容层永远只有玻璃背景一半帧率（用户报的「标题/图标掉帧、背景流畅」）。
+pub(crate) fn raise_timer_resolution() {
+    if TIMER_PERIOD_REF.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+        unsafe { super::ffi_imports::timeBeginPeriod(1) };
+    }
+}
+
+/// 会话结束：还原定时器粒度（引用计数配平，多调无害）。
+pub(crate) fn lower_timer_resolution() {
+    let prev = TIMER_PERIOD_REF.fetch_update(
+        std::sync::atomic::Ordering::SeqCst,
+        std::sync::atomic::Ordering::SeqCst,
+        |v| if v > 0 { Some(v - 1) } else { None },
+    );
+    if prev.map_or(false, |v| v > 0) {
+        unsafe { super::ffi_imports::timeEndPeriod(1) };
+    }
+}
 
 /// 引擎模式下 hover 轮询间隔（毫秒）。
 ///
@@ -880,6 +938,9 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         render_padding: shadow_padding,
         glass_session_active: false,
         box_drag_active: false,
+        content_last_render_ms: 0,
+        glass_session_seen_resizing: false,
+        glass_session_idle_ticks: 0,
         box_drag_anchor_x: 0,
         box_drag_anchor_y: 0,
         box_drag_orig_x: 0,
@@ -1852,6 +1913,7 @@ pub(crate) fn begin_box_drag(hwnd: HWND) {
     data.box_drag_orig_x = outer.left;
     data.box_drag_orig_y = outer.top;
     data.box_drag_moved = false;
+    raise_timer_resolution();
     unsafe { SetCapture(hwnd) };
     log::info!("[glass-dbg] begin_box_drag hwnd={hwnd:?} anchor=({cx},{cy})");
     switch_glass_timer(hwnd, LIQUID_GLASS_DRAG_INTERVAL_MS);
@@ -2002,7 +2064,16 @@ fn follow_glass_session(hwnd: HWND) {
             );
         }
     }
-    if !super::glass_engine::block_resizing(box_id) {
+    let resizing = super::glass_engine::block_resizing(box_id);
+    let (seen, idle, should_end) = session_next(
+        resizing,
+        data.glass_session_seen_resizing,
+        data.glass_session_idle_ticks,
+    );
+    data.glass_session_seen_resizing = seen;
+    data.glass_session_idle_ticks = idle;
+    if should_end {
+        log::debug!("库缩放会话收尾：resizing 连续 {idle} 拍为 false（seen={seen}）");
         end_glass_resize_session(hwnd);
     }
 }
@@ -2016,6 +2087,9 @@ pub(crate) fn begin_glass_resize_session(hwnd: HWND) {
         return;
     }
     data.glass_session_active = true;
+    data.glass_session_seen_resizing = false;
+    data.glass_session_idle_ticks = 0;
+    raise_timer_resolution();
     enter_glass_resize_session(hwnd);
     super::alignment_guide::on_enter_size_move(hwnd);
     log::debug!("分类框进入库缩放会话");
@@ -2030,6 +2104,10 @@ pub(crate) fn end_glass_resize_session(hwnd: HWND) {
         return;
     }
     data.glass_session_active = false;
+    data.glass_session_seen_resizing = false;
+    data.glass_session_idle_ticks = 0;
+    data.content_last_render_ms = 0;
+    lower_timer_resolution();
     exit_glass_resize_session(hwnd);
     // 最后做一次几何同步，避免内容窗口停在落后玻璃块不足一 tick 的位置。
     if let Some(content) = super::glass_engine::block_content_rect(data.config_id) {
@@ -2304,6 +2382,28 @@ mod tests {
         assert!(btn_x < more_x, "锁定按钮应在更多按钮左侧");
         assert_eq!(btn_x, win_w - more_size - btn_size - 10);
         assert_eq!(btn_y, 7);
+    }
+
+    #[test]
+    fn glass_session_does_not_end_on_first_stale_snapshot() {
+        // 事件先到、快照后补：前若干拍 resizing=false 绝不能收尾。旧实现第一拍
+        // 就结束会话，于是内容不跟尺寸、窗口旧矩形把块推回去（用户看到的
+        // 「拖边缘内容不动，过一会儿自己复原大小」）。
+        let mut seen = false;
+        let mut idle = 0u8;
+        for _ in 0..10 {
+            let (s2, i2, end) = session_next(false, seen, idle);
+            seen = s2;
+            idle = i2;
+            assert!(!end, "宽限期内不得结束会话");
+        }
+        let (s2, i2, end) = session_next(true, seen, idle);
+        assert!(s2 && i2 == 0 && !end);
+        assert!(!session_next(false, true, 0).2);
+        assert!(!session_next(false, true, 1).2);
+        assert!(session_next(false, true, 2).2, "连续 3 拍 false 才收尾");
+        // 从未见过 true：宽限期到点仍要收尾，不能永久挂着会话。
+        assert!(session_next(false, false, SESSION_ARM_TIMEOUT_TICKS - 1).2);
     }
 
     #[test]

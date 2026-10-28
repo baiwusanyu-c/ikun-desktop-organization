@@ -291,3 +291,70 @@ SendMessage 复用既有 handler；定时器三档（hover/会话）。
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: 缩放会话收尾竞态 + 退出11/11必崩 + 内容层掉帧
+
+**Date**: 2026-10-28
+**Task**: 缩放会话收尾竞态 + 退出11/11必崩 + 内容层掉帧
+**Branch**: `master`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+## 会话 6：缩放会话收尾竞态 + 退出 11/11 必崩 + 内容层掉帧（三条新缺陷定位与修复）
+
+用户复验「锁定好了、其余照旧」并补 3 条新观察。本轮全部落到根因并修掉两条半：
+
+### 根因 5：库缩放会话「第一拍就收尾」
+WM_USER_GLASS_RESIZE(1) 与 WindowSnapshot.resizing 不同通道，空闲档快照 ~4Hz，
+会话头几拍仍读到 resizing=false → 旧代码当拍收尾 → glass_session_active 掉回 false
+→ WM_WINDOWPOSCHANGED 恢复把旧窗口尺寸反推给块（用户看到「过一会儿自己复原大小」），
+且内容层再没收到新尺寸 WM_SIZE（不重排/不重画/不推纹理）。库的内容纹理是
+「与块 1:1、锚定左上角、不拉伸」，所以块变大而纹理没跟上 = 按钮图标不跟尺寸。
+修复：纯函数 session_next 双条件去抖（必须先见过 true，再连续 3 拍 false；
+从未见过 true 时 80 拍宽限兜底）+ 单测。实测 PostMessage 复刻会话：1317ms 正常收尾（旧：当拍）。
+
+### 根因 6：退出路径 11/11 必崩（KERNELBASE 0x87A）
+WER 里 10-26~10-28 每次退出都记一次 APPCRASH；app_handle.exit(0) 后约 1s 崩在
+Tauri/WebView2 收尾，且 Tauri 事件循环从不返回。旧看门狗用 std::process::exit(0)
+强杀 → 跑 CRT atexit/DllMain，与仍在飞 COM 的 WebView2/D2D 线程对撞。
+修复：清理全做完后留 400ms 直接 TerminateProcess 主动收尾；看门狗改为轮询
+TEARDOWN_DONE + TerminateProcess；main.rs 事件循环返回时记一笔。实测 3/3 退出零崩溃。
+
+### 优化 7：会话期内容层掉帧
+内容层软件光栅化 5~11ms/帧，逐拍全量重画追不上 120Hz 玻璃。改为：会话期重画节流
+~30Hz（收尾必补一次全量）+ 跟随间隔 16→8ms + 会话期 timeBeginPeriod(1)/timeEndPeriod(1)
+（引用计数配平；不抬粒度 SetTimer(8) 实际仍 15.6ms）。
+
+### 症状「hover 闪烁」本轮只布取证点
+4 条迁移日志提到 info 级（hover lock/more/item + WM_MOUSELEAVE），等用户停鼠标 3 秒
+数来回次数：怀疑是「轮询 inside 判定」与「TrackMouseEvent 真实光标判定」两套口径打架
+（代理窗全透明，真实鼠标不会给它发 MOVE）。定位后降回 debug。
+
+### 测试
+- [OK] cargo test 517 全绿（+1 回归钉）、fmt 干净、build 54 warnings 持平
+- [OK] 会话去抖：PostMessage 实测 1317ms 收尾（旧实现当拍退）
+- [OK] 退出：3/3 无 WER 崩溃（此前 11/11 必崩）
+- [OK] 交互回归：真实鼠标双击→编辑框、三点菜单存活、锁定切换、图标命中（上一轮已验）
+- [待办] 用户复验：拖边缘改大小是否跟手不弹回、拖位置/改尺寸是否还掉帧、hover 是否仍闪
+
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

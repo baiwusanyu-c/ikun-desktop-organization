@@ -675,6 +675,16 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 let over_lock =
                     mx >= btn_x && mx < btn_x + btn_size && my >= btn_y && my < btn_y + btn_size;
                 if over_lock != data.lock_hovered {
+                    log::info!(
+                        "[glass-dbg] hover lock {} -> {} 点=({},{}) 矩形=({},{},{})",
+                        data.lock_hovered,
+                        over_lock,
+                        mx,
+                        my,
+                        btn_x,
+                        btn_y,
+                        btn_size
+                    );
                     data.lock_hovered = over_lock;
                     need_rerender = true;
                 }
@@ -686,6 +696,16 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                     && my >= mbtn_y
                     && my < mbtn_y + mbtn_size;
                 if over_more != data.more_hovered {
+                    log::info!(
+                        "[glass-dbg] hover more {} -> {} 点=({},{}) 矩形=({},{},{})",
+                        data.more_hovered,
+                        over_more,
+                        mx,
+                        my,
+                        mbtn_x,
+                        mbtn_y,
+                        mbtn_size
+                    );
                     data.more_hovered = over_more;
                     need_rerender = true;
                 }
@@ -695,6 +715,16 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 // 图标网格 hit test（tooltip + hover 高亮）
                 let hit = grid_hit_test(data, w, mx, my, dpi);
                 if hit != data.hovered_item {
+                    log::info!(
+                        "[glass-dbg] hover item {} -> {} 点=({},{}) scroll={} 内容=({},{})",
+                        data.hovered_item,
+                        hit,
+                        mx,
+                        my,
+                        data.scroll_offset,
+                        w,
+                        wr.bottom - wr.top
+                    );
                     data.hovered_item = hit;
                     need_rerender = true;
                 }
@@ -1311,6 +1341,10 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
 
         // ===== 鼠标离开窗口：重置所有 hover 状态 =====
         WM_MOUSELEAVE => {
+            // 临时取证（info 级）：hover 闪烁 = 状态在 move/leave 之间来回抖，
+            // 下面四条迁移日志能在用户正常启动（无 RUST_LOG）时直接数出来。
+            // 定位后统一降回 debug。
+            log::info!("[glass-dbg] WM_MOUSELEAVE 到达（TrackMouseEvent 按真实光标判定离开窗口）");
             let mut need_rerender = false;
             if let Some(data) = get_data(hwnd) {
                 if data.hovered_item != -1 {

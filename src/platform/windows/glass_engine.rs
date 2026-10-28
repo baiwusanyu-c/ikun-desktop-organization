@@ -116,7 +116,9 @@ fn snapshot_stalled() -> bool {
 /// 进程内单调时钟基准（自动复活限流用）。
 static CLOCK_BASE: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 
-fn now_ms() -> u64 {
+/// 进程内单调毫秒（供内容层节流等跨模块小工具复用，避免各算各的基准）。
+#[must_use]
+pub(crate) fn now_ms() -> u64 {
     let base = CLOCK_BASE.get_or_init(std::time::Instant::now);
     u64::try_from(base.elapsed().as_millis()).unwrap_or(u64::MAX)
 }

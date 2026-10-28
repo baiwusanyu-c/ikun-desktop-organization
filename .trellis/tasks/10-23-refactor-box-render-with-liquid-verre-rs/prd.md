@@ -297,6 +297,65 @@ monitors/occlusion/fullscreen、log facade 与事件。
 - 待用户目视确认：拖拽跟手 + 对齐参考线出现/消失时机、图标与按钮 hover 是否还闪
   （屏幕录制不可用：分类框窗口带 `WDA_EXCLUDEFROMCAPTURE`）。
 
+## 缺陷修复记录（2026-10-28 第二轮：缩放会话收尾竞态 / 退出 100% 崩溃 / 内容层掉帧）
+
+用户复验：固定（锁定）已正常，其余照旧，并补了 3 条新观察：
+①图标与锁定/三点按钮 hover 背景仍闪烁；②多操作几次分类框就「崩溃消失」，且拖另一框边缘
+改大小时锁定/三点/图标不跟着变，过一会儿框自己复原大小；③拖位置/改大小时标题、图标、按钮
+明显掉帧，而玻璃背景帧率明显更好。
+
+**根因 5：库缩放会话「第一拍就收尾」的竞态**（症状②的后半段）
+- `WM_USER_GLASS_RESIZE(1)`（引擎事件回调）与 `WindowSnapshot.resizing` 不是同一条通道：
+  空闲档库只按 ~4Hz 发布快照，会话刚开始的若干拍读到的仍是 `resizing=false`。
+  旧 `follow_glass_session` 一句 `if !block_resizing() { end }` 于是当拍收尾。
+- 收尾后 `glass_session_active=false` → `WM_WINDOWPOSCHANGED` 恢复「窗口矩形反推给块」，
+  把**会话进行中的旧窗口尺寸**推回库 → 块弹回旧尺寸（用户看到的「过一会儿自己复原大小」）；
+  同时内容层再也没收到新尺寸的 `WM_SIZE` → 不重排、不重画、不推纹理。
+- 关键前提（库侧口径）：内容纹理与块矩形 **1:1、锚定左上角、不拉伸**
+  （库 `core/content.rs` 顶部约定），所以块变大而纹理没跟上时，多出来的区域只有玻璃 ——
+  正是「锁定/三点按钮、图标没跟着大小变化」。
+- 修复：收尾改为纯函数 `session_next(resizing, seen, idle)` 双条件去抖 ——
+  必须先观察到过一次 `resizing=true`，之后连续 3 拍 false 才收尾；从未观察到 true 时
+  按宽限期（80 拍）兜底，避免会话永久挂着。单测 `glass_session_does_not_end_on_first_stale_snapshot`。
+- 实测（PostMessage 复刻 `WM_USER_GLASS_RESIZE(1)`，不碰光标）：会话存活 **1317 ms** 后
+  按「resizing 连续 80 拍为 false」正常收尾；旧实现是当拍（<16ms）就退。
+
+**根因 6：退出路径 11/11 必崩**（症状②的前半段「崩溃消失」）
+- WER `Application Error` 里 `ikun_organizer.exe` + `KERNELBASE.dll` + 异常码 `0x87A`
+  共 11 条，2026-10-26 ~ 10-28 每次退出全部命中（含本次修复前最后一次 10:54:57）。
+- 定性：`app_handle.exit(0)` 之后约 1s 崩在 Tauri/WebView2 收尾；且 Tauri 事件循环
+  **从不返回**（`.run()` 之后新加的日志一次都没出现过），旧看门狗用
+  `std::process::exit(0)` 强杀，会跑 CRT atexit / DllMain，与仍在飞 COM 调用的
+  WebView2/D2D/DComp 线程对撞。
+- 修复：①清理全部完成后（窗口销毁、引擎关闭、托盘注销、图标还原、配置落盘）
+  留 400ms 让日志与落盘写完，直接 `TerminateProcess(GetCurrentProcess(), 0)` 主动收尾，
+  不走 Tauri/WebView2 那套；②看门狗改为轮询 `TEARDOWN_DONE`（30×100ms）+ 同样用
+  `TerminateProcess`，只在正常路径没走通时补刀；③`main.rs` 在事件循环返回时记一笔
+  并置位（顺带验证「正常退出到底走不走得通」）。
+- 实测：修复后连续 3 轮「启动 → --quit 退出」**0 次** WER 崩溃（此前 11/11）。
+
+**优化 7：会话期内容层掉帧**（症状③）
+- 内容层是 DC 互操作 / 软件光栅化，实测一帧 5~11ms（`mem_probe` 的「内容层」段），
+  而会话跟随每拍都要全量重画 + 推 1.4MB 纹理 → 追不上 120Hz 的玻璃，主观就是
+  「标题/图标/按钮慢半拍、背景流畅」。
+- 两处改动：①会话期内容重画节流到 ~30Hz（`SESSION_CONTENT_MIN_MS=33`，中间拍复用上一张
+  内容纹理；会话收尾必然清时间戳补一次全量）；②跟随间隔 16ms→8ms 并在会话期
+  `timeBeginPeriod(1)` / 结束 `timeEndPeriod(1)`（引用计数配平）——不抬粒度时
+  `SetTimer(8)` 实际仍按 ~15.6ms 触发，内容永远只有背景一半帧率。
+
+**症状①（hover 闪烁）：本轮只布了取证点，尚未定案**
+- 已把 4 条迁移日志提到 info 级（正常启动、不设 RUST_LOG 也能抓到）：
+  `hover lock/more/item {} -> {}` 带光标与按钮矩形，以及 `WM_MOUSELEAVE 到达`。
+- 下一步：用户把光标停在图标上 3 秒，数日志里 `hover item` 与 `WM_MOUSELEAVE` 来回次数 ——
+  若来回抖动即为「轮询 inside 判定」与「TrackMouseEvent 真实光标判定」两套口径打架
+  （代理窗全透明、真实鼠标根本不会给它发 MOVE，leave 只能靠 TrackMouseEvent）。
+- 定位后这 4 条降回 debug。
+
+**本轮验证汇总**
+- `cargo test` 517 全绿（+1 会话去抖回归钉）、`cargo fmt --check` 干净、`cargo build` 54 warnings（基线持平）。
+- 会话去抖：PostMessage 实测 1317ms 收尾（旧：当拍）。
+- 退出崩溃：3/3 无 WER 报告（旧：11/11 必崩）。
+
 ## 实施顺序
 
 1. `app_config.rs` 新配置结构 + normalize + 兼容加载。

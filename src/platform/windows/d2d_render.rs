@@ -666,11 +666,26 @@ fn render_layered_window_inner(hwnd: HWND) {
     // 因此「状态变了但没人显式重绘」这种漏网情况由指纹兜住，而指纹
     // 漏字段的后果只是少省一次重画，方向是安全的。
     let fingerprint = content_fingerprint(data, w, h, dpi, &box_style);
-    let need_content = !data.content_valid
+    let mut need_content = !data.content_valid
         || data.content_w != content_w
         || data.content_h != content_h
         || data.content_fingerprint != fingerprint
         || data.content_bitmap.is_none();
+
+    // 会话期内容重画节流（治「标题/图标/按钮掉帧、玻璃背景却流畅」）：
+    // 内容层是 DC 互操作 / 软件光栅化，实测一帧 5~11ms；库缩放与接管式移动
+    // 每拍（8ms）都全量重画根本追不上，帧时间堆积后主观就是「内容慢半拍」。
+    // 这里把内容重画压到约 30Hz，中间拍复用上一张内容纹理（库侧与块矩形 1:1
+    // 锚定左上角，新露出的边缘暂时只有玻璃），会话收尾必然清时间戳补一次全量。
+    const SESSION_CONTENT_MIN_MS: u64 = 33;
+    if need_content
+        && (data.glass_session_active || data.box_drag_active)
+        && data.content_last_render_ms != 0
+        && super::glass_engine::now_ms().saturating_sub(data.content_last_render_ms)
+            < SESSION_CONTENT_MIN_MS
+    {
+        need_content = false;
+    }
 
     // 分段计时：这一趟是软件光栅化，与 GPU 段分开看才知道刀该往哪切。
     // content_started 单独包住第一趟：命中缓存时它应当接近 0，
@@ -1043,6 +1058,7 @@ fn render_layered_window_inner(hwnd: HWND) {
         }
         data.content_fingerprint = fingerprint;
         data.content_valid = data.content_bitmap.is_some();
+        data.content_last_render_ms = super::glass_engine::now_ms();
     }
     let content_us = content_started.elapsed().as_micros() as u64;
 

@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 5
+- **Total Sessions**: 6
 - **Last Active**: 2026-10-28
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~293 | Active |
+| `journal-1.md` | ~360 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 6 | 2026-10-28 | 缩放会话收尾竞态 + 退出11/11必崩 + 内容层掉帧 | - | `master` |
 | 5 | 2026-10-28 | 真实鼠标复现再挖两条根因：库无 CS_DBLCLKS 致双击不触发 / FocusHint 抢焦点杀菜单 | - | `master` |
 | 4 | 2026-10-27 | 分类框全灭根因修复：锁定=输入全灭 + 库 debug panic 杀渲染线程 | - | `master` |
 | 3 | 2026-10-26 | sink 首版缺陷修复：消息洪水+模态竞态 → 接管式拖拽（实测验证） | - | `master` |
