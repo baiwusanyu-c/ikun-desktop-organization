@@ -413,6 +413,14 @@ impl TauriRuntime {
         #[cfg(windows)]
         {
             crate::platform::windows::glass_engine::poll_events_to_log();
+            // 显示器热插拔可能杀死库渲染线程（0.5.0 已知缺陷）：每周期检查并
+            // 立即复活引擎，避免用户看到玻璃永久消失退回旧渲染路径。
+            crate::platform::windows::glass_engine::revive_if_dead(&self.ctx.config);
+            // 画布主循环唤醒保险丝：0.5.1 已在库侧内建同构 100ms 定时器（#3），
+            // 这里按库侧指南降频保留为双保险（只 PostMessage(WM_NULL)，零阻塞）。
+            crate::platform::windows::glass_engine::wake_canvas_idle();
+            // 块状态诊断快照（debug 级，1 s 一条）：定位「某个框点不动」的唯一硬证据。
+            crate::platform::windows::glass_engine::debug_log_blocks();
             if crate::platform::windows::mem_probe::due() {
                 crate::platform::windows::mem_probe::log_breakdown();
             }

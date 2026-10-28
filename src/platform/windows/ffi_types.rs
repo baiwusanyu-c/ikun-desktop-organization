@@ -157,6 +157,8 @@ pub const WM_PAINT: u32 = 0x000F;
 pub const WM_DESTROY: u32 = 0x0002;
 pub const WM_SIZE: u32 = 0x0005;
 pub const WM_NCHITTEST: u32 = 0x0084;
+pub const WM_NCLBUTTONDOWN: u32 = 0x00A1;
+pub const WM_NCLBUTTONUP: u32 = 0x00A2;
 pub const WM_NCLBUTTONDBLCLK: u32 = 0x00A3;
 pub const WM_SETCURSOR: u32 = 0x0020;
 pub const WM_GETMINMAXINFO: u32 = 0x0024;
@@ -166,6 +168,7 @@ pub const WM_LBUTTONDOWN: u32 = 0x0201;
 #[allow(dead_code)]
 pub const WM_LBUTTONUP: u32 = 0x0202;
 pub const WM_LBUTTONDBLCLK: u32 = 0x0203;
+pub const WM_RBUTTONDOWN: u32 = 0x0204;
 pub const WM_RBUTTONUP: u32 = 0x0205;
 pub const WM_MOUSELEAVE: u32 = 0x02A3;
 pub const WM_CAPTURECHANGED: u32 = 0x0215;
@@ -672,6 +675,12 @@ pub const WM_USER_GRID_REDRAW: u32 = WM_APP + 23;
 /// 按当前液态玻璃开关重设分类框留白、定时器并重绘。
 /// 引擎缩放会话开始/结束转发（wParam=1 开始，0 结束）
 pub const WM_USER_GLASS_RESIZE: u32 = WM_APP + 25;
+/// 库 FocusHint 转发：宿主代理窗口在自己线程上 SetFocus 自己（同线程调用必成）
+pub const WM_USER_GLASS_FOCUS: u32 = WM_APP + 26;
+/// 鼠标按键状态标志（合成消息 wparam 用，与 Win32 MK_* 同值）
+pub const MK_LBUTTON: usize = 0x0001;
+pub const MK_RBUTTON: usize = 0x0002;
+
 pub const WM_USER_CUT_FILE_MOVED: u32 = WM_APP + 17;
 /// 通知覆盖窗口：外部文件拖拽放置完成（由 overlay IDropTarget PostMessage 触发）
 pub const WM_USER_OVERLAY_DROP: u32 = WM_APP + 18;

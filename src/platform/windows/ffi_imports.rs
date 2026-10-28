@@ -23,6 +23,7 @@ extern "system" {
     // Window management
 
     pub fn GetModuleHandleW(lpModuleName: *const u16) -> HINSTANCE;
+    pub fn UnregisterClassW(lpClassName: *const u16, hInstance: HINSTANCE) -> i32;
 
     pub fn GetLastError() -> u32;
 
@@ -102,6 +103,9 @@ extern "system" {
     pub fn GetCursorPos(lpPoint: *mut POINT) -> i32;
 
     pub fn GetAsyncKeyState(vKey: i32) -> i16;
+
+    /// 用户设置的双击时间窗口（ms）：sink 侧合成双击要用。
+    pub fn GetDoubleClickTime() -> u32;
 
     #[allow(dead_code)]
     pub fn SetCapture(hWnd: HWND) -> HWND;

@@ -124,6 +124,18 @@ set_movable/set_interactive/set_resizable（固定/解锁）、WindowLevel::Alwa
 monitors/occlusion/fullscreen、log facade 与事件。
 
 ### 项目侧移植计划（等 P0-1/P0-2 就绪后执行）
+
+> **进度（2026-10-26，库 0.5.0 已发布）**：PR-A 已落地——输入路由 sink（Down/Up/Move/双击/右键/滚轮
+> 合成标准消息转投代理窗口，标题拖拽走 WM_NCLBUTTONDOWN 模态循环复用既有 WM_MOVING 同步）、
+> 命中几何快照（BlockGeom + 锁/更多按钮纯函数判定 + 单测）、内容推流（第一趟 content DIB →
+> update_content，静态零成本）、代理窗口全透明 ULW 帧（可聚焦不可命中）、FocusHint→同线程 SetFocus、
+> 画布级 IDropTarget 转发器（RegisterDragDrop 实测注册成功，回调行为待实机验证）、
+> 引擎模式禁用 DComp 预建。514 测试全绿、warning 51<基线 54。
+> **待实机验收**：图标点选/框选/双击/右键/hover/滚轮/标题拖拽+吸附参考线/grip 缩放+border 反馈/
+> 锁定/拖入/拖出/键盘 ESC/tooltip/多框叠放。
+> **遗留（PR-B）**：hover_edge 与捕获层死代码清理、content_bitmap 引擎模式免建、clear_content 时机、
+> 拖入回调线程行为验证（若 RegisterDragDrop 跨线程注册有隐性问题，需库补 canvas hook）。
+
 1. grid_window：退役每框 ULW 窗口 → "GlassBlockView"（注册表 + 内容重绘推流 + 事件消费）；
    仅保留一个进程级隐藏壳窗口（键盘焦点 / OLE 锚点 / 定时器消息）。
 2. wnd_proc：图标/标题/按钮/框选/菜单逻辑迁到 input sink 适配层（坐标=块内物理像素）；
@@ -146,6 +158,144 @@ monitors/occlusion/fullscreen、log facade 与事件。
 5. **日志**：库走 `log` facade 自动进 env_logger 滚动文件；`EngineConfig.log_level=Trace`（库构造会 `log::set_max_level` 全局门闩，取 Trace 避免收紧项目其他模块日志级别，实际过滤权留在项目 env_logger）；`EngineEvent` 全量映射为中文日志（runtime tick 消费）；mem_probe `[内存分解]` 的玻璃段改报引擎指标（fps/质量档/屏数/块数），`FRAME_TIMINGS` 由 thread_local 改全局 Mutex（输出方与记账方不同线程）。
 6. **坐标换算**：块 `x/y` 传虚拟屏物理像素（与 GetWindowRect 同系），`w/h` 传逻辑像素 = 物理 ÷ (该屏DPI/主屏DPI)；回读用 `WindowSnapshot.scale` 乘回。单测钉死往返。
 7. **已知行为变化**：库会把块中心钳制在所在屏内（最多半出屏），分类框无法整体拖出屏外（防丢失，替代旧「可拖没」行为）。
+
+## 缺陷修复记录（2026-10-26 用户实机验收：双层残留在 sink 首版实现引发 5 症状）
+
+**根因（全部在宿主侧，liquid-verre-rs 无缺陷）**：
+1. 逐条转发库 120Hz 的 `WM_MOUSEMOVE` 到代理窗口 → posted 移动不像真实输入被系统
+   合并 → 消息洪水压垮宿主队列 → 症状②按钮点不动、④hover 闪烁（状态抖动+渲染风暴）。
+2. 合成 `WM_NCLBUTTONDOWN(HTCAPTION)` 借系统模态移动循环 → posted down/up 与模态
+   启动存在竞态（up 先于模态建立即丢失）→ 症状③主线程永久挂死在模态循环、⑤无法拖拽。
+3. 症状①双击无反应为 ②③ 队列堵塞的连带表现。
+
+**修复（按库结论「接管式拖拽」配方）**：
+- sink 只转发低频事件（Down/Up/双击/右键/滚轮），`Move` 仅记录 last_local（供
+  cursor_override），不再进宿主队列；
+- 标题区 Down（未锁定）→ `begin_box_drag`：代理窗口 SetCapture + 16ms 定时器轮询
+  GetCursorPos → SetWindowPos → `WM_WINDOWPOSCHANGED` 反向 push 块矩形；Up 收尾
+  `end_box_drag`：回读库权威块矩形对齐（库「中心不出屏」clamp 边界防撕裂）→
+  参考线退出 + save_config；
+- hover/tooltip 改为 100ms 低频轮询（`poll_glass_hover`：块内 SendMessage 合成
+  WM_MOUSEMOVE 复用既有 handler，块外补发 WM_MOUSELEAVE）；
+- 定时器三档：hover 100ms ↔ 移动/缩放会话 16ms（`switch_glass_timer`）。
+
+**自动化验证（SendInput + 定向 PostMessage；桌面被用户窗口覆盖，截图受 WDA 屏蔽，
+以日志/配置为证据）**：锁定按钮切换 ✓；标题双击 → edit-box 窗口创建 ✓；拖拽移动 +
+出屏 clamp 对齐 + 配置保存 ✓；缩放会话状态机 begin→follow→end→save ✓；滚轮/hover
+消息无崩溃 ✓；全程主线程存活无卡死 ✓；514 单测全绿、warning 51<基线 54 ✓。
+
+**待用户实机视觉确认**：hover 高亮稳定性（无闪烁）、边缘缩放 border 反馈、拖拽参考线、tooltip。
+
+## 缺陷修复记录（2026-10-27 用户实机验收：升 0.5.1 后「整个分类框完全不可用」5 症状）
+
+**根因 1：锁定（固定）= 输入全灭**（症状 1/2/4/5 的直接原因，宿主侧接线错误）
+- `attach_box` / `set_box_locked` 把锁定实现成 `GlassWindow::set_interactive(!locked)`。
+  库对 `interactive=false` 的语义是「块不参与点击穿透判定」（库 `runtime/mod.rs` 的
+  `inside` 计算、`core/draw.rs` 注释），于是画布恒带 `WS_EX_TRANSPARENT`。
+- 引擎架构下分类框窗口是**全透明代理窗**（`d2d_render` 只提交全透明帧，画面由库合成），
+  命中链「代理窗透明像素 → 库画布 → sink → 代理窗」在第二环就断：整块区域收不到任何
+  鼠标消息 → 按钮点不动、标题双击无反应、hover 不动、拖不动，**连解锁都做不到**。
+  用户两个框当时都是 `locked=true`（`~/.ikun_organizer.json`），故表现为整体不可用。
+- 修复：新增单一口径 `block_config_for(style_cfg, logical, locked)` —— 锁定只关
+  `resize.enabled`（库的缩放把手与会话），`interactive` **恒为 true**；标题拖拽是否
+  放行仍由 sink 的 `BlockGeom::locked` + 内容层 `WM_LBUTTONDOWN` 判定（两处既有逻辑）。
+  回归钉：单测 `locked_block_keeps_input_routing_and_disables_resize_handles`。
+
+**根因 2：debug 构建下库渲染线程约 4.4 分钟必死**（症状 3「一拖就卡死」的时间线来源）
+- 库 `core/quality.rs:225` 的 `good_streak: u8` 在质量档 0（正常机器永不升档，故永不复位）
+  下每个统计窗口自增，256 拍后 `+= 1` 触发 dev 的 overflow-checks panic。
+- panic 会跳过库的 `set_running(false)`，`Engine::is_running()` 永远停在 `true`
+  → 宿主 `revive_if_dead` 永不触发 → 日志持续 `玻璃引擎[运行中] fps=0`，画布不再摘除
+  穿透位、sink 停摆，分类框玻璃与全部块输入死亡。
+- 日志实锤（本日 4 次，均在引擎启动后约 266 s）：09:35:55(0.5.0)、16:16:32、16:42:53、
+  16:58:47(0.5.1)。release 不开溢出检查（静默回绕），所以打包版没暴露。
+- 宿主侧止血：`Cargo.toml` 加 `[profile.dev.package.liquid-verre-rs] overflow-checks=false`
+  让依赖在 dev 下与 release 语义一致（库发 0.5.2 后可删）。
+- 补 panic 感知复活：`main.rs` panic hook 命中 `liquid-verre` 源码位置时
+  `glass_engine::mark_engine_suspect()`（hook 内绝不调用引擎 API，防自死锁）；
+  `revive_if_dead` 增加「嫌疑标志 + 快照 epoch 连续 2 拍停滞」双条件通道，
+  10 s 限流，不再单靠会说谎的 `is_running()`。
+- **库侧根治（一行，待 0.5.2）**：`good_streak`/`bad_streak` 改 `saturating_add(1)`。
+
+**顺带修掉的工程问题**
+1. 工作树编译不过：`poll_glass_hover` 引用 `GridWindowData::hover_out_ticks` 但结构体无该
+   字段（上一轮改动只落一半）→ 补字段与三处初始化；hover「离开块」需连续 2 拍才补发
+   `WM_MOUSELEAVE`（单拍越界抖动正是 hover 闪烁源）。
+2. 接管式拖拽看门狗：`on_grid_refresh_tick` 中若左键已物理抬起却未收到 UP，强制
+   `end_box_drag` 收尾（否则窗口以 16ms 追着手跑 = 用户看到的「卡死」）；
+   `begin_box_drag` 在库缩放会话期间直接让位，避免两套状态机抢同一窗口。
+3. sink 的 `Move` 日志降为 debug（INFO 级下 120Hz 刷日志）。
+4. `wake_canvas_idle` / `revive_if_dead` 的注释口径更新到 0.5.1（注销窗口类的绕法已随
+   库 #2 修复移除；wake 按库侧建议降频保留为双保险）。
+
+**验证结论**
+- `cargo test` 515 全绿（含新增 2 条回归钉）、`cargo fmt --check` 干净、`cargo build`
+  54 warnings（与基线持平）。
+- 宿主消息链路（PostMessage 复现 sink 下发序列）：锁定按钮切换 ✓、标题双击 → 创建
+  edit-box 窗口 ✓、三点菜单 → 菜单窗口创建 ✓、图标点击 `[CLICK] hit=0` ✓。
+- **端到端真实鼠标未能在 Codex 执行环境验证**：该环境被 Job Object 限制
+  （`SetCursorPos`/`SendInput` 返回 err=5、`OpenDesktop` 拒绝访问、DDA
+  `DuplicateOutput` 0x80070005 → 库回退 WGC 且渲染循环 fps=0、块 `is_alive()=false`），
+  「画布摘除 `WS_EX_TRANSPARENT` → sink 收到事件」这一环需用户在真实桌面验收。
+  另：分类框窗口带 `WDA_EXCLUDEFROMCAPTURE`，截图看不到框体，核对画面请设
+  `IKUN_ALLOW_CAPTURE=1` 后重启。
+
+**用户验收清单（0.5.1 + 本轮修复）**
+1. 未锁定态：标题空白处按下即可拖走整框，拖拽中出现对齐参考线，松手后布局落盘。
+2. 锁定态（点锁定按钮变锁）：框不可拖不可缩放，但图标点击/选中/右键菜单/锁定按钮本身
+   仍然可点，且能再点一次解锁（旧行为：锁上即全死）。
+3. 标题双击 → 弹出「编辑分类框」窗口；三点菜单按钮 → 弹出菜单；图标 hover 高亮稳定不闪。
+4. 挂机 10 分钟（跨过旧 panic 时间点 266 s）后日志无 `[PANIC] ... quality.rs`，
+   `mem_probe` 的 `玻璃引擎[...] fps` 不归零，分类框仍可交互。
+5. 若仍出现「运行几分钟后全灭」：抓 `~/.ikun_organizer_log` 里 `PANIC` 与
+   `玻璃引擎[运行中] fps=0` 两行，即为库侧渲染线程再次死亡，需推 0.5.2 的 saturating 修复。
+
+## 缺陷修复记录（2026-10-28 用户复验：锁定已正常，其余 4 症状的另两条根因）
+
+用户复验反馈「只有固定（锁定）好了，其他照旧」。真实鼠标复现 + 日志逐条定位到两条新根因，
+都与上一轮的两条无关：
+
+**根因 3：库画布窗口类没有 `CS_DBLCLKS` → 双击标题永远不触发**（症状 1）
+- 库 `platform/window.rs` 注册画布类只给了 `style: CS_CLASSDC`。没有 `CS_DBLCLKS`，
+  Windows 不会产生 `WM_LBUTTONDBLCLK`，库的 `PointerPhase::DoubleClick` 分支
+  （`window.rs:206`）永远不执行。
+- 日志实锤（09:50:20 / 09:50:22）：用户在标题上双击，sink 只收到**两组独立 Down/Up**，
+  每组还各自拉起一次接管式拖拽（begin→end + `收集布局数据` + save_config），编辑框从不弹。
+- 修复（宿主侧合成，不依赖库发版）：sink 自己按系统节律判定双击 ——
+  `RouteState` 记录上次 Down 的单调 ms 与块内坐标，第二次 Down 落在
+  `GetDoubleClickTime()` + `SM_C?DOUBLECLK/2`（按 DPI 折算到物理像素）容差内即判双击，
+  走与真相位同一个投递口 `post_double_click`（标题→`WM_NCLBUTTONDBLCLK(HTCAPTION)`，
+  主体→`WM_LBUTTONDBLCLK`）。纯函数 `is_double_click` + 单测钉死。
+- 两个必要约束：**按钮热区不参与合成双击**（锁定/更多上连点两次是「切换两次」，
+  不能被解释成「双击标题=开编辑框」）；一次双击只认一次（三连击不会变两次双击）。
+- 待库侧根治（并入 0.5.2 清单）：画布类补 `CS_DBLCLKS`。补上后本合成逻辑自然退化为
+  「与真相位同口径」，不会双触发（真 DoubleClick 走同一 helper）。
+
+**根因 4：库 FocusHint 抢回焦点 → 刚弹出的模态菜单立刻自杀**（症状 2 的三点按钮）
+- 三点按钮在 `WM_LBUTTONDOWN` 里同步调用 `show_menu_window`，菜单靠
+  `WM_ACTIVATE(WA_INACTIVE)` 关闭；而块被按压消费后库会发 FocusHint，
+  宿主在 `WM_USER_GLASS_FOCUS` 里对代理窗 `SetFocus` —— 菜单刚建好就被抢走焦点，
+  下一拍 `WA_INACTIVE` 直接关掉，用户侧就是「点了没反应」。
+- 修复：`WM_USER_GLASS_FOCUS` 在「本框菜单打开中 / 图标就地重命名编辑中」时忽略抢焦点。
+- 验证（不碰光标的 PostMessage 复刻 sink 序列，两个框都过）：
+  `Down → DesktopOrgMenu 创建(0x320ef4) → 再投 WM_USER_GLASS_FOCUS → 菜单仍存活 → ESC 正常关闭`。
+
+**顺带（同一轮日志暴露的浪费）**
+- 接管式拖拽的参考线 overlay 改为**懒创建**：`begin_box_drag` 不再立刻拉起
+  5040x2080 全屏 overlay，首次产生真实位移时才 `on_enter_size_move`；
+  没有位移就既不建 overlay 也不 `save_config`（旧实现标题每点一次写一次配置）。
+- 新增 `debug_log_blocks()`（debug 级、1 s 一条）打印每块库侧真值
+  `rect/interactive/visible/occluded/hovered/moving/resizing/resize_enabled/movable`，
+  以后「某个框点不动、另一个正常」一眼可判。
+- 实测：光标进块 → 画布摘除 `WS_EX_TRANSPARENT` 延迟 **23–25 ms**（锁定框同样在线）。
+
+**2026-10-28 真实输入复验结果**
+- 锁定按钮 ✓（用户手点：`锁定状态切换: 已解锁 → 开发工具`）
+- 图标点击/选中/框间拖拽 ✓（`[CLICK] hit=0/2`、`handle_box_to_box_move`）
+- 标题双击 → 编辑框 ✓（`WM_NCLBUTTONDBLCLK 触发编辑分类框对话框` + `按需创建持久 WebView 窗口: edit-box`）
+- 三点菜单 ✓（FocusHint 后存活，ESC 正常关闭）
+- 待用户目视确认：拖拽跟手 + 对齐参考线出现/消失时机、图标与按钮 hover 是否还闪
+  （屏幕录制不可用：分类框窗口带 `WDA_EXCLUDEFROMCAPTURE`）。
 
 ## 实施顺序
 

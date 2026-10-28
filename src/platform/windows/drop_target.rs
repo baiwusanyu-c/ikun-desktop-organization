@@ -953,3 +953,188 @@ mod helper_lifecycle_tests {
         assert_eq!(call_order.len(), 3, "必须恰好 3 步");
     }
 }
+
+// =============================================================================
+// 画布级转发 IDropTarget（引擎模式专用）
+// =============================================================================
+//
+// 引擎激活时分类框代理窗口提交的是全透明帧 → OLE 的鼠标命中链落在
+// liquid-verre-rs 的每屏画布 HWND 上，注册在代理窗口的 BoxDropTarget 再也
+// 收不到 DragEnter。这里给每块画布注册一个无状态转发器：按拖拽点坐标路由
+// 到对应分类框的 BoxDropTarget，直接调用其 vtable 方法，令「拖入接收」
+// 在库窗口模型下原样工作。转发器与 BoxDropTarget 同处本模块，vtable 布局
+// 一致，调用约定为普通 COM 指针调用（回调发生在库画布的渲染线程上，
+// BoxDropTarget 的实现只写全局 pending 队列 + PostMessage，线程安全）。
+
+/// 转发器当前路由到的 BoxDropTarget（isize 裸指针，0=无）。
+/// Enter 建立、Leave/Drop 清除；OLE 拖放序列在源端是单线程串行的。
+static CANVAS_ROUTED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+// 已注册过转发器的画布 HWND 集合（幂等去重，跨线程访问加锁）。
+lazy_static::lazy_static! {
+    static ref CANVAS_BOUND: std::sync::Mutex<std::collections::HashSet<isize>> =
+        std::sync::Mutex::new(std::collections::HashSet::new());
+}
+
+#[repr(C)]
+struct CanvasDropTarget {
+    vtbl: *const IDropTargetVtbl,
+}
+
+static CANVAS_DT_VTBL: IDropTargetVtbl = IDropTargetVtbl {
+    query_interface: canvas_target_query_interface,
+    add_ref: canvas_target_add_ref,
+    release: canvas_target_release,
+    drag_enter: canvas_target_drag_enter,
+    drag_over: canvas_target_drag_over,
+    drag_leave: canvas_target_drag_leave,
+    drop: canvas_target_drop,
+};
+
+unsafe extern "system" fn canvas_target_query_interface(
+    this: *mut c_void,
+    riid: *const u8,
+    ppv: *mut *mut c_void,
+) -> HRESULT {
+    if ppv.is_null() {
+        return E_POINTER;
+    }
+    let iid = std::slice::from_raw_parts(riid, 16);
+    if iid == IID_IUNKNOWN || iid == IID_IDROPTARGET {
+        *ppv = this;
+        canvas_target_add_ref(this);
+        S_OK
+    } else {
+        *ppv = std::ptr::null_mut();
+        E_NOINTERFACE
+    }
+}
+
+/// 转发器是进程级单例：引用计数恒为 1（不拥有 BoxDropTarget 的所有权，
+/// 被路由对象的生命周期由其所属分类框窗口管理）。
+unsafe extern "system" fn canvas_target_add_ref(_this: *mut c_void) -> u32 {
+    1
+}
+
+unsafe extern "system" fn canvas_target_release(_this: *mut c_void) -> u32 {
+    1
+}
+
+/// POINTL(i64) → 屏幕坐标 → 命中分类框的 BoxDropTarget 裸指针。
+unsafe fn canvas_route(ptl: i64) -> *mut BoxDropTarget {
+    let x = ptl as i32;
+    let y = (ptl >> 32) as i32;
+    let agent = super::zorder::find_grid_window_at_point(x, y);
+    if agent.is_null() {
+        return std::ptr::null_mut();
+    }
+    match super::grid_window::get_data(agent) {
+        Some(data) if !data.drop_target_ptr.is_null() => data.drop_target_ptr as *mut BoxDropTarget,
+        _ => std::ptr::null_mut(),
+    }
+}
+
+unsafe fn canvas_call_enter(
+    t: *mut c_void,
+    data_obj: *mut c_void,
+    ks: u32,
+    ptl: i64,
+    effect: *mut u32,
+) -> HRESULT {
+    let vtbl = *(t as *const *const IDropTargetVtbl);
+    ((*vtbl).drag_enter)(t, data_obj, ks, ptl, effect)
+}
+
+unsafe extern "system" fn canvas_target_drag_enter(
+    _this: *mut c_void,
+    data_obj: *mut c_void,
+    ks: u32,
+    ptl: i64,
+    effect: *mut u32,
+) -> HRESULT {
+    let target = canvas_route(ptl);
+    if target.is_null() {
+        if !effect.is_null() {
+            *effect = 0;
+        }
+        return S_OK;
+    }
+    CANVAS_ROUTED.store(target as usize, std::sync::atomic::Ordering::SeqCst);
+    canvas_call_enter(target as *mut c_void, data_obj, ks, ptl, effect)
+}
+
+unsafe extern "system" fn canvas_target_drag_over(
+    _this: *mut c_void,
+    ks: u32,
+    ptl: i64,
+    effect: *mut u32,
+) -> HRESULT {
+    // 目标以 Enter 时路由为准（Over 的坐标在框边缘抖动时可能短暂脱靶）；
+    // 若路由丢失则按当前坐标重新解析。
+    let mut target = CANVAS_ROUTED.load(std::sync::atomic::Ordering::SeqCst) as *mut BoxDropTarget;
+    if target.is_null() {
+        target = canvas_route(ptl);
+    }
+    if target.is_null() {
+        if !effect.is_null() {
+            *effect = 0;
+        }
+        return S_OK;
+    }
+    let t = target as *mut c_void;
+    let vtbl = *(t as *const *const IDropTargetVtbl);
+    ((*vtbl).drag_over)(t, ks, ptl, effect)
+}
+
+unsafe extern "system" fn canvas_target_drag_leave(_this: *mut c_void) -> HRESULT {
+    let routed = CANVAS_ROUTED.swap(0, std::sync::atomic::Ordering::SeqCst) as *mut c_void;
+    if routed.is_null() {
+        return S_OK;
+    }
+    let vtbl = *(routed as *const *const IDropTargetVtbl);
+    ((*vtbl).drag_leave)(routed)
+}
+
+unsafe extern "system" fn canvas_target_drop(
+    _this: *mut c_void,
+    data_obj: *mut c_void,
+    ks: u32,
+    ptl: i64,
+    effect: *mut u32,
+) -> HRESULT {
+    let mut target =
+        CANVAS_ROUTED.swap(0, std::sync::atomic::Ordering::SeqCst) as *mut BoxDropTarget;
+    if target.is_null() {
+        target = canvas_route(ptl);
+    }
+    if target.is_null() {
+        if !effect.is_null() {
+            *effect = 0;
+        }
+        return S_OK;
+    }
+    let t = target as *mut c_void;
+    let vtbl = *(t as *const *const IDropTargetVtbl);
+    ((*vtbl).drop)(t, data_obj, ks, ptl, effect)
+}
+
+/// 为全部画布注册转发 IDropTarget（幂等；引擎启动与 MonitorsChanged 后调用）。
+pub fn rebind_canvas_drop_targets() {
+    for canvas in super::glass_engine::canvas_hwnds() {
+        let Ok(mut bound) = CANVAS_BOUND.lock() else {
+            return;
+        };
+        if bound.contains(&canvas) {
+            continue;
+        }
+        let obj = Box::into_raw(Box::new(CanvasDropTarget {
+            vtbl: &CANVAS_DT_VTBL,
+        }));
+        let hr = unsafe { RegisterDragDrop(canvas as HWND, obj as *mut c_void) };
+        if hr == S_OK {
+            bound.insert(canvas);
+            log::info!("画布拖放转发器已注册: canvas={canvas:#X}");
+        } else {
+            log::warn!("画布拖放转发器注册失败: canvas={canvas:#X}, hr={hr:#010X}");
+        }
+    }
+}

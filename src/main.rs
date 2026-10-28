@@ -72,6 +72,17 @@ fn install_panic_hook() {
                 location.column()
             );
         }
+        // 库侧 panic 会直接杀死玻璃渲染线程，且库的 `running` 标志停在 true
+        // （退出路径被 panic 跳过），宿主无法靠 `is_running()` 发现。这里按栈地址
+        // 记一个「嫌疑渲染线程已死」标志，交给 runtime tick 做确认后复活。
+        // 只置标志，绝不在 hook 里调引擎 API：hook 运行在正在死亡的那个线程上，
+        // 可能正持着库内写锁，一调就死锁。
+        #[cfg(windows)]
+        if let Some(location) = info.location() {
+            if location.file().replace('\\', "/").contains("liquid-verre") {
+                crate::platform::windows::glass_engine::mark_engine_suspect();
+            }
+        }
         let backtrace = std::backtrace::Backtrace::force_capture();
         log::error!("[PANIC] 回溯:\n{backtrace}");
         // 旁路直写文件：日志器本身卡死时 panic 也要留下证据

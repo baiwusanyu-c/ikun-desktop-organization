@@ -402,34 +402,6 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 return HTCLIENT as LRESULT;
             }
 
-            // ===== 引擎激活路径 =====
-            // 玻璃底板由 liquid-verre-rs 画布渲染在内容层之下：边缘/四角把手带
-            // （库命中带宽 = grip_px × 所在屏 DPI 比例，物理像素）在内容渲染时保持
-            // alpha=0，ULW 对全透明像素自动穿透鼠标 → 库画布直接收到 hover/按压，
-            // 绘制加粗 border 反馈并驱动缩放会话。这里能走到说明像素不透明：
-            // 标题栏 → HTCAPTION（原生拖拽移动，WM_MOVING 同步玻璃块矩形）；
-            // 主体 → HTCLIENT（图标点选 / 橡皮筋 / 拖出等原有交互全部保留）。
-            let has_glass = data_opt
-                .as_ref()
-                .map(|d| {
-                    super::glass_engine::is_active() && super::glass_engine::has_box(d.config_id)
-                })
-                .unwrap_or(false);
-            if has_glass {
-                // 清掉旧的边缘指示状态（引擎路径不画宿主指示条，避免残留一帧）
-                if let Some(data) = get_data(hwnd) {
-                    if data.hover_edge != 0 {
-                        data.hover_edge = 0;
-                        render_layered_window(hwnd);
-                    }
-                }
-                return if dy < title_h {
-                    HTCAPTION as LRESULT
-                } else {
-                    HTCLIENT as LRESULT
-                };
-            }
-
             // 未锁定：正常边缘缩放检测（统一计算 result，最后更新 hover_edge）
             let edge = scale_for_dpi(8, dpi);
             let result: i32;
@@ -557,6 +529,23 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 }
             }
             render_layered_window(hwnd);
+            // 尺寸变了 → sink 命中几何快照跟着更新（标题区/按钮矩形随宽高与 DPI 变化）。
+            if let Some(data) = get_data(hwnd) {
+                if super::glass_engine::has_box(data.config_id) {
+                    let (cw, _ch) = get_grid_content_rect(hwnd)
+                        .map(|r| (r.right - r.left, r.bottom - r.top))
+                        .unwrap_or((0, 0));
+                    super::glass_engine::update_block_geom(
+                        data.config_id,
+                        super::glass_engine::BlockGeom {
+                            win_w: cw,
+                            title_h: data.title_h,
+                            dpi,
+                            locked: data.locked,
+                        },
+                    );
+                }
+            }
             0
         }
 
@@ -628,6 +617,12 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             // 逻辑全部跳过（实测高速甩动时模态循环饥饿、渲染崩到 3fps）。
             if IN_DRAG.get() {
                 return 0;
+            }
+            // 接管式移动会话（SetCapture 后真实 move 到达）：同样跳过悬停逻辑。
+            if let Some(data) = get_data(hwnd) {
+                if data.box_drag_active {
+                    return 0;
+                }
             }
             let (mx, my) = content_point_from_lparam(hwnd, lparam);
 
@@ -832,6 +827,23 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 false
             };
 
+            // ===== 引擎路径：标题区（非按钮）按压 = 接管式移动会话 =====
+            // posted WM_LBUTTONDOWN 不带 NC 语义，标题命中由这里自行判定；
+            // begin_box_drag 内 SetCapture 后，真实 WM_LBUTTONUP 归本窗收尾。
+            if !lock_clicked && !more_clicked {
+                let glass_title = get_data(hwnd).map(|d| {
+                    let glass = super::glass_engine::is_active()
+                        && super::glass_engine::has_box(d.config_id);
+                    (glass && click_y < d.title_h, d.locked)
+                });
+                if let Some((true, locked)) = glass_title {
+                    if !locked {
+                        super::grid_window::begin_box_drag(hwnd);
+                    }
+                    return 0;
+                }
+            }
+
             if lock_clicked {
                 // 切换锁定状态
                 if let Some(data) = get_data(hwnd) {
@@ -839,6 +851,23 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                     // 固定（锁定）联动：玻璃块退出生效命中区（库把手不再响应），
                     // 解锁时按当前配置恢复边缘缩放。
                     super::glass_engine::set_box_locked(data.config_id, data.locked);
+                    // sink 的标题拖拽判定依赖锁定态，快照同步刷新。
+                    if super::glass_engine::has_box(data.config_id) {
+                        let (cw, _ch) = get_grid_content_rect(hwnd)
+                            .map(|r| (r.right - r.left, r.bottom - r.top))
+                            .unwrap_or((0, 0));
+                        let dpi_now = unsafe { GetDpiForWindow(hwnd) };
+                        let dpi_now = if dpi_now > 0 { dpi_now } else { 96 };
+                        super::glass_engine::update_block_geom(
+                            data.config_id,
+                            super::glass_engine::BlockGeom {
+                                win_w: cw,
+                                title_h: data.title_h,
+                                dpi: dpi_now,
+                                locked: data.locked,
+                            },
+                        );
+                    }
                     log::info!(
                         "锁定状态切换: {} → {}",
                         if data.locked {
@@ -900,14 +929,14 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                         // Sort by (row, col) to get left-to-right, top-to-bottom visual order
                         visual_order.sort_by(|x, y| x.1.cmp(&y.1).then(x.2.cmp(&y.2)));
 
-                        log::info!(
+                        log::debug!(
                             "[SHIFT-CLICK] anchor={}, target={}, cols={}, visual_order:",
                             a,
                             hi,
                             cols
                         );
                         for (vo_idx, &(item_idx, r, c)) in visual_order.iter().enumerate() {
-                            log::info!(
+                            log::debug!(
                                 "[SHIFT-CLICK]   visual[{}] = item[{}] at ({},{})",
                                 vo_idx,
                                 item_idx,
@@ -923,7 +952,11 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                         if let (Some(av), Some(tv)) = (anchor_vo, target_vo) {
                             let lo_vo = av.min(tv);
                             let hi_vo = av.max(tv);
-                            log::info!("[SHIFT-CLICK] visual range: visual[{}..={}]", lo_vo, hi_vo);
+                            log::debug!(
+                                "[SHIFT-CLICK] visual range: visual[{}..={}]",
+                                lo_vo,
+                                hi_vo
+                            );
 
                             if !ctrl_down {
                                 super::multi_select::clear();
@@ -938,13 +971,15 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                                 super::multi_select::add(k);
                             }
                         } else {
-                            log::warn!("[SHIFT-CLICK] anchor or target not found in visual_order!");
+                            log::debug!(
+                                "[SHIFT-CLICK] anchor or target not found in visual_order!"
+                            );
                         }
 
                         // Ensure clicked item is in selection
                         super::multi_select::add(key);
                         let selected_now = super::multi_select::selected_in_container(ct, cid);
-                        log::info!(
+                        log::debug!(
                             "[SHIFT-RESULT] Final selection: {} items = {:?}",
                             selected_now.len(),
                             selected_now
@@ -1360,6 +1395,14 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         }
         WM_DESTROY => {
             KillTimer(hwnd, TIMER_ID_LIQUID_GLASS);
+            // 接管式移动会话未收尾即销毁时释放捕获（保存由整体退出路径负责）。
+            if let Some(data) = get_data(hwnd) {
+                if data.box_drag_active {
+                    unsafe {
+                        ReleaseCapture();
+                    }
+                }
+            }
             let data_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GridWindowData;
             if !data_ptr.is_null() {
                 let mut data = Box::from_raw(data_ptr);
@@ -1401,6 +1444,25 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         // ===== 异步重绘请求（样式配置变更后由 Tauri 线程 PostMessage 触发）=====
         WM_USER_GRID_REDRAW => {
             render_layered_window(hwnd);
+            0
+        }
+
+        // ===== 库 FocusHint 转发：同线程 SetFocus（代理窗全透明但可见，合法可聚焦）=====
+        WM_USER_GLASS_FOCUS => {
+            // 例外：这次按压已经把焦点交给了模态 UI（三点菜单 / 图标就地重命名）。
+            // 菜单靠 WM_ACTIVATE(WA_INACTIVE) 自杀，代理窗抢回焦点会让菜单
+            // 「刚弹出就关掉」，用户侧表现为三点按钮点了没反应
+            // （2026-10-28 日志实锤：Down → 菜单建 D2D 目标 → 立刻无下文）。
+            let modal_ui = get_data(hwnd)
+                .map(|d| d.menu.open || d.renaming_item_index >= 0)
+                .unwrap_or(false);
+            if modal_ui {
+                log::debug!("忽略库 FocusHint：模态菜单/重命名编辑中，焦点不得抢回代理窗");
+                return 0;
+            }
+            unsafe {
+                SetFocus(hwnd);
+            }
             0
         }
 
@@ -1497,6 +1559,11 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         // ===== 鼠标左键释放：完成自定义拖拽 / 取消拖拽检测 =====
         WM_LBUTTONUP => {
             if let Some(data) = get_data(hwnd) {
+                // 接管式移动会话收尾（真实捕获 up 或 posted up 均到达此处）。
+                if data.box_drag_active {
+                    super::grid_window::end_box_drag(hwnd);
+                    return 0;
+                }
                 if data.marquee_active {
                     let ctrl_down = unsafe { GetAsyncKeyState(VK_CONTROL) } & 0x8000u16 as i16 != 0;
                     data.marquee_active = false;

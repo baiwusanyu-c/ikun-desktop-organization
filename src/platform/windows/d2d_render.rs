@@ -27,7 +27,7 @@ use std::ffi::c_void;
 
 use windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE_PREMULTIPLIED;
 use windows::Win32::Graphics::Direct2D::{
-    Common::{D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F, D2D_SIZE_U},
+    Common::{D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_SIZE_U},
     ID2D1Bitmap, ID2D1DCRenderTarget, ID2D1Image, D2D1_ANTIALIAS_MODE_ALIASED,
     D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_PROPERTIES,
     D2D1_BITMAP_PROPERTIES1, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_INTERPOLATION_MODE_LINEAR,
@@ -604,13 +604,7 @@ fn render_layered_window_inner(hwnd: HWND) {
     // 全部由 liquid-verre-rs 画布在内容窗口之下渲染。
     let glass_active =
         super::glass_engine::is_active() && super::glass_engine::has_box(data.config_id);
-    // 库缩放把手带物理宽度：内容层在 ULW/DComp 前景里留出这条全透明带，
-    // 点击自动穿透到下层画布，由库完成边缘缩放与悬停加粗 border 反馈。
-    let grip_band = if glass_active {
-        super::glass_engine::resize_grip_band(data.config_id)
-    } else {
-        0.0
-    };
+    // 引擎模式下代理窗口只提交全透明帧（命中由库 sink 路由），无需捕获带。
     // D2D 坐标系为物理像素，回退路径需手动缩放以与液态玻璃路径保持一致
     let fallback_radius = box_style.border_radius * dpi_scale;
 
@@ -632,7 +626,11 @@ fn render_layered_window_inner(hwnd: HWND) {
     // 所以四周各外扩 `content_margin`：足以接住 ±1px 描边加抗锯齿溢出，
     // 相对 128px 留白仍可忽略（(w+4)(h+4) vs (w+256)(h+256)）。
     // 绘制时平移 margin 进来，合成时再平移回 (padding - margin)。
-    let content_margin = scale_for_dpi(2, dpi);
+    let content_margin = if glass_active {
+        0
+    } else {
+        scale_for_dpi(2, dpi)
+    };
     let content_w = w + content_margin * 2;
     let content_h = h + content_margin * 2;
     let content_bind_rect = windows::Win32::Foundation::RECT {
@@ -1048,6 +1046,30 @@ fn render_layered_window_inner(hwnd: HWND) {
     }
     let content_us = content_started.elapsed().as_micros() as u64;
 
+    // ===== 引擎路径：内容层直接推流给 liquid-verre-rs（库画布呈现）=====
+    //
+    // 第一趟刚画出的内容 DIB（预乘 BGRA、行距 w*4）就是块内容纹理的源；
+    // 只在内容真重画过（need_content）时推送，静态期间零传输零重画。
+    if glass_active
+        && need_content
+        && !data.content_bits.is_null()
+        && content_w > 0
+        && content_h > 0
+    {
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                data.content_bits as *const u8,
+                (content_w as usize) * (content_h as usize) * 4,
+            )
+        };
+        super::glass_engine::push_content(
+            data.config_id,
+            content_w.max(0) as u32,
+            content_h.max(0) as u32,
+            bytes,
+        );
+    }
+
     // ===== DirectComposition 呈现：玻璃与内容全程留在 GPU =====
     //
     // 与下面的 `UpdateLayeredWindow` 路径相比，**画什么完全一样**
@@ -1078,8 +1100,6 @@ fn render_layered_window_inner(hwnd: HWND) {
                 content_h,
                 dpi_scale,
                 need_content,
-                glass_active,
-                grip_band,
                 &box_style,
             )
         };
@@ -1123,32 +1143,7 @@ fn render_layered_window_inner(hwnd: HWND) {
     unsafe { target.Clear(Some(&transparent)) };
 
     if glass_active {
-        // 命中捕获层：预乘 alpha=1/255 的近隐形填充，四周内缩 grip_band。
-        let left = grip_band.min(ww.max(0.0));
-        let top = grip_band.min(hh.max(0.0));
-        let right = (ww - grip_band).max(left);
-        let bottom = (hh - grip_band).max(top);
-        if right - left >= 1.0 && bottom - top >= 1.0 {
-            let capture_color = D2D1_COLOR_F {
-                r: 0.0,
-                g: 0.0,
-                b: 0.0,
-                a: 1.0 / 255.0,
-            };
-            if let Ok(brush) = unsafe { target.CreateSolidColorBrush(&capture_color, None) } {
-                unsafe {
-                    target.FillRectangle(
-                        &D2D_RECT_F {
-                            left,
-                            top,
-                            right,
-                            bottom,
-                        },
-                        &brush,
-                    )
-                };
-            }
-        }
+        // 引擎路径：整窗保持全透明（Clear 即完成本帧背景），画面在库块上。
     } else {
         let [red, green, blue] = box_style.background_color;
         let bg_brush = cached_brush(&target, red, green, blue, box_style.background_alpha);
@@ -1167,30 +1162,31 @@ fn render_layered_window_inner(hwnd: HWND) {
         }
     }
 
-    // 内容层盖在底板之上。
+    // 内容层盖在回退背景之上（引擎路径的内容已推流给库，主 DIB 不再画内容）。
     //
     // destinationRectangle 必须显式传，不能图省事传 None：
     // None 时 D2D 用「位图自己的 DIP 尺寸」当目标矩形，而内容层位图
     // 是按 96 DPI 建的，DIP 尺寸 == 像素尺寸只在渲染目标也是 96 DPI
     // 时才成立；显式矩形让两条 DPI 语义只有一种解释。
-    // 引擎路径留白为 0，origin 即 content_margin 的负外扩归位量。
-    if let Some(bitmap) = data.content_bitmap.clone() {
-        let origin = (shadow_padding - content_margin) as f32;
-        let content_dst = d2d_rect(
-            origin,
-            origin,
-            origin + content_w as f32,
-            origin + content_h as f32,
-        );
-        unsafe {
-            target.DrawBitmap(
-                &bitmap,
-                Some(&content_dst),
-                1.0,
-                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
-                None,
-            )
-        };
+    if !glass_active {
+        if let Some(bitmap) = data.content_bitmap.clone() {
+            let origin = (shadow_padding - content_margin) as f32;
+            let content_dst = d2d_rect(
+                origin,
+                origin,
+                origin + content_w as f32,
+                origin + content_h as f32,
+            );
+            unsafe {
+                target.DrawBitmap(
+                    &bitmap,
+                    Some(&content_dst),
+                    1.0,
+                    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                    None,
+                )
+            };
+        }
     }
 
     // ===== D2D 渲染结束 =====
@@ -1286,8 +1282,6 @@ fn render_via_dcomp(
     content_h: i32,
     dpi_scale: f32,
     content_redrawn: bool,
-    glass_active: bool,
-    grip_band: f32,
     box_style: &crate::config::BoxStyleConfig,
 ) -> bool {
     if outer_w <= 0 || outer_h <= 0 {
@@ -1370,35 +1364,8 @@ fn render_via_dcomp(
         // 后缓冲保留着上一帧，必须清成全透明再画，否则会叠影
         state.context.Clear(Some(&transparent));
 
-        if glass_active {
-            // 命中捕获层（与 ULW 引擎路径同一口径）：预乘 alpha=1/255 的
-            // 近隐形填充，四周内缩 grip_band 让边缘把手带保持全透明，
-            // 点击经 DWM 穿透到下层的库画布。
-            let l = (shadow_padding as f32 + grip_band).min(outer_w as f32);
-            let t = (shadow_padding as f32 + grip_band).min(outer_h as f32);
-            let r = (shadow_padding as f32 + w as f32 - grip_band).max(l);
-            let b = (shadow_padding as f32 + h as f32 - grip_band).max(t);
-            if r - l >= 1.0 && b - t >= 1.0 {
-                let capture_color = D2D1_COLOR_F {
-                    r: 0.0,
-                    g: 0.0,
-                    b: 0.0,
-                    a: 1.0 / 255.0,
-                };
-                if let Ok(brush) = state.context.CreateSolidColorBrush(&capture_color, None) {
-                    state.context.FillRectangle(
-                        &D2D_RECT_F {
-                            left: l,
-                            top: t,
-                            right: r,
-                            bottom: b,
-                        },
-                        &brush,
-                    );
-                }
-            }
-        } else {
-            // 引擎不可用：画回退半透明圆角背景
+        {
+            // 回退路径背景（引擎激活时 DComp 不装配，能走到这里必然是回退模式）
             let [red, green, blue] = box_style.background_color;
             let color = d2d_color(red, green, blue, box_style.background_alpha);
             if let Ok(brush) = state.context.CreateSolidColorBrush(&color, None) {
