@@ -651,15 +651,30 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             let mut tooltip_x: i32 = 0;
             let mut tooltip_y: i32 = 0;
 
-            // 注册 WM_MOUSELEAVE 跟踪（每次进入时重新注册）
-            let mut tme = TRACKMOUSEEVENT {
-                cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
-                dwFlags: TME_LEAVE,
-                hwndTrack: hwnd,
-                dwHoverTime: 0,
-            };
-            unsafe {
-                TrackMouseEvent(&mut tme);
+            // 注册 WM_MOUSELEAVE 跟踪 —— **只给回退路径用**，引擎模式必须跳过。
+            //
+            // 引擎模式下代理窗提交的是全透明帧，真实命中的窗口是库画布，
+            // `TrackMouseEvent` 的「光标是否离开本窗」按真实命中链判定 → 我们每次
+            // （100ms 轮询）注册都立刻被回一个 `WM_MOUSELEAVE`，把刚设上的 hover
+            // 又清掉：实测 hover 图标/锁定/三点高亮以 10Hz 无限抖动，就是用户报的
+            // 「背景还在闪」（2026-10-28 逐帧截图 + 日志实锤）。
+            // 引擎模式的离开清理由 `poll_glass_hover` 负责（连续 2 拍在块外才补发
+            // WM_MOUSELEAVE，天然带去抖）。
+            let glass_mode = get_data(hwnd)
+                .map(|d| {
+                    super::glass_engine::is_active() && super::glass_engine::has_box(d.config_id)
+                })
+                .unwrap_or(false);
+            if !glass_mode {
+                let mut tme = TRACKMOUSEEVENT {
+                    cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                    dwFlags: TME_LEAVE,
+                    hwndTrack: hwnd,
+                    dwHoverTime: 0,
+                };
+                unsafe {
+                    TrackMouseEvent(&mut tme);
+                }
             }
 
             if let Some(data) = get_data(hwnd) {
@@ -1341,10 +1356,10 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
 
         // ===== 鼠标离开窗口：重置所有 hover 状态 =====
         WM_MOUSELEAVE => {
-            // 临时取证（info 级）：hover 闪烁 = 状态在 move/leave 之间来回抖，
-            // 下面四条迁移日志能在用户正常启动（无 RUST_LOG）时直接数出来。
-            // 定位后统一降回 debug。
-            log::info!("[glass-dbg] WM_MOUSELEAVE 到达（TrackMouseEvent 按真实光标判定离开窗口）");
+            // 取证日志：hover 闪烁 = 状态在 move/leave 之间来回抖。
+            // 2026-10-28 定位过程：修复前当天 2770 条 LEAVE（TrackMouseEvent 误判），
+            // 修复后只剩轮询补发的正常 leave。已降回 debug 级。
+            log::debug!("[glass-dbg] WM_MOUSELEAVE 到达（hover 清空）");
             let mut need_rerender = false;
             if let Some(data) = get_data(hwnd) {
                 if data.hovered_item != -1 {

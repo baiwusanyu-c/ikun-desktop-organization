@@ -358,3 +358,62 @@ TEARDOWN_DONE + TerminateProcess；main.rs 事件循环返回时记一笔。实�
 ### Next Steps
 
 - None - task complete
+
+
+## Session 7: hover闪烁定案(TrackMouseEvent假LEAVE) + 引擎模式每帧白烧一趟ULW
+
+**Date**: 2026-10-28
+**Task**: hover闪烁定案(TrackMouseEvent假LEAVE) + 引擎模式每帧白烧一趟ULW
+**Branch**: `master`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+## 会话 7：hover 闪烁定案（TrackMouseEvent 假 LEAVE 风暴）+ 引擎模式每帧白烧一趟 ULW
+
+### 根因 8：hover 闪烁 = TrackMouseEvent 在引擎模式下每次都立刻回假 WM_MOUSELEAVE
+代理窗是全透明命中层，真实命中的是库画布，TrackMouseEvent 按真实命中链判定「离开」，
+于是轮询刚设上 hover 就被清掉，10Hz 无限抖动。当天日志实锤：WM_MOUSELEAVE 2770 条、
+hover 迁移 1345 条，11:36 段是 hover item -1->0 与 LEAVE 的逐拍交替。
+修复：glass_mode 下不注册 TrackMouseEvent，离开交给 poll_glass_hover 连续 2 拍判定。
+修复后只剩正常 leave（11:47 之后 4 条，均为真离开）。
+
+### 根因 9：引擎模式下代理窗每帧仍跑「D2D 合成 + ULW 提交 3.5MB 全透明位图」
+实测光栅合成 ~3.8ms + 提交 ~1.2ms，画面却不会有任何变化 —— 会话跟随的帧预算被这
+5ms/帧吃光，就是「内容掉帧、玻璃背景流畅」。修复：尺寸与玻璃状态未变时短路返回
+（新增 submitted_w/h/glass 记账），并把会话期内容重画节流 33ms → 16ms。
+
+### 记录两条口径/方法边界
+- 库 hit_resize 的 grip = grip_px × (该屏DPI/主屏DPI)，主屏 200% 下只有 10 物理像素，
+  宿主边缘判定却是 scale_for_dpi(8,dpi)=16 物理像素 → 两套口径；实测离边 12px 按压
+  被判成块内点击而非缩放。待定：宿主抬 grip_px 默认值，或库按 DPI/96 折算。
+- 截图不能验证玻璃：画布是 DComp flip-model，BitBlt 取到冻结帧（像素差恒 0）；
+  真实鼠标测试前必须扫遮挡（本轮 Chrome 铺满主屏，标题带与手柄都点不到）。
+  测试改动的用户布局已从备份还原。
+
+### 测试
+- [OK] cargo test 517 全绿、fmt 干净、build 54 warnings 持平
+- [OK] hover 假 LEAVE 风暴：2770 条 → 修复后仅存正常 leave
+- [OK] 交互回归：光标进块摘除穿透 22ms、块矩形与窗口矩形同步（拖拽后仍一致）
+- [待办] 用户目视：hover 是否还闪、拖拽/缩放时内容是否还掉帧
+- [受阻] 库缩放手柄与标题拖拽的真实鼠标验证：Chrome 铺满主屏遮挡，需用户让开窗口
+
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

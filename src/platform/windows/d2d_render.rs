@@ -677,7 +677,7 @@ fn render_layered_window_inner(hwnd: HWND) {
     // 每拍（8ms）都全量重画根本追不上，帧时间堆积后主观就是「内容慢半拍」。
     // 这里把内容重画压到约 30Hz，中间拍复用上一张内容纹理（库侧与块矩形 1:1
     // 锚定左上角，新露出的边缘暂时只有玻璃），会话收尾必然清时间戳补一次全量。
-    const SESSION_CONTENT_MIN_MS: u64 = 33;
+    const SESSION_CONTENT_MIN_MS: u64 = 16;
     if need_content
         && (data.glass_session_active || data.box_drag_active)
         && data.content_last_render_ms != 0
@@ -1086,6 +1086,25 @@ fn render_layered_window_inner(hwnd: HWND) {
         );
     }
 
+    // ===== 引擎模式短路：透明命中层没有新画面要交，直接收工 =====
+    //
+    // 内容已经推流给库（上面 push_content），代理窗这一帧本来就应该是全透明；
+    // 尺寸与玻璃状态都没变时，上一次提交的透明帧仍然有效，再跑一遍
+    // 「BindDC + BeginDraw + Clear + EndDraw + UpdateLayeredWindow(3.5MB)」
+    // 只会把会话帧预算吃光（实测 ~5ms/帧），表现为内容比玻璃背景慢半拍。
+    if glass_active
+        && !dcomp_active
+        && data.submitted_w == outer_w
+        && data.submitted_h == outer_h
+        && data.submitted_glass
+    {
+        unsafe {
+            ReleaseDC(std::ptr::null_mut(), screen_dc);
+        }
+        RENDERING.store(false, Ordering::SeqCst);
+        return;
+    }
+
     // ===== DirectComposition 呈现：玻璃与内容全程留在 GPU =====
     //
     // 与下面的 `UpdateLayeredWindow` 路径相比，**画什么完全一样**
@@ -1261,6 +1280,11 @@ fn render_layered_window_inner(hwnd: HWND) {
     } else if LAYERED_SUBMIT_FAILED.swap(false, Ordering::Relaxed) {
         log::info!("UpdateLayeredWindow 提交分类框画面已恢复: hwnd={:?}", hwnd);
     }
+    // 记账：这一帧的画面（引擎模式下 = 全透明）已经交给 DWM，
+    // 下次同样尺寸 + 同样玻璃状态就可以短路掉整趟合成与提交。
+    data.submitted_w = outer_w;
+    data.submitted_h = outer_h;
+    data.submitted_glass = glass_active;
 
     super::mem_probe::add_frame_timing_ex(
         dib_us,

@@ -356,6 +356,55 @@ monitors/occlusion/fullscreen、log facade 与事件。
 - 会话去抖：PostMessage 实测 1317ms 收尾（旧：当拍）。
 - 退出崩溃：3/3 无 WER 报告（旧：11/11 必崩）。
 
+## 缺陷修复记录（2026-10-28 第三轮：hover 闪烁定案 + 内容层白烧开销）
+
+**根因 8：引擎模式下 `TrackMouseEvent` 每次注册都立刻回一个假 `WM_MOUSELEAVE`**（症状①定案）
+- `WM_MOUSEMOVE` 处理器无条件调用 `TrackMouseEvent(TME_LEAVE)`。它按**真实命中链**判断
+  「光标是否离开本窗」，而引擎模式下代理窗提交的是全透明帧、真实命中的窗口是库画布，
+  于是每次注册都被立即回一个 `WM_MOUSELEAVE` → 轮询刚把 hover 设上就被清掉。
+- 数据实锤（当天日志）：`WM_MOUSELEAVE` **2770 条**、`hover 迁移` **1345 条**，
+  11:36 一段是 10Hz 的 `hover item -1 -> 0` ↔ `WM_MOUSELEAVE` 无限交替 —— 正是用户看到的
+  「图标 / 锁定 / 三点按钮 hover 背景一直在闪」。
+- 修复：`glass_mode`（`is_active() && has_box()`）下**不再注册 TrackMouseEvent**，
+  离开清理完全交给 `poll_glass_hover`（连续 2 拍在块外才补发 LEAVE，天然带去抖）。
+  回退路径（无玻璃块 / 引擎不可用）保持原样，那时代理窗是真会收到真实鼠标的。
+- 修复后同一操作下 LEAVE 只剩轮询补发的正常事件（当天 11:47 之后 4 条，且都是真离开）。
+
+**根因 9：引擎模式下代理窗每帧白烧一趟「D2D 合成 + UpdateLayeredWindow」**（症状③开销）
+- 会话跟随每拍都会 `render_layered_window`；引擎路径下内容已推流给库，代理窗这一帧
+  本该什么都没有，但代码仍然跑完第二趟：`BindDC + BeginDraw + Clear(透明) + EndDraw`
+  再把 **整窗全透明位图（实测 1080x812 ≈ 3.5MB）ULW 提交给 DWM**，
+  实测 `光栅合成 ~3.8ms + 提交 ~1.2ms` ≈ 5ms/帧纯浪费 —— 把会话帧预算吃光，
+  表现就是「标题/图标/按钮跟着位置大小时掉帧，玻璃背景却流畅」。
+- 修复：尺寸与玻璃状态都没变时直接短路返回（新增 `submitted_w/submitted_h/submitted_glass`
+  记账；上一次提交的透明帧仍然有效）；只有尺寸变化（缩放/DPI）或引擎↔回退切换才重提一趟。
+  同时把会话期内容重画节流从 33ms(≈30Hz) 压回 16ms(≈60Hz) —— 短路省下的预算够它跑满。
+
+**顺带记录：库的缩放把手带在主屏 200% 下只有 10 物理像素（很难抓）**
+- 库 `hit_resize` 用 `grip_px * b.scale`，而 `scale` 是**该屏 DPI / 主屏 DPI**
+  （实测 DISPLAY1 主屏 192dpi → scale=1.00，DISPLAY2 96dpi → 0.50），
+  所以 200% 主屏上 grip 带 = 10 逻辑像素 × 1.0 = **10 物理像素**（相当于 5 逻辑像素的触感）。
+  宿主自己的边缘判定是 `scale_for_dpi(8, dpi)` = 16 物理像素，两套口径不一致。
+- 实测影响：在离块边 12px 处按压，被判成「块内点击」并起了框选，而不是缩放会话。
+- 待定方案（择一，需用户拍板）：① 宿主默认把 `resize.grip_px` 抬到 16~20；
+  ② 库侧把 grip 按「该屏 DPI / 96」而不是「该屏 / 主屏」折算（口径更正，属库改动）。
+
+**本轮取证方法的边界（写给下一轮，别再踩）**
+- 截图对**库画布无效**：画布是 DComp + flip-model 交换链，BitBlt/ImageGrab 取到的是
+  冻结帧（hover 设上、点击选中、甚至改尺寸后，逐帧像素差恒为 0），
+  所以「像素 diff 为 0」不能当作「画面没变」的证据；代理窗还额外带
+  `WDA_EXCLUDEFROMCAPTURE`（需 `IKUN_ALLOW_CAPTURE=1` 才进得了截图，且截到的是透明层）。
+  → 视觉结论只能由用户目视确认；宿主侧一律以**日志 + 窗口/块矩形**为准。
+- 真实鼠标测试前必须先确认遮挡：分类框按设计低于普通应用窗口，本轮 Chrome
+  `(-13,-13)-(3133,1997)` 铺满整个主屏 → 标题带与缩放手柄一个采样点都点不到
+  （`WindowFromPoint` 全是 `Chrome_RenderWidgetHostHWND`），合成点击被 Chrome 吃掉，
+  表现为「拖不动且无日志」，不是代码问题。测试前要么请用户让开窗口，要么先扫可点区。
+- 测试改动的用户数据已还原：开发工具 307x502 @(320,109)、示例玻璃ss 540x406 @(990,70)
+  （备份 `.tmp_cfg_backup.json`）。
+
+**本轮验证**：`cargo test` 517 全绿、fmt 干净、build 54 warnings（基线持平）；
+hover 假 LEAVE 风暴从当天 2770 条降到修复后仅存正常 leave。
+
 ## 实施顺序
 
 1. `app_config.rs` 新配置结构 + normalize + 兼容加载。

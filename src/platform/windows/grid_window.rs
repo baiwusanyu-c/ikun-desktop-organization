@@ -363,6 +363,15 @@ pub(crate) struct GridWindowData {
     /// 接管式标题拖拽会话进行中（`begin_box_drag` → SetCapture + 轮询光标 →
     /// SetWindowPos → WM_WINDOWPOSCHANGED 反向同步块矩形 → Up 收尾保存）。
     pub(crate) box_drag_active: bool,
+    /// 上次经 UpdateLayeredWindow 真正提交过的外框尺寸与当时的玻璃状态。
+    ///
+    /// 引擎模式下代理窗是**纯透明命中层**：尺寸没变时再合成 + 提交一遍
+    /// 3.5MB 全透明位图是纯白烧（实测光栅合成 ~3.8ms + 提交 ~1.2ms），
+    /// 正是「拖拽时标题/图标/按钮掉帧、玻璃背景却流畅」的开销来源。
+    /// 上一帧仍然有效，直接跳过；尺寸或玻璃状态变化时必须重新提交。
+    pub(crate) submitted_w: i32,
+    pub(crate) submitted_h: i32,
+    pub(crate) submitted_glass: bool,
     /// 上次真正重画内容层的单调毫秒（会话期节流用，0 = 未知）。
     pub(crate) content_last_render_ms: u64,
     /// 本次库缩放会话是否已观察到过快照 `resizing=true`。
@@ -509,6 +518,9 @@ impl GridWindowData {
             render_padding: 0,
             glass_session_active: false,
             box_drag_active: false,
+            submitted_w: 0,
+            submitted_h: 0,
+            submitted_glass: false,
             content_last_render_ms: 0,
             glass_session_seen_resizing: false,
             glass_session_idle_ticks: 0,
@@ -938,6 +950,9 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         render_padding: shadow_padding,
         glass_session_active: false,
         box_drag_active: false,
+        submitted_w: 0,
+        submitted_h: 0,
+        submitted_glass: false,
         content_last_render_ms: 0,
         glass_session_seen_resizing: false,
         glass_session_idle_ticks: 0,
