@@ -677,7 +677,7 @@ fn render_layered_window_inner(hwnd: HWND) {
     // 每拍（8ms）都全量重画根本追不上，帧时间堆积后主观就是「内容慢半拍」。
     // 这里把内容重画压到约 30Hz，中间拍复用上一张内容纹理（库侧与块矩形 1:1
     // 锚定左上角，新露出的边缘暂时只有玻璃），会话收尾必然清时间戳补一次全量。
-    const SESSION_CONTENT_MIN_MS: u64 = 16;
+    const SESSION_CONTENT_MIN_MS: u64 = 12;
     if need_content
         && (data.glass_session_active || data.box_drag_active)
         && data.content_last_render_ms != 0
@@ -1086,23 +1086,33 @@ fn render_layered_window_inner(hwnd: HWND) {
         );
     }
 
-    // ===== 引擎模式短路：透明命中层没有新画面要交，直接收工 =====
+    // ===== 引擎模式：代理窗只需要「存在且全透明」，能少交就少交 =====
     //
-    // 内容已经推流给库（上面 push_content），代理窗这一帧本来就应该是全透明；
-    // 尺寸与玻璃状态都没变时，上一次提交的透明帧仍然有效，再跑一遍
-    // 「BindDC + BeginDraw + Clear + EndDraw + UpdateLayeredWindow(3.5MB)」
-    // 只会把会话帧预算吃光（实测 ~5ms/帧），表现为内容比玻璃背景慢半拍。
-    if glass_active
-        && !dcomp_active
-        && data.submitted_w == outer_w
-        && data.submitted_h == outer_h
-        && data.submitted_glass
-    {
-        unsafe {
-            ReleaseDC(std::ptr::null_mut(), screen_dc);
+    // 内容已经推流给库（上面的 push_content），代理窗这一帧不该有任何像素；
+    // 但 WS_EX_LAYERED 窗口必须先有一次 UpdateLayeredWindow 才会被 DWM 当分层
+    // 窗口显示，所以非会话期照常清一趟、交一帧全透明（并记账尺寸）。
+    //
+    // 两种情况直接收工：
+    //   ① 尺寸与玻璃状态都没变 —— 上一次交的透明帧仍然有效；
+    //   ② **会话期**（库缩放 / 接管式移动）尺寸在连续变 —— 整窗透明帧的提交成本
+    //      随面积走（实测 1712x1332 ≈ 9MB 一帧：光栅合成 + 提交把跟随 tick 拖到
+    //      ~30Hz、内容纹理 push 拖到 ~18Hz），而库的玻璃边缘按帧跑，用户看到的
+    //      就是「缩放时锁定/三点按钮一卡一卡、图标换行卡顿」。代理窗本来就是
+    //      全透明，会话期少交一帧不影响画面，会话收尾必然再交一帧最终尺寸。
+    //
+    // 不要用 1x1 帧糊弄：UpdateLayeredWindow 的 size 会同时把窗口缩成 1x1
+    // （2026-10-28 实测踩过，分类框直接消失）。
+    if glass_active && !dcomp_active {
+        let size_matches =
+            data.submitted_glass && data.submitted_w == outer_w && data.submitted_h == outer_h;
+        let in_session = data.glass_session_active || data.box_drag_active;
+        if size_matches || in_session {
+            unsafe {
+                ReleaseDC(std::ptr::null_mut(), screen_dc);
+            }
+            RENDERING.store(false, Ordering::SeqCst);
+            return;
         }
-        RENDERING.store(false, Ordering::SeqCst);
-        return;
     }
 
     // ===== DirectComposition 呈现：玻璃与内容全程留在 GPU =====

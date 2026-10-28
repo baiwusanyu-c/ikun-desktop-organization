@@ -872,19 +872,20 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 false
             };
 
-            // ===== 引擎路径：标题区（非按钮）按压 = 接管式移动会话 =====
-            // posted WM_LBUTTONDOWN 不带 NC 语义，标题命中由这里自行判定；
-            // begin_box_drag 内 SetCapture 后，真实 WM_LBUTTONUP 归本窗收尾。
+            // ===== 引擎路径：标题区（非按钮）按压 =====
+            // 拖拽**不在这里起**：库的契约是「sink 返回 Consumed 接管拖拽，
+            // Down 记锚点，序列内每次 Move 用 set_rect 驱动」（120Hz，与库会话
+            // 同等延迟）。几何推进在 `glass_engine::route_pointer` 里完成，
+            // 宿主只通过 `WM_USER_GLASS_DRAG_SYNC` 跟随落位（参考线 + 落盘）。
+            // 旧写法（本处调 begin_box_drag + 8ms 定时器轮询光标）节拍被
+            // Windows 定时器粒度卡在 ~54Hz，就是用户看到的「移动时图标掉帧」。
             if !lock_clicked && !more_clicked {
                 let glass_title = get_data(hwnd).map(|d| {
                     let glass = super::glass_engine::is_active()
                         && super::glass_engine::has_box(d.config_id);
                     (glass && click_y < d.title_h, d.locked)
                 });
-                if let Some((true, locked)) = glass_title {
-                    if !locked {
-                        super::grid_window::begin_box_drag(hwnd);
-                    }
+                if let Some((true, _locked)) = glass_title {
                     return 0;
                 }
             }
@@ -1531,9 +1532,15 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         // 块矩形是真值不得回推），覆盖程序化移动：DPI 切换、菜单位置、折叠等。
         WM_WINDOWPOSCHANGED => {
             if let Some(data) = get_data(hwnd) {
+                // 库会话（移动/缩放）期间块矩形是真值，绝不能用窗口几何反推。
+                // 除了本地标志，还要**直接问库**：会话起止是 PostMessage 异步送达的，
+                // 标志位还没置上的那几拍里反推一次，就会把库的会话锚点搞脏
+                // （实测：光标 (+220,+130) 拖出 (+315,+32) 的落位）。
                 if !data.glass_session_active
+                    && !data.box_drag_active
                     && super::glass_engine::is_active()
                     && super::glass_engine::has_box(data.config_id)
+                    && !super::glass_engine::block_in_session(data.config_id)
                 {
                     let mut wr = RECT {
                         left: 0,

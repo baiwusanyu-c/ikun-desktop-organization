@@ -405,6 +405,98 @@ monitors/occlusion/fullscreen、log facade 与事件。
 **本轮验证**：`cargo test` 517 全绿、fmt 干净、build 54 warnings（基线持平）；
 hover 假 LEAVE 风暴从当天 2770 条降到修复后仅存正常 leave。
 
+## 缺陷修复记录（2026-10-28 第四轮：内容掉帧的两个真实来源，附实测帧率）
+
+用毫秒级 tick 探针（日志时间戳只到秒，所以自己打 `now_ms()`）在真实鼠标下量化：
+受控缩放一次 1.4s，记录「块几何变化 / 窗口跟随 / 内容 push」三个节奏。
+
+**根因 10a：库的快照发布节流 —— 会话期改块几何不置 `snapshot_dirty`**
+- 库 `runtime/mod.rs:870`：`if app.snapshot_dirty || 距上次 >= 250ms { publish_snapshot() }`。
+  而 `snapshot_dirty` 只由「宿主 setter / 建块 / 显示器变化 / 质量档变化」置位，
+  **库自己的缩放与移动会话改块几何时不置脏**（注释里写的「拖拽期靠 dirty 走即时路径」
+  对宿主可见的 rect 并不成立）。
+- 后果：宿主 `follow_glass_session` 读到的 `WindowSnapshot.rect` 在会话里只有 **4Hz**，
+  于是代理窗尺寸 → 内容 DIB 尺寸 → `push_content` 全被拖成 4Hz，而库的玻璃边缘按帧跑。
+- 修复前实测：1.4s 缩放里块几何只变 6 次、内容只推 5 次（**3.4Hz**）。
+- 宿主绕行（不等库发版）：会话每拍调用 `Engine::set_default_resize(当前默认值)` ——
+  它是唯一「置 `snapshot_dirty`、但不碰任何块也不触发重渲染」的公开 setter
+  （库 `commands.rs:77-81` 的 `SetDefaultResize` 返回 `false`）；我们所有块都带显式
+  `resize`，改引擎默认值对现有块无副作用。见 `glass_engine::request_render()`。
+- 修复后实测：块几何 **54Hz**、内容 push **20Hz**（6 倍提升）。
+
+**根因 10b：会话期每帧重交整窗透明 ULW 帧**
+- 引擎模式下代理窗只需要「存在且全透明」，但每个跟随拍都跑完
+  `BindDC + BeginDraw + Clear + EndDraw + UpdateLayeredWindow(整窗)`；
+  成本随面积走（实测框体 1712x1332 ≈ 9MB 一帧），把 tick 拖到 **30Hz**。
+- 修复：`glass_active` 下两种情况直接收工 —— ①尺寸与玻璃状态都没变（上一帧仍有效）；
+  ②**会话期**（尺寸在连续变，反正全透明，少交一帧不影响画面，会话收尾必补一帧）。
+  实测 tick 30Hz → **54Hz**。
+- **踩坑记录**：想用 1x1 透明帧一劳永逸是错的 —— `UpdateLayeredWindow` 的 `size`
+  参数会**同时把窗口缩成 1x1**（实测分类框直接消失、块被反推成 1x1）。
+
+**剩余上限在库侧**：内容 push 现在稳定在 ~20Hz，瓶颈已是「库会话几何更新 + 快照发布」
+自身节奏。要 60Hz+ 需要库在会话改块几何时置 `snapshot_dirty`（已列入 0.5.2 清单）。
+
+**0.5.2 库侧清单（累计 3 条）**
+1. `core/quality.rs` `good_streak`/`bad_streak` 改 `saturating_add`（debug 256s 必 panic）。
+2. 画布窗口类补 `CS_DBLCLKS`（否则 `PointerPhase::DoubleClick` 永不触发，宿主已自行合成）。
+3. 缩放/移动会话改块几何时置 `snapshot_dirty`（否则宿主只能按 4Hz 看到新矩形）；
+   顺带统一把手带口径：`grip_px × (该屏DPI/主屏DPI)` 在 200% 主屏只有 10 物理像素。
+
+**本轮验证**：`cargo test` 517 全绿、fmt 干净、54 warnings 持平；诊断探针已拆除。
+**操作事故记录（务必记住）**：用户在机器前时用真实鼠标脚本 = 抢光标，会把
+合成点击变成拖拽（曾把图标拖到别的框）；另外我用「还原备份」差点覆盖用户之后的
+手工整理，已回滚。→ 真实鼠标测试前必须先跟用户确认空闲，且不要拿旧备份盖新配置。
+## 缺陷修复记录（2026-10-28 第五轮：按库的性能契约重写拖拽链路，对齐 120Hz）
+
+对齐依据（`liquid-verre-rs` 仓库 README「宿主集成样例」+ BASELINE.md）：
+- **帧数口径**：`IDLE_WAIT_MS = 8ms ≈ 125Hz`，注释明写「覆盖 120Hz 显示器的一个刷新
+  周期，保证鼠标悬停反馈延迟不超过半帧」；基线指标 `单块拖拽 fps/p50 = 113~116 /
+  8.32~8.36ms（120Hz 锁相）`，验收线「拖拽 ≥60fps（120Hz 屏 ≥90fps）」。
+- **接管拖拽的官方写法**：「需要拖拽吸附的块：不要等库的会话再事后修正（会互相回写
+  抖动），直接让 sink 返回 `Consumed` 接管拖拽 —— **Down 记锚点，序列内每次 Move 用
+  `set_rect(吸附后的位置)` 驱动（异步入队 ≤1 帧，与库会话同等延迟）**」。
+- **sink 线程契约**：允许「回调内调用 GlassWindow 的 setter（异步入队 ≤1 帧生效）」，
+  禁止阻塞/重入/DoDragDrop。
+
+### 改造：接管式拖拽从「宿主 8ms 定时器轮询光标」搬到「sink 按压序列内驱动」
+- 旧链路的天花板就是宿主定时器：`SetTimer(8)` 受 Windows 粒度限制，实测跟随
+  ~54Hz，且每拍都要 `GetCursorPos → SetWindowPos → WM_WINDOWPOSCHANGED → push_box_rect`
+  四段回环；玻璃背景由库按帧跑，于是「移动时图标/标题/按钮明显掉帧」。
+- 新链路：`RouteState` 增 `window: GlassWindow` 与 `rect`（宿主下发矩形时顺手同步，
+  **sink 内绝不读 `HOLDER`**，避免三方锁环）；`Down` 命中标题空白（复用
+  `down_routes_title_drag`，此前是死代码）即记锚点开序列；序列内每次 `Move`
+  直接 `set_rect` → 与库自己的会话同等延迟；`Up` 收尾。
+- 代理窗只当跟随者：`WM_USER_GLASS_DRAG_SYNC`（按位移阈值 `DRAG_SYNC_STEP=3px` 合并，
+  收尾必发一次 `wParam=1`）搬窗口 + 懒建参考线 + 落盘；
+  `WM_WINDOWPOSCHANGED` 在 `box_drag_active` 期间不得反推块矩形（块是真值）。
+- 删掉 `begin_box_drag` 与定时器驱动的拖拽分支、`SetCapture`/`ReleaseCapture` 与
+  四个锚点字段；`poll_glass_hover` 保留「左键已物理抬起却没收尾 → 强制 end」兜底。
+
+### 踩到并修掉的递推错误（重要，别重犯）
+`PointerEvent.block_local` 是相对块**当前**原点的（库里没有屏幕坐标字段）。
+第一版写成 `R_k = R_0 + (block_local_k - anchor)`：块一跟上去，同一光标位置的
+`block_local` 就回落，形成自我抵消 —— 实测「拖 240px 只走 136px，越拖越不动」。
+正确递推是 `R_k = R_(k-1) + (block_local_k - anchor)`（基准=上一次**请求**的矩形）：
+库跟上时精确成立，库落后一帧时最多多一个步长、下一拍自动收敛。
+修后实测：光标 (+240,+140) → 窗口 (+240,+140) 精确一致，块矩形与窗口一致，
+收尾一次 `end_box_drag` + 一次落盘，参考线正常建/销。
+
+### 实测数据（真实鼠标，受控 2.24s 拖拽）
+| 指标 | 旧（定时器） | 新（sink 序列） |
+|---|---|---|
+| 驱动频率 | ~54Hz（定时器粒度） | 每次 Move 一帧（脚本光标 33Hz 下实测 49Hz，上限=库帧率 125Hz） |
+| 落位精度 | — | 期望 (+240,+140) / 实际 (+240,+140) |
+| 落盘次数 | 每次按压都写 | 序列收尾 1 次 |
+
+### 仍未对齐的一项（缩放）
+库的缩放会话由库自己驱动（把手带优先级恒高于 sink，宿主拿不到那段事件），
+宿主只能跟随快照；快照发布节流已在上一轮用 `set_default_resize` 催办绕过
+（块几何 4Hz → 54Hz），内容纹理 push 约 20Hz。彻底对齐需要库侧
+「会话改几何时置 `snapshot_dirty`」，已列入 0.5.2 清单（现累计 3 条）。
+
+**本轮门禁**：`cargo test` 517 全绿、`fmt` 干净、warnings 52（比基线少 2：
+`down_routes_title_drag` 与 `BlockGeom::locked` 由死代码转为正式链路）。
 ## 实施顺序
 
 1. `app_config.rs` 新配置结构 + normalize + 兼容加载。

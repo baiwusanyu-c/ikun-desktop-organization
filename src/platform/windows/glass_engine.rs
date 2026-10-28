@@ -21,7 +21,7 @@
 //! 调用方必须跟进 `reassert_canvas_bottom()`，把画布重新压回 Z 序最底部。
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use uuid::Uuid;
@@ -351,8 +351,13 @@ fn block_config_for(
         z_order: None,
         // 恒为 true：见函数注释。
         interactive: true,
-        // 位置由宿主接管式拖拽驱动（push_box_rect），库不需要自己的移动会话。
-        movable: false,
+        // 移动会话交给库驱动（未锁定时）。库 README 口径：不需要改拖拽位置的块
+        // 返回 `DragMove` 用库的 movable；库会话是「鼠标消息只记 pending、每帧
+        // 应用一次」并把 capture_wait_ms 压到 0（循环全速），所以块几何逐帧更新
+        // （BASELINE：单块拖拽 113~116fps / p50 8.34ms）。
+        // 宿主自己接管（sink 内 set_rect）实测只有 ~45Hz：库不在会话里时按
+        // IDLE_WAIT_MS 步长跑，Move 事件与宿主 tick 一起被拖慢（2026-10-28 计数实锤）。
+        movable: !locked,
         visible: true,
     }
 }
@@ -433,11 +438,11 @@ use liquid_verre::GlassWindow;
 /// `new` 之后渲染线程尚不存在，写 handler 无竞争；`start` 后主线程不再触碰写锁。
 fn start_engine_with_handler(mut engine: Engine) -> Result<Engine, liquid_verre::Error> {
     engine.set_event_handler(Some(Arc::new(|event| match event {
-        EngineEvent::ResizeStarted { id, .. } => {
-            dispatch_resize_session(*id, true);
+        EngineEvent::ResizeStarted { id, .. } | EngineEvent::MoveStarted { id, .. } => {
+            dispatch_glass_session(*id, true);
         }
-        EngineEvent::ResizeEnded { id, .. } => {
-            dispatch_resize_session(*id, false);
+        EngineEvent::ResizeEnded { id, .. } | EngineEvent::MoveEnded { id, .. } => {
+            dispatch_glass_session(*id, false);
         }
         _ => {}
     })));
@@ -764,7 +769,36 @@ pub fn block_resizing(box_id: Uuid) -> bool {
     .unwrap_or(false)
 }
 
-/// 同步固定（锁定）状态：锁定时关掉库的缩放把手与会话，
+/// 该玻璃块当前是否正处于库驱动的任意会话（移动或缩放）。
+///
+/// 宿主的本地标志位靠 PostMessage 送达，有几拍延迟；判断「能不能反推几何」
+/// 必须问库要即时状态，否则会在会话刚起的窗口期里把块拽偏。
+#[must_use]
+pub fn block_in_session(box_id: Uuid) -> bool {
+    with_holder(|holder| {
+        holder
+            .boxes
+            .get(&box_id)
+            .and_then(|e| e.window.snapshot())
+            .is_some_and(|s| s.moving || s.resizing)
+    })
+    .unwrap_or(false)
+}
+
+/// 该玻璃块当前是否正处于库驱动的**移动**会话。
+#[must_use]
+pub fn block_moving(box_id: Uuid) -> bool {
+    with_holder(|holder| {
+        holder
+            .boxes
+            .get(&box_id)
+            .and_then(|e| e.window.snapshot())
+            .is_some_and(|s| s.moving)
+    })
+    .unwrap_or(false)
+}
+
+/// 同步固定（锁定）状态：锁定时关掉库的移动/缩放把手与会话，
 /// 解锁时按当前配置恢复；**输入路由（interactive）恒开**，
 /// 否则全透明代理窗会失去全部鼠标消息（见 [`block_config_for`]）。
 pub fn set_box_locked(box_id: Uuid, locked: bool) {
@@ -783,6 +817,8 @@ pub fn set_box_locked(box_id: Uuid, locked: bool) {
     entry.locked = locked;
     // 双保险：即使历史路径把块设成了非交互，这里也把它拉回来。
     entry.window.set_interactive(true);
+    // 锁定 = 关掉库自己的移动/缩放会话（输入路由仍然在线，见 block_config_for）
+    entry.window.set_movable(!locked);
     entry.window.set_resizable(!locked);
     if !locked {
         entry
@@ -950,10 +986,10 @@ fn spawn_holder_and_reattach(
 // Z 序与事件
 // =============================================================================
 
-/// 把库缩放会话的开始/结束转发到对应分类框窗口的消息循环。
+/// 把库会话（移动 / 缩放）的起止转发到对应分类框窗口的消息循环。
 ///
 /// 只在渲染线程回调里执行：查表 + 非阻塞 PostMessage，不重入引擎、不加锁等待。
-fn dispatch_resize_session(glass_id: u32, started: bool) {
+fn dispatch_glass_session(glass_id: u32, started: bool) {
     let hwnd = match ROUTES.lock() {
         Ok(map) => map.get(&glass_id).map(|route| route.agent),
         Err(_) => None,
@@ -1341,7 +1377,7 @@ impl GlassInputSink for HostSink {
 
 fn route_pointer(id: u32, ev: &PointerEvent) -> InputDecision {
     // 锁内只做状态更新与取快照；锁外 PostMessage（非阻塞、任意线程合法）。
-    let (agent, title_h, double_click) = {
+    let (agent, title_h, double_click, hand_off_move) = {
         let Ok(mut map) = ROUTES.lock() else {
             return InputDecision::Ignored;
         };
@@ -1381,7 +1417,15 @@ fn route_pointer(id: u32, ev: &PointerEvent) -> InputDecision {
                 route.last_down_y = ly;
             }
         }
-        (route.agent, title_h, double_click)
+        // 标题空白按压（未锁定、不在按钮上）→ 让位给库的 movable 会话，由库逐帧
+        // 应用光标位移（README：不需要改拖拽位置的块返回 DragMove）。宿主自己
+        // 接管实测只有 ~45Hz，原因见 block_config_for 注释。
+        let hand_off_move = matches!(ev.phase, PointerPhase::Down)
+            && !double_click
+            && route
+                .geom
+                .is_some_and(|g| down_routes_title_drag(&g, lx, ly));
+        (route.agent, title_h, double_click, hand_off_move)
     };
     if agent == 0 {
         return InputDecision::Ignored;
@@ -1403,6 +1447,10 @@ fn route_pointer(id: u32, ev: &PointerEvent) -> InputDecision {
         // hover 高亮/tooltip 由宿主侧低频轮询驱动，避免 posted 移动消息洪水。
         PointerPhase::Move => InputDecision::Consumed,
         PointerPhase::Down => {
+            if hand_off_move {
+                log::debug!("[glass-dbg] sink 让位给库移动会话 id={id} local=({lx},{ly})");
+                return InputDecision::DragMove;
+            }
             if double_click {
                 unsafe { post_double_click(agent, title_h.is_some_and(|th| ly < th), lx, ly) };
                 return InputDecision::Consumed;
@@ -1470,11 +1518,112 @@ pub fn update_block_geom(box_id: Uuid, geom: BlockGeom) {
 ///
 /// 语义与校验由库承担：非法参数丢弃 + warn-once；w/h=0 等价 clear_content。
 pub fn push_content(box_id: Uuid, w_phys: u32, h_phys: u32, buffer: &[u8]) {
+    SESSION_CONTENT_PUSHES.fetch_add(1, Ordering::Relaxed);
     with_holder(|holder| {
         if let Some(entry) = holder.boxes.get(&box_id) {
             entry.window.update_content(w_phys, h_phys, buffer, None);
         }
     });
+}
+
+// =============================================================================
+// 会话期帧率对比（零成本计数 + 1 s 一条 info 汇总）
+//
+// 为什么不用库的取证落盘 `GLASS_INTERNAL_SHOT`：它每帧要把整屏 RT 回读并写盘
+// （实测 24.8MB/帧，跑一次就落 4.9GB），GPU 回读本身就会把主循环拖慢 ——
+// 用它测掉帧等于制造掉帧。计数器只读写几个原子量。
+// =============================================================================
+/// 会话驱动次数（跟随拍数 / 拖拽 Move 数）
+pub static SESSION_TICKS: AtomicU64 = AtomicU64::new(0);
+/// 会话期「块矩形相对上一拍发生变化」的次数（= 内容真正需要跟上的次数）
+pub static SESSION_RECT_CHANGES: AtomicU64 = AtomicU64::new(0);
+/// 会话期内容纹理重推次数
+pub static SESSION_CONTENT_PUSHES: AtomicU64 = AtomicU64::new(0);
+/// 上一拍读到的块矩形（i64::MIN = 未初始化）
+static SESSION_LAST_RECT: [AtomicI64; 4] = [
+    AtomicI64::new(i64::MIN),
+    AtomicI64::new(i64::MIN),
+    AtomicI64::new(i64::MIN),
+    AtomicI64::new(i64::MIN),
+];
+static SESSION_LAST_EPOCH: AtomicU64 = AtomicU64::new(0);
+static SESSION_LOG_NEXT_MS: AtomicU64 = AtomicU64::new(0);
+
+/// 读库侧帧计数：`(快照 epoch, fps)`；引擎不可用时 `(0, 0.0)`。
+#[must_use]
+pub fn engine_frame_stats() -> (u64, f32) {
+    with_holder(|holder| {
+        let s = holder.engine.snapshot();
+        (s.epoch, s.fps)
+    })
+    .unwrap_or((0, 0.0))
+}
+
+/// 记一拍跟随：块矩形变了就计数。
+pub fn note_session_rect(rect: [i32; 4]) {
+    SESSION_TICKS.fetch_add(1, Ordering::Relaxed);
+    let changed = SESSION_LAST_RECT[0].load(Ordering::Relaxed) != i64::from(rect[0])
+        || SESSION_LAST_RECT[1].load(Ordering::Relaxed) != i64::from(rect[1])
+        || SESSION_LAST_RECT[2].load(Ordering::Relaxed) != i64::from(rect[2])
+        || SESSION_LAST_RECT[3].load(Ordering::Relaxed) != i64::from(rect[3]);
+    if changed {
+        SESSION_RECT_CHANGES.fetch_add(1, Ordering::Relaxed);
+        for (i, slot) in SESSION_LAST_RECT.iter().enumerate() {
+            slot.store(i64::from(rect[i]), Ordering::Relaxed);
+        }
+    }
+}
+
+/// 会话期 1 秒一条的帧率对比汇总（info 级，零成本，只在会话期出现）。
+///
+/// 四个数直接指出掉帧在哪一环：
+/// `tick` 跟随拍数（8ms 档理论 ~125/s）、`块矩形变化` 几何真的动了多少次、
+/// `内容重推` 内容纹理重画并推给库多少次、`库发布快照` 库侧 epoch 增量（≈渲染帧数）。
+pub fn maybe_log_session_stats() {
+    let now = now_ms();
+    if now < SESSION_LOG_NEXT_MS.load(Ordering::Relaxed) {
+        return;
+    }
+    SESSION_LOG_NEXT_MS.store(now + 1_000, Ordering::Relaxed);
+    let ticks = SESSION_TICKS.swap(0, Ordering::Relaxed);
+    let rect_changes = SESSION_RECT_CHANGES.swap(0, Ordering::Relaxed);
+    let pushes = SESSION_CONTENT_PUSHES.swap(0, Ordering::Relaxed);
+    if ticks == 0 {
+        return;
+    }
+    let (epoch, fps) = engine_frame_stats();
+    let prev_epoch = SESSION_LAST_EPOCH.swap(epoch, Ordering::Relaxed);
+    let epochs = epoch.saturating_sub(prev_epoch);
+    log::info!(
+        "[glass-dbg] 会话帧率对比: tick={} 块矩形变化={} 内容重推={} 库发布快照={} fps={:.0}",
+        ticks,
+        rect_changes,
+        pushes,
+        epochs,
+        fps
+    );
+}
+
+/// 会话期催库出帧 + 催库重新发布快照。
+///
+/// 快照发布是 `snapshot_dirty || 每 250ms`（库 `runtime/mod.rs`），而库自己的
+/// 移动/缩放会话改块几何时**不置 `snapshot_dirty`** → 宿主读到的 `rect` 只有 4Hz，
+/// 内容纹理跟着卡成 3~4Hz（用户看到「玻璃边缘在动、按钮/图标换行一卡一卡」）。
+/// `Engine::request_render()` 只置渲染位不置脏；`set_default_resize` 是唯一
+/// 「置脏、但不碰任何块也不触发重渲染」的公开 setter（库 `commands.rs` 里它
+/// 返回 false），拿它当发布催办器。所有块都带显式 `resize`，改默认值无副作用。
+/// 库侧根治口径：会话改几何时置 `snapshot_dirty`（0.5.2），届时本函数可简化。
+pub fn request_render() {
+    if let Ok(mut guard) = HOLDER.lock() {
+        if let Some(holder) = guard.as_mut() {
+            if !holder.engine.is_running() {
+                return;
+            }
+            holder.engine.request_render();
+            let default_resize = resize_options_from(&holder.style_cfg.resize);
+            holder.engine.set_default_resize(default_resize);
+        }
+    }
 }
 
 /// 逻辑矩形近似相等。
@@ -1549,8 +1698,8 @@ mod tests {
             "输入路由必须恒开"
         );
         assert!(
-            !unlocked.movable && !locked.movable,
-            "移动由宿主接管，库不开自己的移动会话"
+            unlocked.movable && !locked.movable,
+            "未锁定应交给库驱动移动（每帧应用一次，120Hz）；锁定则关掉库的移动会话"
         );
         assert!(
             unlocked.resize.enabled,

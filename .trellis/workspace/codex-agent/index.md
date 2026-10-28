@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
+- **Total Sessions**: 9
 - **Last Active**: 2026-10-28
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~419 | Active |
+| `journal-1.md` | ~554 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,8 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 9 | 2026-10-28 | 按库性能契约重写接管式拖拽：Move 内 set_rect 对齐 120Hz | - | `master` |
+| 8 | 2026-10-28 | 内容掉帧量化：库快照4Hz发布 + 会话期每帧重交9MB透明ULW帧 | - | `master` |
 | 7 | 2026-10-28 | hover闪烁定案(TrackMouseEvent假LEAVE) + 引擎模式每帧白烧一趟ULW | - | `master` |
 | 6 | 2026-10-28 | 缩放会话收尾竞态 + 退出11/11必崩 + 内容层掉帧 | - | `master` |
 | 5 | 2026-10-28 | 真实鼠标复现再挖两条根因：库无 CS_DBLCLKS 致双击不触发 / FocusHint 抢焦点杀菜单 | - | `master` |

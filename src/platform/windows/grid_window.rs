@@ -360,8 +360,8 @@ pub(crate) struct GridWindowData {
     /// 由 `WM_USER_GLASS_RESIZE` 事件置位、跟随 tick 确认快照回落后清除；
     /// 会话期间 `WM_WINDOWPOSCHANGED` 不得把窗口几何反向推回引擎（防止回路）。
     pub(crate) glass_session_active: bool,
-    /// 接管式标题拖拽会话进行中（`begin_box_drag` → SetCapture + 轮询光标 →
-    /// SetWindowPos → WM_WINDOWPOSCHANGED 反向同步块矩形 → Up 收尾保存）。
+    /// 接管式标题拖拽会话进行中（几何由库 sink 的按压序列驱动，代理窗
+    /// 由 `on_glass_drag_sync` 跟随；收尾走 `end_box_drag`）。
     pub(crate) box_drag_active: bool,
     /// 上次经 UpdateLayeredWindow 真正提交过的外框尺寸与当时的玻璃状态。
     ///
@@ -383,12 +383,6 @@ pub(crate) struct GridWindowData {
     pub(crate) glass_session_seen_resizing: bool,
     /// 会话内连续看到 resizing=false 的拍数（收尾去抖用）。
     pub(crate) glass_session_idle_ticks: u8,
-    /// 拖拽起始光标屏幕坐标
-    pub(crate) box_drag_anchor_x: i32,
-    pub(crate) box_drag_anchor_y: i32,
-    /// 拖拽起始窗口外框左上角（屏幕坐标）
-    pub(crate) box_drag_orig_x: i32,
-    pub(crate) box_drag_orig_y: i32,
     /// 本次接管式移动是否真的挪过窗口（懒创建参考线、决定要不要落盘）。
     pub(crate) box_drag_moved: bool,
     /// hover 轮询里连续「光标在块外」的拍数。
@@ -524,10 +518,6 @@ impl GridWindowData {
             content_last_render_ms: 0,
             glass_session_seen_resizing: false,
             glass_session_idle_ticks: 0,
-            box_drag_anchor_x: 0,
-            box_drag_anchor_y: 0,
-            box_drag_orig_x: 0,
-            box_drag_orig_y: 0,
             box_drag_moved: false,
             hover_out_ticks: 0,
         }
@@ -956,10 +946,6 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         content_last_render_ms: 0,
         glass_session_seen_resizing: false,
         glass_session_idle_ticks: 0,
-        box_drag_anchor_x: 0,
-        box_drag_anchor_y: 0,
-        box_drag_orig_x: 0,
-        box_drag_orig_y: 0,
         box_drag_moved: false,
         hover_out_ticks: 0,
     });
@@ -1825,50 +1811,6 @@ pub(crate) fn on_grid_refresh_tick(hwnd: HWND) {
     let Some(data) = (unsafe { get_data(hwnd) }) else {
         return;
     };
-    if data.box_drag_active {
-        // 看门狗：接管式移动靠 UP 消息收尾。异常路径（捕获被别的窗口抢走、
-        // 库会话插队、渲染线程死亡导致 sink 停摆）下 UP 可能永远不到达，
-        // 那时分类框会以 16ms 追着手跑 —— 用户侧就是「一拖整个分类框卡死、
-        // 所有交互无响应」。左键物理抬起即强制收尾，代价只是这一轮少存一次布局。
-        let lbutton_down = unsafe { GetAsyncKeyState(VK_LBUTTON) } & 0x8000u16 as i16 != 0;
-        if !lbutton_down {
-            log::warn!("[glass-dbg] 接管式移动未收到 UP（左键已抬起）→ 强制收尾");
-            // 与 WM_LBUTTONUP 处理器同一收尾路径（那里也是在持有 data 借用时调用）。
-            end_box_drag(hwnd);
-            return;
-        }
-        // 接管式移动：光标轮询 → 目标外框 → SetWindowPos（块矩形由
-        // WM_WINDOWPOSCHANGED 反向同步，参考线由其自身定时器跟踪窗口矩形）。
-        if let Some((cx, cy)) = glass_cursor_pos() {
-            let want_left = data.box_drag_orig_x + (cx - data.box_drag_anchor_x);
-            let want_top = data.box_drag_orig_y + (cy - data.box_drag_anchor_y);
-            let mut outer = RECT {
-                left: 0,
-                top: 0,
-                right: 0,
-                bottom: 0,
-            };
-            let have = unsafe { GetWindowRect(hwnd, &mut outer) } != 0;
-            if !have || outer.left != want_left || outer.top != want_top {
-                if !data.box_drag_moved {
-                    data.box_drag_moved = true;
-                    super::alignment_guide::on_enter_size_move(hwnd);
-                }
-                unsafe {
-                    SetWindowPos(
-                        hwnd,
-                        std::ptr::null_mut(),
-                        want_left,
-                        want_top,
-                        0,
-                        0,
-                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-                    );
-                }
-            }
-        }
-        return;
-    }
     drop(data);
     follow_glass_session(hwnd);
     // 空闲（无库缩放会话、无移动会话）时兼作 hover 轮询。
@@ -1899,44 +1841,6 @@ fn switch_glass_timer(hwnd: HWND, interval_ms: u32) {
     };
 }
 
-/// 接管式标题拖拽：开始（代理窗口在此接收 SetCapture，后续真实 up/move 归本窗）。
-pub(crate) fn begin_box_drag(hwnd: HWND) {
-    let Some(data) = (unsafe { get_data(hwnd) }) else {
-        return;
-    };
-    // 库缩放会话优先：两套状态机同时搬同一个窗口会互相拉锯（表现为拖完
-    // 分类框抖动/卡死），这里直接让位。
-    if data.glass_session_active {
-        log::debug!("[glass-dbg] 库缩放会话进行中，忽略接管式移动请求");
-        return;
-    }
-    let Some((cx, cy)) = glass_cursor_pos() else {
-        return;
-    };
-    let mut outer = RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
-    };
-    if unsafe { GetWindowRect(hwnd, &mut outer) } == 0 {
-        return;
-    }
-    data.box_drag_active = true;
-    data.box_drag_anchor_x = cx;
-    data.box_drag_anchor_y = cy;
-    data.box_drag_orig_x = outer.left;
-    data.box_drag_orig_y = outer.top;
-    data.box_drag_moved = false;
-    raise_timer_resolution();
-    unsafe { SetCapture(hwnd) };
-    log::info!("[glass-dbg] begin_box_drag hwnd={hwnd:?} anchor=({cx},{cy})");
-    switch_glass_timer(hwnd, LIQUID_GLASS_DRAG_INTERVAL_MS);
-    // 参考线**懒创建**：标题单击、合成双击都会走到这里，但窗口未必移动；
-    // 立刻拉起 5040x2080 的全屏 overlay 会闪一下（也白烧一次合成）。
-    // 真正产生位移时由 `on_grid_refresh_tick` 补 on_enter_size_move。
-}
-
 /// 接管式标题拖拽：结束（释放捕获、对齐库权威矩形、恢复低频档、保存布局）。
 pub(crate) fn end_box_drag(hwnd: HWND) {
     let Some(data) = (unsafe { get_data(hwnd) }) else {
@@ -1947,9 +1851,6 @@ pub(crate) fn end_box_drag(hwnd: HWND) {
     }
     data.box_drag_active = false;
     log::info!("[glass-dbg] end_box_drag hwnd={hwnd:?}");
-    unsafe {
-        ReleaseCapture();
-    }
     // 库对块有「中心不出所在屏」钳制：拖到屏幕边缘时窗口可能领先块矩形。
     // 收尾回读权威块矩形对齐窗口，保证内容层与玻璃最终严丝合缝。
     if let Some(content) = super::glass_engine::block_content_rect(data.config_id) {
@@ -1999,7 +1900,21 @@ fn poll_glass_hover(hwnd: HWND) {
     let Some(data) = (unsafe { get_data(hwnd) }) else {
         return;
     };
-    if !super::glass_engine::has_box(data.config_id) || data.menu.open || data.box_drag_active {
+    if !super::glass_engine::has_box(data.config_id) {
+        return;
+    }
+    if data.box_drag_active {
+        // 看门狗：拖拽收尾依赖 sink 序列的 Up。异常路径（序列里丢了 Up、画布
+        // 输入被抢）会让代理窗一直跟着跑，这里按左键物理状态兜底。
+        let lbutton_down = unsafe { GetAsyncKeyState(VK_LBUTTON) } & 0x8000u16 as i16 != 0;
+        if !lbutton_down {
+            log::warn!("[glass-dbg] 接管式移动未收到 UP（左键已抬起）→ 强制收尾");
+            end_box_drag(hwnd);
+            return;
+        }
+    }
+    // 拖拽进行中不做 hover 轮询（代理窗正在被搬，高亮跟随没有意义）
+    if data.menu.open || data.box_drag_active {
         return;
     }
     let Some((cx, cy)) = glass_cursor_pos() else {
@@ -2036,6 +1951,9 @@ fn follow_glass_session(hwnd: HWND) {
         return;
     };
     let box_id = data.config_id;
+    // 先催库出帧：块矩形来自快照，不催就按空闲兜底档（~4Hz）发布，
+    // 内容纹理会跟着窗口尺寸一起卡成 3~4Hz。
+    super::glass_engine::request_render();
     // 空闲态**绝不搬窗口**：块矩形与窗口矩形之间存在 1px 级舍入差是常态
     // （逻辑↔物理往返、库中心钳制），空闲跟随会与 WM_WINDOWPOSCHANGED 的
     // 反向 push 形成每 tick 拉锯 —— 表现为 hover 闪烁、点击抖动（实测根因）。
@@ -2079,16 +1997,26 @@ fn follow_glass_session(hwnd: HWND) {
             );
         }
     }
-    let resizing = super::glass_engine::block_resizing(box_id);
+    super::glass_engine::note_session_rect([
+        content.left,
+        content.top,
+        content.right,
+        content.bottom,
+    ]);
+    super::glass_engine::maybe_log_session_stats();
+    // 移动会话只有 moving、缩放会话只有 resizing：两者都要当作「会话还活着」，
+    // 否则移动会话会被宽限期提前掐断。
+    let active =
+        super::glass_engine::block_resizing(box_id) || super::glass_engine::block_moving(box_id);
     let (seen, idle, should_end) = session_next(
-        resizing,
+        active,
         data.glass_session_seen_resizing,
         data.glass_session_idle_ticks,
     );
     data.glass_session_seen_resizing = seen;
     data.glass_session_idle_ticks = idle;
     if should_end {
-        log::debug!("库缩放会话收尾：resizing 连续 {idle} 拍为 false（seen={seen}）");
+        log::debug!("库会话收尾：moving/resizing 连续 {idle} 拍为 false（seen={seen}）");
         end_glass_resize_session(hwnd);
     }
 }
