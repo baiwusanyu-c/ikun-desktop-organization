@@ -421,11 +421,17 @@ fn content_fingerprint(
     f.i32(data.selected_item);
     f.i32(data.hovered_item);
     f.i32(data.shift_anchor);
-    f.flag(data.marquee_active);
-    f.i32(data.marquee_start_x);
-    f.i32(data.marquee_start_y);
-    f.i32(data.marquee_current_x);
-    f.i32(data.marquee_current_y);
+    // 引擎模式：选框由快路径 `render_marquee_frame` 直接合成进内容 DIB 并按
+    // 脏区增量上传，不进指纹——否则每拍坐标变化都触发「全量软件光栅重绘 +
+    // 整块纹理重传」（2026-11-03 性能验收）。收尾用 marquee_force_full 兜底
+    // 强制一次全量重绘，保证松手后选框必然消失。
+    if !(super::glass_engine::is_active() && super::glass_engine::has_box(data.config_id)) {
+        f.flag(data.marquee_active);
+        f.i32(data.marquee_start_x);
+        f.i32(data.marquee_start_y);
+        f.i32(data.marquee_current_x);
+        f.i32(data.marquee_current_y);
+    }
     f.i32(data.multi_drag_items.len() as i32);
     for index in &data.multi_drag_items {
         f.i32(*index as i32);
@@ -482,6 +488,175 @@ fn content_fingerprint(
 /// 重要：使用 GetWindowRect（而非 GetClientRect）获取尺寸。
 /// 对 WS_POPUP|WS_THICKFRAME 分层窗口，UpdateLayeredWindow 的 psize 参数
 /// 会直接设置窗口尺寸。
+/// 引擎模式框选快路径：不做全量软件光栅重绘，只做三步——
+/// 1. 把上一拍选框区域从「干净帧快照」整区还原；
+/// 2. source-over 重新混合当前选框全区域（干净底 + 单层框，杜绝旧边框残留）；
+/// 3. push_content_dirty 按两拍并集脏区增量上传库纹理。
+///
+/// 每拍成本约等于小区域行拷贝 + 新带查表混合 + 一次 buffer 拷贝（库 API 要求
+/// 整面 buffer，GPU 只传脏区），对比全量重绘路径（软件光栅 5~11ms + 整块
+/// 4MB 纹理重传）是数量级下降。选框始终留在 liquid-verre-rs 内容纹理管线内
+/// ——独立覆盖层窗口会被 DDA 桌面采集吃进玻璃折射产生残影（2026-11-03 否决）。
+///
+/// 返回 false = 不适用（非引擎模式 / 未在框选 / DIB 未就绪 / 需要先来一帧
+/// 干净全量），调用方回退 render_layered_window。
+pub(crate) fn render_marquee_frame(hwnd: HWND) -> bool {
+    let Some(data) = (unsafe { get_data(hwnd) }) else {
+        return false;
+    };
+    if !data.marquee_active {
+        return false;
+    }
+    if !(super::glass_engine::is_active() && super::glass_engine::has_box(data.config_id)) {
+        return false;
+    }
+    let (cw, ch) = (data.content_w, data.content_h);
+    if cw <= 0 || ch <= 0 || data.content_bits.is_null() {
+        return false;
+    }
+    let len = (cw as usize) * (ch as usize) * 4;
+    let prev = data.marquee_prev_rect;
+
+    // 首拍/全量重绘使快照失效后：把当前 DIB 快照为干净帧。prev 非空说明
+    // DIB 上还带着旧选框，不能当干净帧——让调用方先全量重绘（重绘产出干净
+    // 帧并重置 prev），下一拍再来快照。
+    if !data.marquee_pristine_valid || data.marquee_pristine.len() != len {
+        if prev != [0; 4] {
+            return false;
+        }
+        data.marquee_pristine.resize(len, 0);
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                data.content_bits as *const u8,
+                data.marquee_pristine.as_mut_ptr(),
+                len,
+            );
+        }
+        data.marquee_pristine_valid = true;
+    }
+
+    // 当前选框（视口=块内物理像素；引擎模式 content_margin=0，DIB 即视口）。
+    // 纵向避开标题栏，与内容层 PushAxisAlignedClip 同口径。
+    let title_lo = data.title_h.max(0).min(ch);
+    let x1 = data
+        .marquee_start_x
+        .min(data.marquee_current_x)
+        .clamp(0, cw);
+    let x2 = data
+        .marquee_start_x
+        .max(data.marquee_current_x)
+        .clamp(0, cw);
+    let y1 = data
+        .marquee_start_y
+        .min(data.marquee_current_y)
+        .clamp(title_lo, ch);
+    let y2 = data
+        .marquee_start_y
+        .max(data.marquee_current_y)
+        .clamp(title_lo, ch);
+    let rect = [x1, y1, x2, y2];
+    if rect == prev {
+        return true; // 选框未变：DIB 与库纹理都仍是最新
+    }
+
+    let stride = cw as usize * 4;
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    let dpi = if dpi > 0 { dpi as i32 } else { 96 };
+    let border_px = (dpi / 96).max(1);
+    // 注意：不能「上一框在新框内就只刷新增带」——旧框的边框像素（a=200）
+    // 会残留在新框内部成为暗色轨迹，随拖拽不断堆积，视觉上就是
+    // 「框线一直颤抖」（2026-11-03 验收反馈）。必须每拍先整区还原旧框，
+    // 再对新框全区域重混，保证任意两拍之间画面只有「干净底 + 一层框」。
+
+    // 与 D2D 路径同参：RGB(0,120,215)，填充 a=40、边框 a=200（预乘 BGRA）。
+    let fill_a: u32 = 40;
+    let border_a: u32 = 200;
+    let (f_pb, f_pg) = (215 * fill_a / 255, 120 * fill_a / 255);
+    let (b_pb, b_pg) = (215 * border_a / 255, 120 * border_a / 255);
+    let build_lut = |inv: u32| -> [u8; 256] {
+        let mut t = [0u8; 256];
+        for (i, v) in t.iter_mut().enumerate() {
+            *v = ((i as u32 * inv + 127) / 255).min(255) as u8;
+        }
+        t
+    };
+    let f_lut = build_lut(255 - fill_a);
+    let b_lut = build_lut(255 - border_a);
+
+    unsafe {
+        let dst = data.content_bits as *mut u8;
+        let src = data.marquee_pristine.as_ptr();
+        if prev[2] > prev[0] && prev[3] > prev[1] {
+            let (pl, pt, pr, pb) = (
+                prev[0].clamp(0, cw),
+                prev[1].clamp(0, ch),
+                prev[2].clamp(0, cw),
+                prev[3].clamp(0, ch),
+            );
+            let row_bytes = ((pr - pl).max(0) as usize) * 4;
+            for y in pt..pb {
+                let off = y as usize * stride + pl as usize * 4;
+                if row_bytes > 0 {
+                    std::ptr::copy_nonoverlapping(src.add(off), dst.add(off), row_bytes);
+                }
+            }
+        }
+        if x2 > x1 && y2 > y1 {
+            let blend_span = |xa: i32, xb: i32, y: i32| {
+                if xb <= xa {
+                    return;
+                }
+                let row = y as usize * stride;
+                let edge_row = y - y1 < border_px || y2 - y <= border_px;
+                for x in xa..xb {
+                    let border = edge_row || x - x1 < border_px || x2 - x <= border_px;
+                    let (lut, pb2, pg2, aa) = if border {
+                        (&b_lut, b_pb, b_pg, border_a)
+                    } else {
+                        (&f_lut, f_pb, f_pg, fill_a)
+                    };
+                    let p = row + x as usize * 4;
+                    let ob = u32::from(lut[*dst.add(p) as usize]) + pb2;
+                    let og = u32::from(lut[*dst.add(p + 1) as usize]) + pg2;
+                    let or_ = u32::from(lut[*dst.add(p + 2) as usize]);
+                    let oa = u32::from(lut[*dst.add(p + 3) as usize]) + aa;
+                    *dst.add(p) = ob.min(255) as u8;
+                    *dst.add(p + 1) = og.min(255) as u8;
+                    *dst.add(p + 2) = or_.min(255) as u8;
+                    *dst.add(p + 3) = oa.min(255) as u8;
+                }
+            };
+            for y in y1..y2 {
+                blend_span(x1, x2, y);
+            }
+        }
+    }
+
+    let mut bounds = rect;
+    if prev[2] > prev[0] && prev[3] > prev[1] {
+        bounds[0] = bounds[0].min(prev[0].clamp(0, cw));
+        bounds[1] = bounds[1].min(prev[1].clamp(0, ch));
+        bounds[2] = bounds[2].max(prev[2].clamp(0, cw));
+        bounds[3] = bounds[3].max(prev[3].clamp(0, ch));
+    }
+    data.marquee_prev_rect = rect;
+    let bytes = unsafe { std::slice::from_raw_parts(data.content_bits as *const u8, len) };
+    let dirty = [
+        bounds[0].max(0) as u32,
+        bounds[1].max(0) as u32,
+        bounds[2].max(0) as u32,
+        bounds[3].max(0) as u32,
+    ];
+    super::glass_engine::push_content_dirty(
+        data.config_id,
+        cw as u32,
+        ch as u32,
+        bytes,
+        Some(dirty),
+    );
+    true
+}
+
 pub fn render_layered_window(hwnd: HWND) {
     render_layered_window_inner(hwnd)
 }
@@ -670,7 +845,9 @@ fn render_layered_window_inner(hwnd: HWND) {
         || data.content_w != content_w
         || data.content_h != content_h
         || data.content_fingerprint != fingerprint
-        || data.content_bitmap.is_none();
+        || data.content_bitmap.is_none()
+        // 框选收尾：快路径已把选框合成进 DIB，必须无视指纹重画一次干净帧
+        || data.marquee_force_full;
 
     // 会话期内容重画节流（治「标题/图标/按钮掉帧、玻璃背景却流畅」）：
     // 内容层是 DC 互操作 / 软件光栅化，实测一帧 5~11ms；库缩放与接管式移动
@@ -960,7 +1137,7 @@ fn render_layered_window_inner(hwnd: HWND) {
         // 构建多选参数
         let multi_select_ct = Some(super::multi_select::ContainerType::GridBox);
         let multi_select_id = super::multi_select::container_id_from_uuid(data.config_id);
-        let marquee = if data.marquee_active {
+        let marquee = if data.marquee_active && !glass_active {
             Some((
                 data.marquee_start_x,
                 data.marquee_start_y,
@@ -1084,6 +1261,10 @@ fn render_layered_window_inner(hwnd: HWND) {
             content_h.max(0) as u32,
             bytes,
         );
+        // 刚产出干净全量帧：快路径基线重置（下一拍重新快照，旧选框残留清零）。
+        data.marquee_pristine_valid = false;
+        data.marquee_prev_rect = [0; 4];
+        data.marquee_force_full = false;
     }
 
     // ===== 引擎模式：代理窗只需要「存在且全透明」，能少交就少交 =====
@@ -1749,10 +1930,13 @@ pub fn render_icon_grid(
 
     // ===== Marquee selection rectangle =====
     if let Some((mx1, my1, mx2, my2)) = marquee {
+        // marquee 坐标是视口系（content_point_from_lparam 未加 scroll_offset，
+        // 与 WM_LBUTTONUP 的选中命中同一口径），不能再减 scroll_offset——
+        // 旧写法在内容滚动时把选框整体上移 scroll 距离（位置错位 bug，顺手修正）。
         let left = mx1.min(mx2) as f32;
-        let top = (my1.min(my2) - scroll_offset) as f32;
+        let top = my1.min(my2) as f32;
         let right = mx1.max(mx2) as f32;
-        let bottom = (my1.max(my2) - scroll_offset) as f32;
+        let bottom = my1.max(my2) as f32;
         // Semi-transparent blue fill
         let fill_brush = cached_brush(target, 0, 120, 215, 40);
         if let Ok(ref fb) = fill_brush {

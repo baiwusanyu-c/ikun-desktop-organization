@@ -77,8 +77,12 @@ pub fn get_config(runtime: State<'_, SharedTauriRuntime>) -> Result<AppConfig, S
 }
 
 /// 从磁盘重新加载配置并替换当前运行时状态。
+///
+/// `async` 标记：磁盘读 + 引擎应用（可能触发整引擎重建，百毫秒级）必须脱离
+/// Tauri 主线程执行——同步命令跑在主线程上，会饿死 WebView2 窗口的
+/// WM_PAINT/WM_SIZE（2026-08 f6f6ed5 修过同类「面板底部异常空白」问题）。
 #[tauri::command]
-pub fn load_config(runtime: State<'_, SharedTauriRuntime>) -> Result<AppConfig, String> {
+pub async fn load_config(runtime: State<'_, SharedTauriRuntime>) -> Result<AppConfig, String> {
     let mut config = AppConfig::load().map_err(|error| format!("加载配置失败: {error}"))?;
     config.box_style.normalize();
     apply_runtime_config(&config);
@@ -91,7 +95,7 @@ pub fn load_config(runtime: State<'_, SharedTauriRuntime>) -> Result<AppConfig, 
 
 /// 保存完整配置。
 #[tauri::command]
-pub fn save_config(
+pub async fn save_config(
     runtime: State<'_, SharedTauriRuntime>,
     config: AppConfig,
 ) -> Result<AppConfig, String> {
@@ -100,7 +104,7 @@ pub fn save_config(
 
 /// 更新所有窗口使用的主题色。
 #[tauri::command]
-pub fn update_theme_color(
+pub async fn update_theme_color(
     runtime: State<'_, SharedTauriRuntime>,
     color: String,
 ) -> Result<AppConfig, String> {
@@ -111,7 +115,7 @@ pub fn update_theme_color(
 
 /// 更新分类框样式并实时重绘。
 #[tauri::command]
-pub fn update_box_style(
+pub async fn update_box_style(
     runtime: State<'_, SharedTauriRuntime>,
     mut style: BoxStyleConfig,
 ) -> Result<AppConfig, String> {
@@ -121,22 +125,21 @@ pub fn update_box_style(
 
 /// 更新液态玻璃参数并实时重绘。
 #[tauri::command]
-pub fn update_liquid_glass(
+pub async fn update_liquid_glass(
     runtime: State<'_, SharedTauriRuntime>,
     mut config: LiquidGlassConfig,
 ) -> Result<AppConfig, String> {
     config.normalize();
     update_config(runtime.inner(), |app_config| {
         app_config.box_style.liquid_glass = config;
-        // 透明模式圆角继续联动分类框整体圆角（液态模式圆角独立可调）
-        app_config.box_style.liquid_glass.transparent.corner_radius =
-            app_config.box_style.border_radius;
+        // 圆角/背景色/透明度 → 库参数的联动统一在 `BoxStyleConfig::normalize()`
+        //（persist_locked 内必然执行），这里不再手抄一份映射口径。
     })
 }
 
 /// 更新 AI 配置。
 #[tauri::command]
-pub fn update_ai_config(
+pub async fn update_ai_config(
     runtime: State<'_, SharedTauriRuntime>,
     config: AiConfig,
 ) -> Result<AppConfig, String> {
@@ -145,13 +148,16 @@ pub fn update_ai_config(
 
 /// 恢复默认配置。
 #[tauri::command]
-pub fn reset_config(runtime: State<'_, SharedTauriRuntime>) -> Result<AppConfig, String> {
+pub async fn reset_config(runtime: State<'_, SharedTauriRuntime>) -> Result<AppConfig, String> {
     persist_config(runtime.inner(), AppConfig::default())
 }
 
 /// 导出配置。
 #[tauri::command]
-pub fn export_config(runtime: State<'_, SharedTauriRuntime>, path: String) -> Result<(), String> {
+pub async fn export_config(
+    runtime: State<'_, SharedTauriRuntime>,
+    path: String,
+) -> Result<(), String> {
     current_config(runtime.inner())?
         .export_to(std::path::Path::new(&path))
         .map_err(|error| format!("导出配置失败: {error}"))
@@ -159,7 +165,7 @@ pub fn export_config(runtime: State<'_, SharedTauriRuntime>, path: String) -> Re
 
 /// 导入配置。
 #[tauri::command]
-pub fn import_config(
+pub async fn import_config(
     runtime: State<'_, SharedTauriRuntime>,
     path: String,
 ) -> Result<AppConfig, String> {

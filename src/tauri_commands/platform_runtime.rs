@@ -624,6 +624,9 @@ pub fn start_platform_runtime(app: tauri::AppHandle, runtime: SharedTauriRuntime
                 }
             }
 
+            // WebView 挂死看门狗（心跳断流 + 未被遮挡 + 可见 → 重建窗口）。
+            crate::tauri_commands::window_cmd::watch_webview_hangs(&app_handle);
+
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
 

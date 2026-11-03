@@ -232,6 +232,9 @@ pub const LWA_COLORKEY: u32 = 0x00000001;
 pub const SW_SHOW: i32 = 5;
 pub const SW_SHOWNOACTIVATE: i32 = 4;
 pub const SW_SHOWNA: i32 = 8;
+/// GetAncestor 标志：取根属窗口（顶层窗口）。
+pub const GA_ROOT: u32 = 2;
+
 pub const SW_HIDE: i32 = 0;
 pub const SWP_NOZORDER: u32 = 0x0004;
 pub const SWP_NOACTIVATE: u32 = 0x0010;

@@ -323,8 +323,23 @@ impl BoxStyleConfig {
             .border_radius
             .clamp(0.0, LIQUID_GLASS_CORNER_RADIUS_MAX);
         self.liquid_glass.normalize();
-        // 透明模式圆角继续跟随分类框整体圆角（保持旧版联动）；液态模式圆角独立可调。
+        // 「分类框风格」表单字段 → 库参数的统一映射（渲染出口只有 liquid-verre-rs）：
+        // - 圆角：两种模式一致（面板不再暴露分模式圆角滑条，单一来源 border_radius）；
+        // - 背景色/透明度：驱动透明玻璃底板。非液态模式的底板由库
+        //   `GlassStyle::Transparent(TransparentParams)` 渲染，应用层 D2D 背景
+        //   仅作为引擎不可用时的回退绘制（`d2d_render.rs` 第二趟）。
+        //   2026-11-02 用户报「背景色/透明度不生效」：旧版只联动了圆角，
+        //   颜色与 alpha 从未流入 transparent 参数组，这里补齐。
         self.liquid_glass.transparent.corner_radius = self.border_radius;
+        self.liquid_glass.liquid.corner_radius = self.border_radius;
+        let [red, green, blue] = self.background_color;
+        self.liquid_glass.transparent.color = [
+            f32::from(red) / 255.0,
+            f32::from(green) / 255.0,
+            f32::from(blue) / 255.0,
+            1.0,
+        ];
+        self.liquid_glass.transparent.opacity = f32::from(self.background_alpha) / 255.0;
         *self != before
     }
 }
@@ -1769,7 +1784,24 @@ mod liquid_glass_tests {
         style.border_radius = 24.0;
         style.liquid_glass.liquid.corner_radius = 40.0;
         style.normalize();
+        // 单一来源：两种模式圆角都跟随「圆角调节」，面板不再暴露分模式圆角滑条。
         assert!((style.liquid_glass.transparent.corner_radius - 24.0).abs() < f32::EPSILON);
-        assert!((style.liquid_glass.liquid.corner_radius - 40.0).abs() < f32::EPSILON);
+        assert!((style.liquid_glass.liquid.corner_radius - 24.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_box_style_normalize_maps_background_to_transparent_params() {
+        // 2026-11-02 回归钉：非液态模式的底板由库 TransparentParams 渲染，
+        // 「分类框风格」的背景色/透明度必须流入 color/opacity，否则面板调节不生效。
+        let mut style = BoxStyleConfig::default();
+        style.background_color = [255, 0, 0];
+        style.background_alpha = 184;
+        style.normalize();
+        let t = &style.liquid_glass.transparent;
+        assert!((t.color[0] - 1.0).abs() < 1e-6);
+        assert!(t.color[1].abs() < 1e-6);
+        assert!(t.color[2].abs() < 1e-6);
+        assert!((t.color[3] - 1.0).abs() < 1e-6);
+        assert!((t.opacity - 184.0 / 255.0).abs() < 1e-6);
     }
 }

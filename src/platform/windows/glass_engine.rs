@@ -41,7 +41,8 @@ use crate::config::app_config::{
 use super::ffi_imports::{GetWindowRect, PostMessageW};
 use super::ffi_types::{
     HTCAPTION, MK_LBUTTON, MK_RBUTTON, RECT, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEWHEEL, WM_NCLBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_USER_GLASS_FOCUS,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCLBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    WM_USER_GLASS_FOCUS,
 };
 use super::grid_layout::{lock_btn_rect, more_btn_rect};
 use super::monitor_utils::get_primary_monitor_dpi;
@@ -158,6 +159,10 @@ struct RouteState {
     geom: Option<BlockGeom>,
     /// 最近一次 Move 的块内物理坐标（cursor_override 查询 hover 用）。
     last_local: [f32; 2],
+    /// 左键是否在块内被宿主消费（Down 返回 Consumed 置位、Up 清位）。
+    /// 按压期间的 Move 必须转发给代理窗口，否则框选矩形/图标拖拽只能靠
+    /// 100ms hover 轮询更新坐标（实测 ~10Hz，用户报「框选非常卡顿」）。
+    host_pressing: bool,
     /// 上一次 Down 的单调毫秒（0 = 无）与块内坐标：库画布没有 `CS_DBLCLKS`，
     /// Windows 不会发 `WM_LBUTTONDBLCLK`，双击只能由 sink 自己按系统节律合成。
     last_down_ms: u64,
@@ -183,6 +188,7 @@ fn registry_register(glass_id: u32, agent: isize) {
                 agent,
                 geom: None,
                 last_local: [0.0; 2],
+                host_pressing: false,
                 last_down_ms: 0,
                 last_down_x: 0,
                 last_down_y: 0,
@@ -976,10 +982,19 @@ fn spawn_holder_and_reattach(
     if let Ok(mut guard) = HOLDER.lock() {
         *guard = Some(holder);
         log::info!("玻璃引擎重建完成");
-        return true;
+    } else {
+        log::error!("玻璃引擎重建收尾失败：HOLDER 锁不可用");
+        return false;
     }
-    log::error!("玻璃引擎重建收尾失败：HOLDER 锁不可用");
-    false
+    // 重建后必须把新画布重新压回 Z 序最底部：库画布「创建时置底、就绪时才
+    // ShowWindow」，而 ShowWindow 会把窗口抬到普通带顶部——旧引擎销毁→新引擎
+    // 就绪之间面板等应用窗口全被这块全屏画布压在下面，DWM 遮挡状态错乱，
+    // WebView2 判定窗口被遮挡后停止绘制新暴露区域（2026-11-02 实锤：WGC↔DDA
+    // 切换重建后控制面板整页空白、滚动条失灵，EnumWindows 显示画布压在面板上）。
+    reassert_canvas_bottom();
+    // 画布压在别的窗口之上期间，OLE 放置目标也要跟着重挂（同 attach_box 口径）。
+    super::drop_target::rebind_canvas_drop_targets();
+    true
 }
 
 // =============================================================================
@@ -1039,9 +1054,15 @@ pub fn poll_events_to_log() {
         match event {
             EngineEvent::Ready { monitor_count } => {
                 log::info!("玻璃引擎就绪，参与渲染的显示器数量: {monitor_count}");
+                // 画布是「创建时置底、首帧就绪才 ShowWindow」，ShowWindow 会把
+                // 窗口抬到普通带顶部 → 必须立刻压回底部，否则全屏画布压在面板等
+                // 应用窗口之上（2026-11-02 控制面板整页空白的根因，见
+                // spawn_holder_and_reattach 注释）。
+                reassert_canvas_bottom();
             }
             EngineEvent::MonitorsChanged { monitor_count } => {
                 log::info!("显示器集合变化，画布与采集已重建，显示器数量: {monitor_count}");
+                reassert_canvas_bottom();
             }
             EngineEvent::WindowCreated { id } => {
                 log::debug!("玻璃块已创建: id={id}");
@@ -1070,6 +1091,9 @@ pub fn poll_events_to_log() {
                 backend,
             } => {
                 log::info!("显示器 {monitor_name} 采集后端: {backend} (下标 {monitor_index})");
+                // 该事件在画布真正开始出帧后到达，是「画布已显示」的最晚可靠信号；
+                // 再压一次底部兜底（幂等，SetWindowPos 只动 Z 序）。
+                reassert_canvas_bottom();
             }
             EngineEvent::CaptureLost {
                 monitor_index,
@@ -1338,6 +1362,16 @@ fn in_title_buttons(geom: &BlockGeom, x: i32, y: i32) -> bool {
     x >= mx && x < mx + ms && y >= my && y < my + ms
 }
 
+/// 块内光标判定（纯函数，单测钉死）：标题按钮手型，其余箭头。
+#[must_use]
+fn cursor_id_for(geom: &BlockGeom, x: i32, y: i32) -> isize {
+    if in_title_buttons(geom, x, y) {
+        32649 // IDC_HAND
+    } else {
+        32512 // IDC_ARROW
+    }
+}
+
 /// 全局输入路由 sink：把库画布收到的块内指针事件合成为标准鼠标消息，
 /// PostMessage 到对应分类框代理窗口，复用既有消息驱动交互全链路。
 ///
@@ -1347,9 +1381,10 @@ fn in_title_buttons(geom: &BlockGeom, x: i32, y: i32) -> bool {
 ///   存在竞态（up 早于模态启动即丢 → 主线程卡死），由代理窗口在 `WM_LBUTTONDOWN`
 ///   里自管「接管式移动会话」（`grid_window::begin_box_drag`：SetCapture +
 ///   定时器轮询光标 → SetWindowPos → WM_WINDOWPOSCHANGED 反向同步块矩形）。
-/// - `WM_MOUSEMOVE` **不**逐条转发：posted 移动不会被系统按队列合并（真实输入
-///   才会），120Hz 洪水会压垮宿主消息循环（实测按钮失灵、hover 闪烁）。
-///   hover 高亮由代理窗口的低频轮询定时器驱动（`on_glass_hover_tick`）。
+/// - `WM_MOUSEMOVE` **空闲不转发、按压必转发**：posted 移动不会被系统按队列
+///   合并（真实输入才会），120Hz 洪水会压垮宿主消息循环（实测按钮失灵、hover
+///   闪烁），所以空闲 hover 由低频轮询定时器驱动（`poll_glass_hover`）；
+///   但左键按压期间（框选/拖拽阈值）不转发就没有实时坐标源，必须逐条投递。
 /// - 双击/右键/滚轮 → 对应标准消息（低频，直接转发）。
 struct HostSink;
 
@@ -1359,7 +1394,15 @@ impl GlassInputSink for HostSink {
     }
 
     fn cursor_override(&self, id: u32) -> Option<isize> {
-        // 锁定/更多按钮 hover 手型；其余默认箭头（与重构前 WM_SETCURSOR 语义一致）。
+        // 锁定/更多按钮 hover 手型；块内其余位置**必须显式回箭头**。
+        //
+        // 返回 None 时库画布走 `DefWindowProcW`，而画布窗口类注册时
+        // hCursor 为空（liquid-verre-rs `platform/window.rs` 的 WNDCLASSEXW
+        // 用 `..Default::default()`）→ DefWindowProc 不设置光标 → 上一阶段的
+        // 光标形状原地粘住：边缘缩放后块内仍是 SIZEWE/SIZENS、点过锁定按钮后
+        // 块内仍是 HAND（2026-11-02 用户报「分类框内鼠标不对」，GetCursorInfo
+        // 实测钉死：拖完右边缘进块内光标停在 SIZEWE）。
+        // 把手带光标由库自己按 `hover_handle` 优先处理，不会被这里覆盖。
         let Ok(map) = ROUTES.lock() else {
             return None;
         };
@@ -1367,17 +1410,13 @@ impl GlassInputSink for HostSink {
         let geom = route.geom?;
         let x = route.last_local[0] as i32;
         let y = route.last_local[1] as i32;
-        if in_title_buttons(&geom, x, y) {
-            Some(32649) // IDC_HAND
-        } else {
-            None
-        }
+        Some(cursor_id_for(&geom, x, y))
     }
 }
 
 fn route_pointer(id: u32, ev: &PointerEvent) -> InputDecision {
     // 锁内只做状态更新与取快照；锁外 PostMessage（非阻塞、任意线程合法）。
-    let (agent, title_h, double_click, hand_off_move) = {
+    let (agent, title_h, double_click, hand_off_move, pressing) = {
         let Ok(mut map) = ROUTES.lock() else {
             return InputDecision::Ignored;
         };
@@ -1425,7 +1464,24 @@ fn route_pointer(id: u32, ev: &PointerEvent) -> InputDecision {
             && route
                 .geom
                 .is_some_and(|g| down_routes_title_drag(&g, lx, ly));
-        (route.agent, title_h, double_click, hand_off_move)
+        // 按压消费状态机：Down（宿主消费，未让位给库会话）→ 开始转发 Move；
+        // Up → 停止。库会话（DragMove/缩放）期间不置位，由库自行逐帧驱动。
+        match ev.phase {
+            PointerPhase::Down => {
+                if !hand_off_move {
+                    route.host_pressing = true;
+                }
+            }
+            PointerPhase::Up(button) if button != Some(PointerButton::Right) => {
+                route.host_pressing = false;
+            }
+            PointerPhase::DoubleClick => {
+                route.host_pressing = false;
+            }
+            _ => {}
+        }
+        let pressing = route.host_pressing;
+        (route.agent, title_h, double_click, hand_off_move, pressing)
     };
     if agent == 0 {
         return InputDecision::Ignored;
@@ -1443,9 +1499,33 @@ fn route_pointer(id: u32, ev: &PointerEvent) -> InputDecision {
     }
 
     match ev.phase {
-        // Move 只更新 last_local（供 cursor_override 手型判定），不转发：
-        // hover 高亮/tooltip 由宿主侧低频轮询驱动，避免 posted 移动消息洪水。
-        PointerPhase::Move => InputDecision::Consumed,
+        // Move：空闲态只更新 last_local（供 cursor_override 手型判定），不转发
+        // ——posted 移动不会被系统按队列合并，120Hz 洪水会压垮宿主消息循环
+        // （hover 高亮/tooltip 由低频轮询驱动）。但**左键按压期间必须转发**：
+        // 框选矩形与图标拖拽阈值都靠 WM_MOUSEMOVE 更新坐标，不转发时只剩
+        // 100ms hover 轮询喂坐标（实测框选 ~10Hz，用户报「框选非常卡顿」）。
+        // 按压是有限时长事件流，转发成本可控（框选处理器只记坐标不重绘）。
+        PointerPhase::Move => {
+            if pressing {
+                // 自愈守卫：按压标志靠 Up 清除，但「在其它窗口上松手」时画布
+                // 收不到 WM_LBUTTONUP（无捕获），标志会一直挂着 → 空闲 Move 被
+                // 持续转发 = 当初要避免的消息洪水。按物理按键状态兜底清位。
+                let lbutton_down =
+                    unsafe { super::ffi_imports::GetAsyncKeyState(super::ffi_types::VK_LBUTTON) }
+                        & 0x8000u16 as i16
+                        != 0;
+                if lbutton_down {
+                    unsafe { PostMessageW(hwnd, WM_MOUSEMOVE, MK_LBUTTON, pack_lparam(lx, ly)) };
+                } else {
+                    if let Ok(mut map) = ROUTES.lock() {
+                        if let Some(route) = map.get_mut(&id) {
+                            route.host_pressing = false;
+                        }
+                    }
+                }
+            }
+            InputDecision::Consumed
+        }
         PointerPhase::Down => {
             if hand_off_move {
                 log::debug!("[glass-dbg] sink 让位给库移动会话 id={id} local=({lx},{ly})");
@@ -1518,10 +1598,25 @@ pub fn update_block_geom(box_id: Uuid, geom: BlockGeom) {
 ///
 /// 语义与校验由库承担：非法参数丢弃 + warn-once；w/h=0 等价 clear_content。
 pub fn push_content(box_id: Uuid, w_phys: u32, h_phys: u32, buffer: &[u8]) {
+    push_content_dirty(box_id, w_phys, h_phys, buffer, None);
+}
+
+/// 带脏区的增量推送（框选快路径专用）。
+///
+/// `dirty` 为块内物理像素半开区间 `[l, t, r, b)`（库 `update_content` 口径：
+/// 纹理与块矩形 1:1 锚定左上角，dirty 直接就是纹理空间坐标）。库据此只重传
+/// 子矩形 GPU 纹理——整块 ~4MB 全量重传是框选每拍成本大头（2026-11-03）。
+pub fn push_content_dirty(
+    box_id: Uuid,
+    w_phys: u32,
+    h_phys: u32,
+    buffer: &[u8],
+    dirty: Option<[u32; 4]>,
+) {
     SESSION_CONTENT_PUSHES.fetch_add(1, Ordering::Relaxed);
     with_holder(|holder| {
         if let Some(entry) = holder.boxes.get(&box_id) {
-            entry.window.update_content(w_phys, h_phys, buffer, None);
+            entry.window.update_content(w_phys, h_phys, buffer, dirty);
         }
     });
 }
@@ -1740,6 +1835,25 @@ mod tests {
         assert!((opts.grip_px - 16.0).abs() < f32::EPSILON);
         assert!((opts.feedback.border_width - 8.0).abs() < f32::EPSILON);
         assert!(opts.enabled && opts.edges && opts.corners);
+    }
+
+    #[test]
+    fn cursor_override_pins_arrow_inside_block_and_hand_on_buttons() {
+        // 2026-11-02 回归钉：画布窗口类无 hCursor，override 返回 None 会让
+        // 上一阶段的 SIZEWE/HAND 在块内粘住（用户报「分类框内鼠标不对」）。
+        // 块内非按钮区域必须显式回箭头；锁定/更多按钮回手型。
+        let geom = BlockGeom {
+            win_w: 676,
+            title_h: 80,
+            dpi: 192,
+            locked: false,
+        };
+        assert_eq!(cursor_id_for(&geom, 300, 400), 32512); // 内容区 → IDC_ARROW
+        let (bx, by, bs) = lock_btn_rect(geom.win_w, geom.title_h, geom.dpi);
+        assert_eq!(cursor_id_for(&geom, bx + bs / 2, by + bs / 2), 32649); // 锁定 → IDC_HAND
+        let (mx, my, ms) = more_btn_rect(geom.win_w, geom.title_h, geom.dpi);
+        assert_eq!(cursor_id_for(&geom, mx + ms / 2, my + ms / 2), 32649); // 更多 → IDC_HAND
+        assert_eq!(cursor_id_for(&geom, 10, 40), 32512); // 标题空白 → IDC_ARROW
     }
 
     #[test]

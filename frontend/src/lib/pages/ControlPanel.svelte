@@ -11,6 +11,7 @@
 
   type TabId = "style" | "ai" | "about";
   let activeTab = $state<TabId>("style");
+  let scrollEl: HTMLDivElement | undefined = $state();
   let config = $state<AppConfig | null>(null);
   let loadError = $state("");
 
@@ -35,12 +36,17 @@
   <TitleBar title="控制面板" showMinimize={true} />
   <nav class="tabs" aria-label="控制面板页面">
     {#each tabs as tab}
-      <button type="button" class:active={activeTab === tab.id} onclick={() => activeTab = tab.id}>
+      <button type="button" class:active={activeTab === tab.id} onclick={() => {
+        activeTab = tab.id;
+        // 切页复位滚动位置：各页内容高度不同，沿用上一页的 scrollTop
+        // 会让短内容页底部露出大片容器背景（用户报「底部大量空白」的入口之一）。
+        if (scrollEl) scrollEl.scrollTop = 0;
+      }}>
         <tab.icon size={14} />{tab.label}
       </button>
     {/each}
   </nav>
-  <div class="content-scroll">
+  <div class="content-scroll" bind:this={scrollEl}>
     {#if loadError}
       <div class="load-state error" role="alert">{loadError}</div>
     {:else if !config}
@@ -62,7 +68,7 @@
   .tabs button:hover { color: var(--text-primary); }
   .tabs button.active { color: var(--text-primary); font-weight: 650; }
   .tabs button.active::after { content: ""; position: absolute; left: 14px; right: 14px; bottom: -1px; height: 2px; border-radius: 2px; background: var(--primary-color); }
-  .content-scroll { flex: 1 1 0; min-height: 0; overflow-x: hidden; overflow-y: scroll; overscroll-behavior: contain; background: var(--bg-group); }
+  .content-scroll { flex: 1 1 0; min-height: 0; overflow-x: hidden; overflow-y: scroll; overscroll-behavior: contain; overflow-anchor: none; background: var(--bg-group); }
   .load-state { display: grid; min-height: 180px; place-items: center; color: var(--text-secondary); }
   .load-state.error { color: #b91c1c; padding: 20px; text-align: center; }
 </style>

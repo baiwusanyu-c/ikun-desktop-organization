@@ -415,8 +415,25 @@ pub(crate) fn handle_grid_drag_timer(hwnd: HWND) {
     };
     // Check marquee: if active, render and detect release
     if data.marquee_active {
-        // Render marquee at timer rate (16ms = ~60fps) for smooth visual update
-        super::d2d_render::render_layered_window(hwnd);
+        // 引擎模式：sink 按压期转发的 WM_MOUSEMOVE 只在光标位于画布命中区时到达
+        // （离开块区域就没有坐标源）；这里每拍补一次物理光标采样，框选矩形在
+        // 块外也持续跟手，且与转发路径幂等（同值不产生额外差异）。
+        if super::glass_engine::is_active() && super::glass_engine::has_box(data.config_id) {
+            let mut pt = POINT { x: 0, y: 0 };
+            unsafe { GetCursorPos(&mut pt) };
+            // 与消息路径同一套换算（含 client->content 留白）。两源各写一套坐标时
+            // 选框每拍在两个值之间跳 12px，就是「框线一直颤抖」的根因。
+            let (mx, my) = super::wnd_proc::content_point_from_screen(hwnd, pt);
+            if mx != data.marquee_current_x || my != data.marquee_current_y {
+                data.marquee_current_x = mx;
+                data.marquee_current_y = my;
+            }
+        }
+        // 定时器拍：优先快路径（光标出块、没有转发 move 时这里是唯一驱动源）；
+        // 快路径内部自带 rect==prev 去重，与 move 驱动并行不产生重复上传。
+        if !super::d2d_render::render_marquee_frame(hwnd) {
+            super::d2d_render::render_layered_window(hwnd);
+        }
         let lbutton_down = unsafe { GetAsyncKeyState(VK_LBUTTON) } & 0x8000u16 as i16 != 0;
         if !lbutton_down {
             unsafe {

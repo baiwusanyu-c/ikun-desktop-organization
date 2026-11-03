@@ -84,6 +84,50 @@ fn content_point_from_lparam(hwnd: HWND, lparam: LPARAM) -> (i32, i32) {
     client_to_content_point_with_padding(padding, client_x, client_y)
 }
 
+/// Screen point -> content-layer point, using the SAME transform as the
+/// message path (`content_point_from_lparam`).
+///
+/// The marquee timer must go through this. Sampling with
+/// `GetCursorPos() - get_grid_content_rect()` skips the client->content
+/// padding step, so the timer and the forwarded WM_MOUSEMOVE wrote two
+/// different coordinate systems (measured 12px apart at 200% DPI). Each tick
+/// the selection rect was snapped between the two values -- that is the
+/// 'rect keeps trembling while dragging' report (2026-11-03 log evidence:
+/// `move cur=(461,252)` immediately followed by `timer -> (449,240)`).
+/// Marquee-only coordinate conversion, in *content-layer truth* space.
+///
+/// In engine mode the forwarded lparam is already block-local, and the block
+/// rect equals the content rect, so running it through
+/// `content_point_from_lparam` (which assumes client-relative coordinates) adds
+/// the invisible-window-frame delta -- measured 12px at 200% DPI. That made the
+/// selection rect sit 12px down-right of the cursor, while the drag timer
+/// sampled the true position: the two writers alternated and the rect jumped
+/// 12px every tick ('the marquee trembles while dragging', 2026-11-03 logs
+/// `move (1162,652) lp=(1150,640)` vs `timer (1150,640)`).
+/// Item hit-testing keeps using the legacy conversion untouched.
+fn marquee_content_point(hwnd: HWND, lparam: LPARAM) -> (i32, i32) {
+    let engine = unsafe { get_data(hwnd) }
+        .map(|d| super::glass_engine::is_active() && super::glass_engine::has_box(d.config_id))
+        .unwrap_or(false);
+    if engine {
+        (get_x_lparam(lparam), get_y_lparam(lparam))
+    } else {
+        content_point_from_lparam(hwnd, lparam)
+    }
+}
+
+pub(crate) fn content_point_from_screen(hwnd: HWND, screen: POINT) -> (i32, i32) {
+    let mut client = screen;
+    if unsafe { ScreenToClient(hwnd, &mut client) } != 0 {
+        let lparam = (((client.y as u32) << 16) | ((client.x as u32) & 0xFFFF)) as isize;
+        return content_point_from_lparam(hwnd, lparam);
+    }
+    match get_grid_content_rect(hwnd) {
+        Some(rect) => (screen.x - rect.left, screen.y - rect.top),
+        None => (screen.x, screen.y),
+    }
+}
+
 fn remove_grid_item_if_missing_after_shell_menu(hwnd: HWND, logical_path: &str) {
     if super::icon_hider::icon_exists_for_box(logical_path) {
         return;
@@ -636,11 +680,21 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 return 0;
             }
 
-            // Marquee selection update: just update coordinates (render happens in timer)
+            // Marquee selection update：坐标即输入即更新；渲染由输入消息直接
+            // 驱动（12ms 节流）——WM_TIMER 被系统合并进 ~30ms 桶，只靠定时器
+            // 框选会掉到 ~40Hz（2026-11-03 实测）。快路径每拍 <2ms，可承受。
             if let Some(data) = get_data(hwnd) {
                 if data.marquee_active {
-                    data.marquee_current_x = mx;
-                    data.marquee_current_y = my;
+                    let (qx, qy) = marquee_content_point(hwnd, lparam);
+                    data.marquee_current_x = qx;
+                    data.marquee_current_y = qy;
+                    let now = super::glass_engine::now_ms();
+                    if now - data.marquee_last_render_ms >= 12 {
+                        data.marquee_last_render_ms = now;
+                        if !super::d2d_render::render_marquee_frame(hwnd) {
+                            super::d2d_render::render_layered_window(hwnd);
+                        }
+                    }
                     return 0;
                 }
             }
@@ -1084,10 +1138,18 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                     }
                     // Start marquee (SetTimer for tracking mouse release outside window)
                     data.marquee_active = true;
-                    data.marquee_start_x = click_x;
-                    data.marquee_start_y = click_y;
-                    data.marquee_current_x = click_x;
-                    data.marquee_current_y = click_y;
+                    // 起点与后续 MOVE/定时器补采样必须同系，否则首拍就跳 12px。
+                    let (qx, qy) = marquee_content_point(hwnd, lparam);
+                    data.marquee_start_x = qx;
+                    data.marquee_start_y = qy;
+                    data.marquee_current_x = qx;
+                    data.marquee_current_y = qy;
+                    // 快路径基线重置 + 定时器粒度抬到 1ms（收尾在 UP 归还）。
+                    // 默认 15.6ms 粒度会把 16ms tick 拉成 ~40Hz（2026-11-03 实测）。
+                    data.marquee_prev_rect = [0; 4];
+                    data.marquee_pristine_valid = false;
+                    data.marquee_last_render_ms = 0;
+                    super::grid_window::raise_timer_resolution();
                     unsafe {
                         SetTimer(hwnd, TIMER_ID_GRID_DRAG, 16, std::ptr::null_mut());
                     }
@@ -1623,6 +1685,14 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 if data.marquee_active {
                     let ctrl_down = unsafe { GetAsyncKeyState(VK_CONTROL) } & 0x8000u16 as i16 != 0;
                     data.marquee_active = false;
+                    // 收尾：快路径把选框合成进了内容 DIB，而引擎模式指纹不含
+                    // marquee 字段——必须强制一次全量重绘产出干净帧，否则
+                    // 松手后选框永远留在画面上（2026-11-03 验收反馈根因）。
+                    data.marquee_force_full = true;
+                    data.marquee_prev_rect = [0; 4];
+                    data.marquee_pristine_valid = false;
+                    super::grid_window::lower_timer_resolution();
+
                     let rl = data.marquee_start_x.min(data.marquee_current_x);
                     let rr = data.marquee_start_x.max(data.marquee_current_x);
                     let rt = data.marquee_start_y.min(data.marquee_current_y);

@@ -331,6 +331,7 @@ extern "system" {
     pub fn GetClassNameW(hWnd: HWND, lpClassName: *mut u16, nMaxCount: i32) -> i32;
 
     pub fn WindowFromPoint(pt: POINT) -> HWND;
+    pub fn GetAncestor(hWnd: HWND, gaFlags: u32) -> HWND;
 
     pub fn IsWindowVisible(hWnd: HWND) -> i32;
 

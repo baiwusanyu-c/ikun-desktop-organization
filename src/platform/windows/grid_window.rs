@@ -275,6 +275,20 @@ pub(crate) struct GridWindowData {
     /// Current position of marquee selection (window coordinates)
     pub(crate) marquee_current_x: i32,
     pub(crate) marquee_current_y: i32,
+    /// 框选快路径：上一拍已合成进内容 DIB 的选框矩形（视口物理像素，已裁剪；
+    /// 全零 = DIB 干净无残留）。下一拍先把该区域从干净帧快照还原再混合新框。
+    pub(crate) marquee_prev_rect: [i32; 4],
+    /// 干净内容帧快照是否可用（任何全量重绘都会使其失效并重取）
+    pub(crate) marquee_pristine_valid: bool,
+    /// 干净帧快照（BGRA 预乘，行距 = content_w*4）；仅框选期间持有
+    pub(crate) marquee_pristine: Vec<u8>,
+    /// 框选渲染节流戳（move 驱动路径，12ms）
+    pub(crate) marquee_last_render_ms: u64,
+    /// 框选收尾强制全量重绘：快路径把选框合成进了内容 DIB，而引擎模式的
+    /// 指纹不含 marquee 字段——松手后若无其它状态变化，缓存命中会让选框
+    /// 永远留在画面上（2026-11-03 验收反馈「松手后不消失」的根因）。
+    /// UP 时置位，让下一趟 render_layered_window 无视指纹缓存重画一次干净帧。
+    pub(crate) marquee_force_full: bool,
     /// List of selected item indices for multi-select operations
     pub(crate) multi_drag_items: Vec<usize>,
 
@@ -489,6 +503,11 @@ impl GridWindowData {
             marquee_start_y: 0,
             marquee_current_x: 0,
             marquee_current_y: 0,
+            marquee_prev_rect: [0; 4],
+            marquee_pristine_valid: false,
+            marquee_pristine: Vec::new(),
+            marquee_last_render_ms: 0,
+            marquee_force_full: false,
             multi_drag_items: Vec::new(),
             renaming_item_index: -1,
             d2d_target: None,
@@ -917,6 +936,11 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         marquee_start_y: 0,
         marquee_current_x: 0,
         marquee_current_y: 0,
+        marquee_prev_rect: [0; 4],
+        marquee_pristine_valid: false,
+        marquee_pristine: Vec::new(),
+        marquee_last_render_ms: 0,
+        marquee_force_full: false,
         multi_drag_items: Vec::new(),
         d2d_target: None,
         icon_bitmap_cache: HashMap::new(),
@@ -963,13 +987,26 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         right: outer_x + outer_w - shadow_padding,
         bottom: outer_y + outer_h - shadow_padding,
     };
-    super::glass_engine::attach_box(
+    let attached = super::glass_engine::attach_box(
         params.config_id,
         hwnd as isize,
         &glass_content,
         dpi,
         params.locked,
     );
+    if attached {
+        // 块的真正上线在库渲染线程处理 CreateWindow 命令后才完成
+        // （`has_box → is_alive` 在此之前为 false）。不等的话，紧接着的首帧
+        // 会按「无块」走 D2D 回退背景，用户看到启动时分类框多画一层、
+        // 鼠标进入触发重绘后才消失（2026-11-03 验收反馈 bug4）。
+        // 上限 ~300ms；超时也不阻塞创建——玻璃 tick 里有残帧纠正兜底。
+        for _ in 0..60 {
+            if super::glass_engine::has_box(params.config_id) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
     // 发布命中几何快照：sink 在渲染线程据此做「标题拖拽接管 / 按钮手型」判定。
     super::glass_engine::update_block_geom(
         params.config_id,
@@ -1811,7 +1848,17 @@ pub(crate) fn on_grid_refresh_tick(hwnd: HWND) {
     let Some(data) = (unsafe { get_data(hwnd) }) else {
         return;
     };
+    // 残帧纠正：块已上线但代理窗还挂着「无块」时期的回退背景
+    // （submitted_glass=false）→ 补一次重绘切回全透明帧，画面交还给库。
+    // 兜住启动等待超时、引擎重建后重挂载等所有迟到场景（bug4 双层的根治）。
+    let stale_fallback = super::glass_engine::has_box(data.config_id)
+        && !data.submitted_glass
+        && !data.glass_session_active
+        && !data.box_drag_active;
     drop(data);
+    if stale_fallback {
+        super::d2d_render::render_layered_window(hwnd);
+    }
     follow_glass_session(hwnd);
     // 空闲（无库缩放会话、无移动会话）时兼作 hover 轮询。
     poll_glass_hover(hwnd);
@@ -1914,7 +1961,9 @@ fn poll_glass_hover(hwnd: HWND) {
         }
     }
     // 拖拽进行中不做 hover 轮询（代理窗正在被搬，高亮跟随没有意义）
-    if data.menu.open || data.box_drag_active {
+    // 框选同理：真实/转发的 WM_MOUSEMOVE 已经是坐标源，这里再 Post 一发合成 move
+    // 只会让选框在同一拍被写两次（多一次无谓重绘，还与定时器互相覆盖）。
+    if data.menu.open || data.box_drag_active || data.marquee_active {
         return;
     }
     let Some((cx, cy)) = glass_cursor_pos() else {

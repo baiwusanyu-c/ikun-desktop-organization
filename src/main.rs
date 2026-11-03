@@ -191,6 +191,21 @@ fn run_tauri_app() -> anyhow::Result<()> {
         .setup(|app| {
             log::info!("Tauri setup complete");
 
+            // WebView 挂死看门狗的前半段：记录各窗口心跳（前端 500ms 一发）。
+            {
+                use tauri::Listener;
+                app.listen("panel-heartbeat", |event| {
+                    // payload：{ label, frames }（frames = rAF 帧计数，冻结即呈现停滞）
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(event.payload()) {
+                        let label = value.get("label").and_then(|v| v.as_str()).unwrap_or("");
+                        let frames = value.get("frames").and_then(|v| v.as_u64()).unwrap_or(0);
+                        if !label.is_empty() {
+                            tauri_commands::window_cmd::record_heartbeat(label, frames);
+                        }
+                    }
+                });
+            }
+
             // Start the platform poller (system tray, hotkey, desktop registry).
             // The SharedTauriRuntime state is already managed via Builder::manage().
             let app_handle = app.handle().clone();

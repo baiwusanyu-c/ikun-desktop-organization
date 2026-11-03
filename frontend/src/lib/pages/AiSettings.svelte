@@ -85,7 +85,7 @@
 {/if}
 
 <style>
-  .ai-settings { display: flex; flex-direction: column; gap: 14px; padding: 16px 18px 20px; }
+  .ai-settings { display: flex; flex-direction: column; gap: 14px; padding: 16px 18px 20px; min-height: 100%; background: #ffffff; }
   .group { overflow: hidden; }
   .group.info { border: 1px solid var(--primary-color); border-radius: 8px; }
   header { min-height: 43px; display: flex; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border-group); background: var(--bg-group-header); }

@@ -552,3 +552,217 @@ R_k = R_0 + (block_local_k - anchor) 会自我抵消：实测「拖 240px 只走
 ### Next Steps
 
 - None - task complete
+
+
+## Session 10: liquid-verre-rs 分类框 5 项 bug 修复（光标粘滞 / 框选卡顿 / 样式直通库接口 / 面板表单重排 / 面板空白回归）
+
+**Date**: 2026-11-02
+**Task**: 分类框基于 liquid-verre-rs 的交互与设置面板缺陷修复（用户报 1/3/4/5/6 号问题）
+**Branch**: `master`（未提交，工作区改动）
+
+### 取证方法（重要口径）
+- 画布与分类框窗口带 `WDA_EXCLUDEFROMCAPTURE`，BitBlt/PrintWindow 均取不到玻璃画面；
+  画面取证用库环境变量 `GLASS_INTERNAL_SHOT`/`GLASS_SHOT_EVERY_MS`（GPU 回读连拍）。
+- 光标形状验证不需要截图：`SetCursorPos` + `GetCursorInfo`（本进程从未 SetCursor 时
+  返回全局可见光标句柄），与 `LoadCursorW(IDC_*)` 句柄直接比对。
+- 真实鼠标 SendInput 在 Codex desktop 环境可用（用户授权后执行）。
+
+### 根因与修复
+1. **块内光标粘滞（e-resize / pointer 不回落）**：库画布窗口类注册 hCursor 为空，
+   宿主 sink 的 `cursor_override` 在非按钮区返回 None → 画布 `WM_SETCURSOR` 走
+   DefWindowProc 不设置光标 → 上一阶段形状原地粘住。修复：块内非按钮区显式返回
+   IDC_ARROW（把手带由库 hover_handle 优先，不受影响）。实测：锁按钮→HAND、
+   进块→ARROW、右边缘→SIZEWE、进块→ARROW 全通过。
+2. **框选矩形卡顿（~10Hz）**：sink 空闲不转发 Move 是对的（防消息洪水），但按压
+   期间框选/拖拽阈值失去唯一坐标源，只剩 100ms hover 轮询。修复：Down(Consumed)
+   置 `host_pressing`，按压期 Move 逐条转发 WM_MOUSEMOVE，Up/物理键松开双路清位；
+   另在 `handle_grid_drag_timer` 引擎分支补每拍 GetCursorPos 采样（块外也跟手）。
+   实测转发 ~28Hz + 16ms 定时器采样，替代旧 10Hz。
+3. **背景色/透明度/圆角不生效 + 红色残影**：`BoxStyleConfig` 的 background_color/
+   alpha 从未流入库 `TransparentParams`（只有圆角联动），非液态模式实际由库透明玻璃
+   渲染底板；旧「残影」是引擎不可用时回退 D2D 绘制时代的产物。修复：normalize()
+   统一映射（圆角→两模式 corner_radius；背景色→transparent.color；透明度→
+   transparent.opacity），面板调背景色 #2563eb/72% 后 `GLASS_INTERNAL_SHOT` 单帧
+   取证确认库底板变蓝、圆角正确、拖拽无残影。
+4. **面板表单重排**：「分类框风格」内嵌液态玻璃开关；开启才显示「液态玻璃参数」
+   区（去掉分模式圆角滑条，单一来源）；背景色/透明度仅关闭时显示；缩放交互/引擎
+   独立成节（两模式共用）。移除「透明玻璃」重复参数组。
+5. **控制面板底部大量空白/滚动条失灵（回归）**：实锤两类根因——
+   a) 写命令全部是同步 `#[tauri::command]`（主线程执行）：磁盘写 + 引擎重建阻塞
+      事件循环。修复：全部改 `#[tauri::command(async)]`；前端滑条 60ms 合并防抖。
+   b) WebView2 合成器在引擎重建/高 GPU 负载滚动时停止提交新帧（JS 活着、输入被
+      吞、Ctrl+R 立刻恢复；--disable-gpu 等浏览器参数无效）。修复：rAF 心跳看门狗
+      （main.ts）可见状态停滞 >2.5s 自动 location.reload 自愈（60s 限一次）；
+      配置应用与画布 Ready 事件后向持久窗口派发 resize 事件强制出新帧。
+   c) 画布 Z 序不变量被重建打破（实测画布压在面板之上）：spawn 收尾 + Ready/
+      MonitorsChanged/CaptureBackendSelected 事件统一 `reassert_canvas_bottom()`。
+   d) 切标签沿用上一页 scrollTop → 短页面底部露容器背景：ControlPanel 切页复位。
+
+### 踩到并记录的坑
+- 测试脚本真实拖拽会改动用户布局并连盘（一次边缘拖 = 26 次 save_config）；
+  已用 `.tmp_cfg_before_codex_test.json` 恢复，box0 尺寸仍残留 10-28 会话的改动。
+- `GetGUIThreadInfo` 在 Python ctypes 下报 87 不可用；`AttachThreadInput` 后
+  `GetCursorInfo` 读到的是被附加队列的旧光标——裸 `GetCursorInfo`（本线程从未
+  SetCursor）才是全局可见光标。
+- WebView2 透明窗的 `documentElement` 内联背景被 Chromium 强制透明吞掉，
+  「eval 是否执行」要用 IPC 日志而非颜色标记验证。
+
+### 测试
+- [OK] cargo test 519 全绿（+2 回归钉：cursor_id_for、背景色→transparent 映射；
+      改 1 条旧断言：圆角单一来源）；cargo fmt --check 干净；build 52 warnings 持平
+- [OK] pnpm check 0 errors；pnpm build 通过
+- [OK] 真实鼠标光标回归：HAND/ARROW/SIZEWE 全场景无粘滞
+- [OK] 框选：连拍帧选框持续跟手；转发实测 ~28Hz（旧 10Hz）
+- [OK] 背景色 #2563eb + 透明度 72% + 圆角 13px 经库渲染生效（internal shot 取证）
+- [OK] 面板：切页复位、防抖、重建期间可交互；看门狗自愈逻辑就位
+- [注意] 引擎重建触发 WebView2 停滞的底层问题（Chromium/Intel Arc 交互）已用
+      自愈兜底，根治需库侧（swapchain 优先级/呈现节流）或上游修复
+
+### Status
+
+[OK] **Completed**（工作区改动未提交，等用户验收）
+
+### Next Steps
+
+- 用户验收 5 项修复；如要提交由用户明确发起
+- 向 liquid-verre-rs 反馈：画布类注册应带 hCursor；重建期间 WebView2 呈现停滞复现步骤
+
+
+## Session 11: 验收反馈二轮修复（框选回归库管线内优化 / 面板挂死恢复阶梯）
+
+**Date**: 2026-11-03
+**Task**: 用户验收反馈：bug3 覆盖层方案有残影须回退；bug6 未解决（点「启用缩放」等控件即面板高度异常/空白）
+**Branch**: `master`（工作区改动，未提交）
+
+### bug3 二轮：撤销独立覆盖层，改库管线内快路径
+- 用户实测：独立分层窗口画的选框会被 DDA 桌面采集吃进玻璃折射 → 残影、更卡。**方案作废**
+  （`marquee_overlay.rs` 已删，接线全部回滚）。教训：**任何新窗口出现在块区域上方都会被
+  库的桌面复制采样**，框选必须留在 liquid-verre-rs 内容纹理管线内。
+- 新快路径（`d2d_render::render_marquee_frame`）：
+  - 内容层缓存「干净帧」快照（全量重绘产出时快照；指纹引擎模式剔除 marquee 字段）；
+  - 每拍 = 上一拍选框区域行还原 → 当前选框 **L 形增量带** 混合（prev ⊂ cur 时只刷新增部分，
+    方向翻转/收缩才整框重刷）→ `update_content` **脏区增量上传**（`push_content_dirty`，
+    库按半开区间只重传子矩形 GPU 纹理）；
+  - 逐通道 256 项查表 source-over（RGB 0,120,215，填充 a=40/边框 a=200，与 D2D 路径同参）；
+  - 顺手修正选框绘制多减一次 `scroll_offset` 的历史错位 bug（选框坐标本就是视口系）。
+- 驱动节拍：WM_TIMER 实测被系统合并进 ~30ms 桶（timeBeginPeriod(1) 也压不进 16ms，中位
+  30ms 实锤）→ 改为**按压期转发的 WM_MOUSEMOVE 直接驱动渲染（12ms 节流）**，定时器降级为
+  松手看门狗 + 光标出块采样兜底；实测 tick 40/s → 69/s，真实鼠标（125Hz 输入）下更高。
+
+### bug6 二轮：真根因 = WebView2 渲染/呈现侧挂死，原生看门狗阶梯恢复
+- 取证链：白屏时**主线程活着**（信号开关窗正常）、**渲染进程 JS 也活着过**（配置点击生效、
+  Ctrl+R 秒恢复）→ 挂点在 WebView2 浏览器/渲染侧管道；`--disable-gpu`、
+  `--disable-gpu-compositing`、`--disable-direct-composition` 全部实测无效 → 宿主无法预防，
+  只能检测 + 恢复。
+- 检测：心跳载荷从「setInterval 时间戳」升级为 **rAF 帧计数**——合成停滞后 setInterval 照发
+  但 rAF 冻结，两类挂死（JS 死 / 呈现死）统一暴露为「帧计数 8s 不变」。
+- 遮挡判定修复：`WindowFromPoint` 返回最深子窗口（Chrome_WidgetWin_1），必须
+  `GetAncestor(GA_ROOT)` 归一再比（否则永远误判被遮挡、永不重建）。
+- 恢复阶梯（0→1→2）：
+  1. 浏览器进程侧 `ICoreWebView2::Reload()`（经 `with_webview`；无窗口闪烁，杀渲染进程实测
+     1s 复活、滚动位置都还在）；
+  2. Reload 无效 → `run_on_main_thread` 投递 destroy，poll 线程观察 label 释放后
+     **两阶段原位重建**（同一闭包里 destroy+build 会撞 "label already exists" 竞态，实测）。
+- 防抖只约束新周期（stage 0 启动，30s）；心跳恢复即复位阶梯。
+- 前端 rAF 看门狗（呈现停滞 → location.reload 自愈，60s 限一次）保留，与原生阶梯互补。
+
+### 测试
+- [OK] cargo test 519 全绿、fmt --check 干净、build 52 warnings 基线持平
+- [OK] 框选连拍取证：选框经库合成无残影；快路径 0 回退、混合成本 4ms→查表+增量带后 <2ms
+- [OK] 杀渲染进程端到端：8s 判挂死 → Reload → 1s 心跳恢复 → 阶梯复位
+- [待办] 用户真机验收：框选跟手度（真实鼠标 125Hz 输入）、连点「启用缩放」等控件的自愈表现
+
+### Status
+
+[OK] **Completed**（工作区改动未提交）
+
+
+### Session 11 补充：二轮验收反馈（框选回滚重做 / 启动双层根因 / 挂死检测阶梯）
+
+用户二轮反馈后追加修复：
+
+1. **bug3 按指示回滚到首轮版本再优化**：回滚拼接时误删了定时器分支的
+   `render_layered_window` 调用（连拍实测拖拽期间选框完全不出现）——已恢复；
+   快路径重新叠加时修掉「松手不消失」根因：引擎模式指纹不含 marquee 字段，
+   松手后若无其它状态变化缓存命中、选框永留画面 → 新增
+   `marquee_force_full` 标志，UP 收尾强制一次干净全量重绘。
+   连拍验收：拖拽 6 帧连续跟手生长、松手后 5 帧全部无残留。
+2. **bug4 启动双层根因**：`attach_box` 的块上线在库渲染线程异步完成
+   （`has_box→is_alive` 前为 false），create_grid_window 步骤 3 的首帧紧随
+   attach 执行 → 判定「无块」走了 D2D 回退背景，且无任何东西再触发重绘，
+   直到鼠标进入 hover 才刷成透明帧——与用户描述逐字吻合。修复：attach 成功
+   后有限等待块上线（≤300ms）+ 玻璃 tick 残帧纠正
+   （`has_box && !submitted_glass` → 补一次重绘，覆盖所有迟到场景）。
+   `IKUN_ALLOW_CAPTURE=1` + BitBlt 只拍代理层实测：修复前启动即见标题/图标，
+   修复后启动代理层全透明。
+3. **bug6 摘除「resize 事件重绘推手」**：每次 apply 都向页面派发 resize 事件，
+   透明窗 + clip-path 下正是「点控件后高度异常/空白」的嫌疑放大器，且从未
+   被证明有效——整体移除（含 APP_HANDLE 通路）。真挂死由看门狗阶梯兜底
+   （心跳 rAF 帧计数 → 浏览器侧 Reload → 两阶段销毁重建），杀渲染进程实测
+   1 秒复活。压力序列（开关连点 + 快滚 10 轮）通过。
+4. **事故记录**：行过滤脚本 skip 标志未复位，把 config_cmd.rs 截断到 2.3KB
+   （丢失全部命令定义）——经 git checkout + 重放 async 化补丁完整恢复，
+   11 函数/9 async 核对无误。教训：文件级改写必须用精确锚点 + 写前断言
+   函数清单，禁止粗粒度行过滤。
+
+- [OK] cargo test 519 全绿、fmt 干净、build 52 warnings 基线持平
+
+## 2026-11-03（第 4 轮）bug3 颤抖 / bug6 空白 / bug4 绘制审计
+
+1. **先解阻塞**：`#[tauri::command(async)]` 不是 Tauri 2 合法属性（9 处），
+   改为 `#[tauri::command]` + `pub async fn`。上一轮「同步命令饿死 WebView2
+   WM_PAINT/WM_SIZE」的意图保留（磁盘 IO + 引擎应用仍脱离主线程）。
+   build 通过、`cargo test` 519 全绿、`pnpm check` 0 error。
+
+2. **bug6 真根因（实测锤定，不是 CSS 也不是挂死）**：取色弹层用
+   `position: fixed` + JS 视口坐标，但容器链上有两处会把 fixed 的包含块
+   从视口改掉——`.window-shadow { filter: drop-shadow }`（实测 +8px）与
+   `.fields { contain: layout style }`（layout containment 规范上就是 fixed
+   的包含块，实测 +271px）。探针数据：`want=[460,336] got=[731,363]`，
+   差值恰好等于 `.fields` 的 rect 偏移。错位的弹层落在滚动容器内部，
+   扰动可滚动范围 → 用户看到的「点击控件后底部大片空白 + 滚动条失灵」。
+   修复：`ColorPicker.svelte` 加 `use:bodyPortal` 把弹层搬到 `document.body`
+   （本仓库 Svelte 5.57.2 没有 `{@portal}`，只能手写 action）。
+   过程中自己踩了一坑：action 的 `destroy()` 里把节点插回原父节点，等于
+   把 Svelte 已经摘掉的节点复活 → 弹层关不掉且泄漏；改成 `node.remove()`。
+   验收：`want=204,336 got=204,336`、`want=460 got=460`；两次「已关闭」
+   截图逐像素相同（ImageChops.difference bbox=None），无残留、无空白。
+   注：上一轮恢复的 8 月 CSS（f6f6ed5：`contain: layout style` /
+   `overflow-anchor: none` / `.settings{min-height:100%}`）保持不变，
+   本轮没有再动面板样式；我一度加的 ResizeObserver 校正 scrollTop 因
+   缺乏实测证据已回退（避免过度修改）。
+
+3. **bug3 颤抖真根因（坐标系不一致，不是重绘次数）**：框选期间有三个源写
+   `marquee_current_*`，其中两套用两套坐标：
+   - 引擎转发进来的 `lparam` 已经是「块内=内容层」坐标，而
+     `content_point_from_lparam` 按 client 坐标再换算一次，多加了窗口
+     不可见边框的 12px（200% DPI 实测）；
+   - 拖拽定时器 `GetCursorPos() - get_grid_content_rect()` 是内容层真值。
+   两源交替覆盖 → 选框每拍在 (447,239) 与 (459,251) 间跳 12px，就是「一直
+   重绘 + 框线颤抖」。日志实锤：`move (1162,652) lp=(1150,640)` 紧接
+   `timer (1150,640)`。修复：新增 `marquee_content_point()`（引擎模式直接取
+   lparam，回退模式仍走 client 换算）统一 DOWN 起点与 MOVE 当前点，定时器
+   改走 `content_point_from_screen()`，并让 `poll_glass_hover` 在框选期不再
+   补发合成 WM_MOUSEMOVE。验收：连续拖拽 rect 严格单调
+   （1250,1464 → 1270,1474 → 1290,1484 → …，步长恰等于鼠标位移）。
+   附带纠正：选框不再整体偏右下 12px，且松手命中判定（用真值系）与可见
+   矩形终于同系。
+
+4. **bug4 审计结论：引擎模式下应用层不再画任何分类框像素**。
+   - `d2d_render.rs` 第二趟：`if glass_active { /* 只 Clear 成全透明 */ } else {
+     画圆角底板 }`，且 `if !glass_active { DrawBitmap(content) }`；
+   - 透明帧本身也短路：尺寸与玻璃状态未变 / 会话期直接 return，不交帧；
+   - DComp 路径自带底板绘制，但只在 `IKUN_DCOMP=1` 时装配（默认关）；
+   - 内容层（图标/标题/按钮）经库的 `update_content` 接口推给 liquid-verre-rs，
+     属库规定入口，不是应用层重复图层。
+   运行时取证（临时计数器，已撤除）：空闲 12s 与光标停在框内 8s 两种场景
+   应用层渲染调用 **0 次**；拖拽 5s 窗口 `calls=2 raster=2 ulw=0
+   marquee_fast=70`——70 次走快路径增量上传，0 次提交透明帧。idle 进程 CPU
+   约 3.8% 单核（库自身连续渲染），应用层无白烧。
+
+5. **副作用待告知**：合成鼠标测试改动了用户桌面上分类框的位置/尺寸与一个
+   图标格位（与 `.tmp_cfg_before_codex_test.json` 对比有 4 个框 position/size
+   差异）。样式项（背景色 #ffb8b8 / 圆角 30 / 透明度 25% / 遮挡剔除 off）
+   与备份一致，未回滚 layout，等用户决定。
+
+- [OK] cargo fmt / build / test 519 全绿；pnpm build + svelte-check 0 error
