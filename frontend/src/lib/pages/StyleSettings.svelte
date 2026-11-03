@@ -311,8 +311,9 @@
         <div class="row"><span>边缘缩放</span><Toggle checked={boxStyle.liquid_glass.resize.edges} onchange={(v) => setResize("edges", v)} /></div>
         <div class="row"><span>角落缩放</span><Toggle checked={boxStyle.liquid_glass.resize.corners} onchange={(v) => setResize("corners", v)} /></div>
         <Slider label="抓取区域 (grip)" value={boxStyle.liquid_glass.resize.grip_px} min={2} max={128} suffix="px" onchange={(v) => setResize("grip_px", v)} />
-        <Slider label="最小宽度" value={boxStyle.liquid_glass.resize.min_width} min={8} max={4096} suffix="px" onchange={(v) => setResize("min_width", v)} />
-        <Slider label="最小高度" value={boxStyle.liquid_glass.resize.min_height} min={8} max={4096} suffix="px" onchange={(v) => setResize("min_height", v)} />
+        <Slider label="最小宽度" value={boxStyle.liquid_glass.resize.min_width} min={8} max={512} suffix="px" onchange={(v) => setResize("min_width", v)} />
+        <Slider label="最小高度" value={boxStyle.liquid_glass.resize.min_height} min={8} max={512} suffix="px" onchange={(v) => setResize("min_height", v)} />
+        <p class="sub-label">最小值只托底不钉死：超过「单个图标网格」的硬下限会被程序夹回，防止框拖不小。</p>
         <p class="sub-label">缩放反馈</p>
         <div class="row"><span>反馈启用</span><Toggle checked={boxStyle.liquid_glass.resize.feedback.enabled} onchange={(v) => setFeedback("enabled", v)} /></div>
         <Slider label="反馈边框宽度" value={boxStyle.liquid_glass.resize.feedback.border_width} min={0.5} max={32} step={0.5} digits={1} suffix="px" onchange={(v) => setFeedback("border_width", v)} />

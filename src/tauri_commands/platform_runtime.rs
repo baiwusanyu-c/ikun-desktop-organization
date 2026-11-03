@@ -421,6 +421,10 @@ impl TauriRuntime {
             crate::platform::windows::glass_engine::wake_canvas_idle();
             // 块状态诊断快照（debug 级，1 s 一条）：定位「某个框点不动」的唯一硬证据。
             crate::platform::windows::glass_engine::debug_log_blocks();
+            // 画布层级兜底：库的 SetWindowLevel 有等值早退，画布被 ShowWindow 抬进
+            // 普通带顶部后，只有靠这里周期性重发 HWND_BOTTOM 才能收敛（函数内部
+            // 500ms 节流，跨线程 SetWindowPos 不会每拍发生）。
+            crate::platform::windows::glass_engine::reassert_canvas_bottom();
             if crate::platform::windows::mem_probe::due() {
                 crate::platform::windows::mem_probe::log_breakdown();
             }

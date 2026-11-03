@@ -1764,6 +1764,13 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 // 库缩放会话期间的跟随 tick（会话外该定时器不会装配）
                 super::grid_window::on_grid_refresh_tick(hwnd);
             }
+            // 对齐参考线的检测 tick。`on_enter_size_move` 会 SetTimer(TIMER_ID_ALIGNMENT,16)，
+            // 但这里曾经只派 GRID_DRAG / LIQUID_GLASS 两个 id —— 定时器在跑、回调从来
+            // 不被调用，于是「拖拽时对齐参考线」整个功能消失（2026-11-03 用户复验）。
+            // 引擎架构下不再有原生移动循环，WM_MOVING 也不会来，这条 tick 是唯一驱动源。
+            if wparam == TIMER_ID_ALIGNMENT {
+                super::alignment_guide::on_alignment_timer(hwnd);
+            }
             0
         }
         // ===== 捕获丢失处理：纯清理兆底 =====

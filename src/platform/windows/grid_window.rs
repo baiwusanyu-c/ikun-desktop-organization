@@ -1072,8 +1072,26 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
     render_layered_window(hwnd);
     unsafe {
         // 先完成首帧再显示窗口，避免桌面捕获尚未就绪时短暂出现黑/透明窗口。
-        ShowWindow(hwnd, SW_SHOW);
+        //
+        // **必须 SW_SHOWNOACTIVATE 并立刻置底**：新建窗口默认落在普通带顶部，
+        // 而 `WM_WINDOWPOSCHANGING` 里的强制 HWND_BOTTOM 只在「下一次位置变化」
+        // 才生效 —— 于是启动瞬间分类框压在所有应用窗口之上，用户点一下才下沉
+        // （2026-11-03 用户复验的层级问题）。另外 SW_SHOW 会抢焦点，桌面组件
+        // 不该在启动时把焦点从用户正在用的窗口抢走。
+        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        SetWindowPos(
+            hwnd,
+            HWND_BOTTOM,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
     }
+    // 内容窗口被压底后必须把画布再压回它之下，维持
+    // 「画布 < 全部玻璃块内容窗口 < 其他应用窗口」不变量（见模块头）。
+    super::glass_engine::reassert_canvas_bottom();
     // 周期重绘只在液态玻璃开启时才需要：玻璃关闭时画面是静态位图，
     // 所有变更都会走显式重绘路径。200ms 定时器空转实测吃掉约 9% CPU，
     // 并且是主进程内存持续爬升的放大器。
@@ -2083,8 +2101,14 @@ pub(crate) fn begin_glass_resize_session(hwnd: HWND) {
     data.glass_session_idle_ticks = 0;
     raise_timer_resolution();
     enter_glass_resize_session(hwnd);
+    // 库的缩放反馈 border 是**独立叠加 pass，画在全部玻璃之上**（库 compositor
+    // 「缩放反馈 border：独立叠加 pass，盖在全部玻璃之上」）。两个框重合时，
+    // 下层框的 border 会画到上层框身上 —— 先把正在操作的块抬到块序最前，
+    // 让「border 属于最上面那块」成立（宿主侧唯一可用的手段；根治要库把
+    // border 收进逐块 pass 或按更高块裁剪）。
+    super::glass_engine::raise_box(data.config_id);
     super::alignment_guide::on_enter_size_move(hwnd);
-    log::debug!("分类框进入库缩放会话");
+    log::debug!("分类框进入库会话（移动/缩放）");
 }
 
 /// 退出库缩放会话（tick 确认快照 `resizing` 回落，或 wParam=0 事件兜底）。

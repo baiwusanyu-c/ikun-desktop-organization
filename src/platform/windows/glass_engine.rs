@@ -327,6 +327,29 @@ pub(crate) fn resize_options_from(cfg: &GlassResizeConfig) -> ResizeOptions {
     }
 }
 
+/// 库缩放会话最小尺寸在**宿主侧的硬上限**（单位 = 库逻辑像素，见 `phys_to_logical_rect`）。
+///
+/// 为什么需要上限：`box_style.liquid_glass.resize.min_width/min_height` 是样式页
+/// 滑条能写到 4096 的原始值，用户配置里实测出现过 605x1150（正好等于示例玻璃框
+/// 当时的物理尺寸）。库把它当硬下限（`input::drag::ResizeState::apply` 里的
+/// `max(min_w)`），于是**每个分类框都被钉死在 605x1150，边缘拖拽完全改不小**
+/// （2026-11-03 用户报「拖到一定程度就无法改变大小」；日志里 `缩放结束` 的宽全部
+/// 停在 605/732 这类 >=605 的值、高恒为 1150，即为实锤）。
+///
+/// 上限取 `WM_GETMINMAXINFO` 已经在用的最小跟踪尺寸同一口径（宽
+/// `scale_for_dpi(200)`，高 `title_h + scale_for_dpi(100)`，都不含外投影留白），
+/// 保证全项目只有一个「最小分类框」定义，玻璃块与代理窗口不会各按各的。
+#[must_use]
+pub(crate) fn glass_resize_floor(dpi: u32) -> (f32, f32) {
+    let dpi = if dpi > 0 { dpi } else { 96 };
+    let ratio = monitor_dpi_ratio(dpi).max(1e-3);
+    let title_h = super::ffi_types::scale_for_dpi(40, dpi) as f32;
+    let min_w = super::ffi_types::scale_for_dpi(200, dpi) as f32 / ratio;
+    let min_h = (title_h + super::ffi_types::scale_for_dpi(100, dpi) as f32) / ratio;
+    // 24 = 库 `core::block::MIN_SIZE`，再小库自己也会夹回去。
+    (min_w.max(24.0), min_h.max(24.0))
+}
+
 /// 分类框状态 → 下发给库的块参数（`attach_box` 与引擎重建共用一份口径）。
 ///
 /// # 为什么锁定不能关 `interactive`（2026-10-27 分类框全灭根因）
@@ -345,8 +368,21 @@ fn block_config_for(
     style_cfg: &LiquidGlassConfig,
     logical: [f32; 4],
     locked: bool,
+    dpi: u32,
 ) -> WindowConfig {
     let mut resize = resize_options_from(&style_cfg.resize);
+    // 最小尺寸只能「托底」不能「钉死」：超过宿主上限的部分一律压回
+    // （见 `glass_resize_floor`），否则样式页里一个误拉的滑条就让全部框改不了大小。
+    let (floor_w, floor_h) = glass_resize_floor(dpi);
+    if resize.min_width > floor_w || resize.min_height > floor_h {
+        log::warn!(
+            "玻璃缩放最小尺寸被夹取: ({},{}) -> ({floor_w:.0},{floor_h:.0}) dpi={dpi}（配置值大于最小跟踪尺寸）",
+            resize.min_width,
+            resize.min_height,
+        );
+        resize.min_width = resize.min_width.min(floor_w);
+        resize.min_height = resize.min_height.min(floor_h);
+    }
     if locked {
         resize.enabled = false;
     }
@@ -586,6 +622,11 @@ pub fn ensure_engine(app: &AppConfig) -> bool {
         engine_cfg: app.box_style.liquid_glass.engine,
         style_cfg: app.box_style.liquid_glass,
     });
+    drop(guard);
+    // 抢先压底：画布此刻还是**隐藏**窗口，但已经占在「普通带顶部」的 Z 序位次上。
+    // 趁隐藏期间先压到 HWND_BOTTOM，并起 8ms 收敛守护盯住库的首次 ShowWindow。
+    reassert_canvas_bottom();
+    spawn_bottom_guard();
     true
 }
 
@@ -652,7 +693,7 @@ pub fn attach_box(box_id: Uuid, hwnd: isize, content_phys: &RECT, dpi: u32, lock
     }
     let ratio = monitor_dpi_ratio(dpi);
     let logical = phys_to_logical_rect(content_phys, ratio);
-    let config = block_config_for(&holder.style_cfg, logical, locked);
+    let config = block_config_for(&holder.style_cfg, logical, locked, dpi);
     let created = match holder.engine.create_window(config) {
         Ok(window) => {
             registry_register(window.id(), hwnd);
@@ -881,15 +922,32 @@ pub fn apply_settings(app: &AppConfig) {
     }
     holder.style_cfg = *glass;
     let style = glass_style_from(glass);
-    let resize = resize_options_from(&glass.resize);
+    let mut resize = resize_options_from(&glass.resize);
+    // 与 block_config_for 同口径夹取：否则样式切换会把原始配置的 605x1150
+    // 直接推给每个块 set_resize_options，框又被钉死（2026-11-03 用户复验）。
     holder.engine.set_default_style(style);
-    holder.engine.set_default_resize(resize);
+    let primary = get_primary_monitor_dpi();
     for entry in holder.boxes.values_mut() {
+        let dpi = (entry.ratio * primary as f32).round() as u32;
+        let (fw, fh) = glass_resize_floor(dpi);
+        let mut r = resize;
+        if r.min_width > fw || r.min_height > fh {
+            r.min_width = r.min_width.min(fw);
+            r.min_height = r.min_height.min(fh);
+        }
         entry.window.set_style(Some(style));
         if !entry.locked {
-            entry.window.set_resize_options(resize);
+            entry.window.set_resize_options(r);
         }
     }
+    // default_resize 也要夹（新建块的兜底）。
+    let primary_dpi = primary;
+    let (dfw, dfh) = glass_resize_floor(primary_dpi);
+    if resize.min_width > dfw || resize.min_height > dfh {
+        resize.min_width = resize.min_width.min(dfw);
+        resize.min_height = resize.min_height.min(dfh);
+    }
+    holder.engine.set_default_resize(resize);
     holder.engine.request_render();
 }
 
@@ -957,7 +1015,7 @@ fn spawn_holder_and_reattach(
         } else {
             logical
         };
-        let window_config = block_config_for(&style_cfg, logical, locked);
+        let window_config = block_config_for(&style_cfg, logical, locked, dpi_now);
         match holder.engine.create_window(window_config) {
             Ok(window) => {
                 registry_register(window.id(), hwnd);
@@ -992,6 +1050,7 @@ fn spawn_holder_and_reattach(
     // WebView2 判定窗口被遮挡后停止绘制新暴露区域（2026-11-02 实锤：WGC↔DDA
     // 切换重建后控制面板整页空白、滚动条失灵，EnumWindows 显示画布压在面板上）。
     reassert_canvas_bottom();
+    spawn_bottom_guard();
     // 画布压在别的窗口之上期间，OLE 放置目标也要跟着重挂（同 attach_box 口径）。
     super::drop_target::rebind_canvas_drop_targets();
     true
@@ -1022,15 +1081,209 @@ fn dispatch_glass_session(glass_id: u32, started: bool) {
     }
 }
 
+/// 桌面类窗口（画布必须正好压在它们之上，除此之外的任何窗口都不该比画布低）。
+fn is_desktop_class(hwnd: isize) -> bool {
+    let mut buf = [0u16; 64];
+    let n = unsafe {
+        super::ffi_imports::GetClassNameW(
+            hwnd as *mut std::ffi::c_void,
+            buf.as_mut_ptr(),
+            buf.len() as i32,
+        )
+    };
+    if n <= 0 {
+        return false;
+    }
+    let class = String::from_utf16_lossy(&buf[..n as usize]);
+    class == "Progman" || class == "WorkerW"
+}
+
+/// 画布当前是否已经在「除桌面外最低」的位置。
+///
+/// 判据只沿 `GW_HWNDNEXT`（更低的窗口）走最多 8 步：跳过本进程自己的窗口
+/// （两块画布、代理窗、tooltip/IME 伴生窗），第一个外部窗口必须是桌面
+/// （Progman/WorkerW）或者干脆没有窗口，才算「已经在底」。
+///
+/// 这么做的理由是**成本**：跨线程 `SetWindowPos` 要等渲染线程处理一次位置变更
+/// （实测 ~10ms），旧实现因此只能 500ms 节流；而库把画布显示出来用的是
+/// `ShowWindow(SW_SHOWNOACTIVATE)`（库 `platform::window::apply_visibility`），
+/// 它会把画布抬进普通带顶部 —— 启动时「分类框盖在其他应用窗口上」平均要
+/// 250ms 才自愈（2026-11-03 EnumWindows 采样实锤：t+0.62s 画布排在 Chrome 之前，
+/// t+0.74s 才被压回）。换成 O(1) 判据后每个 tick（100ms）都能查，稳定态零成本。
+fn canvas_at_bottom(canvas: isize) -> bool {
+    const MAX_HOPS: usize = 8;
+    let own = unsafe { super::ffi_imports::GetCurrentProcessId() };
+    let mut cur = canvas;
+    for _ in 0..MAX_HOPS {
+        let next = unsafe {
+            super::ffi_imports::GetWindow(
+                cur as *mut std::ffi::c_void,
+                super::ffi_types::GW_HWNDNEXT,
+            )
+        } as isize;
+        if next == 0 {
+            return true; // 已经是 Z 序最底
+        }
+        let mut pid = 0u32;
+        unsafe {
+            super::ffi_imports::GetWindowThreadProcessId(next as *mut std::ffi::c_void, &mut pid)
+        };
+        if pid != own && !is_desktop_class(next) {
+            return false; // 画布下面还压着别的应用窗口
+        }
+        cur = next;
+    }
+    true
+}
+
 /// 把各屏画布重新压回 Z 序最底部（分类框内容窗口被推底后必须跟进调用，
 /// 维持「画布 < 全部玻璃块内容窗口 < 其他应用窗口」不变量）。
+///
+/// **为什么必须自己发 SetWindowPos**：库的 `Command::SetWindowLevel` 有
+/// `if app.level == level { return false }` 早退，而 `app.level` 在建引擎时
+/// 就已经是 `AlwaysOnBottom`（EngineConfig 里传的），所以宿主反复调
+/// `set_window_level(AlwaysOnBottom)` 是**空操作**；画布却在「创建时置底、
+/// 首帧就绪才 ShowWindow」时被抬进普通带顶部 —— 2026-11-03 实测 EnumWindows
+/// 序列里画布排在 Chrome 窗口之前，玻璃整层盖住其他应用窗口（用户报的启动层级）。
+///
+/// 成本口径：先用 [`canvas_at_bottom`] 做 O(1) 判定，**只有真的被抬起来才**发
+/// 跨线程 `SetWindowPos`（一次 ~10ms），并带 120ms 防抖；因此本函数可以每个
+/// tick（100ms）都调，拖拽/`WM_WINDOWPOSCHANGING` 里也不会拖慢节奏。
+/// 返回 `(画布总数, 被抬进普通带的画布)`。
+///
+/// 拆出来是为了让压底守护能区分「已经稳定在底部」和「画布还没创建出来」——
+/// 后者不能算稳定，否则守护会在库首次 ShowWindow（实测 t+0.6s）之前就提前收工。
+fn canvas_bottom_state() -> (usize, Vec<isize>) {
+    let canvases = canvas_hwnds();
+    let stuck: Vec<isize> = canvases
+        .iter()
+        .copied()
+        .filter(|h| !canvas_at_bottom(*h))
+        .collect();
+    (canvases.len(), stuck)
+}
+
+/// 检查并（必要时）把画布压回底部。返回 `(画布总数, 被抬起并已修正的画布数)`。
+///
+/// 返回画布总数是为了让调用方（压底守护）能区分「稳定在底部」与
+/// 「画布还没创建出来」——后者绝不能算稳定，否则守护会在库首次
+/// `ShowWindow`（实测启动后 ~0.6s）之前提前收工。
+fn reassert_canvas_bottom_once() -> (usize, usize) {
+    static NEXT_PUSH_MS: AtomicU64 = AtomicU64::new(0);
+    static NEXT_LOG_MS: AtomicU64 = AtomicU64::new(0);
+    let (count, stuck) = canvas_bottom_state();
+    if stuck.is_empty() {
+        return (count, 0);
+    }
+    let now = now_ms();
+    // 120ms 防抖：避免与「同样把自己压到底的第三方窗口」互相推搡。
+    if now < NEXT_PUSH_MS.load(Ordering::Relaxed) {
+        return (count, stuck.len());
+    }
+    NEXT_PUSH_MS.store(now + 120, Ordering::Relaxed);
+    for &hwnd in &stuck {
+        unsafe {
+            super::ffi_imports::SetWindowPos(
+                hwnd as *mut std::ffi::c_void,
+                super::ffi_types::HWND_BOTTOM,
+                0,
+                0,
+                0,
+                0,
+                super::ffi_types::SWP_NOMOVE
+                    | super::ffi_types::SWP_NOSIZE
+                    | super::ffi_types::SWP_NOACTIVATE,
+            );
+        }
+    }
+    if now >= NEXT_LOG_MS.load(Ordering::Relaxed) {
+        NEXT_LOG_MS.store(now + 1000, Ordering::Relaxed);
+        log::info!(
+            "画布层级修正：{} 块画布被抬进了普通带，已压回 Z 序底部（启动/重建/显示器变化后的正常现象）",
+            stuck.len()
+        );
+    }
+    (count, stuck.len())
+}
+
+/// 把各屏画布压回 Z 序底部（对外入口，见 `reassert_canvas_bottom_once`）。
 pub fn reassert_canvas_bottom() {
+    reassert_canvas_bottom_once();
+    // 层级记账同步（幂等；即便库内部等值早退也无害）。
     if let Ok(guard) = HOLDER.lock() {
         if let Some(holder) = guard.as_ref() {
             if holder.engine.is_running() {
                 holder.engine.set_window_level(WindowLevel::AlwaysOnBottom);
             }
         }
+    }
+}
+
+/// 启动 / 重建后的「压底收敛守护」：8ms 节奏复查画布位次，直到连续稳定。
+///
+/// 为什么不能只靠 runtime tick（100ms）：库显示画布用的是
+/// `ShowWindow(SW_SHOWNOACTIVATE)`（库 `platform::window::apply_visibility`），
+/// 它会把画布抬进普通带顶部；100ms 兜底意味着启动时**最多 100ms、实测均值
+/// ~120ms** 玻璃整层压在 Chrome 等窗口之上（2026-11-03 EnumWindows 采样：
+/// t+0.66s COVER / t+0.78s 恢复）。判据本身是 O(1) 的 `GetWindow` 走几步，
+/// 稳定态零成本，所以可以高频跑；真正的跨线程 `SetWindowPos` 仍有 120ms 防抖。
+/// 根治办法在库侧（把 `apply_visibility` 换成 `level::apply(..., visible=true)`），
+/// 已登记进 0.5.2 清单。
+/// 取证用：把当前能拿到的画布句柄打成十六进制串。
+fn canvases_hex() -> String {
+    canvas_hwnds()
+        .iter()
+        .map(|h| format!("{h:#X}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn spawn_bottom_guard() {
+    const DEADLINE_MS: u64 = 8_000;
+    const STEP_MS: u64 = 4;
+    /// 连续多少拍「画布存在且没被抬起来」才算稳定：4ms x 80 = 320ms。
+    const STABLE_TICKS: u32 = 80;
+
+    static GUARD_RUNNING: AtomicBool = AtomicBool::new(false);
+    if GUARD_RUNNING.swap(true, Ordering::SeqCst) {
+        return; // 已有守护在跑，不叠加线程
+    }
+    let spawned = std::thread::Builder::new()
+        .name("ikun-canvas-bottom-guard".into())
+        .spawn(move || {
+            let began = now_ms();
+            let mut stable = 0u32;
+            let mut saw_canvas = false;
+            // 一次性取证日志：确认 `canvas_hwnds()` 到底能不能拿到画布。
+            // 拿不到就意味着宿主所有「压回底部」的兜底都是空转（必须先修这条）。
+            let mut probe_logged = false;
+            while now_ms().saturating_sub(began) < DEADLINE_MS {
+                let (count, lifted) = reassert_canvas_bottom_once();
+                if count > 0 {
+                    saw_canvas = true;
+                    if !probe_logged {
+                        log::info!(
+                            "[z序取证] 画布 {count} 块，本轮抬起 {lifted} 块（hwnd={}）",
+                            canvases_hex()
+                        );
+                        probe_logged = true;
+                    }
+                }
+                if lifted == 0 && saw_canvas {
+                    stable += 1;
+                    if stable >= STABLE_TICKS {
+                        break;
+                    }
+                } else {
+                    stable = 0;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(STEP_MS));
+            }
+            GUARD_RUNNING.store(false, Ordering::SeqCst);
+        });
+    if spawned.is_err() {
+        GUARD_RUNNING.store(false, Ordering::SeqCst);
+        log::warn!("画布压底守护线程创建失败，回退 100ms tick 兜底");
     }
 }
 
@@ -1059,10 +1312,12 @@ pub fn poll_events_to_log() {
                 // 应用窗口之上（2026-11-02 控制面板整页空白的根因，见
                 // spawn_holder_and_reattach 注释）。
                 reassert_canvas_bottom();
+                spawn_bottom_guard();
             }
             EngineEvent::MonitorsChanged { monitor_count } => {
                 log::info!("显示器集合变化，画布与采集已重建，显示器数量: {monitor_count}");
                 reassert_canvas_bottom();
+                spawn_bottom_guard();
             }
             EngineEvent::WindowCreated { id } => {
                 log::debug!("玻璃块已创建: id={id}");
@@ -1786,8 +2041,8 @@ mod tests {
         // WS_EX_TRANSPARENT，分类框就收不到任何鼠标消息（连解锁都点不动）。
         let cfg = LiquidGlassConfig::default();
         let logical = [0.0, 0.0, 400.0, 300.0];
-        let unlocked = block_config_for(&cfg, logical, false);
-        let locked = block_config_for(&cfg, logical, true);
+        let unlocked = block_config_for(&cfg, logical, false, 96);
+        let locked = block_config_for(&cfg, logical, true, 96);
         assert!(
             unlocked.interactive && locked.interactive,
             "输入路由必须恒开"
@@ -1802,6 +2057,59 @@ mod tests {
         );
         assert!(!locked.resize.enabled, "锁定时必须关掉库的缩放把手");
         assert_eq!(locked.rect, logical);
+    }
+
+    #[test]
+    fn pathological_resize_min_is_capped_so_boxes_can_shrink() {
+        // 回归钉（2026-11-03）：样式页「最小宽度/最小高度」被拉到 605x1150 后，
+        // 库会把它当硬下限，所有分类框都被钉死在示例框的尺寸上、边缘拖不小。
+        let mut cfg = LiquidGlassConfig::default();
+        cfg.resize.min_width = 605.0;
+        cfg.resize.min_height = 1150.0;
+        let logical = [100.0, 100.0, 605.0, 1150.0];
+
+        let (floor_w, floor_h) = glass_resize_floor(192);
+        let capped = block_config_for(&cfg, logical, false, 192);
+        assert_eq!(
+            capped.resize.min_width, floor_w,
+            "超过上限的最小宽必须被夹取"
+        );
+        assert_eq!(
+            capped.resize.min_height, floor_h,
+            "超过上限的最小高必须被夹取"
+        );
+        assert!(
+            floor_w < 605.0 && floor_h < 1150.0,
+            "上限必须低于钉死用户的 605x1150，否则问题依旧：{floor_w}x{floor_h}"
+        );
+
+        // 正常配置（默认 24）必须原样下发，不能因为「有上限」而被抬高。
+        let kept = block_config_for(&LiquidGlassConfig::default(), logical, false, 192);
+        assert_eq!(kept.resize.min_width, 24.0);
+        assert_eq!(kept.resize.min_height, 24.0);
+    }
+
+    #[test]
+    fn resize_floor_is_monitor_physical_size_independent() {
+        // 库逻辑像素 = 主屏物理像素，`glass_resize_floor` 折算后应当落在**同一物理宽度**：
+        // `scale_for_dpi(200, dpi) / (dpi / primary_dpi)` 与 dpi 无关。高 DPI 副屏
+        // 上的最小框必须和主屏一样大，否则跨屏拖一下尺寸下限就跳变。
+        let (w96, h96) = glass_resize_floor(96);
+        let (w192, h192) = glass_resize_floor(192);
+        let (w144, h144) = glass_resize_floor(144);
+        assert!(
+            (w96 - w192).abs() < 1.0,
+            "最小宽不该随 DPI 变化: {w96} vs {w192}"
+        );
+        assert!(
+            (h96 - h144).abs() < 1.0,
+            "最小高不该随 DPI 变化: {h96} vs {h144}"
+        );
+        assert!(w96 >= 24.0 && h96 >= 24.0, "不得低于库 MIN_SIZE=24");
+        assert!(
+            w96 <= 1024.0 && h96 <= 1024.0,
+            "上限本身也得合理: {w96}x{h96}"
+        );
     }
 
     #[test]

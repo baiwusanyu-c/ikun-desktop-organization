@@ -7,7 +7,7 @@
 //!
 //! # 核心函数
 //! - push_other_grids_below: 将其他分类框推到指定窗口之下
-//! - ind_grid_window_at_point: 查找指定坐标处的分类框
+//! - find_grid_window_at_point: 查找指定坐标处的分类框
 //! - is_zorder_suppressing / with_zorder_suppressed: 递归抑制
 //! - set_drag_in_progress / is_drag_in_progress: OLE 拖拽标志
 

@@ -1,7 +1,7 @@
-//! ����ο��� Overlay ����
+//! 对齐参考线 Overlay 模块
 //!
-//! ����һ��ȫ��͸���ķֲ㴰�ڣ����ڻ��ƶ���ο��ߡ�
-//! ����ʹ�� WS_EX_TRANSPARENT ��ʽ��ʹ����¼���͸��
+//! 创建一个全屏透明的分层窗口，用于绘制移动/缩放时的对齐参考线。
+//! 窗口带 WS_EX_TRANSPARENT，鼠标事件直接穿透到下层窗口。
 
 use std::ffi::c_void;
 use std::sync::Mutex;
@@ -19,11 +19,11 @@ use crate::platform::windows::render_devices;
 /// 10x10=100 个采样点足够估算屏幕中心区域亮度，同时保持启动时间 < 50ms
 const SAMPLE_GRID_SIZE: i32 = 10;
 
-/// �ο��� Overlay ��������
+/// 参考线 Overlay 的窗口数据
 struct GuideOverlayData {
-    /// ��������ȣ��������أ�
+    /// 画布宽度（物理像素）
     width: i32,
-    /// �������߶ȣ��������أ�
+    /// 画布高度（物理像素）
     height: i32,
     /// D2D Factory
     d2d_factory: Option<ID2D1Factory>,
@@ -33,7 +33,7 @@ struct GuideOverlayData {
 
 unsafe impl Send for GuideOverlayData {}
 
-/// �ο��� Overlay ���ھ����װ
+/// 参考线 Overlay 的窗口句柄包装
 struct GuideOverlayWindow {
     hwnd: HWND,
 }
@@ -186,12 +186,12 @@ static CLASS_NAME: &[u16] = &[
     73, 107, 117, 110, 71, 117, 105, 100, 101, 79, 118, 101, 114, 108, 97, 121, 0,
 ]; // "IkunGuideOverlay"
 
-/// �ο�����ɫ����͸����ɫ (rgba: 0, 120, 255, 200)
+/// 参考线默认颜色：半透明蓝 (rgba: 0, 120, 255, 200)
 
-/// �ο��߿��
+/// 参考线线宽（物理像素）
 const GUIDE_LINE_WIDTH: f32 = 3.0;
 
-/// ��ȡ��������
+/// 取 Overlay 窗口的用户数据
 fn get_guide_data(hwnd: HWND) -> Option<&'static mut GuideOverlayData> {
     let data_ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
     if data_ptr == 0 {
@@ -200,7 +200,7 @@ fn get_guide_data(hwnd: HWND) -> Option<&'static mut GuideOverlayData> {
     Some(unsafe { &mut *(data_ptr as *mut GuideOverlayData) })
 }
 
-/// ���ڹ��̣���������С��Ϣ����
+/// Overlay 窗口过程：只处理消息循环所需的最小集合
 unsafe extern "system" fn guide_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -226,7 +226,7 @@ unsafe extern "system" fn guide_wnd_proc(
     }
 }
 
-/// ȷ����������ע��
+/// 确保 Overlay 窗口类已注册
 fn ensure_class_registered() -> Result<HINSTANCE, &'static str> {
     let hinstance = unsafe { GetModuleHandleW(std::ptr::null()) };
     if hinstance.is_null() {
@@ -277,9 +277,9 @@ fn init_d2d_devices(data: &mut GuideOverlayData) {
     }
 }
 
-/// ��������ʾ Guide Overlay ����
+/// 创建并显示 Guide Overlay（全屏分层窗）
 pub fn create_guide_overlay() -> Result<(), &'static str> {
-    // ����Ƿ��Ѵ���
+    // 已经建过就直接复用，不重复创建
     if let Ok(guard) = GUIDE_OVERLAY.lock() {
         if guard.is_some() {
             return Ok(());
@@ -288,11 +288,11 @@ pub fn create_guide_overlay() -> Result<(), &'static str> {
 
     let hinstance = ensure_class_registered()?;
 
-    // ��ȡ��������߽磨����������ʾ����
+    // 虚拟桌面边界（覆盖全部显示器的并集）
     let (x, y, width, height) =
         crate::platform::windows::monitor_utils::get_virtual_desktop_bounds();
 
-    // ����͸���ֲ㴰�ڣ���괩͸
+    // 创建透明分层窗口：鼠标穿透、不抢焦点、不进任务栏
     let hwnd = unsafe {
         CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
@@ -314,7 +314,7 @@ pub fn create_guide_overlay() -> Result<(), &'static str> {
         return Err("CreateWindowExW failed for guide overlay");
     }
 
-    // ���ô�������
+    // 挂载窗口数据
     let data = Box::new(GuideOverlayData {
         width,
         height,
@@ -326,13 +326,13 @@ pub fn create_guide_overlay() -> Result<(), &'static str> {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, data_ptr as isize);
     }
 
-    // ���浽ȫ��
+    // 存入全局单例
     if let Ok(mut guard) = GUIDE_OVERLAY.lock() {
         *guard = Some(GuideOverlayWindow { hwnd });
     }
 
     log::info!(
-        "Guide overlay �����Ѵ���: {}x{} at ({}, {})",
+        "Guide overlay 窗口已创建: {}x{} at ({}, {})",
         width,
         height,
         x,
@@ -341,23 +341,23 @@ pub fn create_guide_overlay() -> Result<(), &'static str> {
     Ok(())
 }
 
-/// ���� Guide Overlay ����
+/// 销毁 Guide Overlay（释放全屏分层窗与 DIB）
 pub fn destroy_guide_overlay() {
     if let Ok(mut guard) = GUIDE_OVERLAY.lock() {
         if let Some(overlay) = guard.take() {
             unsafe {
                 DestroyWindow(overlay.hwnd);
             }
-            log::info!("Guide overlay ����������");
+            log::info!("Guide overlay 窗口已销毁");
         }
     }
 }
 
-/// ���²ο�����ʾ
+/// 更新参考线显示
 ///
-/// # ����
-/// - `alignment`: ��������
-/// - `work_area_offset`: ���������Ͻ�ƫ�ƣ������������꣩
+/// # 参数
+/// - `alignment`: 对齐检测结果（横线 / 竖线集合）
+/// - `work_area_offset`: 虚拟桌面左上角偏移（把屏幕坐标转成本窗坐标）
 pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i32)) {
     let guard = match GUIDE_OVERLAY.lock() {
         Ok(g) => g,
@@ -375,19 +375,41 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
         None => return,
     };
 
-    // ����Ƿ��ж���
+    // 本轮没有任何对齐命中 -> 保留上一帧画面 300ms 再隐藏。
+    // 检测每 16ms 跑一次，但移动框矩形有 1~2 拍延迟，命中是间歇性的：
+    // 立刻隐藏 = 参考线闪一帧就消失，肉眼看不到（2026-11-03 用户报「不显示」）。
     let has_lines =
         !alignment.horizontal_matches.is_empty() || !alignment.vertical_matches.is_empty();
 
     if !has_lines {
-        // ���ش���
-        unsafe {
-            ShowWindow(hwnd, SW_HIDE);
+        use std::time::Instant;
+        static LAST_HIT: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+        let now = Instant::now();
+        let should_hide = match LAST_HIT.lock() {
+            Ok(g) => g
+                .map(|t| now.duration_since(t).as_millis() >= 300)
+                .unwrap_or(true),
+            Err(_) => true,
+        };
+        if should_hide {
+            unsafe {
+                ShowWindow(hwnd, SW_HIDE);
+            }
         }
+        // should_hide=false 时直接 return：不调 UpdateLayeredWindow，
+        // 分层窗保留上一帧位图 = 参考线继续可见。
         return;
     }
+    // 有命中：刷新宽限期时间戳
+    {
+        use std::time::Instant;
+        static LAST_HIT: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+        if let Ok(mut g) = LAST_HIT.lock() {
+            *g = Some(Instant::now());
+        }
+    }
 
-    // ��ʼ�� D2D �豸
+    // 初始化 D2D 设备（首帧懒建）
     // 参考线更新节流 33ms：每次鼠标移动都做全屏 5040x2080
     // DIB 重建 + 全屏 ULW 会拖垮 DWM（实测拖拽掉帧主因），30Hz 足够跟手。
     {
@@ -456,7 +478,7 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
     init_d2d_devices(data);
 
     let (Some(ref _factory), Some(ref target)) = (&data.d2d_factory, &data.d2d_target) else {
-        log::warn!("Guide D2D �豸δ��ʼ��");
+        log::warn!("Guide D2D 设备未初始化");
         return;
     };
 
@@ -466,7 +488,7 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
         return;
     }
 
-    // ���� DIB ����Ⱦ
+    // 准备 DIB 并渲染
     let screen_dc = unsafe { GetDC(std::ptr::null_mut()) };
     let mem_dc = unsafe { CreateCompatibleDC(screen_dc) };
     if mem_dc.is_null() {
@@ -510,7 +532,7 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
 
     let old_bmp = unsafe { SelectObject(mem_dc, dib as HGDIOBJ) };
 
-    // �� DC �� D2D target
+    // 把内存 DC 绑成 D2D 渲染目标
     let bind_rect = windows::Win32::Foundation::RECT {
         left: 0,
         top: 0,
@@ -519,7 +541,7 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
     };
 
     if unsafe { target.BindDC(GdiHDC(mem_dc), &bind_rect) }.is_err() {
-        log::error!("Guide BindDC ʧ��");
+        log::error!("Guide BindDC 失败");
         unsafe {
             SelectObject(mem_dc, old_bmp);
             DeleteObject(dib as HGDIOBJ);
@@ -529,10 +551,10 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
         return;
     }
 
-    // ��ʼ����
+    // 开始绘制
     unsafe { target.BeginDraw() };
 
-    // ���Ϊȫ͸��
+    // 整屏清成全透明
     unsafe {
         target.Clear(Some(
             &windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F {
@@ -544,7 +566,7 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
         ));
     }
 
-    // �����ο��߻���
+    // 画参考线本体
     // 动态对比色参考线：根据背景亮度自动选择颜色
     let stroke_style = unsafe {
         _factory.CreateStrokeStyle(
@@ -607,14 +629,14 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
         }
     }
 
-    // ��������
+    // 结束绘制
     let mut tag1 = 0;
     let mut tag2 = 0;
     if let Err(e) = unsafe { target.EndDraw(Some(&mut tag1), Some(&mut tag2)) } {
-        log::error!("Guide D2D EndDraw ʧ��: {:?}", e);
+        log::error!("Guide D2D EndDraw 失败: {:?}", e);
     }
 
-    // ���·ֲ㴰��
+    // 把画好的位图提交给分层窗口
     let size = POINT { x: w, y: h };
     let src_pt = POINT { x: 0, y: 0 };
     let blend = BLENDFUNCTION {
@@ -637,9 +659,9 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
             LWA_ALPHA,
         );
 
-        // ��ʾ����
+        // 显示窗口
         ShowWindow(hwnd, SW_SHOWNA);
-        // ����
+        // 清理 GDI 对象
         SelectObject(mem_dc, old_bmp);
         DeleteObject(dib as HGDIOBJ);
         DeleteDC(mem_dc);
@@ -647,7 +669,7 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
     }
 }
 
-/// ���زο���
+/// 隐藏参考线（不销毁窗口）
 pub fn hide_guide_lines() {
     if let Ok(guard) = GUIDE_OVERLAY.lock() {
         if let Some(overlay) = guard.as_ref() {
@@ -658,7 +680,7 @@ pub fn hide_guide_lines() {
     }
 }
 
-/// ��� Guide Overlay �Ƿ��Ѵ���
+/// 判断 Guide Overlay 是否已创建
 pub fn is_guide_overlay_created() -> bool {
     GUIDE_OVERLAY.lock().map(|g| g.is_some()).unwrap_or(false)
 }

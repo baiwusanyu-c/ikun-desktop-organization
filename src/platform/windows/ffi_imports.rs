@@ -330,6 +330,9 @@ extern "system" {
 
     pub fn GetClassNameW(hWnd: HWND, lpClassName: *mut u16, nMaxCount: i32) -> i32;
 
+    /// Z 序邻居查询（GW_HWNDFIRST / GW_HWNDLAST / GW_HWNDNEXT / GW_HWNDPREV）。
+    pub fn GetWindow(hWnd: HWND, uCmd: u32) -> HWND;
+
     pub fn WindowFromPoint(pt: POINT) -> HWND;
     pub fn GetAncestor(hWnd: HWND, gaFlags: u32) -> HWND;
 

@@ -243,6 +243,13 @@ pub const SWP_FRAMECHANGED: u32 = 0x0020;
 pub const SWP_NOMOVE: u32 = 0x0002;
 pub const SWP_NOSIZE: u32 = 0x0001;
 pub const HWND_BOTTOM: HWND = std::ptr::dangling_mut::<c_void>();
+
+/// `GetWindow` 方向常量：沿 Z 序取下一个**更低**的窗口。
+#[allow(dead_code)]
+pub const GW_HWNDNEXT: u32 = 2;
+/// `GetWindow` 方向常量：沿 Z 序取上一个**更高**的窗口。
+#[allow(dead_code)]
+pub const GW_HWNDPREV: u32 = 3;
 pub const GWLP_USERDATA: i32 = -21;
 pub const SM_CXSCREEN: i32 = 0;
 #[allow(dead_code)]
