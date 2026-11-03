@@ -375,16 +375,21 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
         None => return,
     };
 
-    // 本轮没有任何对齐命中 -> 保留上一帧画面 300ms 再隐藏。
-    // 检测每 16ms 跑一次，但移动框矩形有 1~2 拍延迟，命中是间歇性的：
-    // 立刻隐藏 = 参考线闪一帧就消失，肉眼看不到（2026-11-03 用户报「不显示」）。
+    // 对齐参考线可见性控制（三个 static 必须在函数作用域共享）：
+    // - 有命中 → 刷新 LAST_HIT，按 33ms 节流渲染（DIB 只是线条包围盒，不是全屏）
+    // - 无命中 → 300ms 宽限期内不调 ULW（分层窗保留上一帧位图 = 参考线继续可见），
+    //   超过才隐藏。检测每 16ms 跑一次但移动框矩形有 1~2 拍延迟，命中间歇性，
+    //   立刻隐藏 = 参考线闪一帧就消失（2026-11-03 用户报「不显示」根因：
+    //   原实现把 LAST_HIT 声明在两个不同的 if 分支里 = 两个独立的 static，
+    //   写一个读另一个 → 宽限期永远 None → 每次都立刻隐藏）。
     let has_lines =
         !alignment.horizontal_matches.is_empty() || !alignment.vertical_matches.is_empty();
 
+    static LAST_HIT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+    static LAST_RENDER: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
     if !has_lines {
-        use std::time::Instant;
-        static LAST_HIT: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
-        let now = Instant::now();
+        let now = std::time::Instant::now();
         let should_hide = match LAST_HIT.lock() {
             Ok(g) => g
                 .map(|t| now.duration_since(t).as_millis() >= 300)
@@ -396,30 +401,19 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
                 ShowWindow(hwnd, SW_HIDE);
             }
         }
-        // should_hide=false 时直接 return：不调 UpdateLayeredWindow，
-        // 分层窗保留上一帧位图 = 参考线继续可见。
         return;
     }
-    // 有命中：刷新宽限期时间戳
-    {
-        use std::time::Instant;
-        static LAST_HIT: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
-        if let Ok(mut g) = LAST_HIT.lock() {
-            *g = Some(Instant::now());
-        }
+    // 有命中：刷新宽限期（即使本轮被节流跳过，也要让宽限期知道「刚才还命中」）
+    if let Ok(mut g) = LAST_HIT.lock() {
+        *g = Some(std::time::Instant::now());
     }
-
-    // 初始化 D2D 设备（首帧懒建）
-    // 参考线更新节流 33ms：每次鼠标移动都做全屏 5040x2080
-    // DIB 重建 + 全屏 ULW 会拖垮 DWM（实测拖拽掉帧主因），30Hz 足够跟手。
+    // 渲染节流 33ms（30Hz 跟手）：DIB 只是线条包围盒（百 KB 级），不是全屏 5040x2080。
     {
-        use std::time::Instant;
-        static LAST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
-        let now = Instant::now();
-        let due = match LAST.lock() {
+        let now = std::time::Instant::now();
+        let due = match LAST_RENDER.lock() {
             Ok(mut g) => {
                 let d = g
-                    .map(|t| now.duration_since(t).as_millis() >= 100)
+                    .map(|t| now.duration_since(t).as_millis() >= 33)
                     .unwrap_or(true);
                 if d {
                     *g = Some(now);
@@ -458,13 +452,18 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
         by0 = by0.min(y0).min(y1);
         by1 = by1.max(y0).max(y1);
     }
+    // margin 先加再做退化判断：否则单条横线（by0==by1）或单条竖线（bx0==bx1）
+    // 会被判退化直接隐藏 = 对齐了也不显示（2026-11-03 用户报根因）。
+    bx0 -= margin;
+    by0 -= margin;
+    bx1 += margin;
+    by1 += margin;
     if bx0 >= bx1 || by0 >= by1 {
         unsafe {
             ShowWindow(hwnd, SW_HIDE);
         }
         return;
     }
-    bx0 -= margin;
     by0 -= margin;
     bx1 += margin;
     by1 += margin;

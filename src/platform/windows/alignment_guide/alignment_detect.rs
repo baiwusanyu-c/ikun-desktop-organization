@@ -196,9 +196,11 @@ fn check_horizontal_alignment(
     other: &RectEdges,
     other_hwnd: *mut std::ffi::c_void,
     threshold: i32,
-    max_gap: i32,
+    _max_gap: i32,
 ) {
-    // 待比较的四对 top/bottom 边缘
+    // 四对 top/bottom 边缘独立检测，每对 <= threshold 就画线。
+    // 与接入 liquid-verre-rs 之前的逻辑一致：不设「另一轴关联」门控，
+    // 不取 best_diff —— 用户明确要求「和之前一致，只是阈值小一点」。
     let pairs = [
         (moving.top, other.top),
         (moving.top, other.bottom),
@@ -206,21 +208,11 @@ fn check_horizontal_alignment(
         (moving.bottom, other.bottom),
     ];
 
-    // 另一轴（X）上没有关联的两个框不该互相拉参考线
-    if !related_with_gap(moving.left, moving.right, other.left, other.right, max_gap) {
-        return;
-    }
-
-    // 四对里只取最贴近的一对：否则 top↔bottom 与 bottom↔top 会同时成立，
-    // 一次拖拽画出两条互相矛盾的横线。
-    let mut best_diff = i32::MAX;
     for (moving_edge, other_edge) in pairs {
         let diff = (moving_edge - other_edge).abs();
-        if diff <= threshold && diff < best_diff {
-            best_diff = diff;
-            // X 轴上的绘制范围（重叠段外扩，相离时并集）
-            let (x0, x1) = guide_span(moving.left, moving.right, other.left, other.right);
-            // 是否已有同一位置的匹配（跨参考框合并成一条线）
+        if diff <= threshold {
+            let left_x = moving.left.min(other.left);
+            let right_x = moving.right.max(other.right);
             let existing = result
                 .horizontal_matches
                 .iter_mut()
@@ -229,17 +221,16 @@ fn check_horizontal_alignment(
             if let Some(existing) = existing {
                 if !existing.matched_hwnds.contains(&other_hwnd) {
                     existing.matched_hwnds.push(other_hwnd);
-                    existing.line_start.0 = existing.line_start.0.min(x0);
-                    existing.line_end.0 = existing.line_end.0.max(x1);
+                    existing.line_start.0 = existing.line_start.0.min(left_x);
+                    existing.line_end.0 = existing.line_end.0.max(right_x);
                 }
             } else {
-                let line_y = other_edge;
                 result.horizontal_matches.push(AlignmentMatch {
                     direction: AlignmentDirection::Horizontal,
                     position: other_edge,
                     matched_hwnds: vec![other_hwnd],
-                    line_start: (x0, line_y),
-                    line_end: (x1, line_y),
+                    line_start: (left_x, other_edge),
+                    line_end: (right_x, other_edge),
                 });
             }
         }
@@ -253,9 +244,9 @@ fn check_vertical_alignment(
     other: &RectEdges,
     other_hwnd: *mut std::ffi::c_void,
     threshold: i32,
-    max_gap: i32,
+    _max_gap: i32,
 ) {
-    // 待比较的四对 left/right 边缘
+    // 四对 left/right 边缘独立检测，与接入库之前一致（见 check_horizontal_alignment 注释）。
     let pairs = [
         (moving.left, other.left),
         (moving.left, other.right),
@@ -263,19 +254,11 @@ fn check_vertical_alignment(
         (moving.right, other.right),
     ];
 
-    // 另一轴（Y）上没有关联的两个框不该互相拉参考线
-    if !related_with_gap(moving.top, moving.bottom, other.top, other.bottom, max_gap) {
-        return;
-    }
-
-    // 四对里只取最贴近的一对（同上：避免一次拖拽出两条矛盾参考线）
-    let mut best_diff = i32::MAX;
     for (moving_edge, other_edge) in pairs {
         let diff = (moving_edge - other_edge).abs();
-        if diff <= threshold && diff < best_diff {
-            best_diff = diff;
-            // Y 轴上的绘制范围
-            let (y0, y1) = guide_span(moving.top, moving.bottom, other.top, other.bottom);
+        if diff <= threshold {
+            let top_y = moving.top.min(other.top);
+            let bottom_y = moving.bottom.max(other.bottom);
             let existing = result
                 .vertical_matches
                 .iter_mut()
@@ -284,17 +267,16 @@ fn check_vertical_alignment(
             if let Some(existing) = existing {
                 if !existing.matched_hwnds.contains(&other_hwnd) {
                     existing.matched_hwnds.push(other_hwnd);
-                    existing.line_start.1 = existing.line_start.1.min(y0);
-                    existing.line_end.1 = existing.line_end.1.max(y1);
+                    existing.line_start.1 = existing.line_start.1.min(top_y);
+                    existing.line_end.1 = existing.line_end.1.max(bottom_y);
                 }
             } else {
-                let line_x = other_edge;
                 result.vertical_matches.push(AlignmentMatch {
                     direction: AlignmentDirection::Vertical,
                     position: other_edge,
                     matched_hwnds: vec![other_hwnd],
-                    line_start: (line_x, y0),
-                    line_end: (line_x, y1),
+                    line_start: (other_edge, top_y),
+                    line_end: (other_edge, bottom_y),
                 });
             }
         }
@@ -468,45 +450,40 @@ mod tests {
 
     #[test]
     fn test_multiple_alignments() {
-        // 两个框完全重合：四对边缘里 top/bottom 都相同，但一次拖拽只能给
-        // **一条**横线 + **一条**竖线（旧实现会出两条互相矛盾的线）。
+        // 两个框完全重合：top 和 bottom 都相同 → 2 条横线 + 2 条竖线。
         let moving = make_rect(100, 100, 200, 200);
         let others = vec![(hwnd(0x1), make_rect(100, 100, 200, 200))];
 
         let result = detect_alignments(&moving, &others, 5);
-        assert_eq!(
-            result.horizontal_matches.len(),
-            1,
-            "重合时只出最贴近的一条横线"
-        );
-        assert_eq!(
-            result.vertical_matches.len(),
-            1,
-            "重合时只出最贴近的一条竖线"
-        );
+        assert_eq!(result.horizontal_matches.len(), 2, "top 和 bottom 各一条");
+        assert_eq!(result.vertical_matches.len(), 2, "left 和 right 各一条");
     }
 
     #[test]
-    fn test_only_closest_pair_per_box() {
-        // top 与 bottom 同时落在阈值内（各差 2px）时，只保留第一对（最贴近的一对）。
+    fn test_multiple_pairs_per_box() {
+        // top 和 bottom 都在阈值内 → 两条横线（不再取 best_diff，与接入库之前一致）。
         let moving = make_rect(100, 100, 200, 205);
         let others = vec![(hwnd(0x1), make_rect(300, 102, 400, 207))];
 
         let result = detect_alignments(&moving, &others, 5);
-        assert_eq!(result.horizontal_matches.len(), 1);
-        assert_eq!(result.horizontal_matches[0].position, 102);
+        assert_eq!(result.horizontal_matches.len(), 2);
+        let positions: Vec<i32> = result
+            .horizontal_matches
+            .iter()
+            .map(|m| m.position)
+            .collect();
+        assert!(positions.contains(&102));
+        assert!(positions.contains(&207));
     }
 
     #[test]
-    fn test_unrelated_far_boxes_no_guide() {
-        // 顶边完全相同，但两框在 X 上相距 700px（> MAX_PERPENDICULAR_GAP）：
-        // 不构成可对齐关系 —— 这正是用户报的「还没对齐就出现参考线」。
+    fn test_far_boxes_align_if_edges_match() {
+        // 顶边相同 → 横线，即使 X 相距很远也画（与接入库之前一致：不设 gap 门控）。
         let moving = make_rect(100, 100, 200, 200);
         let others = vec![(hwnd(0x1), make_rect(900, 100, 1000, 300))];
 
         let result = detect_alignments(&moving, &others, 5);
-        assert!(result.horizontal_matches.is_empty());
-        assert!(result.vertical_matches.is_empty());
+        assert_eq!(result.horizontal_matches.len(), 1);
     }
 
     #[test]
@@ -521,52 +498,16 @@ mod tests {
     }
 
     #[test]
-    fn test_overlapping_boxes_guide_spans_overlap_only() {
-        // X 重叠区 [300,400]，参考线只画重叠段 + GUIDE_EXTEND，而不是并集 100..600。
+    fn test_overlapping_boxes_guide_spans_union() {
+        // 参考线长度 = 两框并集（与接入库之前一致）。
         let moving = make_rect(100, 100, 400, 200);
         let others = vec![(hwnd(0x1), make_rect(300, 100, 600, 300))];
 
         let result = detect_alignments(&moving, &others, 5);
         assert_eq!(result.horizontal_matches.len(), 1);
         let m = &result.horizontal_matches[0];
-        assert_eq!(m.line_start.0, 300 - GUIDE_EXTEND);
-        assert_eq!(m.line_end.0, 400 + GUIDE_EXTEND);
-        assert!(
-            m.line_start.0 > 100 && m.line_end.0 < 600,
-            "不该横跨两个框的并集"
-        );
-    }
-
-    #[test]
-    fn test_gap_is_dpi_dependent_not_hard_physical() {
-        // 回归钉（2026-11-03）：200% 屏上两框相距 400 物理像素（=200 逻辑像素），
-        // 按逻辑口径 240 应当「有关联」；但早期实现把 240 当物理像素直接用，
-        // 400 > 240 判成无关 -> 参考线一条都不出（用户报「对齐辅助线不显示了」）。
-        let moving = make_rect(100, 100, 200, 200);
-        let others = [(hwnd(0x1), make_rect(500, 100, 600, 300))]; // X 间隙 300 物理像素
-
-        let strict = detect_alignments(&moving, &others, 5);
-        assert!(
-            strict.horizontal_matches.is_empty(),
-            "物理 240 上限下相距 300 不连线"
-        );
-
-        let dpi_scaled =
-            detect_alignments_with_gap(&moving, &others, 5, 240 * 2 /* 192DPI 折算 */);
-        assert_eq!(
-            dpi_scaled.horizontal_matches.len(),
-            1,
-            "按 DPI 折算后应连线"
-        );
-    }
-
-    #[test]
-    fn test_very_far_boxes_still_no_guide() {
-        // 折算后依然要有上限：相距 2000 物理像素（1000 逻辑像素）不该连线。
-        let moving = make_rect(100, 100, 200, 200);
-        let others = [(hwnd(0x1), make_rect(2100, 100, 2200, 300))];
-        let result = detect_alignments_with_gap(&moving, &others, 5, 480);
-        assert!(result.horizontal_matches.is_empty());
+        assert_eq!(m.line_start.0, 100, "union left");
+        assert_eq!(m.line_end.0, 600, "union right");
     }
 
     #[test]
