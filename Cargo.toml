@@ -33,7 +33,7 @@ env_logger = "0.11"
 # ===== Windows API =====
 [target.'cfg(windows)'.dependencies]
 # 液态玻璃渲染引擎库（替代自研 liquid_glass 效果实现、边缘缩放/拖拽交互与视觉反馈）
-liquid-verre-rs = "0.5.1"
+liquid-verre-rs = "0.5.3"
 # 注：Win32_Graphics_Direct3D_Fxc 供运行时 D3DCompile 编译着色器使用
 # （主项目回退背景与 liquid-verre-rs 各自需要），不是可选 UI 的遗留依赖，勿删。
 windows-numerics = "0.3"
@@ -80,17 +80,6 @@ embed-resource = "3"
 # ===== Dev Dependencies =====
 [dev-dependencies]
 tempfile = "3.0"
-
-# 警告：临时止血，库侧 liquid-verre-rs 0.5.2 发布后可删除。
-# liquid-verre-rs 的自适应质量计数器 `good_streak: u8`（core/quality.rs）在质量档 0
-# （常规机器，永远不会升档）下每秒自增且从不复位，256 s 后 `+= 1`
-# 触发「attempt to add with overflow」panic：渲染线程当场死亡，玻璃与块输入路由
-# 全部失效，分类框表现为「整个不可用」（实测 debug 启动 ~4.4 分钟必现，
-# 日志钉死 liquid-verre-rs 0.5.0/0.5.1 均存在）。dev 默认对依赖开启
-# overflow-checks，release 不开；这里让该依赖在 dev 下与 release 语义一致
-# （溢出回绕、不抛 panic），先保 debug 日常可用。库侧修好后本段整体删除。
-[profile.dev.package.liquid-verre-rs]
-overflow-checks = false
 
 [profile.release]
 opt-level = 3

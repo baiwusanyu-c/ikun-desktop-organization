@@ -1091,7 +1091,8 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
     }
     // 内容窗口被压底后必须把画布再压回它之下，维持
     // 「画布 < 全部玻璃块内容窗口 < 其他应用窗口」不变量（见模块头）。
-    super::glass_engine::reassert_canvas_bottom();
+    // 新建块/新窗口显示属于关键时机，直接请库重发一次底部层级（0.5.2 起等值也生效）。
+    super::glass_engine::press_canvas_bottom();
     // 周期重绘只在液态玻璃开启时才需要：玻璃关闭时画面是静态位图，
     // 所有变更都会走显式重绘路径。200ms 定时器空转实测吃掉约 9% CPU，
     // 并且是主进程内存持续爬升的放大器。
@@ -2018,8 +2019,8 @@ fn follow_glass_session(hwnd: HWND) {
         return;
     };
     let box_id = data.config_id;
-    // 先催库出帧：块矩形来自快照，不催就按空闲兜底档（~4Hz）发布，
-    // 内容纹理会跟着窗口尺寸一起卡成 3~4Hz。
+    // 催库出帧：块矩形来自快照。0.5.2 起库的契约是「块几何变化 => 同帧快照可见」，
+    // 这里只唤醒渲染，不再需要 set_default_resize 那种催发布 hack。
     super::glass_engine::request_render();
     // 空闲态**绝不搬窗口**：块矩形与窗口矩形之间存在 1px 级舍入差是常态
     // （逻辑↔物理往返、库中心钳制），空闲跟随会与 WM_WINDOWPOSCHANGED 的
@@ -2101,12 +2102,14 @@ pub(crate) fn begin_glass_resize_session(hwnd: HWND) {
     data.glass_session_idle_ticks = 0;
     raise_timer_resolution();
     enter_glass_resize_session(hwnd);
-    // 库的缩放反馈 border 是**独立叠加 pass，画在全部玻璃之上**（库 compositor
-    // 「缩放反馈 border：独立叠加 pass，盖在全部玻璃之上」）。两个框重合时，
-    // 下层框的 border 会画到上层框身上 —— 先把正在操作的块抬到块序最前，
-    // 让「border 属于最上面那块」成立（宿主侧唯一可用的手段；根治要库把
-    // border 收进逐块 pass 或按更高块裁剪）。
-    super::glass_engine::raise_box(data.config_id);
+    // 0.5.2 起 border 由库在**逐块 pass 内**发射（紧跟自己那块的玻璃、早于任何
+    // 更高块，库 core::draw::border_emit_plan）：下层框的反馈白边会被上层框的玻璃
+    // 正确遮挡，不再画到上层框身上，因此这里不再抬层 —— 0.5.1 时代的 raise_box
+    // 绕法实测修不了该缺陷（border 是无条件盖在全部玻璃之上的独立 pass，抬层只
+    // 改块序、改不了那条 pass）。「操作中的框整体在最前」仍由内容窗口激活链路
+    // （wnd_proc 的 Z 序不变量 -> glass_engine::raise_box）负责。
+    // 0.5.3 再补一刀：命中层序与绘制层序同判据（库 hit_resize 的 topmost_body_z_at 遮挡过滤），
+    // 被上层框机身压住的那段边缘**根本不会再亮**，所以这条白边争议从「画在哪」变成「该不该亮」。
     super::alignment_guide::on_enter_size_move(hwnd);
     log::debug!("分类框进入库会话（移动/缩放）");
 }

@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 9
-- **Last Active**: 2026-10-28
+- **Total Sessions**: 11
+- **Last Active**: 2026-11-04
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~554 | Active |
+| `journal-1.md` | ~922 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,8 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 11 | 2026-11-04 | 接线 liquid-verre-rs 0.5.3：下层框亮边从「画在哪」变成「该不该亮」 | - | `master` |
+| 10 | 2026-11-04 | 接入 liquid-verre-rs 0.5.2：修下层框 border 盖到上层框 + 退役临时绕行 | - | `master` |
 | 9 | 2026-10-28 | 按库性能契约重写接管式拖拽：Move 内 set_rect 对齐 120Hz | - | `master` |
 | 8 | 2026-10-28 | 内容掉帧量化：库快照4Hz发布 + 会话期每帧重交9MB透明ULW帧 | - | `master` |
 | 7 | 2026-10-28 | hover闪烁定案(TrackMouseEvent假LEAVE) + 引擎模式每帧白烧一趟ULW | - | `master` |

@@ -766,3 +766,157 @@ R_k = R_0 + (block_local_k - anchor) 会自我抵消：实测「拖 240px 只走
    与备份一致，未回滚 layout，等用户决定。
 
 - [OK] cargo fmt / build / test 519 全绿；pnpm build + svelte-check 0 error
+
+
+## Session 10: 接入 liquid-verre-rs 0.5.2：修下层框 border 盖到上层框 + 退役临时绕行
+
+**Date**: 2026-11-04
+**Task**: 接入 liquid-verre-rs 0.5.2：修下层框 border 盖到上层框 + 退役临时绕行
+**Branch**: `master`
+
+### Summary
+
+依赖升 0.5.2；按库侧指南退役 border 抬层/双击合成/4ms 压底守护/催发布 hack/debug overflow 止血，主诉由库逐块 pass 层序解决；fmt+test 全绿，4 项待实机复验
+
+### Main Changes
+
+## 结论
+
+liquid-verre-rs 升到 **0.5.2**（crates.io 已发布，库仓库 HEAD 8af57b8），
+宿主按《0.5.2 库侧修复结果与应用层接入指南》退役临时绕行，本次主诉
+「下层框缩放反馈白边盖到上层框身上」改由库的逐块 pass 层序保证。
+
+## 改了什么
+
+- **Cargo.toml / Cargo.lock**：0.5.1 -> 0.5.2；删除 `[profile.dev.package.liquid-verre-rs]
+  overflow-checks = false`（#6 库侧 `bump_streaks` 已修，debug ~256s 必 panic 的止血段不再需要）。
+- **#1 主诉（border 层序）**：`grid_window.rs::begin_glass_resize_session` 删除专为 border 加的
+  `raise_box` 抬层绕行（库 CHANGELOG 明确：宿主复验 raise_box 修不了）。border 现由库
+  `core::draw::border_emit_plan` 在第 i 块玻璃之后、任何更高块之前发射 => 下层框白边被上层
+  玻璃正确遮挡。`glass_engine.rs` 模块头新增「玻璃块层序」不变量。
+- **#5 双击（升版必改）**：删除 sink 里的 `is_double_click` / `double_click_window_ms` /
+  `double_click_slop_px` / `RouteState.last_down_*` 合成链路，只匹配 `PointerPhase::DoubleClick`。
+  序列口径写进注释与规范：CS_DBLCLKS 生效后物理双击是 `Down -> Up -> DoubleClick -> Up`，
+  第二次按下不再产生 Down。
+- **#2 + #3 压底**：删除 4ms「压底收敛守护」线程与「宿主自己拿 `canvas_handle` 发
+  `SetWindowPos(HWND_BOTTOM)`」路径；改为 `apply_canvas_bottom_level()`（走
+  `Engine::set_window_level`，0.5.2 等值也重发）+ 判据(120ms 防抖)的 `reassert_canvas_bottom()`
+  + 关键时机的 `press_canvas_bottom()`（引擎启动/重建、Ready、MonitorsChanged、新建块显示）。
+- **#4 会话快照**：`request_render()` 删除拿 `set_default_resize` 当「发布催办器」的 hack，
+  只保留 `Engine::request_render()`；契约改为「块几何变化 => 同帧快照可见」，
+  `moving`/`resizing` 现已能如实回落（会话收尾判据可靠）。
+- **#8**：`EngineConfig` 补 `frame_latency: None`（1..=8，默认 1 跟手优先），不进风格面板。
+- **规范同步**：`.trellis/spec/guides/tauri-window-contract.md` 新增三段——玻璃块层序与 border、
+  画布 Z 序兜底、指针事件与快照契约。
+
+## 保留未动（有意为之）
+
+`revive_if_dead`（库侧建议再留一个版本周期）、`wake_canvas_idle` 双保险、
+下发前夹 `min_width/min_height`（#7 语义仍是硬下限）、`wnd_proc` Z 序不变量里的
+`raise_box`（产品语义：激活框整体在最前，与 border 无关）。
+
+## 门禁
+
+`cargo fmt --all -- --check` 干净；`cargo test` 524 passed / 0 failed；
+`cargo clippy --all-targets` 与 `cargo build` 无新增告警（基线 57 warnings 持平）。
+已核对：全仓无残留旧行为假设（等值早退 / 催发布 / DoubleClick 永不到来 / 独立叠加 pass）。
+
+## 待人工实机复验（GPU + 真实桌面，无法在 CI 覆盖）
+
+1. 两个框重叠，悬停/拖拽**下层**框边缘：白边不再出现在上层框身上。
+2. 冷启动：玻璃不再压在 Chrome/IDE 之上、控制面板不整页空白
+   （4ms 守护退役后只靠关键时机 + 100ms tick 判据，这是本轮最大回归风险点）。
+3. 双击标题只打开一次编辑框（若「开了又关」说明相位重复投递）。
+4. debug 连跑 > 5 min 不 panic；20 框最小尺寸拉满不钉死。
+
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 11: 接线 liquid-verre-rs 0.5.3：下层框亮边从「画在哪」变成「该不该亮」
+
+**Date**: 2026-11-04
+**Task**: 接线 liquid-verre-rs 0.5.3：下层框亮边从「画在哪」变成「该不该亮」
+**Branch**: `master`
+
+### Summary
+
+0.5.2->0.5.3 版本接线，业务代码零改动；在发布产物里逐处核对 topmost_body_z_at/grip_reachable/cursor_over_canvas/hover_gate_blocks 真落地；规范收口命中层序=绘制层序 + WindowFromPoint 时效语义；fmt/test 524 全绿
+
+### Main Changes
+
+## 结论
+
+库侧 0.5.3（#9 把手命中让位上层块本体 / #10 外来窗口 `WindowFromPoint` 门控 / #11 三处旧口径 +
+不变量 13「绘制层序与命中层序共用同一套 z 判据」）已 release：库仓库 `8f18a6c`、tag `v0.5.3`、
+crates.io 有 0.5.3。宿主**只接线，业务代码零改动**。
+
+## 做了什么
+
+1. `Cargo.toml` / `Cargo.lock`：`liquid-verre-rs` 0.5.2 -> 0.5.3。`EngineConfig` 无新增必填字段，
+   `cargo check --all-targets` 一次通过（0.5.2 那次需要补 `frame_latency: None`，这次没有这层摩擦）。
+2. **不轻信文档**：在实际参与编译的发布产物 `~/.cargo/registry/src/*/liquid-verre-rs-0.5.3/` 里
+   逐处核对判据是否真落地 —— `core/manager.rs:36 topmost_body_z_at`、`:53 grip_reachable`、
+   `:158 if !grip_reachable(b.z_order, top_body_z) { continue; }`、
+   `platform/window.rs:756 cursor_over_canvas` / `:776 point_i32`、
+   `runtime/mod.rs:69-70 hover_gate_blocks(pinned, cursor_on_canvas) = !pinned && !cursor_on_canvas`
+   （合取写法 + `GLASS_CURSOR_AT` 钉死绕行都在，这两条是我清单里点名的「CI 全绿但取证集体空转」风险）。
+3. 影响面排查：全仓只有 `glass_engine.rs:1388`（`debug_log_blocks`）读库侧 `WindowSnapshot::hovered`，
+   纯诊断；业务 hover（图标高亮 / 锁定 / 更多按钮）走宿主自己的 `WM_MOUSEMOVE` 命中。
+   所以「归属上移到上层块」不改变宿主行为，只让诊断日志变准。
+4. 注释口径跟进：`glass_engine.rs` 模块头「玻璃块层序」新增 0.5.3 命中同判据一段；
+   `grid_window.rs::begin_glass_resize_session` 补一句「这条争议已从画在哪变成该不该亮」。
+5. 规范收口：`.trellis/spec/guides/tauri-window-contract.md` 里那段「已知未修（等库 0.5.3 #9）」
+   整段替换为新契约，含**时效语义**（外来窗口盖上来/撤走都要动一下鼠标才生效，别拿静止鼠标当反例）、
+   禁止宿主重算层序判据、禁止 `raise_box` 抬层与 `set_resizable(false)` 两种旧绕法、
+   `hovered` 是快照（≤1 帧）不得当实时信号。
+
+## 门禁
+
+`cargo fmt --all -- --check` 干净；`cargo test` 524 passed / 0 failed；
+`cargo check --all-targets` / `cargo build` 无新增告警（47 / 57 基线持平）。
+debug 产物已重建：`target/debug/ikun_organizer.exe`。
+
+## 库侧遗留（不阻塞宿主）
+
+0.5.3 的性能结论按库里 `measurement-and-gates.md` §2 还欠一次「轮转 A/B + >=3 重复 + 中位数」
+（本轮机器明显更忙：同场景桌面重绘 110~114 次/秒 vs 0.5.2 那轮 47；`own_us` run-to-run 散布 +/-25 us）。
+若将来怀疑「拖拽时玻璃变慢」，先复测这一项，别先动宿主代码。
+
+## 待用户实机复验（本轮主诉的最终闭环）
+
+1. 两框重叠：把光标放进**上层框机身内**正好压住下层框左边缘 => 下层框**不再亮白边、手型不变缩放箭头**；
+   把同一条边缘移出上层框范围 => 立刻亮（防修过头）。
+2. 外来窗口（Chrome/IDE）盖住边缘后**动一下鼠标** => 灭边；撤走窗口后再**动一下鼠标** => 恢复。
+3. 前一轮的三项仍待复验：启动层级（4ms 守护已退役）、双击只开一次编辑框、debug 连跑 >5 min 不 panic。
+
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

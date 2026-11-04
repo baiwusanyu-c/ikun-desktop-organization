@@ -19,6 +19,19 @@
 //! 库画布必须始终位于所有分类框内容窗口之下、桌面之上。分类框被推到底部
 //! （`zorder::push_other_grids_below` / `WM_WINDOWPOSCHANGING` 干预）之后，
 //! 调用方必须跟进 `reassert_canvas_bottom()`，把画布重新压回 Z 序最底部。
+//!
+//! # 玻璃块层序（0.5.2 起由库保证）
+//! 每块玻璃的缩放反馈 border 在**该块自己的 pass 内**发射：紧跟它自己的玻璃、
+//! 早于任何更高块（库 `core::draw::border_emit_plan`）。因此两个框重叠时，下层框
+//! 的反馈白边会被上层框的玻璃正确遮挡，不再画到上层框身上（0.5.1 及以前 border
+//! 是「独立叠加 pass、盖在全部玻璃之上」）。宿主不再为 border 抬层——0.5.1 时代
+//! 的 `raise_box` 绕法实测修不了这条缺陷；块间层序只由「激活/操作谁在最前」这条
+//! 产品语义决定（见 `wnd_proc` 的 Z 序不变量跟进 `raise_box`）。
+//!
+//! 0.5.3 起**命中的层序与绘制的层序共用同一套 z 判据**（库 BASELINE 不变量 13）：`hit_resize`
+//! 会丢弃「被更上层块本体压住」的把手候选，所以上层框机身下的那条下层框边缘**根本不亮**，
+//! 也不再变缩放手型；外来窗口压在光标上时库用 `WindowFromPoint` 门控（只在光标移动过的帧查，
+//! 故灭边/恢复都要动一下鼠标）。宿主不得重算这套判据，也不要再用抬层或 `set_resizable(false)` 绕。
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
@@ -163,11 +176,6 @@ struct RouteState {
     /// 按压期间的 Move 必须转发给代理窗口，否则框选矩形/图标拖拽只能靠
     /// 100ms hover 轮询更新坐标（实测 ~10Hz，用户报「框选非常卡顿」）。
     host_pressing: bool,
-    /// 上一次 Down 的单调毫秒（0 = 无）与块内坐标：库画布没有 `CS_DBLCLKS`，
-    /// Windows 不会发 `WM_LBUTTONDBLCLK`，双击只能由 sink 自己按系统节律合成。
-    last_down_ms: u64,
-    last_down_x: i32,
-    last_down_y: i32,
 }
 
 // 库玻璃 id → 路由状态的独立登记表（输入 sink 与事件回调专用）。
@@ -189,9 +197,6 @@ fn registry_register(glass_id: u32, agent: isize) {
                 geom: None,
                 last_local: [0.0; 2],
                 host_pressing: false,
-                last_down_ms: 0,
-                last_down_x: 0,
-                last_down_y: 0,
             },
         );
     }
@@ -461,6 +466,10 @@ pub(crate) fn engine_config_from(app: &AppConfig) -> EngineConfig {
             Some(glass.engine.monitor_limit as usize)
         },
         log_level: LogLevel::Trace,
+        // 0.5.2 新增的渲染队列深度（1..=8，None = 1 跟手优先）。本项目以「光标到
+        // 光子」延迟为验收口径，不暴露到风格面板，也不设 GLASS_FRAME_LATENCY
+        // 环境变量（库侧优先级：环境变量 > 本字段 > 默认 1）。
+        frame_latency: None,
         diagnostics: DiagnosticsConfig::default(),
     }
 }
@@ -624,9 +633,10 @@ pub fn ensure_engine(app: &AppConfig) -> bool {
     });
     drop(guard);
     // 抢先压底：画布此刻还是**隐藏**窗口，但已经占在「普通带顶部」的 Z 序位次上。
-    // 趁隐藏期间先压到 HWND_BOTTOM，并起 8ms 收敛守护盯住库的首次 ShowWindow。
-    reassert_canvas_bottom();
-    spawn_bottom_guard();
+    // 0.5.2 起库显示画布走「层级 + SWP_SHOWWINDOW 同一次 SetWindowPos」
+    // （platform/window.rs::show_request），首次显示不再把画布抬进普通带；
+    // 这里压一次 + runtime tick 判据兜底足够（4ms 收敛守护已退役）。
+    press_canvas_bottom();
     true
 }
 
@@ -1044,13 +1054,11 @@ fn spawn_holder_and_reattach(
         log::error!("玻璃引擎重建收尾失败：HOLDER 锁不可用");
         return false;
     }
-    // 重建后必须把新画布重新压回 Z 序最底部：库画布「创建时置底、就绪时才
-    // ShowWindow」，而 ShowWindow 会把窗口抬到普通带顶部——旧引擎销毁→新引擎
-    // 就绪之间面板等应用窗口全被这块全屏画布压在下面，DWM 遮挡状态错乱，
+    // 重建后必须把新画布重新压回 Z 序最底部：旧引擎销毁→新引擎就绪之间，
+    // 面板等应用窗口可能被这块全屏画布压在下面，DWM 遮挡状态错乱，
     // WebView2 判定窗口被遮挡后停止绘制新暴露区域（2026-11-02 实锤：WGC↔DDA
     // 切换重建后控制面板整页空白、滚动条失灵，EnumWindows 显示画布压在面板上）。
-    reassert_canvas_bottom();
-    spawn_bottom_guard();
+    press_canvas_bottom();
     // 画布压在别的窗口之上期间，OLE 放置目标也要跟着重挂（同 attach_box 口径）。
     super::drop_target::rebind_canvas_drop_targets();
     true
@@ -1104,12 +1112,9 @@ fn is_desktop_class(hwnd: isize) -> bool {
 /// （两块画布、代理窗、tooltip/IME 伴生窗），第一个外部窗口必须是桌面
 /// （Progman/WorkerW）或者干脆没有窗口，才算「已经在底」。
 ///
-/// 这么做的理由是**成本**：跨线程 `SetWindowPos` 要等渲染线程处理一次位置变更
-/// （实测 ~10ms），旧实现因此只能 500ms 节流；而库把画布显示出来用的是
-/// `ShowWindow(SW_SHOWNOACTIVATE)`（库 `platform::window::apply_visibility`），
-/// 它会把画布抬进普通带顶部 —— 启动时「分类框盖在其他应用窗口上」平均要
-/// 250ms 才自愈（2026-11-03 EnumWindows 采样实锤：t+0.62s 画布排在 Chrome 之前，
-/// t+0.74s 才被压回）。换成 O(1) 判据后每个 tick（100ms）都能查，稳定态零成本。
+/// 这么做的理由是**成本**：下发一次层级要等库渲染线程处理一次位置变更
+/// （实测 ~10ms），所以稳定态必须零成本：只有画布**真的**被抬进普通带才下发，
+/// 并带 120ms 防抖（避免与同样把自己压到底的第三方窗口互相推搡）。
 fn canvas_at_bottom(canvas: isize) -> bool {
     const MAX_HOPS: usize = 8;
     let own = unsafe { super::ffi_imports::GetCurrentProcessId() };
@@ -1136,23 +1141,7 @@ fn canvas_at_bottom(canvas: isize) -> bool {
     true
 }
 
-/// 把各屏画布重新压回 Z 序最底部（分类框内容窗口被推底后必须跟进调用，
-/// 维持「画布 < 全部玻璃块内容窗口 < 其他应用窗口」不变量）。
-///
-/// **为什么必须自己发 SetWindowPos**：库的 `Command::SetWindowLevel` 有
-/// `if app.level == level { return false }` 早退，而 `app.level` 在建引擎时
-/// 就已经是 `AlwaysOnBottom`（EngineConfig 里传的），所以宿主反复调
-/// `set_window_level(AlwaysOnBottom)` 是**空操作**；画布却在「创建时置底、
-/// 首帧就绪才 ShowWindow」时被抬进普通带顶部 —— 2026-11-03 实测 EnumWindows
-/// 序列里画布排在 Chrome 窗口之前，玻璃整层盖住其他应用窗口（用户报的启动层级）。
-///
-/// 成本口径：先用 [`canvas_at_bottom`] 做 O(1) 判定，**只有真的被抬起来才**发
-/// 跨线程 `SetWindowPos`（一次 ~10ms），并带 120ms 防抖；因此本函数可以每个
-/// tick（100ms）都调，拖拽/`WM_WINDOWPOSCHANGING` 里也不会拖慢节奏。
-/// 返回 `(画布总数, 被抬进普通带的画布)`。
-///
-/// 拆出来是为了让压底守护能区分「已经稳定在底部」和「画布还没创建出来」——
-/// 后者不能算稳定，否则守护会在库首次 ShowWindow（实测 t+0.6s）之前就提前收工。
+/// 画布位次判据：`(画布总数, 被抬进普通带的画布)`。稳定态只走 O(1) 的 GetWindow。
 fn canvas_bottom_state() -> (usize, Vec<isize>) {
     let canvases = canvas_hwnds();
     let stuck: Vec<isize> = canvases
@@ -1163,72 +1152,6 @@ fn canvas_bottom_state() -> (usize, Vec<isize>) {
     (canvases.len(), stuck)
 }
 
-/// 检查并（必要时）把画布压回底部。返回 `(画布总数, 被抬起并已修正的画布数)`。
-///
-/// 返回画布总数是为了让调用方（压底守护）能区分「稳定在底部」与
-/// 「画布还没创建出来」——后者绝不能算稳定，否则守护会在库首次
-/// `ShowWindow`（实测启动后 ~0.6s）之前提前收工。
-fn reassert_canvas_bottom_once() -> (usize, usize) {
-    static NEXT_PUSH_MS: AtomicU64 = AtomicU64::new(0);
-    static NEXT_LOG_MS: AtomicU64 = AtomicU64::new(0);
-    let (count, stuck) = canvas_bottom_state();
-    if stuck.is_empty() {
-        return (count, 0);
-    }
-    let now = now_ms();
-    // 120ms 防抖：避免与「同样把自己压到底的第三方窗口」互相推搡。
-    if now < NEXT_PUSH_MS.load(Ordering::Relaxed) {
-        return (count, stuck.len());
-    }
-    NEXT_PUSH_MS.store(now + 120, Ordering::Relaxed);
-    for &hwnd in &stuck {
-        unsafe {
-            super::ffi_imports::SetWindowPos(
-                hwnd as *mut std::ffi::c_void,
-                super::ffi_types::HWND_BOTTOM,
-                0,
-                0,
-                0,
-                0,
-                super::ffi_types::SWP_NOMOVE
-                    | super::ffi_types::SWP_NOSIZE
-                    | super::ffi_types::SWP_NOACTIVATE,
-            );
-        }
-    }
-    if now >= NEXT_LOG_MS.load(Ordering::Relaxed) {
-        NEXT_LOG_MS.store(now + 1000, Ordering::Relaxed);
-        log::info!(
-            "画布层级修正：{} 块画布被抬进了普通带，已压回 Z 序底部（启动/重建/显示器变化后的正常现象）",
-            stuck.len()
-        );
-    }
-    (count, stuck.len())
-}
-
-/// 把各屏画布压回 Z 序底部（对外入口，见 `reassert_canvas_bottom_once`）。
-pub fn reassert_canvas_bottom() {
-    reassert_canvas_bottom_once();
-    // 层级记账同步（幂等；即便库内部等值早退也无害）。
-    if let Ok(guard) = HOLDER.lock() {
-        if let Some(holder) = guard.as_ref() {
-            if holder.engine.is_running() {
-                holder.engine.set_window_level(WindowLevel::AlwaysOnBottom);
-            }
-        }
-    }
-}
-
-/// 启动 / 重建后的「压底收敛守护」：8ms 节奏复查画布位次，直到连续稳定。
-///
-/// 为什么不能只靠 runtime tick（100ms）：库显示画布用的是
-/// `ShowWindow(SW_SHOWNOACTIVATE)`（库 `platform::window::apply_visibility`），
-/// 它会把画布抬进普通带顶部；100ms 兜底意味着启动时**最多 100ms、实测均值
-/// ~120ms** 玻璃整层压在 Chrome 等窗口之上（2026-11-03 EnumWindows 采样：
-/// t+0.66s COVER / t+0.78s 恢复）。判据本身是 O(1) 的 `GetWindow` 走几步，
-/// 稳定态零成本，所以可以高频跑；真正的跨线程 `SetWindowPos` 仍有 120ms 防抖。
-/// 根治办法在库侧（把 `apply_visibility` 换成 `level::apply(..., visible=true)`），
-/// 已登记进 0.5.2 清单。
 /// 取证用：把当前能拿到的画布句柄打成十六进制串。
 fn canvases_hex() -> String {
     canvas_hwnds()
@@ -1238,53 +1161,66 @@ fn canvases_hex() -> String {
         .join(",")
 }
 
-fn spawn_bottom_guard() {
-    const DEADLINE_MS: u64 = 8_000;
-    const STEP_MS: u64 = 4;
-    /// 连续多少拍「画布存在且没被抬起来」才算稳定：4ms x 80 = 320ms。
-    const STABLE_TICKS: u32 = 80;
-
-    static GUARD_RUNNING: AtomicBool = AtomicBool::new(false);
-    if GUARD_RUNNING.swap(true, Ordering::SeqCst) {
-        return; // 已有守护在跑，不叠加线程
-    }
-    let spawned = std::thread::Builder::new()
-        .name("ikun-canvas-bottom-guard".into())
-        .spawn(move || {
-            let began = now_ms();
-            let mut stable = 0u32;
-            let mut saw_canvas = false;
-            // 一次性取证日志：确认 `canvas_hwnds()` 到底能不能拿到画布。
-            // 拿不到就意味着宿主所有「压回底部」的兜底都是空转（必须先修这条）。
-            let mut probe_logged = false;
-            while now_ms().saturating_sub(began) < DEADLINE_MS {
-                let (count, lifted) = reassert_canvas_bottom_once();
-                if count > 0 {
-                    saw_canvas = true;
-                    if !probe_logged {
-                        log::info!(
-                            "[z序取证] 画布 {count} 块，本轮抬起 {lifted} 块（hwnd={}）",
-                            canvases_hex()
-                        );
-                        probe_logged = true;
-                    }
-                }
-                if lifted == 0 && saw_canvas {
-                    stable += 1;
-                    if stable >= STABLE_TICKS {
-                        break;
-                    }
-                } else {
-                    stable = 0;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(STEP_MS));
+/// 走库 API 把全部画布压回 Z 序底部（0.5.2 起等值调用也会重发层级）。
+///
+/// 0.5.1 时代这条调用是**空操作**（库 `Command::SetWindowLevel` 有等值早退，
+/// 而 `EngineConfig.window_level` 建引擎时已是 `AlwaysOnBottom`），宿主只能自己
+/// 拿 `canvas_handle` 发 `SetWindowPos(HWND_BOTTOM)`。0.5.2 去掉早退后
+/// （#3：等值也重发一次 SetWindowPos，但不发事件、不重建金字塔），
+/// 层级下发统一交回库，宿主侧那条裸 SetWindowPos 路径整体退役。
+fn apply_canvas_bottom_level() {
+    if let Ok(guard) = HOLDER.lock() {
+        if let Some(holder) = guard.as_ref() {
+            if holder.engine.is_running() {
+                holder.engine.set_window_level(WindowLevel::AlwaysOnBottom);
             }
-            GUARD_RUNNING.store(false, Ordering::SeqCst);
-        });
-    if spawned.is_err() {
-        GUARD_RUNNING.store(false, Ordering::SeqCst);
-        log::warn!("画布压底守护线程创建失败，回退 100ms tick 兜底");
+        }
     }
+}
+
+/// 判据驱动的压底：只有画布真的被抬起来才下发层级，带 120ms 防抖。
+///
+/// 返回 `(画布总数, 被抬起并已修正的画布数)`，供日志与复验脚本读取。
+fn reassert_canvas_bottom_once() -> (usize, usize) {
+    static NEXT_PUSH_MS: AtomicU64 = AtomicU64::new(0);
+    static NEXT_LOG_MS: AtomicU64 = AtomicU64::new(0);
+    let (count, stuck) = canvas_bottom_state();
+    if stuck.is_empty() {
+        return (count, 0);
+    }
+    let now = now_ms();
+    if now < NEXT_PUSH_MS.load(Ordering::Relaxed) {
+        return (count, stuck.len());
+    }
+    NEXT_PUSH_MS.store(now + 120, Ordering::Relaxed);
+    apply_canvas_bottom_level();
+    if now >= NEXT_LOG_MS.load(Ordering::Relaxed) {
+        NEXT_LOG_MS.store(now + 1_000, Ordering::Relaxed);
+        log::info!(
+            "画布层级修正：{} 块画布被抬进了普通带，已请库重发底部层级（hwnd={}）",
+            stuck.len(),
+            canvases_hex()
+        );
+    }
+    (count, stuck.len())
+}
+
+/// 把各屏画布压回 Z 序底部（对外入口：runtime tick 与「内容窗口被推底后」
+/// 的跟进点用它——判据 + 防抖，稳定态零成本）。
+pub fn reassert_canvas_bottom() {
+    reassert_canvas_bottom_once();
+}
+
+/// 关键时机（引擎启动 / 重建、`Ready`、`MonitorsChanged`、新建块显示）无条件
+/// 请库压一次底部，再补一轮判据日志。
+///
+/// 0.5.1 时代这里还挂着 4ms「压底收敛守护」线程盯库的首次 `ShowWindow`（它会把
+/// 画布抬进普通带顶部，实测 t+0.66s 压在 Chrome 上）。0.5.2 把显示与层级合进
+/// 同一次 `SetWindowPos`（#2 `show_request`）后那条守护整体退役，留下的兜底是：
+/// 这几个关键时机 + runtime 100ms tick 的判据复查。
+pub fn press_canvas_bottom() {
+    apply_canvas_bottom_level();
+    reassert_canvas_bottom_once();
 }
 
 /// 轮询引擎事件队列并转入项目日志系统（runtime tick 调用）。
@@ -1307,17 +1243,16 @@ pub fn poll_events_to_log() {
         match event {
             EngineEvent::Ready { monitor_count } => {
                 log::info!("玻璃引擎就绪，参与渲染的显示器数量: {monitor_count}");
-                // 画布是「创建时置底、首帧就绪才 ShowWindow」，ShowWindow 会把
-                // 窗口抬到普通带顶部 → 必须立刻压回底部，否则全屏画布压在面板等
-                // 应用窗口之上（2026-11-02 控制面板整页空白的根因，见
+                // 画布是「创建时置底、首帧就绪才显示」。0.5.2 起库把显示与层级
+                // 合进同一次 SetWindowPos，不再从底部弹起来；这里仍无条件压一次
+                // 兜底（等值调用现在也会重发层级），避免全屏画布压在面板等应用
+                // 窗口之上（2026-11-02 控制面板整页空白的根因，见
                 // spawn_holder_and_reattach 注释）。
-                reassert_canvas_bottom();
-                spawn_bottom_guard();
+                press_canvas_bottom();
             }
             EngineEvent::MonitorsChanged { monitor_count } => {
                 log::info!("显示器集合变化，画布与采集已重建，显示器数量: {monitor_count}");
-                reassert_canvas_bottom();
-                spawn_bottom_guard();
+                press_canvas_bottom();
             }
             EngineEvent::WindowCreated { id } => {
                 log::debug!("玻璃块已创建: id={id}");
@@ -1525,47 +1460,6 @@ fn agent_screen_pos(agent: isize, lx: i32, ly: i32) -> (i32, i32) {
     }
 }
 
-/// 系统双击时间窗口（ms）；查询失败退到 500ms。
-fn double_click_window_ms() -> u64 {
-    let ms = unsafe { super::ffi_imports::GetDoubleClickTime() };
-    if ms == 0 {
-        500
-    } else {
-        u64::from(ms)
-    }
-}
-
-/// 双击位置容差（物理像素）。系统给的是以首按为中心的矩形（`SM_C?DOUBLECLK`
-/// 逻辑像素），块内坐标是物理像素，按窗口 DPI 放大。
-fn double_click_slop_px(dpi: u32) -> i32 {
-    let cx = unsafe { super::ffi_imports::GetSystemMetrics(52) }; // SM_CXDOUBLECLK
-    let cy = unsafe { super::ffi_imports::GetSystemMetrics(53) }; // SM_CYDOUBLECLK
-    let logical = (cx.max(cy) / 2).max(2);
-    let scale = f64::from(dpi.max(96)) / 96.0;
-    (f64::from(logical) * scale).round() as i32
-}
-
-/// 双击判定（纯函数，可单测）：`prev` 是上一次 Down 的 `(单调ms, x, y)`。
-///
-/// 与 Win32 语义一致：两次按压间隔 <= `window_ms`，且落点仍在以首按为中心的
-/// `slop` 矩形内，才判为双击。
-#[must_use]
-fn is_double_click(
-    prev: Option<(u64, i32, i32)>,
-    now_ms: u64,
-    x: i32,
-    y: i32,
-    window_ms: u64,
-    slop: i32,
-) -> bool {
-    let Some((prev_ms, prev_x, prev_y)) = prev else {
-        return false;
-    };
-    now_ms.saturating_sub(prev_ms) <= window_ms
-        && (prev_x - x).abs() <= slop
-        && (prev_y - y).abs() <= slop
-}
-
 /// 向代理窗口投递「双击」消息。
 ///
 /// 标题区走 `WM_NCLBUTTONDBLCLK(HTCAPTION)`（编辑分类框，纯自绘处理，
@@ -1671,7 +1565,7 @@ impl GlassInputSink for HostSink {
 
 fn route_pointer(id: u32, ev: &PointerEvent) -> InputDecision {
     // 锁内只做状态更新与取快照；锁外 PostMessage（非阻塞、任意线程合法）。
-    let (agent, title_h, double_click, hand_off_move, pressing) = {
+    let (agent, title_h, hand_off_move, pressing) = {
         let Ok(mut map) = ROUTES.lock() else {
             return InputDecision::Ignored;
         };
@@ -1682,40 +1576,10 @@ fn route_pointer(id: u32, ev: &PointerEvent) -> InputDecision {
         let title_h = route.geom.map(|g| g.title_h);
         let lx = ev.block_local[0] as i32;
         let ly = ev.block_local[1] as i32;
-        // 库画布窗口类只注册了 CS_CLASSDC（无 CS_DBLCLKS）→ Windows 不发
-        // WM_LBUTTONDBLCLK → 库的 DoubleClick 相位永远不来（2026-10-28 日志
-        // 实锤：用户双击标题只得到两组独立 Down/Up）。这里按系统双击节律
-        // （GetDoubleClickTime + SM_C?DOUBLECLK 容差）自行合成。
-        let mut double_click = false;
-        if matches!(ev.phase, PointerPhase::Down) {
-            let now = now_ms();
-            let slop = route
-                .geom
-                .map(|g| double_click_slop_px(g.dpi))
-                .unwrap_or(16);
-            // 按钮热区不参与双击：在锁定/更多按钮上连点两次是「切换 + 再切换」，
-            // 绝不能被合成成「标题双击 = 打开编辑框」。
-            let on_button = route.geom.is_some_and(|g| in_title_buttons(&g, lx, ly));
-            let prev = if route.last_down_ms == 0 || on_button {
-                None
-            } else {
-                Some((route.last_down_ms, route.last_down_x, route.last_down_y))
-            };
-            if is_double_click(prev, now, lx, ly, double_click_window_ms(), slop) {
-                double_click = true;
-                // 一次双击只认一次，避免三连击被当成两次双击。
-                route.last_down_ms = 0;
-            } else {
-                route.last_down_ms = now;
-                route.last_down_x = lx;
-                route.last_down_y = ly;
-            }
-        }
         // 标题空白按压（未锁定、不在按钮上）→ 让位给库的 movable 会话，由库逐帧
         // 应用光标位移（README：不需要改拖拽位置的块返回 DragMove）。宿主自己
         // 接管实测只有 ~45Hz，原因见 block_config_for 注释。
         let hand_off_move = matches!(ev.phase, PointerPhase::Down)
-            && !double_click
             && route
                 .geom
                 .is_some_and(|g| down_routes_title_drag(&g, lx, ly));
@@ -1736,7 +1600,7 @@ fn route_pointer(id: u32, ev: &PointerEvent) -> InputDecision {
             _ => {}
         }
         let pressing = route.host_pressing;
-        (route.agent, title_h, double_click, hand_off_move, pressing)
+        (route.agent, title_h, hand_off_move, pressing)
     };
     if agent == 0 {
         return InputDecision::Ignored;
@@ -1786,10 +1650,6 @@ fn route_pointer(id: u32, ev: &PointerEvent) -> InputDecision {
                 log::debug!("[glass-dbg] sink 让位给库移动会话 id={id} local=({lx},{ly})");
                 return InputDecision::DragMove;
             }
-            if double_click {
-                unsafe { post_double_click(agent, title_h.is_some_and(|th| ly < th), lx, ly) };
-                return InputDecision::Consumed;
-            }
             unsafe {
                 PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, pack_lparam(lx, ly));
             }
@@ -1809,7 +1669,8 @@ fn route_pointer(id: u32, ev: &PointerEvent) -> InputDecision {
                 InputDecision::Consumed
             }
         },
-        // 库若某天补上 CS_DBLCLKS，这条真相位与上面的合成走同一个投递口。
+        // 0.5.2 起库画布类带 CS_DBLCLKS，物理双击走这条真相位：Windows 到的是
+        // Down → Up → DoubleClick → Up（第二次按下**不再**产生 Down）。
         PointerPhase::DoubleClick => {
             unsafe { post_double_click(agent, title_h.is_some_and(|th| ly < th), lx, ly) };
             InputDecision::Consumed
@@ -1954,24 +1815,19 @@ pub fn maybe_log_session_stats() {
     );
 }
 
-/// 会话期催库出帧 + 催库重新发布快照。
+/// 会话期催库出帧（将跟随拍数与库帧率对齐）。
 ///
-/// 快照发布是 `snapshot_dirty || 每 250ms`（库 `runtime/mod.rs`），而库自己的
-/// 移动/缩放会话改块几何时**不置 `snapshot_dirty`** → 宿主读到的 `rect` 只有 4Hz，
-/// 内容纹理跟着卡成 3~4Hz（用户看到「玻璃边缘在动、按钮/图标换行一卡一卡」）。
-/// `Engine::request_render()` 只置渲染位不置脏；`set_default_resize` 是唯一
-/// 「置脏、但不碰任何块也不触发重渲染」的公开 setter（库 `commands.rs` 里它
-/// 返回 false），拿它当发布催办器。所有块都带显式 `resize`，改默认值无副作用。
-/// 库侧根治口径：会话改几何时置 `snapshot_dirty`（0.5.2），届时本函数可简化。
+/// 0.5.1 时代这里还要顺手调一次 `set_default_resize` 当「快照发布催办器」：
+/// 那时库的移动/缩放会话改块几何**不置** `snapshot_dirty`，宿主读到的 `rect` 只有
+/// 兜底档 ~4Hz，内容纹理跟着卡成 3~4Hz（用户看到「玻璃边缘在动、图标一卡一卡」）。
+/// 0.5.2 起库的契约是**块几何变化 ⇒ 同帧快照可见**，催发布随之退役；`moving`/
+/// `resizing` 也已接进快照比对键（#4 连带修正），会话收尾判据不会再卡在 true。
 pub fn request_render() {
-    if let Ok(mut guard) = HOLDER.lock() {
-        if let Some(holder) = guard.as_mut() {
-            if !holder.engine.is_running() {
-                return;
+    if let Ok(guard) = HOLDER.lock() {
+        if let Some(holder) = guard.as_ref() {
+            if holder.engine.is_running() {
+                holder.engine.request_render();
             }
-            holder.engine.request_render();
-            let default_resize = resize_options_from(&holder.style_cfg.resize);
-            holder.engine.set_default_resize(default_resize);
         }
     }
 }
@@ -2202,39 +2058,6 @@ mod tests {
             !down_routes_title_drag(&locked, 100, 20),
             "锁定时不接管拖拽"
         );
-    }
-
-    #[test]
-    fn double_click_needs_two_presses_in_time_and_place() {
-        // 间隔内 + 容差内 = 双击；超时、跑偏或没有前一次按压 = 单击。
-        assert!(is_double_click(
-            Some((1_000, 100, 40)),
-            1_300,
-            104,
-            43,
-            500,
-            8
-        ));
-        assert!(!is_double_click(None, 1_300, 104, 43, 500, 8));
-        assert!(!is_double_click(
-            Some((1_000, 100, 40)),
-            1_601,
-            100,
-            40,
-            500,
-            8
-        ));
-        assert!(!is_double_click(
-            Some((1_000, 100, 40)),
-            1_300,
-            109,
-            40,
-            500,
-            8
-        ));
-        // 高 DPI 下容差按 DPI 放大（逻辑像素 -> 物理像素），不会把 200% 屏的
-        // 正常两次点击误判成双击，也不会把手抖判成两次单击。
-        assert!(double_click_slop_px(192) >= double_click_slop_px(96));
     }
 
     #[test]

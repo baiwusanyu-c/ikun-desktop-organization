@@ -66,6 +66,41 @@ Rust `on_window_event` 和前端 `installHideOnClose` 双重拦截；托盘/信�
 ## 液态玻璃引擎帧（liquid-verre-rs）
 
 液态玻璃由 `liquid-verre-rs` 引擎（`src/platform/windows/glass_engine.rs` 适配层）在独立渲染线程持续采集/合成；平台层不得自行启动第二个采集器或把玻璃像素画回内容 DIB。分类框内容窗口只是玻璃之上的前景层。
+
+### 玻璃块层序与缩放反馈 border（库 >= 0.5.2）
+
+- 库在逐块 pass 内发射 border：第 i 块的反馈白边紧跟它自己的玻璃，**早于任何更高块**（库 `core::draw::border_emit_plan`）。
+- 因此两个分类框重叠时，**下层框的 border 会被上层框的玻璃正确遮挡**，不再画到上层框身上。平台层不得为了「让正在操作的框白边永远可见」而额外抬升玻璃块：0.5.1 时代 `begin_glass_resize_session` 里的 `raise_box` 绕法实测修不了该缺陷，已退役。
+- 块抬前只允许由「激活/操作中的框整体在最前」这条产品语义触发，链路是 `wnd_proc` 的 Z 序不变量 → `glass_engine::raise_box`。
+
+**命中层序与绘制层序共用同一套 z 判据（库 >= 0.5.3，#9 / #10；库内 BASELINE 不变量 13）**
+
+- `hit_resize` 带「更上层块本体遮挡」过滤（判据 `topmost_body_z_at` + `grip_reachable`，本体矩形口径与
+  `hit_test` 逐字一致）。四个调用点（每帧 hover、`WM_NCHITTEST`、`dispatch_pointer`、`forward_move_to_sink`）
+  共用这一处判据 ⇒ **被上层框机身压住的那段边缘，归属整个上移到上层框**：下层框不再亮白边、不再变
+  缩放手型，`WM_NCHITTEST` 也不再在属于上层框的像素上声称命中。
+- 外来窗口（Chrome/IDE 等）压在光标上时，库用 `WindowFromPoint` 门控清空 hover / 手型。
+  **该门控只在「光标移动过」的帧查询** ⇒ 窗口盖上来要动一下鼠标才灭边，撤走也要动一下鼠标才恢复。
+  **复验时不要拿静止鼠标当反例。**
+- 归属变化的连带效果：依赖「hover 落在哪块」的 UI 现在读到的是**正确的上层块**。平台层目前只有
+  `debug_log_blocks()` 读 `WindowSnapshot::hovered`（纯诊断）；业务 hover（图标高亮/按钮态）仍由宿主自己的
+  `WM_MOUSEMOVE` 命中判定负责，两套判据互不覆盖，不要在宿主侧重算块层序。
+- **禁止**两种旧绕法：为消亮边而 `raise_box` 抬层（用篡改叠放掩盖命中判错，鼠标移回去还得改回来）、
+  `set_resizable(false)`（会连该边缘**未被遮挡**的那段一起关掉，且与真实缩放会话抢状态）。
+  **同样禁止**宿主自己实现一份遮挡/层序判据 —— 块 z 序与本体矩形只有库掌握，重算必然与库漂移。
+- `WindowSnapshot::hovered` 自 0.5.3 起进快照比对键，诊断日志的 `hovered=` 不再陈旧；但它仍是快照
+  （最坏滞后 1 帧），不得当实时信号驱动状态机。
+
+### 画布 Z 序兜底（库 >= 0.5.2）
+
+- 库把画布的**显示与层级合进同一次** `SetWindowPos`（`show_request`），并且 `Engine::set_window_level` 等值调用也会重发层级，所以平台层不再自己拿 `canvas_handle` 发 `HWND_BOTTOM`，也不再跑 4ms 高频压底守护线程。
+- 关键时机（引擎启动 / 引擎重建 / `Ready` / `MonitorsChanged` / 新建块显示后）调用 `glass_engine::press_canvas_bottom()`；其余位置（runtime 100ms tick、内容窗口被推底之后）调用判据 + 120ms 防抖的 `glass_engine::reassert_canvas_bottom()`。
+- 复验判据不变：启动 12s 内画布低于所有其他应用窗口的采样占比应为 100%；若出现「控制面板整页空白」，先查这条链路。
+
+### 指针事件与快照契约（库 >= 0.5.2）
+
+- 双击：库画布类已带 `CS_DBLCLKS`，物理双击到达 sink 的序列是 `Down -> Up -> DoubleClick -> Up`，**第二次按下不再产生 Down**。sink 侧禁止再自行按 `GetDoubleClickTime` 合成双击（会与真相位重复投递）。
+- 快照：块几何变化 ⇒ **同帧**快照可见，会话位 `moving`/`resizing` 也会如实回落。跟随内容窗口时直接读 `GlassWindow::snapshot()`，不得再用 `set_default_resize` 之类「催发布」hack。
 DXGI 初始化阶段可能返回平均 RGB 接近 `(1,1,1)` 的不透明占位黑帧；渲染器最多跳过前三帧，并由
 `src/platform/windows/d2d_render.rs` 使用白色半透明回退，取得真实桌面帧后立即缓存。单帧捕获失败继续使用上一成功帧。
 

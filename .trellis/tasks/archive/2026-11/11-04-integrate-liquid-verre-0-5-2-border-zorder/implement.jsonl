@@ -1,0 +1,5 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend development guide"}
+{"file": ".trellis/spec/backend/windows-platform-guidelines.md", "reason": "玻璃画布 Z 序与窗口层级属于 Windows 平台层约定"}
+{"file": "src/platform/windows/glass_engine.rs", "reason": "引擎接入唯一入口：层级压底/双击/会话催发布绕行都在此"}
