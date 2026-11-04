@@ -196,11 +196,10 @@ pub const WM_EXITSIZEMOVE: u32 = 0x0232;
 pub const WM_MOVING: u32 = 0x0216;
 pub const WM_SIZING: u32 = 0x0214;
 pub const TIMER_ID_ALIGNMENT: usize = 0x4F56_0003;
-/// Timer ID for overlay hover polling (clears hover state when cursor leaves icon area via alpha=0 pixels)
-pub const TIMER_ID_OVERLAY_HOVER: usize = 0x4F56_0004;
+// 0x4F56_0004 / 0x4F56_0006：覆盖层悬停/框选定时器 ID，随 2026-11 自检审计
+// 删除孤儿 desktop_overlay 模块一并移除；编号保留占位说明，勿复用。
 /// 分类框液态玻璃刷新定时器（约 30 FPS）
 pub const TIMER_ID_LIQUID_GLASS: usize = 0x4F56_0005;
-pub const TIMER_ID_OVERLAY_MARQUEE: usize = 0x4F56_0006;
 
 // ===== Hit Test Constants =====
 pub const HTCLIENT: i32 = 1;
@@ -281,8 +280,6 @@ pub const HC_ACTION: i32 = 0;
 pub const WM_APP: u32 = 0x8000;
 pub const WM_USER_SHOW_DESKTOP_MENU: u32 = WM_APP + 1;
 pub const WM_USER_OPEN_MENU: u32 = WM_APP + 2; // 延迟打开分类框菜单
-pub const WM_USER_DELETE_BOX: u32 = WM_APP + 3; // 延迟删除分类框（从菜单 PostMessage 触发）
-pub const WM_USER_REFRESH_OVERLAY: u32 = WM_APP + 4; // 桌面文件变化后刷新覆盖窗口
 pub const WM_QUIT: u32 = 0x0012;
 pub const WM_COMMAND: u32 = 0x0111;
 pub const WM_CREATE: u32 = 0x0001;
@@ -687,17 +684,14 @@ pub const WM_USER_GRID_REDRAW: u32 = WM_APP + 23;
 pub const WM_USER_GLASS_RESIZE: u32 = WM_APP + 25;
 /// 库 FocusHint 转发：宿主代理窗口在自己线程上 SetFocus 自己（同线程调用必成）
 pub const WM_USER_GLASS_FOCUS: u32 = WM_APP + 26;
+/// 玻璃引擎重建完成广播：各分类框重新发布命中几何、失效内容缓存并向新块
+/// 重推全量内容（2026-11-04 自检审计 P1：重建/复活后状态不恢复）。
+pub const WM_USER_GLASS_REBUILT: u32 = WM_APP + 27;
 /// 鼠标按键状态标志（合成消息 wparam 用，与 Win32 MK_* 同值）
 pub const MK_LBUTTON: usize = 0x0001;
 pub const MK_RBUTTON: usize = 0x0002;
 
 pub const WM_USER_CUT_FILE_MOVED: u32 = WM_APP + 17;
-/// 通知覆盖窗口：外部文件拖拽放置完成（由 overlay IDropTarget PostMessage 触发）
-pub const WM_USER_OVERLAY_DROP: u32 = WM_APP + 18;
-pub const WM_USER_OVERLAY_LBUTTONDOWN: u32 = WM_APP + 19; // 鼠标钩子转发的覆盖区域左键按下
-pub const WM_USER_OVERLAY_LBUTTONUP: u32 = WM_APP + 20;
-pub const WM_USER_DEFERRED_INGEST: u32 = WM_APP + 21; // 异步文件收入仓库（避免阻塞 OLE 回调）
-                                                      // 鼠标钩子转发的覆盖区域左键释放
 
 /// 拖拽项信息（用于框间拖拽数据传递）
 #[derive(Debug, Clone)]

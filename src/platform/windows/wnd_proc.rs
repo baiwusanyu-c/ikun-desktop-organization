@@ -17,10 +17,6 @@
 use super::d2d_render::render_layered_window;
 use super::ffi_imports::*;
 
-extern "system" {
-    fn GetKeyState(nVirtKey: i32) -> i16;
-}
-const VK_LBUTTON: i32 = 0x01;
 use super::ffi_types::*;
 use super::grid_layout::{
     grid_hit_test, lock_btn_rect, more_btn_rect, recalculate_layout, reflow_items,
@@ -47,11 +43,6 @@ thread_local! {
     static PROPOSED_X: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
     static PROPOSED_Y: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
 }
-
-thread_local! { static DRAG_HWND: std::cell::Cell<HWND> = const { std::cell::Cell::new(std::ptr::null_mut()) }; }
-thread_local! { static CUSTOM_MOVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
-thread_local! { static GRAB_DX: std::cell::Cell<i32> = const { std::cell::Cell::new(0) }; }
-thread_local! { static GRAB_DY: std::cell::Cell<i32> = const { std::cell::Cell::new(0) }; }
 
 fn window_dpi(hwnd: HWND) -> u32 {
     let dpi = unsafe { GetDpiForWindow(hwnd) };
@@ -84,28 +75,16 @@ fn content_point_from_lparam(hwnd: HWND, lparam: LPARAM) -> (i32, i32) {
     client_to_content_point_with_padding(padding, client_x, client_y)
 }
 
-/// Screen point -> content-layer point, using the SAME transform as the
-/// message path (`content_point_from_lparam`).
+/// 消息 → 内容层坐标（全 handler 统一口径）。
 ///
-/// The marquee timer must go through this. Sampling with
-/// `GetCursorPos() - get_grid_content_rect()` skips the client->content
-/// padding step, so the timer and the forwarded WM_MOUSEMOVE wrote two
-/// different coordinate systems (measured 12px apart at 200% DPI). Each tick
-/// the selection rect was snapped between the two values -- that is the
-/// 'rect keeps trembling while dragging' report (2026-11-03 log evidence:
-/// `move cur=(461,252)` immediately followed by `timer -> (449,240)`).
-/// Marquee-only coordinate conversion, in *content-layer truth* space.
-///
-/// In engine mode the forwarded lparam is already block-local, and the block
-/// rect equals the content rect, so running it through
-/// `content_point_from_lparam` (which assumes client-relative coordinates) adds
-/// the invisible-window-frame delta -- measured 12px at 200% DPI. That made the
-/// selection rect sit 12px down-right of the cursor, while the drag timer
-/// sampled the true position: the two writers alternated and the rect jumped
-/// 12px every tick ('the marquee trembles while dragging', 2026-11-03 logs
-/// `move (1162,652) lp=(1150,640)` vs `timer (1150,640)`).
-/// Item hit-testing keeps using the legacy conversion untouched.
-fn marquee_content_point(hwnd: HWND, lparam: LPARAM) -> (i32, i32) {
+/// 引擎模式下代理窗收到的鼠标消息几乎全部由 `glass_engine` sink 合成，
+/// lparam 已经是块（= 内容矩形）局部坐标；再走 `content_point_from_lparam`
+/// 的 client→content 换算会多加一个不可见边框偏移（200% DPI 实测 12px）：
+/// hover 高亮、图标/锁定/更多按钮、双击与右键命中整体向右下偏移
+/// （2026-11-04 自检审计 P1，与框选颤抖同根因——旧修复只改了 marquee 一条路径，
+/// 注释里「item hit-testing keeps using the legacy conversion」的写法已被推翻）。
+/// 回退模式（无玻璃块）消息是真实 client 坐标，仍走原换算。
+fn message_content_point(hwnd: HWND, lparam: LPARAM) -> (i32, i32) {
     let engine = unsafe { get_data(hwnd) }
         .map(|d| super::glass_engine::is_active() && super::glass_engine::has_box(d.config_id))
         .unwrap_or(false);
@@ -114,6 +93,11 @@ fn marquee_content_point(hwnd: HWND, lparam: LPARAM) -> (i32, i32) {
     } else {
         content_point_from_lparam(hwnd, lparam)
     }
+}
+
+/// 历史入口：框选坐标与其余鼠标消息现在共用同一判定（保留名字减少调用点改动）。
+fn marquee_content_point(hwnd: HWND, lparam: LPARAM) -> (i32, i32) {
+    message_content_point(hwnd, lparam)
 }
 
 pub(crate) fn content_point_from_screen(hwnd: HWND, screen: POINT) -> (i32, i32) {
@@ -174,7 +158,7 @@ fn handle_shell_menu_result(
 
     match result {
         ShellMenuResult::Cancelled | ShellMenuResult::Dismissed => {}
-        ShellMenuResult::Completed(_) => {
+        ShellMenuResult::Completed => {
             // Check if file still exists after shell operation
             remove_grid_item_if_missing_after_shell_menu(hwnd, file_path);
         }
@@ -303,7 +287,7 @@ fn handle_multi_shell_menu_result(hwnd: HWND, response: super::shell_menu::Multi
                 super::icon_hider::cleanup_staging(p);
             }
         }
-        ShellMenuResult::Completed(_) => {
+        ShellMenuResult::Completed => {
             // 注意：不清理 staging！复制操作的文件可能仍在剪贴板上，
             // 用户后续粘贴时需要 staging 文件存在。
             // 这与单选版本 handle_shell_menu_result 的行为一致。
@@ -662,13 +646,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             if IN_DRAG.get() {
                 return 0;
             }
-            // 接管式移动会话（SetCapture 后真实 move 到达）：同样跳过悬停逻辑。
-            if let Some(data) = get_data(hwnd) {
-                if data.box_drag_active {
-                    return 0;
-                }
-            }
-            let (mx, my) = content_point_from_lparam(hwnd, lparam);
+            let (mx, my) = message_content_point(hwnd, lparam);
 
             // Phase 1: 拖拽阈值检测（超过阈值 → 创建覆盖窗口 + SetCapture）
             if super::drag_handler::check_drag_threshold(hwnd, mx, my) {
@@ -893,7 +871,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
 
         // ===== 鼠标左键：编辑模式按钮 + 锁定按钮 + "更多"按钮 + 图标选中 =====
         WM_LBUTTONDOWN => {
-            let (click_x, click_y) = content_point_from_lparam(hwnd, lparam);
+            let (click_x, click_y) = message_content_point(hwnd, lparam);
             let mut need_rerender = false;
 
             // 获取窗口尺寸和 DPI
@@ -930,7 +908,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             // 拖拽**不在这里起**：库的契约是「sink 返回 Consumed 接管拖拽，
             // Down 记锚点，序列内每次 Move 用 set_rect 驱动」（120Hz，与库会话
             // 同等延迟）。几何推进在 `glass_engine::route_pointer` 里完成，
-            // 宿主只通过 `WM_USER_GLASS_DRAG_SYNC` 跟随落位（参考线 + 落盘）。
+            // 宿主在玻璃会话收尾与 WM_WINDOWPOSCHANGED 里跟随落位（参考线 + 落盘）。
             // 旧写法（本处调 begin_box_drag + 8ms 定时器轮询光标）节拍被
             // Windows 定时器粒度卡在 ~54Hz，就是用户看到的「移动时图标掉帧」。
             if !lock_clicked && !more_clicked {
@@ -1099,7 +1077,6 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                         if !super::multi_select::is_selected(key) {
                             super::multi_select::clear();
                             super::multi_select::add(key);
-                            super::multi_select::set_anchor(Some(key));
                         }
                         data.shift_anchor = hit;
                         data.selected_item = hit;
@@ -1132,10 +1109,6 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                         data.selected_item = -1;
                         need_rerender = true;
                     }
-                    // Kill any existing hover timer to prevent interference
-                    unsafe {
-                        KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER);
-                    }
                     // Start marquee (SetTimer for tracking mouse release outside window)
                     data.marquee_active = true;
                     // 起点与后续 MOVE/定时器补采样必须同系，否则首拍就跳 12px。
@@ -1164,7 +1137,7 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
 
         // ===== 鼠标左键双击：标题栏进入名称编辑 / 图标打开文件 =====
         WM_LBUTTONDBLCLK => {
-            let (click_x, click_y) = content_point_from_lparam(hwnd, lparam);
+            let (click_x, click_y) = message_content_point(hwnd, lparam);
 
             if let Some(data) = get_data(hwnd) {
                 let Some(wr) = get_grid_content_rect(hwnd) else {
@@ -1280,12 +1253,16 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
 
-        // ===== 失去焦点：取消名称编辑 =====
+        // ===== 代理窗失去焦点：故意不做任何事 =====
+        // 重命名编辑窗（独立线程、合法抢焦点）打开时代理窗必然收到本消息，
+        // 在这里「取消名称编辑」会立刻误杀正在进行的编辑；编辑收尾由
+        // rename_editor 自己的 WM_USER_QUIT_EDIT/结果消息闭环（2026-11-04
+        // 自检审计：旧注释与实现不符，实现是对的）。
         WM_KILLFOCUS => 0,
 
         // ===== 鼠标右键：弹出上下文菜单（支持多选） =====
         WM_RBUTTONUP => {
-            let (click_x, click_y) = content_point_from_lparam(hwnd, lparam);
+            let (click_x, click_y) = message_content_point(hwnd, lparam);
 
             // 检查多选状态
             let multi_count = super::multi_select::count();
@@ -1507,14 +1484,6 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         }
         WM_DESTROY => {
             KillTimer(hwnd, TIMER_ID_LIQUID_GLASS);
-            // 接管式移动会话未收尾即销毁时释放捕获（保存由整体退出路径负责）。
-            if let Some(data) = get_data(hwnd) {
-                if data.box_drag_active {
-                    unsafe {
-                        ReleaseCapture();
-                    }
-                }
-            }
             let data_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GridWindowData;
             if !data_ptr.is_null() {
                 let mut data = Box::from_raw(data_ptr);
@@ -1559,6 +1528,34 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             0
         }
 
+        // ===== 玻璃引擎重建完成（DPI 热插拔 / 引擎配置变化 / 自动复活）=====
+        // 重建后库侧块句柄全新：ROUTES 命中几何对新块是 None、内容纹理为空，
+        // 宿主必须重新发布几何并失效内容缓存强制重推，否则玻璃块只剩底板、
+        // 标题拖拽与按钮手型退化（2026-11-04 自检审计 P1）。
+        WM_USER_GLASS_REBUILT => {
+            if let Some(data) = get_data(hwnd) {
+                data.content_valid = false;
+                if super::glass_engine::has_box(data.config_id) {
+                    let (cw, _ch) = get_grid_content_rect(hwnd)
+                        .map(|r| (r.right - r.left, r.bottom - r.top))
+                        .unwrap_or((0, 0));
+                    let dpi_now = unsafe { GetDpiForWindow(hwnd) };
+                    let dpi_now = if dpi_now > 0 { dpi_now } else { 96 };
+                    super::glass_engine::update_block_geom(
+                        data.config_id,
+                        super::glass_engine::BlockGeom {
+                            win_w: cw,
+                            title_h: data.title_h,
+                            dpi: dpi_now,
+                            locked: data.locked,
+                        },
+                    );
+                }
+            }
+            render_layered_window(hwnd);
+            0
+        }
+
         // ===== 库 FocusHint 转发：同线程 SetFocus（代理窗全透明但可见，合法可聚焦）=====
         WM_USER_GLASS_FOCUS => {
             // 例外：这次按压已经把焦点交给了模态 UI（三点菜单 / 图标就地重命名）。
@@ -1599,7 +1596,6 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 // 标志位还没置上的那几拍里反推一次，就会把库的会话锚点搞脏
                 // （实测：光标 (+220,+130) 拖出 (+315,+32) 的落位）。
                 if !data.glass_session_active
-                    && !data.box_drag_active
                     && super::glass_engine::is_active()
                     && super::glass_engine::has_box(data.config_id)
                     && !super::glass_engine::block_in_session(data.config_id)
@@ -1625,10 +1621,12 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
 
-        // ===== 延迟打开菜单（由 PostMessage 触发，用于菜单互斥切换）=====
+        // ===== 延迟销毁参考线 overlay（wParam = 发起时的会话 generation）=====
         WM_USER_DESTROY_GUIDE => {
-            // 延迟销毁全屏参考线 overlay：释放全屏分层窗与 DIB（约 50MB+）。
-            super::alignment_guide::destroy_guide_overlay();
+            // 释放全屏分层窗与 DIB（约 50MB+）。带 generation 校验：旧会话
+            // 排队过来的销毁消息不得杀掉新会话正在使用的 overlay
+            // （2026-11-04 自检审计 P2：跨会话生命周期竞态）。
+            super::alignment_guide::handle_destroy_guide(wparam);
             0
         }
         WM_USER_OPEN_MENU => {
@@ -1636,52 +1634,9 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             0
         }
 
-        // ===== 延迟删除分类框（由菜单 PostMessage 触发，在消息循环正常调度时处理）=====
-        WM_USER_DELETE_BOX => {
-            // 先读取 config_id 和 title（窗口销毁前）
-            let (config_id, title) = get_data(hwnd)
-                .map(|d| (d.config_id, d.title.clone()))
-                .unwrap_or((uuid::Uuid::nil(), String::new()));
-            log::info!("删除分类框: '{}' (id={})", title, config_id);
-
-            // 销毁窗口（从全局列表移除 + DestroyWindow）
-            super::grid_window::destroy_grid_window(hwnd);
-
-            // 按 UUID 精确删除配置中的一条记录
-            match crate::config::AppConfig::load() {
-                Ok(mut config) => {
-                    let before = config.layout.boxes.len();
-                    config.layout.boxes.retain(|b| b.id != config_id);
-                    let after = config.layout.boxes.len();
-                    if let Err(e) = config.save() {
-                        log::warn!("删除分类框后保存配置失败: {}", e);
-                    } else {
-                        log::info!("已删除分类框 '{}'，配置: {} → {} 个", title, before, after);
-                    }
-                }
-                Err(e) => {
-                    log::warn!("加载配置失败，跳过配置更新: {}", e);
-                }
-            }
-
-            // 刷新桌面覆盖窗口：删除分类框后，其包含的图标变为“非管理”状态，
-            // 需要重新收集并显示在覆盖窗口上（纵向优先布局）
-            // 还原仓库中不再被任何剩余分类框管理的图标到桌面
-            super::icon_hider::restore_unmanaged_vault_icons();
-            // 修复同模板分层窗口 Z-order 异常（DestroyWindow 副作用）
-            super::grid_window::rerender_all_grid_windows();
-
-            0
-        }
-
-        // ===== 鼠标左键释放：完成自定义拖拽 / 取消拖拽检测 =====
+        // ===== 鼠标左键释放：结束框选 =====
         WM_LBUTTONUP => {
             if let Some(data) = get_data(hwnd) {
-                // 接管式移动会话收尾（真实捕获 up 或 posted up 均到达此处）。
-                if data.box_drag_active {
-                    super::grid_window::end_box_drag(hwnd);
-                    return 0;
-                }
                 if data.marquee_active {
                     let ctrl_down = unsafe { GetAsyncKeyState(VK_CONTROL) } & 0x8000u16 as i16 != 0;
                     data.marquee_active = false;
@@ -1784,8 +1739,10 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
 
         // ===== 跨框拖拽覆盖可视化更新 =====
         WM_USER_DRAG_OVER_UPDATE => {
-            let screen_x = (lparam as i32) & 0xFFFF;
-            let screen_y = ((lparam as i32) >> 16) & 0xFFFF;
+            // 符号扩展修复（自检审计 P2）：副屏在主屏左/上方时屏幕坐标为负，
+            // 旧写法把低 16 位当无符号解，x=-100 会变成 65436。
+            let screen_x = get_x_lparam(lparam);
+            let screen_y = get_y_lparam(lparam);
             super::drag_handler::handle_cross_box_drag_over(hwnd, screen_x, screen_y);
             0
         }
@@ -1829,12 +1786,6 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                     );
                 }
             }
-            0
-        }
-
-        // ===== 异步文件收入仓库（避免阻塞 OLE 回调导致鼠标释放慢）=====
-        WM_USER_DEFERRED_INGEST => {
-            super::drag_drop::process_deferred_ingests();
             0
         }
 
@@ -1915,7 +1866,6 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         // ===== Enter move/resize mode: start alignment detection =====
         WM_ENTERSIZEMOVE => {
             IN_DRAG.set(true);
-            DRAG_HWND.with(|c| c.set(hwnd));
             super::alignment_guide::on_enter_size_move(hwnd);
             // 引擎架构下这里不再切换宿主重绘档位：玻璃动画由库渲染线程
             // 全权驱动；标题栏拖拽只负责移动窗口 + WM_MOVING 同步块矩形，
@@ -1926,7 +1876,6 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         // ===== Exit move/resize mode: clear guide lines =====
         WM_EXITSIZEMOVE => {
             IN_DRAG.set(false);
-            DRAG_HWND.with(|c| c.set(std::ptr::null_mut()));
             IN_MOVE.set(false); // 重置移动标记
             super::alignment_guide::on_exit_size_move(hwnd);
             // Save layout after move/resize

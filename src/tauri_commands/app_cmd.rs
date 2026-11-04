@@ -44,16 +44,9 @@ pub fn quit_app(runtime: State<'_, SharedTauriRuntime>) -> Result<(), String> {
 /// Get primary monitor resolution
 #[tauri::command]
 pub async fn get_screen_resolution() -> Result<(u32, u32), String> {
-    #[cfg(target_os = "windows")]
-    {
-        use crate::platform::get_screen_resolution as platform_get_resolution;
-        let (width, height) = platform_get_resolution();
-        Ok((width as u32, height as u32))
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        Ok((1920, 1080)) // Fallback
-    }
+    use crate::platform::get_screen_resolution as platform_get_resolution;
+    let (width, height) = platform_get_resolution();
+    Ok((width as u32, height as u32))
 }
 
 #[cfg(test)]

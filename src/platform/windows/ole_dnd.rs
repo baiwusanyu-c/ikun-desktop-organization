@@ -816,6 +816,442 @@ unsafe fn build_hglobal_from_bytes(data: &[u8]) -> Option<HGLOBAL> {
     Some(hglobal)
 }
 
+// 2026-11-04 自检审计：STGMEDIUM 读取/释放与 Shell 数据边界校验集中在本模块，
+// 避免 drop_target.rs 超过单文件行数上限；调用方仍只消费解析后的安全数据。
+// windows crate 的高层 ReleaseStgMedium 受 Win32_System_Com_StructuredStorage
+// feature 门控；本任务不允许改 Cargo.toml，故用 windows::core::link! 绑定同一
+// ole32!ReleaseStgMedium 符号，STGMEDIUM ABI 与 Win32::System::Com 保持一致。
+windows::core::link!("ole32.dll" "system" fn ReleaseStgMedium(pmedium: *mut STGMEDIUM));
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn GlobalSize(h_mem: HGLOBAL) -> usize;
+}
+
+// 2026-11-04 自检审计：所有成功 GetData 的 STGMEDIUM 都交给 RAII 统一释放，
+// 由 OLE 按 tymed 与 pUnkForRelease 做正确结算，避免手工 GlobalFree 漏释放或误释放。
+struct StgMediumGuard {
+    medium: *mut STGMEDIUM,
+}
+
+impl Drop for StgMediumGuard {
+    fn drop(&mut self) {
+        unsafe {
+            ReleaseStgMedium(self.medium);
+        }
+    }
+}
+
+struct GlobalLockGuard {
+    h_global: HGLOBAL,
+    ptr: *mut c_void,
+}
+
+impl GlobalLockGuard {
+    unsafe fn lock(h_global: HGLOBAL) -> Option<Self> {
+        let ptr = GlobalLock(h_global);
+        if ptr.is_null() {
+            None
+        } else {
+            Some(Self { h_global, ptr })
+        }
+    }
+}
+
+impl Drop for GlobalLockGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = GlobalUnlock(self.h_global);
+        }
+    }
+}
+
+unsafe fn pidl_within_bounds(base: *const u8, offset: usize, size: usize) -> bool {
+    let mut position = offset;
+    loop {
+        let Some(item_id_end) = position.checked_add(2) else {
+            return false;
+        };
+        if item_id_end > size {
+            return false;
+        }
+        let cb = std::ptr::read_unaligned(base.add(position) as *const u16) as usize;
+        if cb == 0 {
+            return true;
+        }
+        if cb < 2 {
+            return false;
+        }
+        let Some(next) = position.checked_add(cb) else {
+            return false;
+        };
+        if next > size {
+            return false;
+        }
+        position = next;
+    }
+}
+
+pub(crate) unsafe fn read_drop_files(data_obj: *mut c_void) -> Vec<String> {
+    const MAX_DROP_FILE_CHARS: usize = 64 * 1024;
+
+    if data_obj.is_null() {
+        return Vec::new();
+    }
+    let vtbl = *(data_obj as *const *const IDataObjectVtbl);
+    let fe = FORMATETC {
+        cf_format: CF_HDROP,
+        ptd: std::ptr::null_mut(),
+        dw_aspect: DVASPECT_CONTENT,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL,
+    };
+    let mut medium = STGMEDIUM {
+        tymed: 0,
+        h_global: std::ptr::null_mut(),
+        unk_for_release: std::ptr::null_mut(),
+    };
+    if ((*vtbl).get_data)(data_obj, &fe, &mut medium) != S_OK {
+        return Vec::new();
+    }
+    let _medium_guard = StgMediumGuard {
+        medium: &mut medium,
+    };
+    if medium.tymed != TYMED_HGLOBAL as u32 || medium.h_global.is_null() {
+        log::warn!("[DROP] CF_HDROP medium 类型无效: tymed={:#X}", medium.tymed);
+        return Vec::new();
+    }
+
+    let size = GlobalSize(medium.h_global);
+    if size < std::mem::size_of::<DROPFILES>() {
+        log::warn!("[DROP] CF_HDROP GlobalSize 过小: {}", size);
+        return Vec::new();
+    }
+    let Some(lock) = GlobalLockGuard::lock(medium.h_global) else {
+        log::warn!("[DROP] CF_HDROP GlobalLock 失败");
+        return Vec::new();
+    };
+
+    let dropfiles = std::ptr::read_unaligned(lock.ptr as *const DROPFILES);
+    if dropfiles.f_wide == 0 {
+        // 2026-11-04 自检审计：ANSI DROPFILES 不静默返回空列表，明确拒绝并记录。
+        log::warn!("[DROP] CF_HDROP 为 ANSI 格式（f_wide=0），明确拒绝");
+        return Vec::new();
+    }
+
+    let header_size = std::mem::size_of::<DROPFILES>();
+    let files_offset = dropfiles.p_files as usize;
+    if files_offset < header_size || files_offset >= size || !files_offset.is_multiple_of(2) {
+        log::warn!(
+            "[DROP] CF_HDROP p_files 越界或未对齐: offset={}, size={}",
+            files_offset,
+            size
+        );
+        return Vec::new();
+    }
+
+    let mut paths = Vec::new();
+    let mut offset = files_offset;
+    let mut terminated = false;
+    let mut total_chars = 0usize;
+    while offset <= size.saturating_sub(2) {
+        let mut byte_len = 0usize;
+        let mut found_terminator = false;
+        while offset.saturating_add(byte_len).saturating_add(2) <= size {
+            let code_unit = std::ptr::read_unaligned(
+                (lock.ptr as *const u8).add(offset + byte_len) as *const u16,
+            );
+            if code_unit == 0 {
+                found_terminator = true;
+                break;
+            }
+            byte_len += 2;
+            total_chars += 1;
+            if total_chars > MAX_DROP_FILE_CHARS {
+                log::warn!("[DROP] CF_HDROP 字符串总量超过上限，拒绝继续读取");
+                return Vec::new();
+            }
+        }
+        if !found_terminator {
+            log::warn!("[DROP] CF_HDROP 字符串缺少终止符，拒绝越界读取");
+            break;
+        }
+        if byte_len == 0 {
+            terminated = true;
+            break;
+        }
+        let units = (0..byte_len / 2)
+            .map(|index| {
+                std::ptr::read_unaligned(
+                    (lock.ptr as *const u8).add(offset + index * 2) as *const u16
+                )
+            })
+            .collect::<Vec<_>>();
+        if let Ok(path) = String::from_utf16(&units) {
+            if !path.is_empty() {
+                paths.push(path);
+            }
+        }
+        offset += byte_len + 2;
+    }
+    if !terminated {
+        log::warn!("[DROP] CF_HDROP 列表未以双 NUL 结束，已丢弃不完整结果");
+        paths.clear();
+    }
+    paths
+}
+
+/// 从 IDataObject 读取 Shell IDList 格式的 PIDL，提取虚拟 Shell 对象的 CLSID 路径。
+///
+/// 当从桌面拖拽回收站、此电脑等虚拟对象时，CF_HDROP 为空，
+/// 需要从 CFSTR_SHELLIDLIST 格式读取 PIDL，然后通过 SHGetFileInfoW + SHGFI_PIDL
+/// 获取显示名称，再映射到已知的 CLSID 路径。
+pub(crate) unsafe fn read_shell_idlist_paths(data_obj: *mut c_void) -> Vec<String> {
+    const MAX_CIDL: u32 = 4096;
+
+    if data_obj.is_null() {
+        return Vec::new();
+    }
+
+    let fmt_name: Vec<u16> = "Shell IDList Array\0".encode_utf16().collect();
+    let cf_shellidlist = super::ffi_imports::RegisterClipboardFormatW(fmt_name.as_ptr());
+    if cf_shellidlist == 0 {
+        log::warn!("[PIDL] RegisterClipboardFormat 失败");
+        return Vec::new();
+    }
+
+    let vtbl = *(data_obj as *const *const IDataObjectVtbl);
+    let fe = FORMATETC {
+        cf_format: cf_shellidlist,
+        ptd: std::ptr::null_mut(),
+        dw_aspect: DVASPECT_CONTENT,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL,
+    };
+    let mut medium = STGMEDIUM {
+        tymed: 0,
+        h_global: std::ptr::null_mut(),
+        unk_for_release: std::ptr::null_mut(),
+    };
+    if ((*vtbl).get_data)(data_obj, &fe, &mut medium) != S_OK {
+        log::debug!("[PIDL] 无 CFSTR_SHELLIDLIST 数据");
+        return Vec::new();
+    }
+    let _medium_guard = StgMediumGuard {
+        medium: &mut medium,
+    };
+    if medium.tymed != TYMED_HGLOBAL as u32 || medium.h_global.is_null() {
+        log::warn!(
+            "[PIDL] Shell IDList medium 类型无效: tymed={:#X}",
+            medium.tymed
+        );
+        return Vec::new();
+    }
+
+    let size = GlobalSize(medium.h_global);
+    if size < 4 {
+        log::warn!("[PIDL] GlobalSize 过小: {}", size);
+        return Vec::new();
+    }
+    let Some(lock) = GlobalLockGuard::lock(medium.h_global) else {
+        log::warn!("[PIDL] GlobalLock 失败");
+        return Vec::new();
+    };
+
+    let cidl = std::ptr::read_unaligned(lock.ptr as *const u32);
+    if cidl > MAX_CIDL {
+        log::warn!("[PIDL] cidl={} 超过安全上限 {}", cidl, MAX_CIDL);
+        return Vec::new();
+    }
+    let table_entries = match (cidl as usize).checked_add(1) {
+        Some(value) => value,
+        None => return Vec::new(),
+    };
+    let table_bytes = match table_entries.checked_mul(std::mem::size_of::<u32>()) {
+        Some(value) => value,
+        None => return Vec::new(),
+    };
+    let table_end = match 4usize.checked_add(table_bytes) {
+        Some(value) if value <= size => value,
+        _ => {
+            log::warn!(
+                "[PIDL] 偏移表越界: cidl={}, table_end={}, size={}",
+                cidl,
+                table_bytes.saturating_add(4),
+                size
+            );
+            return Vec::new();
+        }
+    };
+    let offsets = (0..table_entries)
+        .map(|index| {
+            std::ptr::read_unaligned((lock.ptr as *const u8).add(4 + index * 4) as *const u32)
+                as usize
+        })
+        .collect::<Vec<_>>();
+
+    log::info!(
+        "[PIDL] CIDA cidl={}, offsets={:?}",
+        cidl,
+        &offsets[..std::cmp::min(offsets.len(), 5)]
+    );
+
+    #[repr(C)]
+    struct ShellFileInfo {
+        h_icon: *mut std::ffi::c_void,
+        i_icon: i32,
+        dw_attributes: u32,
+        sz_display_name: [u16; 260],
+        sz_type_name: [u16; 80],
+    }
+    const SHGFI_PIDL: u32 = 0x00000008;
+    const SHGFI_DISPLAYNAME: u32 = 0x00000200;
+
+    extern "system" {
+        fn SHGetFileInfoW(
+            pszPath: *const u8,
+            dwFileAttributes: u32,
+            psfi: *mut ShellFileInfo,
+            cbFileInfo: u32,
+            uFlags: u32,
+        ) -> usize;
+    }
+
+    let known_objects: &[(&str, &str)] = &[
+        ("回收站", "::{645FF040-5081-101B-9F08-00AA002F954E}"),
+        ("此电脑", "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"),
+        ("网络", "::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}"),
+        ("控制面板", "::{5399E694-6CE5-4D6C-8FCE-1D8870FDCBA0}"),
+    ];
+
+    let mut paths = Vec::new();
+    for i in 1..=cidl as usize {
+        let Some(&pidl_offset) = offsets.get(i) else {
+            break;
+        };
+        if pidl_offset < table_end || pidl_offset >= size {
+            log::warn!(
+                "[PIDL] 第 {} 个 PIDL 偏移越界: offset={}, table_end={}, size={}",
+                i,
+                pidl_offset,
+                table_end,
+                size
+            );
+            continue;
+        }
+        if !pidl_within_bounds(lock.ptr as *const u8, pidl_offset, size) {
+            log::warn!("[PIDL] 第 {} 个 PIDL 缺少有界终止符，已跳过", i);
+            continue;
+        }
+        let pidl = (lock.ptr as *const u8).add(pidl_offset);
+
+        let mut info = ShellFileInfo {
+            h_icon: std::ptr::null_mut(),
+            i_icon: 0,
+            dw_attributes: 0,
+            sz_display_name: [0u16; 260],
+            sz_type_name: [0u16; 80],
+        };
+        let result = SHGetFileInfoW(
+            pidl,
+            0,
+            &mut info,
+            std::mem::size_of::<ShellFileInfo>() as u32,
+            SHGFI_PIDL | SHGFI_DISPLAYNAME,
+        );
+
+        if result != 0 {
+            let name_len = info
+                .sz_display_name
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(0);
+            let display_name = String::from_utf16_lossy(&info.sz_display_name[..name_len]);
+            log::info!("[PIDL] 解析到显示名称: {}", display_name);
+
+            let mut found = false;
+            for (known_name, clsid) in known_objects {
+                if display_name == *known_name {
+                    paths.push(clsid.to_string());
+                    log::info!("[PIDL] 映射到 CLSID: {} -> {}", display_name, clsid);
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                log::warn!("[PIDL] 未找到 {} 对应的 CLSID 映射", display_name);
+            }
+        } else {
+            log::warn!("[PIDL] SHGetFileInfoW 失败, offset={}", pidl_offset);
+        }
+    }
+    log::info!(
+        "[PIDL] 最终解析到 {} 个虚拟 Shell 对象: {:?}",
+        paths.len(),
+        paths
+    );
+    paths
+}
+
+pub(crate) unsafe fn read_box_drag_data(
+    data_obj: *mut c_void,
+    fmt_id: u32,
+) -> Option<IkunBoxDragData> {
+    const MAX_BOX_DRAG_JSON_BYTES: usize = 64 * 1024;
+
+    if data_obj.is_null() || fmt_id == 0 {
+        return None;
+    }
+    let vtbl = *(data_obj as *const *const IDataObjectVtbl);
+    let fe = FORMATETC {
+        cf_format: fmt_id,
+        ptd: std::ptr::null_mut(),
+        dw_aspect: DVASPECT_CONTENT,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL,
+    };
+    let mut medium = STGMEDIUM {
+        tymed: 0,
+        h_global: std::ptr::null_mut(),
+        unk_for_release: std::ptr::null_mut(),
+    };
+    if ((*vtbl).get_data)(data_obj, &fe, &mut medium) != S_OK {
+        return None;
+    }
+    let _medium_guard = StgMediumGuard {
+        medium: &mut medium,
+    };
+    if medium.tymed != TYMED_HGLOBAL as u32 || medium.h_global.is_null() {
+        log::warn!(
+            "[DROP] IkunBoxDragData medium 类型无效: tymed={:#X}",
+            medium.tymed
+        );
+        return None;
+    }
+
+    let size = GlobalSize(medium.h_global);
+    if size == 0 || size > MAX_BOX_DRAG_JSON_BYTES {
+        log::warn!("[DROP] IkunBoxDragData 大小非法: {}", size);
+        return None;
+    }
+    let Some(lock) = GlobalLockGuard::lock(medium.h_global) else {
+        log::warn!("[DROP] IkunBoxDragData GlobalLock 失败");
+        return None;
+    };
+
+    let bytes = lock.ptr as *const u8;
+    let mut len = 0usize;
+    // 2026-11-04 自检审计：先判上界再解引用，避免恶意/损坏 medium 造成越界扫描。
+    while len < size && std::ptr::read_unaligned(bytes.add(len)) != 0 {
+        len += 1;
+    }
+    if len == size {
+        log::warn!("[DROP] IkunBoxDragData 缺少 NUL 终止符，拒绝解析");
+        return None;
+    }
+    serde_json::from_slice::<IkunBoxDragData>(std::slice::from_raw_parts(bytes, len)).ok()
+}
+
 // =============================================================================
 // 公共 API
 // =============================================================================
@@ -832,10 +1268,9 @@ unsafe fn build_hglobal_from_bytes(data: &[u8]) -> Option<HGLOBAL> {
 ///
 /// # 返回值
 ///
-/// 返回实际执行的拖拽效果：
-/// - `DROPEFFECT_MOVE` (2): 文件被移动（拖到桌面或另一个框）
-/// - `DROPEFFECT_NONE` (0): 拖拽被取消
-/// 返回 true 表示 drop 成功 (DRAGDROP_S_DROP)，false 表示取消
+/// 2026-11-04 自检审计：OLE 侧只协商 COPY；框间移动由自定义载荷与
+/// WM_USER_DRAG_ITEM_REMOVED 消息显式驱动，避免 Shell 因 MOVE 重复删除源文件。
+/// 返回 true 表示 drop 成功 (DRAGDROP_S_DROP)，false 表示取消。
 pub fn start_box_drag(
     file_paths: Vec<String>,
     box_drag_data: IkunBoxDragData,

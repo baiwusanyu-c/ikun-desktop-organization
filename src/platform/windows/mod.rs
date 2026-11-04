@@ -18,6 +18,7 @@
 
 pub mod alignment_guide;
 pub mod app_icon;
+pub mod config_writeback;
 mod d2d_render;
 pub mod desktop_manager;
 pub mod desktop_utils;
@@ -60,7 +61,7 @@ pub use drop_target::{
 #[allow(unused_imports)] // 公共 API 预留
 pub use ffi_types::{IkunBoxDragData, IkunDragItemData};
 #[allow(unused_imports)]
-pub use global_hotkey::{setup_global_hotkey, take_hotkey_toggle, unregister_global_hotkey};
+pub use global_hotkey::{setup_global_hotkey, take_hotkey_toggle};
 #[allow(unused_imports)] // 公共 API 预留
 pub use grid_window::{
     collect_grid_layout, create_grid_window, destroy_all_grid_windows, get_grid_count,
@@ -75,10 +76,7 @@ pub use icon_hider::{
 #[allow(unused_imports)] // 公共 API 预留
 pub use icon_manager::DesktopIconManager;
 #[allow(unused_imports)] // 公共 API 预留
-pub use monitor_utils::{
-    get_cursor_monitor_work_area_phys, get_primary_monitor_dpi, get_primary_monitor_work_area_phys,
-    get_screen_resolution, reposition_and_resize_window, reposition_window_by_title,
-};
+pub use monitor_utils::{get_primary_monitor_dpi, get_screen_resolution};
 #[allow(unused_imports)] // 公共 API 预留
 pub use ole_dnd::{get_box_drag_format_id, start_box_drag};
 #[allow(unused_imports)] // 公共 API 预留
@@ -98,7 +96,6 @@ pub use zorder::{find_grid_window_at_point, push_other_grids_below, set_drag_in_
 
 #[allow(unused_imports)] // multi_select public API
 pub use multi_select::{
-    add, add_range, all_keys, anchor, clear, container_id_from_uuid, count, count_in_container,
-    has_selection, is_selected, remove, selected_in_container, selected_paths_in_container,
-    set_anchor, set_range, toggle, ContainerType, SelectionKey,
+    add, all_keys, clear, container_id_from_uuid, count, is_selected, selected_in_container,
+    toggle, ContainerType, SelectionKey,
 };

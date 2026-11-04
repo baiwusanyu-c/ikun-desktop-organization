@@ -14,6 +14,13 @@
 - 成功保存配置后必须调用 `TauriRuntime::replace_config`，同步 `ctx.config` 与依赖分类规则创建的 `ctx.classifier`。
 - 禁止在普通更新命令中重新 `AppConfig::load()` 并维护第二份状态；`load_config` 是用户显式要求从磁盘重载时的唯一例外。
 - 互斥锁中毒返回中文错误，不得 `unwrap()` 导致 Tauri 事件循环崩溃。
+- **平台线程写配置的唯一入口**：`platform/windows/config_writeback.rs::write_platform_config`。
+  拖拽收尾、覆盖层图标位置、菜单删除分类框等场景过去直接 `AppConfig::load()` → 改字段 → `save()`，
+  绕开内存真源；`config_cmd` 随后从陈旧内存整文件回写就会冲掉平台新写入的字段（2026-11-04 自检审计 P0：
+  布局丢失、被删框复活）。钩子由 `start_platform_runtime` 启动时注入（依赖倒置，平台层不得引用
+  tauri_commands）；钩子未注入的早期路径退回「读磁盘最新快照后改写」，**加载失败必须跳过写入，
+  绝不允许用默认配置覆盖用户配置**。AI 分类重建分类框后必须同锁把 `collect_grid_layout()` 回写
+  内存 + 落盘。
 
 ## IPC 契约
 
@@ -97,7 +104,30 @@ Rust `on_window_event` 和前端 `installHideOnClose` 双重拦截；托盘/信�
 - 关键时机（引擎启动 / 引擎重建 / `Ready` / `MonitorsChanged` / 新建块显示后）调用 `glass_engine::press_canvas_bottom()`；其余位置（runtime 100ms tick、内容窗口被推底之后）调用判据 + 120ms 防抖的 `glass_engine::reassert_canvas_bottom()`。
 - 复验判据不变：启动 12s 内画布低于所有其他应用窗口的采样占比应为 100%；若出现「控制面板整页空白」，先查这条链路。
 
+### 引擎重建/复活的最低恢复清单（2026-11-04 自检审计 P1）
+
+引擎重建（DPI 热插拔、引擎级配置变化、自动复活）会让库侧块句柄全部作废。
+`spawn_holder_and_reattach` 成功后必须广播 `WM_USER_GLASS_REBUILT`（`grid_window::notify_glass_rebuilt_all()`），
+每个分类框在**自己线程**完成三件事，缺一不可：
+
+1. 重新发布命中几何 `update_block_geom`（ROUTES 对新块初始为 `geom: None`，
+   漏发则标题拖拽/按钮手型判定退化）；
+2. 置 `content_valid = false` 并触发一次全量重绘（库纹理已空，漏发则玻璃块只剩底板）；
+3. DPI 换算使用重建元组里的 `old_ratio`（不得回读已清空的全局 HOLDER，历史上因此换算从未生效）。
+
+其余强制口径：缩放最小下限的托底夹取只有 `clamped_resize_options` 一个实现，
+`block_config_for`/`apply_settings`/`set_box_locked` 三个入口共用（漏一处 = 锁定再解锁就把框钉死）；
+重建入口有 `REBUILDING` 单飞；死亡判定必须连续两拍 `is_running()==false`（防误杀刚启动的引擎）。
+
 ### 指针事件与快照契约（库 >= 0.5.2）
+
+- **sink 合成消息的坐标空间**：`glass_engine` 输入路由投递给代理窗口的
+  `WM_MOUSEMOVE/LBUTTONDOWN/LBUTTONUP/LBUTTONDBLCLK/RBUTTONUP` 的 lparam 是
+  **块（= 内容矩形）局部坐标**，不是代理窗 client 坐标。消费端一律经
+  `wnd_proc::message_content_point()` 统一换算（引擎模式直取、回退模式走
+  `ClientToScreen` 链路）；任何新 handler 直接对合成消息用
+  `content_point_from_lparam` 都会在 200% DPI 下偏移一个不可见边框（实测 12px，
+  2026-11-04 自检审计 P1：旧修复只覆盖了 marquee 一条路径）。
 
 - 双击：库画布类已带 `CS_DBLCLKS`，物理双击到达 sink 的序列是 `Down -> Up -> DoubleClick -> Up`，**第二次按下不再产生 Down**。sink 侧禁止再自行按 `GetDoubleClickTime` 合成双击（会与真相位重复投递）。
 - 快照：块几何变化 ⇒ **同帧**快照可见，会话位 `moving`/`resizing` 也会如实回落。跟随内容窗口时直接读 `GlassWindow::snapshot()`，不得再用 `set_default_resize` 之类「催发布」hack。

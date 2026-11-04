@@ -88,8 +88,8 @@ pub enum ShellMenuResult {
     Cancelled,
     /// Menu was shown successfully but user dismissed it without selecting an item
     Dismissed,
-    /// Shell operation completed (verb name if known)
-    Completed(Option<String>),
+    /// Shell operation completed
+    Completed,
     /// User selected rename - needs custom handling
     NeedsRename(String), // file_path
     /// User selected cut - needs monitoring
@@ -488,7 +488,7 @@ fn try_windows_crate_multi_context_menu(hwnd: HWND, paths: &[String]) -> ShellMe
                                     if let Err(e) = cm.InvokeCommand(&invoke(verb_ordinal)) {
                                         log::warn!("[多选菜单] InvokeCommand: {:?}", e);
                                     }
-                                    ShellMenuResult::Completed(Some(verb))
+                                    ShellMenuResult::Completed
                                 }
                             };
                             for pidl in &full_pidls {
@@ -513,7 +513,7 @@ fn try_windows_crate_multi_context_menu(hwnd: HWND, paths: &[String]) -> ShellMe
                 for pidl in &full_pidls {
                     let _ = ILFree(Some(*pidl));
                 }
-                ShellMenuResult::Completed(None)
+                ShellMenuResult::Completed
             }
             Err(e) => {
                 log::warn!("[多选菜单] GetUIObjectOf 失败: {:?}", e);
@@ -732,7 +732,7 @@ fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResul
                                     if let Err(e) = cm.InvokeCommand(&invoke_info) {
                                         log::warn!("InvokeCommand failed: {:?}", e);
                                     }
-                                    ShellMenuResult::Completed(Some(verb))
+                                    ShellMenuResult::Completed
                                 }
                             };
                             return result;
@@ -747,7 +747,7 @@ fn try_windows_crate_context_menu(hwnd: HWND, file_path: &str) -> ShellMenuResul
                 DestroyMenu(menu);
                 drop(cm); // Release COM object
                 let _ = ILFree(Some(full_pidl));
-                ShellMenuResult::Completed(None)
+                ShellMenuResult::Completed
             }
             Err(e) => {
                 log::warn!("windows crate: GetUIObjectOf 失败: {:?}", e);
@@ -801,7 +801,7 @@ fn show_shell_fallback_menu(hwnd: HWND, file_path: &str) -> ShellMenuResult {
                     std::ptr::null(),
                     SW_SHOW,
                 );
-                ShellMenuResult::Completed(Some("open".to_string()))
+                ShellMenuResult::Completed
             }
             2 => {
                 let op: Vec<u16> = "explore\0".encode_utf16().collect();
@@ -813,7 +813,7 @@ fn show_shell_fallback_menu(hwnd: HWND, file_path: &str) -> ShellMenuResult {
                     std::ptr::null(),
                     SW_SHOW,
                 );
-                ShellMenuResult::Completed(Some("explore".to_string()))
+                ShellMenuResult::Completed
             }
             3 => {
                 let op: Vec<u16> = "runas\0".encode_utf16().collect();
@@ -825,7 +825,7 @@ fn show_shell_fallback_menu(hwnd: HWND, file_path: &str) -> ShellMenuResult {
                     std::ptr::null(),
                     SW_SHOW,
                 );
-                ShellMenuResult::Completed(Some("runas".to_string()))
+                ShellMenuResult::Completed
             }
             4 => {
                 let op: Vec<u16> = "delete\0".encode_utf16().collect();
@@ -849,9 +849,9 @@ fn show_shell_fallback_menu(hwnd: HWND, file_path: &str) -> ShellMenuResult {
                     std::ptr::null(),
                     SW_SHOW,
                 );
-                ShellMenuResult::Completed(Some("properties".to_string()))
+                ShellMenuResult::Completed
             }
-            _ => ShellMenuResult::Completed(None),
+            _ => ShellMenuResult::Completed,
         };
         DestroyMenu(menu);
         result
@@ -1569,10 +1569,7 @@ mod tests {
     #[test]
     fn test_should_skip_fallback_returns_true_for_completed() {
         // Completed = user selected a menu item -> should skip fallback
-        assert!(should_skip_fallback(&ShellMenuResult::Completed(Some(
-            "open".to_string()
-        ))));
-        assert!(should_skip_fallback(&ShellMenuResult::Completed(None)));
+        assert!(should_skip_fallback(&ShellMenuResult::Completed));
     }
 
     #[test]
@@ -1618,8 +1615,7 @@ mod tests {
         // Exhaustive check: every non-Cancelled variant skips fallback
         let results = vec![
             ShellMenuResult::Dismissed,
-            ShellMenuResult::Completed(Some("explore".to_string())),
-            ShellMenuResult::Completed(None),
+            ShellMenuResult::Completed,
             ShellMenuResult::NeedsRename("path".to_string()),
             ShellMenuResult::NeedsCutMonitor("path".to_string()),
             ShellMenuResult::NeedsDelete("path".to_string()),

@@ -547,6 +547,35 @@ fn force_finish() {
 }
 
 pub fn start_platform_runtime(app: tauri::AppHandle, runtime: SharedTauriRuntime) {
+    // 注入平台层唯一配置写入口（依赖倒置：平台线程不得直接引用本模块）。
+    // 拖拽收尾/覆盖层位置/菜单删除分类框等平台写盘场景全部经这个钩子，
+    // 在同一把运行时锁内「改内存真源 + 落盘」，消除陈旧内存整文件回写
+    // 冲掉平台新写入的 P0 数据丢失（2026-11-04 自检审计）。
+    #[cfg(windows)]
+    crate::platform::windows::config_writeback::set_write_hook({
+        let runtime = runtime.clone();
+        Box::new(
+            move |what: &str, update: Box<dyn FnOnce(&mut crate::config::AppConfig) + Send>| {
+                let mut guard = match runtime.lock() {
+                    Ok(guard) => guard,
+                    Err(error) => {
+                        log::warn!("配置写入口锁不可用（{what}）: {error}");
+                        return false;
+                    }
+                };
+                update(&mut guard.ctx.config);
+                guard.ctx.config.last_modified = chrono::Utc::now();
+                match guard.ctx.config.save() {
+                    Ok(()) => true,
+                    Err(error) => {
+                        log::warn!("配置写入口落盘失败（{what}）: {error}");
+                        false
+                    }
+                }
+            },
+        )
+    });
+
     // Initialize platform
     match runtime.lock() {
         Ok(mut runtime) => runtime.initialize(&app),

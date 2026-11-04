@@ -8,12 +8,26 @@
 //!
 //! 从 `ole_dnd.rs` 拆分以控制文件行数。
 
+use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use super::ffi_imports::*;
 use super::ffi_types::*;
-use super::ole_dnd::{get_box_drag_format_id, IDataObjectVtbl};
+use super::ole_dnd::{
+    get_box_drag_format_id, read_box_drag_data, read_drop_files, read_shell_idlist_paths,
+    IDataObjectVtbl,
+};
+
+/// 全局状态锁即使曾因线程 panic 中毒，也必须恢复内部值。
+/// 这些表持有 COM 引用，不能因为一次 poison 就丢弃指针造成泄漏。
+fn lock_unpoison<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
 
 // =============================================================================
 // 拖拽放置结果（全局暂存，供 WndProc 读取）
@@ -47,14 +61,16 @@ pub struct PendingSourceRemoval {
     pub item_index: usize,
 }
 
-static PENDING_SOURCE_REMOVAL: Mutex<Option<PendingSourceRemoval>> = Mutex::new(None);
+// 2026-11-04 自检审计：框间多选会为每个 item 各投递一条移除消息，单槽会被覆盖，
+// 因此改为 FIFO 队列；WndProc 每处理一条消息取出一项，现有消息协议保持不变。
+static PENDING_SOURCE_REMOVAL: Mutex<VecDeque<PendingSourceRemoval>> = Mutex::new(VecDeque::new());
 
 /// 取出待处理的源框移除信息（由 WndProc 调用）
 pub fn take_pending_source_removal() -> Option<PendingSourceRemoval> {
     PENDING_SOURCE_REMOVAL
         .lock()
         .ok()
-        .and_then(|mut g| g.take())
+        .and_then(|mut g| g.pop_front())
 }
 
 // 框→框移动：暂存待添加项信息队列（含释放坐标）
@@ -126,16 +142,27 @@ struct IDropTargetHelperVtbl {
 #[repr(C)]
 struct BoxDropTarget {
     vtbl: *const IDropTargetVtbl,
-    ref_count: u32,
+    // 2026-11-04 自检审计：COM 引用计数改为原子类型，Release 可安全处理并发/重复调用。
+    ref_count: AtomicU32,
     target_hwnd: HWND,
     custom_format_id: u32,
+    /// 代理窗口所属 UI 线程（用于线程判定与取证；跨线程时不直接读 UI 数据）。
+    owner_thread_id: u32,
+    /// 每轮拖拽只记录一次 DragOver 线程对比，避免高频 debug 日志。
+    drag_over_thread_logged: AtomicBool,
     /// IDropTargetHelper 实例（仅在外部拖拽时创建，用于保持系统残影图标）
     drop_target_helper: *mut c_void,
 }
 
 /// 当前是否有来自分类框的拖拽悬停（用于区分外部拖拽，控制可视化反馈）
-use std::sync::atomic::{AtomicBool, Ordering};
 static BOX_DRAG_HOVER: AtomicBool = AtomicBool::new(false);
+
+// 2026-11-04 自检审计：画布回调按屏幕坐标命中代理窗口时，不能跨线程直接解引用
+// GridWindowData.drop_target_ptr。这里的 HWND→COM 对象表在注销时原子移除，
+// 路由方在锁内 AddRef，保证窗口销毁与画布转发竞争时对象仍然存活。
+lazy_static::lazy_static! {
+    static ref BOX_TARGETS: Mutex<HashMap<isize, usize>> = Mutex::new(HashMap::new());
+}
 
 /// 检查当前悬停的拖拽是否来自分类框
 pub fn is_box_drag_hover() -> bool {
@@ -159,7 +186,7 @@ unsafe extern "system" fn drop_target_query_interface(
     riid: *const u8,
     ppv: *mut *mut c_void,
 ) -> HRESULT {
-    if ppv.is_null() {
+    if this.is_null() || riid.is_null() || ppv.is_null() {
         return E_POINTER;
     }
     let iid = std::slice::from_raw_parts(riid, 16);
@@ -173,29 +200,62 @@ unsafe extern "system" fn drop_target_query_interface(
     }
 }
 
+unsafe fn increment_ref_count(counter: &AtomicU32) -> u32 {
+    match counter.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+        Some(current.saturating_add(1))
+    }) {
+        Ok(previous) => previous.saturating_add(1),
+        Err(current) => current,
+    }
+}
+
 unsafe extern "system" fn drop_target_add_ref(this: *mut c_void) -> u32 {
-    let obj = &mut *(this as *mut BoxDropTarget);
-    obj.ref_count += 1;
-    obj.ref_count
+    if this.is_null() {
+        return 0;
+    }
+    let obj = &*(this as *const BoxDropTarget);
+    increment_ref_count(&obj.ref_count)
 }
 
 unsafe extern "system" fn drop_target_release(this: *mut c_void) -> u32 {
-    let obj = &mut *(this as *mut BoxDropTarget);
-    obj.ref_count -= 1;
-    if obj.ref_count == 0 {
-        drop(Box::from_raw(obj));
+    if this.is_null() {
         return 0;
     }
-    obj.ref_count
+    // 2026-11-04 自检审计：saturating_sub 防止重复 Release 造成 u32 下溢；
+    // 归零前先清理 IDropTargetHelper，避免窗口销毁时 Shell 残影与 COM 引用泄漏。
+    let released = {
+        let obj = &*(this as *const BoxDropTarget);
+        obj.ref_count
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+                if current == 0 {
+                    None
+                } else {
+                    Some(current.saturating_sub(1))
+                }
+            })
+    };
+    match released {
+        Ok(1) => {
+            cleanup_helper(this as *mut BoxDropTarget);
+            drop(Box::from_raw(this as *mut BoxDropTarget));
+            0
+        }
+        Ok(previous) => previous.saturating_sub(1),
+        Err(_) => {
+            log::warn!("[DropTarget] Release 在引用计数已归零后再次调用，已忽略");
+            0
+        }
+    }
 }
 
 // ----- IDropTarget 方法 -----
 
-/// 释放 IDropTargetHelper 实例
+/// 清理 IDropTargetHelper 实例（Release 归零路径与 DragLeave/Drop 共用）
 ///
 /// 关键修复：释放前必须调用 DragLeave 通知 Shell 拖拽已离开目标窗口，
-/// 否则残影图标会卡死在最后一个位置（分类框边缘）。
-unsafe fn release_drop_target_helper(target: *mut BoxDropTarget) {
+/// 否则残影图标会卡死在最后一个位置（分类框边缘）。2026-11-04 自检审计
+/// 将其封装为统一 cleanup_helper，确保窗口在外部拖拽中被销毁时也不会漏清理。
+unsafe fn cleanup_helper(target: *mut BoxDropTarget) {
     let helper = (*target).drop_target_helper;
     if !helper.is_null() {
         log::info!(
@@ -234,7 +294,21 @@ unsafe extern "system" fn drop_target_drag_enter(
     ptl: i64,
     effect: *mut u32,
 ) -> HRESULT {
+    if this.is_null() || effect.is_null() {
+        return E_POINTER;
+    }
+
     let target = this as *mut BoxDropTarget;
+    (*target)
+        .drag_over_thread_logged
+        .store(false, Ordering::Relaxed);
+    log::debug!(
+        "[DropTarget] DragEnter 线程: current={}, owner={}, hwnd={:?}",
+        GetCurrentThreadId(),
+        (*target).owner_thread_id,
+        (*target).target_hwnd
+    );
+
     let has_box = query_format(data_obj, (*target).custom_format_id);
     let has_hdrop = query_format(data_obj, CF_HDROP);
     // 检查是否有虚拟 Shell 对象（回收站、此电脑等）
@@ -245,31 +319,47 @@ unsafe extern "system" fn drop_target_drag_enter(
     } else {
         false
     };
-    if has_box || has_hdrop || has_shell_idlist {
-        *effect = DROPEFFECT_MOVE;
+
+    let format_supported = has_box || has_hdrop || has_shell_idlist;
+    // 2026-11-04 自检审计：不接受 MOVE。异步入库/框间移动在 Drop 返回时都尚未
+    // 确认最终成功，若向 Shell 承诺 MOVE，失败时资源管理器会删除源文件。
+    // 这里只与源 allowed_effects 求 COPY 交集；交集为空则拒绝本次拖放。
+    let allowed_effect = *effect;
+    let copy_effect = allowed_effect & DROPEFFECT_COPY;
+    let accepted = format_supported && copy_effect != 0;
+    if accepted {
+        *effect = copy_effect;
         BOX_DRAG_HOVER.store(has_box, Ordering::Relaxed);
         PostMessageW((*target).target_hwnd, WM_USER_DRAG_ENTER, 0, 0);
         log::info!(
-            "[DRAG-ENTER] 拖拽进入: box={} hdrop={} shell_idlist={}",
+            "[DRAG-ENTER] 拖拽进入: box={} hdrop={} shell_idlist={} effect=COPY",
             has_box,
             has_hdrop,
             has_shell_idlist
         );
     } else {
         *effect = DROPEFFECT_NONE;
-        log::debug!("[DRAG-ENTER] 拒绝拖拽: 无支持的格式");
+        BOX_DRAG_HOVER.store(false, Ordering::Relaxed);
+        if format_supported {
+            log::warn!(
+                "[DRAG-ENTER] 源 allowed_effects 不含 COPY，拒绝拖放: allowed={:#X}",
+                allowed_effect
+            );
+        } else {
+            log::debug!("[DRAG-ENTER] 拒绝拖拽: 无支持的格式");
+        }
     }
 
-    // 外部拖拽（桌面→分类框）：使用 IDropTargetHelper 保持残影图标显示
-    if !has_box {
-        // ★ 关键修复：释放旧 helper（防止连续拖拽时残影泄漏）
-        if !(*target).drop_target_helper.is_null() {
-            log::info!(
-                "[DropTarget] DragEnter: 释放旧 helper {:?}（防泄漏）",
-                (*target).drop_target_helper
-            );
-            release_drop_target_helper(target);
-        }
+    // 每次 DragEnter 都先释放上一轮可能残留的 helper；随后仅外部拖拽创建新的
+    // IDropTargetHelper，框间自定义拖拽继续使用项目自己的残影覆盖窗口。
+    if !(*target).drop_target_helper.is_null() {
+        log::info!(
+            "[DropTarget] DragEnter: 释放旧 helper {:?}（防泄漏）",
+            (*target).drop_target_helper
+        );
+        cleanup_helper(target);
+    }
+    if !has_box && accepted {
         let mut helper: *mut c_void = std::ptr::null_mut();
         let hr = CoCreateInstance(
             CLSID_DRAGDROPHELPER.as_ptr(),
@@ -311,45 +401,75 @@ unsafe extern "system" fn drop_target_drag_over(
     ptl: i64,
     effect: *mut u32,
 ) -> HRESULT {
-    if *effect & DROPEFFECT_MOVE != 0 {
-        *effect = DROPEFFECT_MOVE;
+    if this.is_null() || effect.is_null() {
+        return E_POINTER;
+    }
+
+    let target = &*(this as *const BoxDropTarget);
+    // 2026-11-04 自检审计：只承诺 COPY，绝不在 DragOver 阶段无条件切换为 MOVE。
+    let copy_effect = *effect & DROPEFFECT_COPY;
+    *effect = copy_effect;
+    if !target.drag_over_thread_logged.swap(true, Ordering::Relaxed) {
+        log::debug!(
+            "[DropTarget] DragOver 线程: current={}, owner={}, hwnd={:?}",
+            GetCurrentThreadId(),
+            target.owner_thread_id,
+            target.target_hwnd
+        );
     }
 
     // 外部拖拽（桌面/资源管理器→框）：更新系统拖拽残影后，继续更新分类框插入指示器。
     let is_box_hover = BOX_DRAG_HOVER.load(Ordering::Relaxed);
-    if !is_box_hover {
-        let target = this as *mut BoxDropTarget;
-        let helper = (*target).drop_target_helper;
-        if !helper.is_null() {
-            let vtbl = *(helper as *const *const IDropTargetHelperVtbl);
-            let mut pt = POINT {
-                x: (ptl & 0xFFFFFFFF) as i32,
-                y: (ptl >> 32) as i32,
-            };
-            let _ = ((*vtbl).drag_over)(helper, &mut pt, *effect);
-        }
+    if !is_box_hover && !target.drop_target_helper.is_null() {
+        let helper = target.drop_target_helper;
+        let vtbl = *(helper as *const *const IDropTargetHelperVtbl);
+        let mut pt = POINT {
+            x: (ptl & 0xFFFFFFFF) as i32,
+            y: (ptl >> 32) as i32,
+        };
+        let _ = ((*vtbl).drag_over)(helper, &mut pt, *effect);
     }
 
-    // 框间拖拽和外部拖拽使用同一套插入位置计算与分割线渲染逻辑。
-    let target = &*(this as *const BoxDropTarget);
-    let should_update = super::grid_window::get_data(target.target_hwnd)
-        .map(|d| !d.drag_active)
-        .unwrap_or(false);
-    if should_update {
-        let mut cursor_pt = POINT { x: 0, y: 0 };
-        unsafe { GetCursorPos(&mut cursor_pt) };
-        super::drag_visual::handle_cross_box_drag_over(
-            target.target_hwnd,
-            cursor_pt.x,
-            cursor_pt.y,
-        );
+    if copy_effect != 0 {
+        let screen_x = ptl as i32;
+        let screen_y = (ptl >> 32) as i32;
+        if GetCurrentThreadId() == target.owner_thread_id {
+            // 同一 UI 线程才可直接访问 GridWindowData；画布转发线程改为 PostMessage。
+            let should_update = super::grid_window::get_data(target.target_hwnd)
+                .map(|d| !d.drag_active)
+                .unwrap_or(false);
+            if should_update {
+                super::drag_visual::handle_cross_box_drag_over(
+                    target.target_hwnd,
+                    screen_x,
+                    screen_y,
+                );
+            }
+        } else {
+            let packed = ((screen_y as isize) << 16) | ((screen_x as isize) & 0xFFFF);
+            PostMessageW(
+                target.target_hwnd,
+                WM_USER_DRAG_OVER_UPDATE,
+                0,
+                packed as LPARAM,
+            );
+        }
     }
 
     S_OK
 }
 
 unsafe extern "system" fn drop_target_drag_leave(this: *mut c_void) -> HRESULT {
+    if this.is_null() {
+        return S_OK;
+    }
     let target = this as *mut BoxDropTarget;
+    log::debug!(
+        "[DropTarget] DragLeave 线程: current={}, owner={}, hwnd={:?}",
+        GetCurrentThreadId(),
+        (*target).owner_thread_id,
+        (*target).target_hwnd
+    );
     log::info!(
         "[DropTarget] DragLeave: hwnd={:?}, has_helper={}, is_box_hover={}",
         (*target).target_hwnd,
@@ -357,12 +477,14 @@ unsafe extern "system" fn drop_target_drag_leave(this: *mut c_void) -> HRESULT {
         BOX_DRAG_HOVER.load(Ordering::Relaxed)
     );
 
-    // 外部拖拽：释放 IDropTargetHelper
     if !(*target).drop_target_helper.is_null() {
-        release_drop_target_helper(target);
+        cleanup_helper(target);
         log::info!("[DropTarget] DragLeave: helper 已释放");
     }
 
+    (*target)
+        .drag_over_thread_logged
+        .store(false, Ordering::Relaxed);
     BOX_DRAG_HOVER.store(false, Ordering::Relaxed);
     PostMessageW((*target).target_hwnd, WM_USER_DRAG_LEAVE, 0, 0);
     S_OK
@@ -380,7 +502,6 @@ unsafe extern "system" fn drop_target_drop(
     pt: i64,
     effect: *mut u32,
 ) -> HRESULT {
-    // 防御性检查：确保指针有效
     if this.is_null() || data_obj.is_null() || effect.is_null() {
         log::warn!(
             "[DropTarget] Drop: 空指针被拒绝 (this={:?}, data_obj={:?}, effect={:?})",
@@ -392,8 +513,26 @@ unsafe extern "system" fn drop_target_drop(
     }
 
     let target = this as *mut BoxDropTarget;
+    log::debug!(
+        "[DropTarget] Drop 线程: current={}, owner={}, hwnd={:?}",
+        GetCurrentThreadId(),
+        (*target).owner_thread_id,
+        (*target).target_hwnd
+    );
 
-    // 外部拖拽：通知 IDropTargetHelper Drop 完成并释放
+    // 2026-11-04 自检审计：Drop 也只接受 COPY。外部文件入库与框间引用更新都在
+    // Drop 返回后异步完成，此处无法确认成功；不确认成功绝不结算 MOVE。
+    let allowed_effect = *effect;
+    let copy_effect = allowed_effect & DROPEFFECT_COPY;
+    if copy_effect == 0 {
+        *effect = DROPEFFECT_NONE;
+        log::warn!(
+            "[DropTarget] Drop: 源 allowed_effects 不含 COPY，拒绝放置: allowed={:#X}",
+            allowed_effect
+        );
+        return S_OK;
+    }
+
     log::info!(
         "[DropTarget] Drop: hwnd={:?}, has_helper={}, pt=({}, {})",
         (*target).target_hwnd,
@@ -408,9 +547,9 @@ unsafe extern "system" fn drop_target_drop(
             x: (pt & 0xFFFFFFFF) as i32,
             y: (pt >> 32) as i32,
         };
-        let drop_hr = ((*vtbl).drop)(helper, data_obj, &mut drop_pt, *effect);
+        let drop_hr = ((*vtbl).drop)(helper, data_obj, &mut drop_pt, copy_effect);
         log::info!("[DropTarget] helper.Drop: hr={:#010X}", drop_hr as u32);
-        release_drop_target_helper(target);
+        cleanup_helper(target);
         log::info!("[DropTarget] Drop: helper 已释放");
     }
 
@@ -419,58 +558,108 @@ unsafe extern "system" fn drop_target_drop(
     let drop_x = (pt & 0xFFFFFFFF) as i32;
     let drop_y = (pt >> 32) as i32;
 
-    let box_data = if (*target).custom_format_id != 0 && !data_obj.is_null() {
+    let has_box_format =
+        (*target).custom_format_id != 0 && query_format(data_obj, (*target).custom_format_id);
+    let box_data = if has_box_format {
         read_box_drag_data(data_obj, (*target).custom_format_id)
     } else {
         None
     };
-
-    let mut file_paths = read_drop_files(data_obj);
-    if file_paths.is_empty() {
-        // CF_HDROP 为空，尝试从 CFSTR_SHELLIDLIST 读取虚拟 Shell 对象
-        log::info!("[DROP] CF_HDROP 为空，尝试读取 PIDL...");
-        file_paths = read_shell_idlist_paths(data_obj);
+    if has_box_format && box_data.is_none() {
+        *effect = DROPEFFECT_NONE;
+        log::warn!("[DROP] IkunBoxDragData 存在但解析失败，拒绝消费 CF_HDROP 临时路径");
+        return S_OK;
     }
+
+    // 2026-11-04 自检审计：框间拖拽只消费自定义载荷中的原始逻辑路径。
+    // CF_HDROP 中的 %TEMP%\ikun_ole_drag 仅用于 Explorer 展示，源端返回后可能已删除。
+    let file_paths = if let Some(box_payload) = box_data.as_ref() {
+        box_payload
+            .items
+            .iter()
+            .map(|item| item.file_path.clone())
+            .collect::<Vec<_>>()
+    } else {
+        let mut paths = read_drop_files(data_obj);
+        if paths.is_empty() {
+            log::info!("[DROP] CF_HDROP 为空，尝试读取 PIDL...");
+            paths = read_shell_idlist_paths(data_obj);
+        }
+        paths
+    };
     if file_paths.is_empty() {
         *effect = DROPEFFECT_NONE;
-        log::warn!("[DROP] 未读取到文件路径（CF_HDROP 和 PIDL 均为空）");
+        log::warn!("[DROP] 未读取到有效文件路径，拒绝放置");
         return S_OK;
     }
     log::info!("[DROP] 最终 file_paths={:?}", file_paths);
 
-    if let Ok(mut g) = PENDING_DROP.lock() {
-        *g = Some(PendingDrop {
-            file_paths: file_paths.clone(),
+    let (insert_col, insert_row) = if GetCurrentThreadId() == (*target).owner_thread_id {
+        match super::grid_window::get_data((*target).target_hwnd) {
+            Some(data) => (data.drag_over_insert_col, data.drag_over_insert_row),
+            None => (-1, -1),
+        }
+    } else {
+        // 画布回调线程不直接读 GridWindowData；异步处理器可回落到当前 UI 状态。
+        (-1, -1)
+    };
+
+    let queued = if let Ok(mut pending) = PENDING_DROP.lock() {
+        *pending = Some(PendingDrop {
+            file_paths,
             box_data: box_data.clone(),
             drop_x,
             drop_y,
-            insert_col: super::grid_window::get_data((*target).target_hwnd)
-                .map(|d| d.drag_over_insert_col)
-                .unwrap_or(-1),
-            insert_row: super::grid_window::get_data((*target).target_hwnd)
-                .map(|d| d.drag_over_insert_row)
-                .unwrap_or(-1),
+            insert_col,
+            insert_row,
         });
+        true
+    } else {
+        false
+    };
+    if !queued {
+        *effect = DROPEFFECT_NONE;
+        log::warn!("[DROP] PENDING_DROP 锁不可用，拒绝放置");
+        return S_OK;
     }
 
-    // 框→框：通知源框移除
+    // 2026-11-04 自检审计：源框移除由 item 消息驱动。多选时按索引降序逐项入队并
+    // PostMessage，每项一条消息，避免单槽覆盖以及从前往后删除导致的索引漂移。
     if let Some(ref bd) = box_data {
-        if let Some(item) = bd.items.first() {
-            if let Ok(mut g) = PENDING_SOURCE_REMOVAL.lock() {
-                *g = Some(PendingSourceRemoval {
-                    file_path: item.file_path.clone(),
-                    display_name: item.display_name.clone(),
-                    item_index: item.index,
-                });
-            }
+        if !bd.items.is_empty() {
             let src = bd.source_hwnd as *mut c_void;
-            PostMessageW(src, WM_USER_DRAG_ITEM_REMOVED, item.index, 0);
+            if src.is_null() {
+                log::warn!("[DROP] 框间拖拽缺少有效源窗口，跳过源删除通知");
+            } else {
+                let mut items: Vec<_> = bd.items.iter().collect();
+                items.sort_by_key(|item| std::cmp::Reverse(item.index));
+                if let Ok(mut removals) = PENDING_SOURCE_REMOVAL.lock() {
+                    for item in items {
+                        removals.push_back(PendingSourceRemoval {
+                            file_path: item.file_path.clone(),
+                            display_name: item.display_name.clone(),
+                            item_index: item.index,
+                        });
+                        let posted = PostMessageW(src, WM_USER_DRAG_ITEM_REMOVED, item.index, 0);
+                        if posted == 0 {
+                            removals.pop_back();
+                            log::warn!(
+                                "[DROP] 源删除消息投递失败，已回滚队列项: index={}",
+                                item.index
+                            );
+                        }
+                    }
+                } else {
+                    log::warn!("[DROP] PENDING_SOURCE_REMOVAL 锁不可用，跳过源删除通知");
+                }
+            }
         }
     }
 
     PostMessageW((*target).target_hwnd, WM_USER_DRAG_DROP, 0, 0);
-    *effect = DROPEFFECT_MOVE;
-    log::info!("拖拽放置完成（数据已暂存）");
+    // 框间自定义载荷由 WM_USER_DRAG_ITEM_REMOVED 驱动源删除；OLE 侧统一返回 COPY。
+    *effect = DROPEFFECT_COPY;
+    log::info!("拖拽放置完成（数据已暂存，OLE 效果=COPY）");
     S_OK
 }
 
@@ -493,243 +682,6 @@ unsafe fn query_format(data_obj: *mut c_void, cf: u32) -> bool {
     ((*vtbl).query_get_data)(data_obj, &fe) == S_OK
 }
 
-unsafe fn read_drop_files(data_obj: *mut c_void) -> Vec<String> {
-    if data_obj.is_null() {
-        return Vec::new();
-    }
-    let vtbl = *(data_obj as *const *const IDataObjectVtbl);
-    let fe = FORMATETC {
-        cf_format: CF_HDROP,
-        ptd: std::ptr::null_mut(),
-        dw_aspect: DVASPECT_CONTENT,
-        lindex: -1,
-        tymed: TYMED_HGLOBAL,
-    };
-    let mut medium = STGMEDIUM {
-        tymed: 0,
-        h_global: std::ptr::null_mut(),
-        unk_for_release: std::ptr::null_mut(),
-    };
-    if ((*vtbl).get_data)(data_obj, &fe, &mut medium) != S_OK || medium.h_global.is_null() {
-        return Vec::new();
-    }
-    let mut paths = Vec::new();
-    let ptr = GlobalLock(medium.h_global);
-    if !ptr.is_null() {
-        let df = &*(ptr as *const DROPFILES);
-        if df.f_wide != 0 {
-            let text = (ptr as *const u8).add(df.p_files as usize) as *const u16;
-            let mut off = 0;
-            loop {
-                let mut len = 0;
-                while *text.add(off + len) != 0 {
-                    len += 1;
-                }
-                if len == 0 {
-                    break;
-                }
-                if let Ok(s) = String::from_utf16(std::slice::from_raw_parts(text.add(off), len)) {
-                    if !s.is_empty() {
-                        paths.push(s);
-                    }
-                }
-                off += len + 1;
-            }
-        }
-        GlobalUnlock(medium.h_global);
-    }
-    if medium.unk_for_release.is_null() && !medium.h_global.is_null() {
-        GlobalFree(medium.h_global);
-    }
-    paths
-}
-
-/// 从 IDataObject 读取 Shell IDList 格式的 PIDL，提取虚拟 Shell 对象的 CLSID 路径。
-///
-/// 当从桌面拖拽回收站、此电脑等虚拟对象时，CF_HDROP 为空，
-/// 需要从 CFSTR_SHELLIDLIST 格式读取 PIDL，然后通过 SHGetFileInfoW + SHGFI_PIDL
-/// 获取显示名称，再映射到已知的 CLSID 路径。
-unsafe fn read_shell_idlist_paths(data_obj: *mut c_void) -> Vec<String> {
-    if data_obj.is_null() {
-        return Vec::new();
-    }
-
-    // 注册 CFSTR_SHELLIDLIST 格式
-    let fmt_name: Vec<u16> = "Shell IDList Array\0".encode_utf16().collect();
-    let cf_shellidlist = super::ffi_imports::RegisterClipboardFormatW(fmt_name.as_ptr());
-    if cf_shellidlist == 0 {
-        log::warn!("[PIDL] RegisterClipboardFormat 失败");
-        return Vec::new();
-    }
-
-    let vtbl = *(data_obj as *const *const IDataObjectVtbl);
-    let fe = FORMATETC {
-        cf_format: cf_shellidlist,
-        ptd: std::ptr::null_mut(),
-        dw_aspect: DVASPECT_CONTENT,
-        lindex: -1,
-        tymed: TYMED_HGLOBAL,
-    };
-    let mut medium = STGMEDIUM {
-        tymed: 0,
-        h_global: std::ptr::null_mut(),
-        unk_for_release: std::ptr::null_mut(),
-    };
-    if ((*vtbl).get_data)(data_obj, &fe, &mut medium) != S_OK || medium.h_global.is_null() {
-        log::debug!("[PIDL] 无 CFSTR_SHELLIDLIST 数据");
-        return Vec::new();
-    }
-
-    let mut paths = Vec::new();
-    let ptr = GlobalLock(medium.h_global);
-    if !ptr.is_null() {
-        // CIDA 结构: cidl(u32) + (cidl+1) 个 u32 偏移量
-        let cidl = *(ptr as *const u32);
-        let offsets = std::slice::from_raw_parts(
-            (ptr as *const u8).add(4) as *const u32,
-            (cidl + 1) as usize,
-        );
-
-        log::info!(
-            "[PIDL] CIDA cidl={}, offsets={:?}",
-            cidl,
-            &offsets[..std::cmp::min(offsets.len(), 5)]
-        );
-
-        // SHGetFileInfoW + SHGFI_PIDL 声明
-        #[repr(C)]
-        struct ShellFileInfo {
-            h_icon: *mut std::ffi::c_void,
-            i_icon: i32,
-            dw_attributes: u32,
-            sz_display_name: [u16; 260],
-            sz_type_name: [u16; 80],
-        }
-        const SHGFI_PIDL: u32 = 0x00000008;
-        const SHGFI_DISPLAYNAME: u32 = 0x00000200;
-
-        extern "system" {
-            fn SHGetFileInfoW(
-                pszPath: *const u8,
-                dwFileAttributes: u32,
-                psfi: *mut ShellFileInfo,
-                cbFileInfo: u32,
-                uFlags: u32,
-            ) -> usize;
-        }
-
-        // 已知的虚拟 Shell 对象显示名称 → CLSID 映射
-        let known_objects: &[(&str, &str)] = &[
-            ("回收站", "::{645FF040-5081-101B-9F08-00AA002F954E}"),
-            ("此电脑", "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"),
-            ("网络", "::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}"),
-            ("控制面板", "::{5399E694-6CE5-4D6C-8FCE-1D8870FDCBA0}"),
-        ];
-
-        // 遍历每个 PIDL（跳过第一个，它是父文件夹 PIDL）
-        for i in 1..=cidl as usize {
-            if i >= offsets.len() {
-                break;
-            }
-            let pidl = (ptr as *const u8).add(offsets[i] as usize);
-
-            // 用 SHGetFileInfoW + SHGFI_PIDL 获取显示名称
-            let mut info = ShellFileInfo {
-                h_icon: std::ptr::null_mut(),
-                i_icon: 0,
-                dw_attributes: 0,
-                sz_display_name: [0u16; 260],
-                sz_type_name: [0u16; 80],
-            };
-            let result = SHGetFileInfoW(
-                pidl,
-                0,
-                &mut info,
-                std::mem::size_of::<ShellFileInfo>() as u32,
-                SHGFI_PIDL | SHGFI_DISPLAYNAME,
-            );
-
-            if result != 0 {
-                let name_len = info
-                    .sz_display_name
-                    .iter()
-                    .position(|&c| c == 0)
-                    .unwrap_or(0);
-                let display_name = String::from_utf16_lossy(&info.sz_display_name[..name_len]);
-                log::info!("[PIDL] 解析到显示名称: '{}'", display_name);
-
-                // 查找已知虚拟对象
-                let mut found = false;
-                for (known_name, clsid) in known_objects {
-                    if display_name == *known_name {
-                        paths.push(clsid.to_string());
-                        log::info!("[PIDL] 映射到 CLSID: {} → {}", display_name, clsid);
-                        found = true;
-                        break;
-                    }
-                }
-                if !found {
-                    log::warn!("[PIDL] 未找到 '{}' 对应的 CLSID 映射", display_name);
-                }
-            } else {
-                log::warn!("[PIDL] SHGetFileInfoW 失败, offset={}", offsets[i]);
-            }
-        }
-        GlobalUnlock(medium.h_global);
-    }
-    if medium.unk_for_release.is_null() && !medium.h_global.is_null() {
-        GlobalFree(medium.h_global);
-    }
-    log::info!(
-        "[PIDL] 最终解析到 {} 个虚拟 Shell 对象: {:?}",
-        paths.len(),
-        paths
-    );
-    paths
-}
-unsafe fn read_box_drag_data(data_obj: *mut c_void, fmt_id: u32) -> Option<IkunBoxDragData> {
-    if data_obj.is_null() || fmt_id == 0 {
-        return None;
-    }
-    let vtbl = *(data_obj as *const *const IDataObjectVtbl);
-    let fe = FORMATETC {
-        cf_format: fmt_id,
-        ptd: std::ptr::null_mut(),
-        dw_aspect: DVASPECT_CONTENT,
-        lindex: -1,
-        tymed: TYMED_HGLOBAL,
-    };
-    let mut medium = STGMEDIUM {
-        tymed: 0,
-        h_global: std::ptr::null_mut(),
-        unk_for_release: std::ptr::null_mut(),
-    };
-    if ((*vtbl).get_data)(data_obj, &fe, &mut medium) != S_OK || medium.h_global.is_null() {
-        return None;
-    }
-    let result = {
-        let ptr = GlobalLock(medium.h_global);
-        if ptr.is_null() {
-            None
-        } else {
-            let bytes = ptr as *const u8;
-            let mut len = 0;
-            while *bytes.add(len) != 0 && len < 65536 {
-                len += 1;
-            }
-            let r =
-                serde_json::from_slice::<IkunBoxDragData>(std::slice::from_raw_parts(bytes, len))
-                    .ok();
-            GlobalUnlock(medium.h_global);
-            r
-        }
-    };
-    if medium.unk_for_release.is_null() && !medium.h_global.is_null() {
-        GlobalFree(medium.h_global);
-    }
-    result
-}
-
 // =============================================================================
 // 公共 API
 // =============================================================================
@@ -739,9 +691,11 @@ pub fn register_box_drop_target(hwnd: HWND) -> *mut c_void {
     let custom_format_id = get_box_drag_format_id();
     let target = Box::new(BoxDropTarget {
         vtbl: &DROP_TARGET_VTBL,
-        ref_count: 1,
+        ref_count: AtomicU32::new(1),
         target_hwnd: hwnd,
         custom_format_id,
+        owner_thread_id: unsafe { GetCurrentThreadId() },
+        drag_over_thread_logged: AtomicBool::new(false),
         drop_target_helper: std::ptr::null_mut(),
     });
     let ptr = Box::into_raw(target) as *mut c_void;
@@ -751,17 +705,30 @@ pub fn register_box_drop_target(hwnd: HWND) -> *mut c_void {
         unsafe { drop_target_release(ptr) };
         return std::ptr::null_mut();
     }
+
+    lock_unpoison(&BOX_TARGETS).insert(hwnd as isize, ptr as usize);
     log::info!("已注册拖拽目标: hwnd={:?}", hwnd);
     ptr
 }
 
 /// 撤销分类框窗口的 OLE 拖拽目标注册
 pub fn unregister_box_drop_target(hwnd: HWND, target_ptr: *mut c_void) {
+    // 2026-11-04 自检审计：先移除 HWND 映射阻断新路由，再清空可能存在的
+    // CANVAS_ROUTED 引用；最后 RevokeDragDrop 并释放注册表引用。
+    {
+        let mut targets = lock_unpoison(&BOX_TARGETS);
+        if targets.get(&(hwnd as isize)).copied() == Some(target_ptr as usize) {
+            targets.remove(&(hwnd as isize));
+        }
+    }
+    if let Some(routed) = take_canvas_route_matching(target_ptr as usize) {
+        unsafe { drop_target_release(routed as *mut c_void) };
+    }
     unsafe {
         RevokeDragDrop(hwnd);
-        if !target_ptr.is_null() {
-            drop_target_release(target_ptr);
-        }
+    }
+    if !target_ptr.is_null() {
+        unsafe { drop_target_release(target_ptr) };
     }
     log::info!("已撤销拖拽目标: hwnd={:?}", hwnd);
 }
@@ -868,10 +835,10 @@ mod helper_lifecycle_tests {
     }
 
     /// 验证 DragLeave 后 helper 被正确清空
-    /// release_drop_target_helper 应将 helper 设为 null
+    /// cleanup_helper 应将 helper 设为 null
     #[test]
     fn test_helper_cleared_after_release_pattern() {
-        // 模拟 release_drop_target_helper 的核心逻辑：
+        // 模拟 cleanup_helper 的核心逻辑：
         // 1. 检查 helper 非空
         // 2. 调用 DragLeave
         // 3. 调用 Show(FALSE)
@@ -898,7 +865,7 @@ mod helper_lifecycle_tests {
 
         // 模拟第二次 DragEnter：先检查并释放旧 helper
         if !drop_target_helper.is_null() {
-            // release_drop_target_helper(target) 的核心效果
+            // cleanup_helper(target) 的核心效果
             drop_target_helper = std::ptr::null_mut();
         }
         assert!(
@@ -962,22 +929,28 @@ mod helper_lifecycle_tests {
 // liquid-verre-rs 的每屏画布 HWND 上，注册在代理窗口的 BoxDropTarget 再也
 // 收不到 DragEnter。这里给每块画布注册一个无状态转发器：按拖拽点坐标路由
 // 到对应分类框的 BoxDropTarget，直接调用其 vtable 方法，令「拖入接收」
-// 在库窗口模型下原样工作。转发器与 BoxDropTarget 同处本模块，vtable 布局
-// 一致，调用约定为普通 COM 指针调用（回调发生在库画布的渲染线程上，
-// BoxDropTarget 的实现只写全局 pending 队列 + PostMessage，线程安全）。
+// 在库窗口模型下原样工作。画布回调发生在 liquid-verre-render 线程，
+// GridWindowData 的读取通过 PostMessage 回到代理窗 UI 线程。
 
 /// 转发器当前路由到的 BoxDropTarget（isize 裸指针，0=无）。
-/// Enter 建立、Leave/Drop 清除；OLE 拖放序列在源端是单线程串行的。
-static CANVAS_ROUTED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-// 已注册过转发器的画布 HWND 集合（幂等去重，跨线程访问加锁）。
+/// Enter 建立、Leave/Drop 清除；路由持有一次 AddRef，切换目标时成对 Release。
+static CANVAS_ROUTED: AtomicUsize = AtomicUsize::new(0);
+/// 同一次 OLE 拖拽序列的 IDataObject 指针；仅用于 A→B 切换时补发 DragEnter。
+static CANVAS_ROUTED_DATA_OBJ: AtomicUsize = AtomicUsize::new(0);
+/// 路由指针与 data object 必须成对切换，避免目标切换窗口期读到半更新状态。
+static CANVAS_ROUTE_LOCK: Mutex<()> = Mutex::new(());
+// 已注册转发器的画布 HWND → CanvasDropTarget 指针（键为 HWND 的 isize 形式，
+// 值持有注册表引用；跨线程访问加锁，注销时 RevokeDragDrop 并 Release）。
 lazy_static::lazy_static! {
-    static ref CANVAS_BOUND: std::sync::Mutex<std::collections::HashSet<isize>> =
-        std::sync::Mutex::new(std::collections::HashSet::new());
+    static ref CANVAS_BOUND: Mutex<HashMap<isize, usize>> = Mutex::new(HashMap::new());
 }
 
 #[repr(C)]
 struct CanvasDropTarget {
     vtbl: *const IDropTargetVtbl,
+    // 2026-11-04 自检审计：真实引用计数，注册失败/撤销/显示器重建均可回收对象。
+    ref_count: AtomicU32,
+    canvas_hwnd: HWND,
 }
 
 static CANVAS_DT_VTBL: IDropTargetVtbl = IDropTargetVtbl {
@@ -995,7 +968,7 @@ unsafe extern "system" fn canvas_target_query_interface(
     riid: *const u8,
     ppv: *mut *mut c_void,
 ) -> HRESULT {
-    if ppv.is_null() {
+    if this.is_null() || riid.is_null() || ppv.is_null() {
         return E_POINTER;
     }
     let iid = std::slice::from_raw_parts(riid, 16);
@@ -1009,17 +982,81 @@ unsafe extern "system" fn canvas_target_query_interface(
     }
 }
 
-/// 转发器是进程级单例：引用计数恒为 1（不拥有 BoxDropTarget 的所有权，
-/// 被路由对象的生命周期由其所属分类框窗口管理）。
-unsafe extern "system" fn canvas_target_add_ref(_this: *mut c_void) -> u32 {
-    1
+unsafe extern "system" fn canvas_target_add_ref(this: *mut c_void) -> u32 {
+    if this.is_null() {
+        return 0;
+    }
+    let obj = &*(this as *const CanvasDropTarget);
+    increment_ref_count(&obj.ref_count)
 }
 
-unsafe extern "system" fn canvas_target_release(_this: *mut c_void) -> u32 {
-    1
+unsafe extern "system" fn canvas_target_release(this: *mut c_void) -> u32 {
+    if this.is_null() {
+        return 0;
+    }
+    let released = {
+        let obj = &*(this as *const CanvasDropTarget);
+        obj.ref_count
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+                if current == 0 {
+                    None
+                } else {
+                    Some(current.saturating_sub(1))
+                }
+            })
+    };
+    match released {
+        Ok(1) => {
+            drop(Box::from_raw(this as *mut CanvasDropTarget));
+            0
+        }
+        Ok(previous) => previous.saturating_sub(1),
+        Err(_) => {
+            log::warn!("[DropTarget] Canvas Release 在引用计数归零后再次调用，已忽略");
+            0
+        }
+    }
 }
 
-/// POINTL(i64) → 屏幕坐标 → 命中分类框的 BoxDropTarget 裸指针。
+fn canvas_route_store(target: usize, data_obj: usize) {
+    let _guard = lock_unpoison(&CANVAS_ROUTE_LOCK);
+    CANVAS_ROUTED.store(target, Ordering::SeqCst);
+    CANVAS_ROUTED_DATA_OBJ.store(data_obj, Ordering::SeqCst);
+}
+
+fn canvas_route_take() -> (usize, usize) {
+    let _guard = lock_unpoison(&CANVAS_ROUTE_LOCK);
+    let target = CANVAS_ROUTED.swap(0, Ordering::SeqCst);
+    // IDataObject 在整个 OLE 拖拽序列内有效；离开 A 尚未进入 B 的间隙也必须保留，
+    // 否则鼠标跨过空白区域后无法给 B 补发 DragEnter。最终 Leave/Drop 才清空。
+    let data_obj = CANVAS_ROUTED_DATA_OBJ.load(Ordering::SeqCst);
+    (target, data_obj)
+}
+
+fn canvas_set_active_data_obj(data_obj: usize) {
+    let _guard = lock_unpoison(&CANVAS_ROUTE_LOCK);
+    CANVAS_ROUTED_DATA_OBJ.store(data_obj, Ordering::SeqCst);
+}
+
+fn canvas_clear_active_data_obj() {
+    let _guard = lock_unpoison(&CANVAS_ROUTE_LOCK);
+    CANVAS_ROUTED_DATA_OBJ.store(0, Ordering::SeqCst);
+}
+
+/// 注销目标时仅清空匹配的路由，不调用 DragLeave（窗口正在销毁），
+/// 但必须把路由持有的 AddRef 还给调用方完成 Release。
+fn take_canvas_route_matching(target: usize) -> Option<usize> {
+    let _guard = lock_unpoison(&CANVAS_ROUTE_LOCK);
+    if CANVAS_ROUTED.load(Ordering::SeqCst) != target || target == 0 {
+        return None;
+    }
+    CANVAS_ROUTED.store(0, Ordering::SeqCst);
+    CANVAS_ROUTED_DATA_OBJ.store(0, Ordering::SeqCst);
+    Some(target)
+}
+
+/// POINTL(i64) → 屏幕坐标 → 命中分类框的 BoxDropTarget。
+/// 返回前已在 BOX_TARGETS 锁内 AddRef，调用方必须 Release。
 unsafe fn canvas_route(ptl: i64) -> *mut BoxDropTarget {
     let x = ptl as i32;
     let y = (ptl >> 32) as i32;
@@ -1027,114 +1064,315 @@ unsafe fn canvas_route(ptl: i64) -> *mut BoxDropTarget {
     if agent.is_null() {
         return std::ptr::null_mut();
     }
-    match super::grid_window::get_data(agent) {
-        Some(data) if !data.drop_target_ptr.is_null() => data.drop_target_ptr as *mut BoxDropTarget,
-        _ => std::ptr::null_mut(),
+    let target = lock_unpoison(&BOX_TARGETS)
+        .get(&(agent as isize))
+        .copied()
+        .unwrap_or(0);
+    if target == 0 {
+        return std::ptr::null_mut();
     }
+    drop_target_add_ref(target as *mut c_void);
+    target as *mut BoxDropTarget
 }
 
 unsafe fn canvas_call_enter(
-    t: *mut c_void,
+    target: *mut BoxDropTarget,
     data_obj: *mut c_void,
     ks: u32,
     ptl: i64,
     effect: *mut u32,
 ) -> HRESULT {
-    let vtbl = *(t as *const *const IDropTargetVtbl);
-    ((*vtbl).drag_enter)(t, data_obj, ks, ptl, effect)
+    let vtbl = *(target as *const *const IDropTargetVtbl);
+    ((*vtbl).drag_enter)(target as *mut c_void, data_obj, ks, ptl, effect)
+}
+
+unsafe fn canvas_call_over(
+    target: *mut BoxDropTarget,
+    ks: u32,
+    ptl: i64,
+    effect: *mut u32,
+) -> HRESULT {
+    let vtbl = *(target as *const *const IDropTargetVtbl);
+    ((*vtbl).drag_over)(target as *mut c_void, ks, ptl, effect)
+}
+
+unsafe fn canvas_call_leave(target: *mut BoxDropTarget) -> HRESULT {
+    let vtbl = *(target as *const *const IDropTargetVtbl);
+    ((*vtbl).drag_leave)(target as *mut c_void)
+}
+
+unsafe fn canvas_call_drop(
+    target: *mut BoxDropTarget,
+    data_obj: *mut c_void,
+    ks: u32,
+    ptl: i64,
+    effect: *mut u32,
+) -> HRESULT {
+    let vtbl = *(target as *const *const IDropTargetVtbl);
+    ((*vtbl).drop)(target as *mut c_void, data_obj, ks, ptl, effect)
+}
+
+unsafe fn log_canvas_thread(operation: &str, target: *mut BoxDropTarget, canvas: HWND) {
+    let mut process_id = 0u32;
+    let proxy_thread = GetWindowThreadProcessId((*target).target_hwnd, &mut process_id);
+    let canvas_thread = GetWindowThreadProcessId(canvas, &mut process_id);
+    log::debug!(
+        "[DropTarget][Canvas] {} 线程: current={}, canvas_thread={}, proxy_thread={}, owner={}, hwnd={:?}",
+        operation,
+        GetCurrentThreadId(),
+        canvas_thread,
+        proxy_thread,
+        (*target).owner_thread_id,
+        (*target).target_hwnd
+    );
 }
 
 unsafe extern "system" fn canvas_target_drag_enter(
-    _this: *mut c_void,
+    this: *mut c_void,
     data_obj: *mut c_void,
     ks: u32,
     ptl: i64,
     effect: *mut u32,
 ) -> HRESULT {
+    if effect.is_null() {
+        return E_POINTER;
+    }
+    // IDataObject 属于整次拖拽序列；即使 DragEnter 落在块间空白处，也要保存，
+    // 供随后 DragOver 首次命中分类框时补发 DragEnter。
+    canvas_set_active_data_obj(data_obj as usize);
     let target = canvas_route(ptl);
-    if target.is_null() {
-        if !effect.is_null() {
-            *effect = 0;
+
+    let (old, _) = canvas_route_take();
+    if old != 0 {
+        if old == target as usize {
+            // 旧路由与新路由同一对象：释放本次额外 AddRef，保留原路由引用。
+            drop_target_release(old as *mut c_void);
+        } else {
+            canvas_call_leave(old as *mut BoxDropTarget);
+            drop_target_release(old as *mut c_void);
         }
+    }
+    if target.is_null() {
+        *effect = DROPEFFECT_NONE;
         return S_OK;
     }
-    CANVAS_ROUTED.store(target as usize, std::sync::atomic::Ordering::SeqCst);
-    canvas_call_enter(target as *mut c_void, data_obj, ks, ptl, effect)
+    let canvas = if this.is_null() {
+        std::ptr::null_mut()
+    } else {
+        (*(this as *const CanvasDropTarget)).canvas_hwnd
+    };
+    log_canvas_thread("DragEnter", target, canvas);
+
+    let hr = canvas_call_enter(target, data_obj, ks, ptl, effect);
+    if hr >= 0 {
+        canvas_route_store(target as usize, data_obj as usize);
+    } else {
+        drop_target_release(target as *mut c_void);
+    }
+    hr
 }
 
 unsafe extern "system" fn canvas_target_drag_over(
-    _this: *mut c_void,
+    this: *mut c_void,
     ks: u32,
     ptl: i64,
     effect: *mut u32,
 ) -> HRESULT {
-    // 目标以 Enter 时路由为准（Over 的坐标在框边缘抖动时可能短暂脱靶）；
-    // 若路由丢失则按当前坐标重新解析。
-    let mut target = CANVAS_ROUTED.load(std::sync::atomic::Ordering::SeqCst) as *mut BoxDropTarget;
-    if target.is_null() {
-        target = canvas_route(ptl);
+    if effect.is_null() {
+        return E_POINTER;
     }
+
+    // 2026-11-04 自检审计：每次都按当前 POINTL 重解析目标，框 A→框 B 时不会把
+    // Drop 继续投给 Enter 时缓存的 A。
+    let target = canvas_route(ptl);
+    let current = CANVAS_ROUTED.load(Ordering::SeqCst);
     if target.is_null() {
-        if !effect.is_null() {
-            *effect = 0;
+        let (old, _) = canvas_route_take();
+        if old != 0 {
+            canvas_call_leave(old as *mut BoxDropTarget);
+            drop_target_release(old as *mut c_void);
         }
+        *effect = DROPEFFECT_NONE;
         return S_OK;
     }
-    let t = target as *mut c_void;
-    let vtbl = *(t as *const *const IDropTargetVtbl);
-    ((*vtbl).drag_over)(t, ks, ptl, effect)
+
+    if current == target as usize {
+        let hr = canvas_call_over(target, ks, ptl, effect);
+        drop_target_release(target as *mut c_void);
+        return hr;
+    }
+
+    let (old, data_obj) = canvas_route_take();
+    if old != 0 {
+        if old == target as usize {
+            drop_target_release(old as *mut c_void);
+        } else {
+            canvas_call_leave(old as *mut BoxDropTarget);
+            drop_target_release(old as *mut c_void);
+        }
+    }
+
+    let canvas = if this.is_null() {
+        std::ptr::null_mut()
+    } else {
+        (*(this as *const CanvasDropTarget)).canvas_hwnd
+    };
+    log_canvas_thread("DragOver 目标切换", target, canvas);
+
+    if data_obj == 0 {
+        log::warn!("[DropTarget][Canvas] 目标切换缺少缓存 IDataObject，无法补发 DragEnter");
+        drop_target_release(target as *mut c_void);
+        *effect = DROPEFFECT_NONE;
+        return S_OK;
+    }
+
+    let enter_hr = canvas_call_enter(target, data_obj as *mut c_void, ks, ptl, effect);
+    if enter_hr < 0 {
+        drop_target_release(target as *mut c_void);
+        *effect = DROPEFFECT_NONE;
+        return enter_hr;
+    }
+    let over_hr = canvas_call_over(target, ks, ptl, effect);
+    canvas_route_store(target as usize, data_obj);
+    over_hr
 }
 
 unsafe extern "system" fn canvas_target_drag_leave(_this: *mut c_void) -> HRESULT {
-    let routed = CANVAS_ROUTED.swap(0, std::sync::atomic::Ordering::SeqCst) as *mut c_void;
-    if routed.is_null() {
+    let (routed, _) = canvas_route_take();
+    canvas_clear_active_data_obj();
+    if routed == 0 {
         return S_OK;
     }
-    let vtbl = *(routed as *const *const IDropTargetVtbl);
-    ((*vtbl).drag_leave)(routed)
+    let hr = canvas_call_leave(routed as *mut BoxDropTarget);
+    drop_target_release(routed as *mut c_void);
+    hr
 }
 
 unsafe extern "system" fn canvas_target_drop(
-    _this: *mut c_void,
+    this: *mut c_void,
     data_obj: *mut c_void,
     ks: u32,
     ptl: i64,
     effect: *mut u32,
 ) -> HRESULT {
-    let mut target =
-        CANVAS_ROUTED.swap(0, std::sync::atomic::Ordering::SeqCst) as *mut BoxDropTarget;
-    if target.is_null() {
-        target = canvas_route(ptl);
+    if effect.is_null() {
+        return E_POINTER;
     }
+
+    // Drop 以当前坐标做最终路由；缓存仅用于识别是否已对同一目标 Enter 过。
+    let target = canvas_route(ptl);
+    let (old, cached_data_obj) = canvas_route_take();
+    canvas_clear_active_data_obj();
     if target.is_null() {
-        if !effect.is_null() {
-            *effect = 0;
+        if old != 0 {
+            canvas_call_leave(old as *mut BoxDropTarget);
+            drop_target_release(old as *mut c_void);
         }
+        *effect = DROPEFFECT_NONE;
         return S_OK;
     }
-    let t = target as *mut c_void;
-    let vtbl = *(t as *const *const IDropTargetVtbl);
-    ((*vtbl).drop)(t, data_obj, ks, ptl, effect)
+
+    let canvas = if this.is_null() {
+        std::ptr::null_mut()
+    } else {
+        (*(this as *const CanvasDropTarget)).canvas_hwnd
+    };
+    log_canvas_thread("Drop", target, canvas);
+
+    if old == target as usize {
+        drop_target_release(old as *mut c_void);
+    } else {
+        if old != 0 {
+            canvas_call_leave(old as *mut BoxDropTarget);
+            drop_target_release(old as *mut c_void);
+        }
+        if cached_data_obj == 0 {
+            log::warn!("[DropTarget][Canvas] 最终目标未收到过 DragEnter，且缺少 IDataObject");
+            drop_target_release(target as *mut c_void);
+            *effect = DROPEFFECT_NONE;
+            return S_OK;
+        }
+        let enter_hr = canvas_call_enter(target, cached_data_obj as *mut c_void, ks, ptl, effect);
+        if enter_hr < 0 {
+            drop_target_release(target as *mut c_void);
+            *effect = DROPEFFECT_NONE;
+            return enter_hr;
+        }
+    }
+
+    let hr = canvas_call_drop(target, data_obj, ks, ptl, effect);
+    drop_target_release(target as *mut c_void);
+    hr
 }
 
 /// 为全部画布注册转发 IDropTarget（幂等；引擎启动与 MonitorsChanged 后调用）。
 pub fn rebind_canvas_drop_targets() {
-    for canvas in super::glass_engine::canvas_hwnds() {
-        let Ok(mut bound) = CANVAS_BOUND.lock() else {
-            return;
-        };
-        if bound.contains(&canvas) {
+    let canvases = super::glass_engine::canvas_hwnds();
+    let live: std::collections::HashSet<isize> = canvases.iter().copied().collect();
+
+    // 显示器变化后旧画布可能已销毁：先撤销已离场 HWND，避免 CANVAS_BOUND 只增不减。
+    let stale = {
+        let mut bound = lock_unpoison(&CANVAS_BOUND);
+        let stale_keys: Vec<isize> = bound
+            .keys()
+            .copied()
+            .filter(|canvas| !live.contains(canvas))
+            .collect();
+        let mut stale = Vec::with_capacity(stale_keys.len());
+        for canvas in stale_keys {
+            if let Some(target) = bound.remove(&canvas) {
+                stale.push((canvas, target));
+            }
+        }
+        stale
+    };
+    for (canvas, target) in stale {
+        unsafe {
+            RevokeDragDrop(canvas as HWND);
+            canvas_target_release(target as *mut c_void);
+        }
+        log::info!("显示器变化后已撤销画布拖放转发器: canvas={canvas:#X}");
+    }
+
+    for canvas in canvases {
+        if lock_unpoison(&CANVAS_BOUND).contains_key(&canvas) {
             continue;
         }
+
         let obj = Box::into_raw(Box::new(CanvasDropTarget {
             vtbl: &CANVAS_DT_VTBL,
-        }));
-        let hr = unsafe { RegisterDragDrop(canvas as HWND, obj as *mut c_void) };
-        if hr == S_OK {
-            bound.insert(canvas);
-            log::info!("画布拖放转发器已注册: canvas={canvas:#X}");
-        } else {
+            ref_count: AtomicU32::new(1),
+            canvas_hwnd: canvas as HWND,
+        })) as *mut c_void;
+        let hr = unsafe { RegisterDragDrop(canvas as HWND, obj) };
+        if hr != S_OK {
+            unsafe { canvas_target_release(obj) };
             log::warn!("画布拖放转发器注册失败: canvas={canvas:#X}, hr={hr:#010X}");
+            continue;
         }
+
+        lock_unpoison(&CANVAS_BOUND).insert(canvas, obj as usize);
+        log::info!("画布拖放转发器已注册: canvas={canvas:#X}");
+    }
+}
+
+/// 引擎 shutdown 前撤销全部画布转发器；由 glass_engine.rs 接线调用。
+pub(crate) fn revoke_all_canvas_drop_targets() {
+    let (routed, _) = canvas_route_take();
+    canvas_clear_active_data_obj();
+    if routed != 0 {
+        unsafe {
+            canvas_call_leave(routed as *mut BoxDropTarget);
+            drop_target_release(routed as *mut c_void);
+        }
+    }
+
+    let bound = std::mem::take(&mut *lock_unpoison(&CANVAS_BOUND));
+    for (canvas, target) in bound {
+        unsafe {
+            RevokeDragDrop(canvas as HWND);
+            canvas_target_release(target as *mut c_void);
+        }
+        log::info!("已撤销画布拖放转发器: canvas={canvas:#X}");
     }
 }

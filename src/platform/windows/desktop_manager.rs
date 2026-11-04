@@ -23,14 +23,6 @@ impl Default for DesktopManager {
 }
 
 impl DesktopManager {
-    /// Create a new DesktopManager instance
-    pub fn new() -> Result<Self> {
-        log::info!("Initializing Windows DesktopManager...");
-        Ok(Self)
-    }
-}
-
-impl DesktopManager {
     /// 枚举桌面图标（文件系统 + 虚拟 Shell 对象），失败时返回空列表
     pub fn get_desktop_icons(&self) -> Vec<DesktopIcon> {
         log::info!("Enumerating Windows desktop icons...");

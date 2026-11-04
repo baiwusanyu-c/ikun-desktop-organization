@@ -499,3 +499,32 @@ let icon_size = scale_dpi(base_size, cursor_dpi, 96);
 6. **混淆物理像素和逻辑像素** → 窗口位置偏移或大小异常
 7. **拖拽残影使用源窗口 DPI** → 跨显示器时残影大小不匹配
 8. **忘记 DPI 转换直接计算居中** → 高 DPI 屏幕下位置错误
+
+---
+
+## 重构完成判据（2026-11-04 自检审计沉淀）
+
+大重构（模块替换、抽取分层、引入外部库）合并前必须逐项过：
+
+1. **无根模块清零**：新位置的模块必须有生产调用方。判据动作：临时跑
+   `cargo clippy --all-targets`（**不带** CI allowlist），把 `dead_code`、
+   `unused_variables`、`unused_assignments`、`clashing_extern_declarations`
+   全部列成清单逐项处置（删除或说明保留理由），然后才允许恢复 allowlist。
+   CI allowlist 只能缩，不能成为死代码的长期掩体。
+2. **双份实现清零**：向 `box_core`/公共层抽取算法时必须同批迁移调用方；
+   旧实现要么删除、要么在 spec 记录为「唯一真源在 X，Y 待迁移」并给出后续任务。
+3. **状态恢复链路清单**：外部库引擎的重建/复活路径逐项核对「几何、纹理、
+   DPI/缩放参数、Z 序、会话状态」是否都有恢复动作（见
+   `guides/tauri-window-contract.md`「引擎重建/复活的最低恢复清单」）。
+4. **配置单写入口**：任何线程写 `AppConfig` 都必须经共享运行时锁
+   （命令走 `persist_locked`，平台线程走 `config_writeback::write_platform_config`）。
+   加载失败降级只允许用于「读」；「写」路径失败必须跳过，不得默认值覆盖。
+5. **合成消息/跨层坐标必须标注坐标空间**：生产端（PostMessage 合成点）与
+   消费端（handler）注释互相引用同一口径；换算函数唯一入口化（`message_content_point`）。
+6. **危险 FFI 一致性**：同一符号只允许一处声明（`windows` crate 提供的一律用 crate，
+   手写补充声明收敛到 `ffi_imports.rs`）；`clashing_extern_declarations` 出现即 P1。
+7. **OLE/COM 契约**：IDropTarget 的 `*pdwEffect` 只能在确认动作成功（或明确允许
+   异步语义成立）后结算 `DROPEFFECT_MOVE`，否则按 COPY 返回；缓存裸指针跨回调必须
+   AddRef/Release 配对，且注销路径要清缓存；`STGMEDIUM` 一律 `ReleaseStgMedium`。
+8. **「模式镜像测试」不算覆盖**：只断言局部变量拷贝、不触达生产代码的测试是负资产，
+   重构时应删除或改写为针对真实函数的测试。

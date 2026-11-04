@@ -7,29 +7,6 @@ use super::d2d_render::render_layered_window;
 use super::ffi_imports::*;
 use super::ffi_types::*;
 
-use std::sync::Mutex;
-
-/// HWND 包装器（实现 Send）
-struct SendHwnd(*mut std::ffi::c_void);
-unsafe impl Send for SendHwnd {}
-
-/// 待异步收入仓库的文件路径队列 (path, target_hwnd)
-static PENDING_INGEST_QUEUE: Mutex<Vec<(String, SendHwnd)>> = Mutex::new(Vec::new());
-
-/// 处理所有待处理的异步文件收入操作（由 WM_USER_DEFERRED_INGEST 调用）
-pub(crate) fn process_deferred_ingests() {
-    let items: Vec<(String, SendHwnd)> = {
-        let mut queue = PENDING_INGEST_QUEUE.lock().unwrap();
-        std::mem::take(&mut *queue)
-    };
-    for (path, _hwnd) in items {
-        match super::icon_hider::ingest_icon(&path) {
-            Ok(()) => log::info!("[DEFERRED] '{}' 已异步收入仓库", path),
-            Err(e) => log::warn!("[DEFERRED] 异步收入仓库失败 '{}': {}", path, e),
-        }
-    }
-}
-
 use super::grid_window::{get_data, get_grid_content_rect};
 
 /// Save grid layout configuration to disk after drag operations.
@@ -911,18 +888,60 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
     };
 
     let is_box_drag = drop.box_data.is_some();
+    // 2026-11-04 自检审计：框间拖拽优先消费 IkunBoxDragData.items 的原始逻辑路径
+    // 与 index；PENDING_DROP.file_paths 中的 CF_HDROP 仅用于 Explorer 兼容展示。
+    let drop_entries: Vec<(String, Option<String>, Option<usize>)> =
+        if let Some(ref box_data) = drop.box_data {
+            box_data
+                .items
+                .iter()
+                .map(|item| {
+                    (
+                        item.file_path.clone(),
+                        Some(item.display_name.clone()),
+                        Some(item.index),
+                    )
+                })
+                .collect()
+        } else {
+            drop.file_paths
+                .iter()
+                .map(|path| (path.clone(), None, None))
+                .collect()
+        };
     log::info!(
-        "OLE drop: {} 个文件, box_drag={}, drop=({}, {}), paths={:?}",
-        drop.file_paths.len(),
+        "OLE drop: {} 个条目, box_drag={}, drop=({}, {}), paths={:?}",
+        drop_entries.len(),
         is_box_drag,
         drop.drop_x,
         drop.drop_y,
-        drop.file_paths
+        drop_entries
+            .iter()
+            .map(|(path, _, _)| path.as_str())
+            .collect::<Vec<_>>()
     );
+
+    // 2026-11-04 自检审计：画布转发回调在 liquid-verre-render 线程，Drop 时不直接
+    // 读取 GridWindowData。这里回到代理窗 UI 线程后按同一释放坐标重算插入状态，
+    // 避免跨线程读 UI 数据，同时保留插入指示器对应的落点。
+    let has_saved_insert = drop.insert_col >= 0 && drop.insert_row >= 0;
+    if !has_saved_insert {
+        super::drag_visual::handle_cross_box_drag_over(hwnd, drop.drop_x, drop.drop_y);
+    }
 
     let data = match unsafe { get_data(hwnd) } {
         Some(d) => d,
         None => return,
+    };
+    let insert_col = if has_saved_insert {
+        drop.insert_col
+    } else {
+        data.drag_over_insert_col
+    };
+    let insert_row = if has_saved_insert {
+        drop.insert_row
+    } else {
+        data.drag_over_insert_row
     };
 
     let mut added = 0;
@@ -933,14 +952,18 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
     // [FIX] 插入模式：循环前一次性将现有项右移 N 位（N=有效文件数）
     // 修复前 shift 在 per-file 循环内，后续迭代会错误移位之前新增的项，
     // 导致多个新项重叠在同一位置。
-    let is_insert = drop.insert_col >= 0 && drop.insert_row >= 0;
+    let is_insert = insert_col >= 0 && insert_row >= 0;
     if is_insert {
-        let insert_lin = drop.insert_row * cols + drop.insert_col;
+        let insert_lin = insert_row * cols + insert_col;
         // 统计有效文件数（去重后）以确定移位量
-        let valid_count = drop
-            .file_paths
+        let valid_count = drop_entries
             .iter()
-            .filter(|fp| !data.items.iter().any(|i| i.file_path == **fp))
+            .filter(|(file_path, _, _)| {
+                !data
+                    .items
+                    .iter()
+                    .any(|item| item.file_path.as_str() == file_path.as_str())
+            })
             .count() as i32;
 
         // 物化所有自动布局位置
@@ -967,9 +990,20 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
         );
     }
 
-    for file_path in &drop.file_paths {
+    for (file_path, box_display_name, box_item_index) in &drop_entries {
+        if let Some(source_index) = box_item_index {
+            log::debug!(
+                "OLE drop: 框间条目使用原始索引 {}，逻辑路径={}",
+                source_index,
+                file_path
+            );
+        }
         // 去重：已存在则跳过
-        if data.items.iter().any(|i| i.file_path == *file_path) {
+        if data
+            .items
+            .iter()
+            .any(|item| item.file_path.as_str() == file_path.as_str())
+        {
             log::debug!("OLE drop: 跳过已存在项 '{}'", file_path);
             continue;
         }
@@ -1031,7 +1065,7 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
 
         // 提取图标（使用有效路径）
         let icon_info = super::icon_extract::extract_file_icon(&effective_path);
-        let (icon_handle, display_name) = match icon_info {
+        let (icon_handle, detected_name) = match icon_info {
             Some(info) => (info.hicon, info.display_name),
             None => {
                 let name = std::path::Path::new(&effective_path)
@@ -1041,12 +1075,13 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
                 (std::ptr::null_mut(), name)
             }
         };
+        let display_name = box_display_name.clone().unwrap_or(detected_name);
 
         // 检查是否有插入模式（来自拖拽悬停可视化反馈）
         // is_insert 已在循环前计算
         let (final_col, final_row) = if is_insert {
             // 插入模式：使用插入位置 + 偏移
-            let offset_lin = (drop.insert_row * cols + drop.insert_col) + added;
+            let offset_lin = (insert_row * cols + insert_col) + added;
             (offset_lin % cols, offset_lin / cols)
         } else {
             // 正常模式：基础位置 + 偏移（每个文件占据不同的 grid cell）
@@ -1071,8 +1106,8 @@ pub(crate) fn handle_ole_drop(hwnd: HWND) {
             drop.drop_y,
             final_col,
             final_row,
-            drop.insert_col,
-            drop.insert_row
+            insert_col,
+            insert_row
         );
 
         // 外部→框：按统一收纳流程处理桌面图标。

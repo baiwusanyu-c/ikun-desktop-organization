@@ -181,8 +181,6 @@ pub(crate) struct DcompState {
     /// 交换链当前尺寸（物理像素），与窗口外框一致
     pub width: u32,
     pub height: u32,
-    /// 已成功 Present 的帧数，用于周期性的 DWM 合成自证
-    pub presented_frames: u64,
 }
 
 pub(crate) struct GridWindowData {
@@ -374,9 +372,6 @@ pub(crate) struct GridWindowData {
     /// 由 `WM_USER_GLASS_RESIZE` 事件置位、跟随 tick 确认快照回落后清除；
     /// 会话期间 `WM_WINDOWPOSCHANGED` 不得把窗口几何反向推回引擎（防止回路）。
     pub(crate) glass_session_active: bool,
-    /// 接管式标题拖拽会话进行中（几何由库 sink 的按压序列驱动，代理窗
-    /// 由 `on_glass_drag_sync` 跟随；收尾走 `end_box_drag`）。
-    pub(crate) box_drag_active: bool,
     /// 上次经 UpdateLayeredWindow 真正提交过的外框尺寸与当时的玻璃状态。
     ///
     /// 引擎模式下代理窗是**纯透明命中层**：尺寸没变时再合成 + 提交一遍
@@ -397,8 +392,6 @@ pub(crate) struct GridWindowData {
     pub(crate) glass_session_seen_resizing: bool,
     /// 会话内连续看到 resizing=false 的拍数（收尾去抖用）。
     pub(crate) glass_session_idle_ticks: u8,
-    /// 本次接管式移动是否真的挪过窗口（懒创建参考线、决定要不要落盘）。
-    pub(crate) box_drag_moved: bool,
     /// hover 轮询里连续「光标在块外」的拍数。
     ///
     /// 连续 2 拍在外才补发 `WM_MOUSELEAVE`：单拍越界（DPI 取整、光标贴边缘）
@@ -530,14 +523,12 @@ impl GridWindowData {
             content_valid: false,
             render_padding: 0,
             glass_session_active: false,
-            box_drag_active: false,
             submitted_w: 0,
             submitted_h: 0,
             submitted_glass: false,
             content_last_render_ms: 0,
             glass_session_seen_resizing: false,
             glass_session_idle_ticks: 0,
-            box_drag_moved: false,
             hover_out_ticks: 0,
         }
     }
@@ -650,11 +641,6 @@ pub(crate) fn content_rect_with_padding(rect: RECT, padding: i32) -> RECT {
         right: rect.right - padding,
         bottom: rect.bottom - padding,
     }
-}
-
-/// 将分层窗口外部矩形转换为用户可见的分类框内容矩形。
-pub(crate) fn content_rect_from_window_rect(rect: RECT, dpi: u32) -> RECT {
-    content_rect_with_padding(rect, shadow_padding_for_dpi(dpi))
 }
 
 /// 获取分类框用户可见内容的屏幕坐标矩形。
@@ -963,14 +949,12 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         content_valid: false,
         render_padding: shadow_padding,
         glass_session_active: false,
-        box_drag_active: false,
         submitted_w: 0,
         submitted_h: 0,
         submitted_glass: false,
         content_last_render_ms: 0,
         glass_session_seen_resizing: false,
         glass_session_idle_ticks: 0,
-        box_drag_moved: false,
         hover_out_ticks: 0,
     });
     let data_ptr = Box::into_raw(data);
@@ -1222,17 +1206,6 @@ pub fn destroy_all_grid_windows() {
     log::info!("所有格子窗口已销毁");
 }
 
-/// 刷新所有格子窗口（液态玻璃参数变更时调用）
-///
-/// 仅触发重绘，不修改窗口位置或 Z-order。
-pub fn refresh_all_grid_windows() {
-    if let Ok(grids) = GRID_WINDOWS.lock() {
-        for grid in grids.iter() {
-            render_layered_window(grid.hwnd);
-        }
-    }
-}
-
 /// 刷新所有格子窗口（修复 DestroyWindow 导致的分层窗口异常）
 ///
 /// DestroyWindow 会导致同线程其他分层窗口 Z-order 和可见性异常。
@@ -1465,7 +1438,6 @@ pub(crate) fn attach_dcomp(
             content_h: 0,
             width,
             height,
-            presented_frames: 0,
         }))
     }
 }
@@ -1872,8 +1844,7 @@ pub(crate) fn on_grid_refresh_tick(hwnd: HWND) {
     // 兜住启动等待超时、引擎重建后重挂载等所有迟到场景（bug4 双层的根治）。
     let stale_fallback = super::glass_engine::has_box(data.config_id)
         && !data.submitted_glass
-        && !data.glass_session_active
-        && !data.box_drag_active;
+        && !data.glass_session_active;
     if stale_fallback {
         super::d2d_render::render_layered_window(hwnd);
     }
@@ -1906,59 +1877,6 @@ fn switch_glass_timer(hwnd: HWND, interval_ms: u32) {
     };
 }
 
-/// 接管式标题拖拽：结束（释放捕获、对齐库权威矩形、恢复低频档、保存布局）。
-pub(crate) fn end_box_drag(hwnd: HWND) {
-    let Some(data) = (unsafe { get_data(hwnd) }) else {
-        return;
-    };
-    if !data.box_drag_active {
-        return;
-    }
-    data.box_drag_active = false;
-    log::info!("[glass-dbg] end_box_drag hwnd={hwnd:?}");
-    // 库对块有「中心不出所在屏」钳制：拖到屏幕边缘时窗口可能领先块矩形。
-    // 收尾回读权威块矩形对齐窗口，保证内容层与玻璃最终严丝合缝。
-    if let Some(content) = super::glass_engine::block_content_rect(data.config_id) {
-        let padding = data.render_padding;
-        let want = RECT {
-            left: content.left - padding,
-            top: content.top - padding,
-            right: content.right + padding,
-            bottom: content.bottom + padding,
-        };
-        let mut outer = RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        };
-        let have = unsafe { GetWindowRect(hwnd, &mut outer) } != 0;
-        if have && (outer.left != want.left || outer.top != want.top) {
-            unsafe {
-                SetWindowPos(
-                    hwnd,
-                    std::ptr::null_mut(),
-                    want.left,
-                    want.top,
-                    0,
-                    0,
-                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-                );
-            }
-        }
-    }
-    switch_glass_timer(hwnd, GLASS_HOVER_POLL_INTERVAL_MS);
-    // 没产生位移（标题单击 / 合成双击）就不碰参考线，也不写配置文件：
-    // 旧实现每次按压都 save_config 一遍，双击/连点会刷出成串磁盘写。
-    if data.box_drag_moved {
-        data.box_drag_moved = false;
-        super::alignment_guide::on_exit_size_move(hwnd);
-        super::drag_handler::save_config();
-    } else {
-        data.box_drag_moved = false;
-    }
-}
-
 /// hover 轮询：光标在块内 → 以 client 坐标 SendMessage(WM_MOUSEMOVE) 复用既有
 /// hover/tooltip 逻辑；离开且存在 hover 态 → 补发一次 WM_MOUSELEAVE。
 fn poll_glass_hover(hwnd: HWND) {
@@ -1968,20 +1886,12 @@ fn poll_glass_hover(hwnd: HWND) {
     if !super::glass_engine::has_box(data.config_id) {
         return;
     }
-    if data.box_drag_active {
-        // 看门狗：拖拽收尾依赖 sink 序列的 Up。异常路径（序列里丢了 Up、画布
-        // 输入被抢）会让代理窗一直跟着跑，这里按左键物理状态兜底。
-        let lbutton_down = unsafe { GetAsyncKeyState(VK_LBUTTON) } & 0x8000u16 as i16 != 0;
-        if !lbutton_down {
-            log::warn!("[glass-dbg] 接管式移动未收到 UP（左键已抬起）→ 强制收尾");
-            end_box_drag(hwnd);
-            return;
-        }
-    }
-    // 拖拽进行中不做 hover 轮询（代理窗正在被搬，高亮跟随没有意义）
-    // 框选同理：真实/转发的 WM_MOUSEMOVE 已经是坐标源，这里再 Post 一发合成 move
-    // 只会让选框在同一拍被写两次（多一次无谓重绘，还与定时器互相覆盖）。
-    if data.menu.open || data.box_drag_active || data.marquee_active {
+    // 框选/菜单打开期间不做 hover 轮询：转发或真实的 WM_MOUSEMOVE 已经是坐标源，
+    // 这里再 Post 一发合成 move 只会让选框在同一拍被写两次（多一次无谓重绘，
+    // 还与定时器互相覆盖）。
+    // （自检审计：旧「接管式移动看门狗」在 box_drag_active 全链路不可达后
+    //   已成死分支，随旧状态机一并删除。）
+    if data.menu.open || data.marquee_active {
         return;
     }
     let Some((cx, cy)) = glass_cursor_pos() else {
@@ -1995,7 +1905,7 @@ fn poll_glass_hover(hwnd: HWND) {
         data.hover_out_ticks = 0;
         let local_x = cx - wr.left;
         let local_y = cy - wr.top;
-        let lparam = (((local_y << 16) | (local_x & 0xFFFF)) as i32) as isize;
+        let lparam = ((local_y << 16) | (local_x & 0xFFFF)) as isize;
         unsafe { PostMessageW(hwnd, WM_MOUSEMOVE, 0, lparam) };
     } else {
         data.hover_out_ticks = data.hover_out_ticks.saturating_add(1);
@@ -2175,6 +2085,13 @@ fn post_to_all_grid_windows(message: u32) {
 /// 请求所有分类框异步重绘一帧（配置里只改了颜色/圆角等样式时使用）。
 pub fn request_all_grid_windows_redraw() {
     post_to_all_grid_windows(WM_USER_GRID_REDRAW);
+}
+
+/// 广播「玻璃引擎重建完成」：各分类框在自己线程里重新发布命中几何、
+/// 失效内容缓存并向新玻璃块重推全量内容（2026-11-04 自检审计 P1：
+/// 重建/复活后 ROUTES 几何与库纹理不恢复，玻璃块只剩底板）。
+pub fn notify_glass_rebuilt_all() {
+    post_to_all_grid_windows(super::ffi_types::WM_USER_GLASS_REBUILT);
 }
 
 /// 获取格子数量

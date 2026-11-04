@@ -64,13 +64,11 @@ jobs:
         # Lint-debt allowlist for legacy platform code.
         # TODO: shrink this list over time (FFI consolidation, doc cleanup).
         # New warnings outside this list still fail CI.
+        # 2026-11-04 自检审计：dead_code / unused_variables / unused_assignments /
+        # unused_mut / clashing_extern_declarations 五项已清零并移出 allowlist，
+        # 今后同类告警直接卡红 CI。剩余条目均为历史格式/风格类抑制，只减不增。
         run: >
           cargo clippy --all-targets -- -D warnings
-          -A dead_code
-          -A unused_variables
-          -A unused_assignments
-          -A unused_mut
-          -A clashing_extern_declarations
           -A clippy::too_many_arguments
           -A clippy::type_complexity
           -A clippy::upper_case_acronyms

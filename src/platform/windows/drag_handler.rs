@@ -65,7 +65,7 @@ pub(crate) fn check_drag_threshold(hwnd: HWND, mx: i32, my: i32) -> bool {
         data.multi_drag_items.clear();
     }
 
-    // ʹõǰĲΪקԴ
+    // 使用当前点击项作为拖拽源（若不在多选集合中则补入，见下方逻辑）。
     let drag_source_idx = item_idx as usize;
     // Ensure the clicked item is in multi_drag_items
     if !data.multi_drag_items.is_empty() && !data.multi_drag_items.contains(&drag_source_idx) {
@@ -605,9 +605,11 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
                         temp_str
                     );
                     paths.push(temp_str.clone());
+                    // 2026-11-04 自检审计：CF_HDROP 用临时副本兼容 Explorer；
+                    // IkunBoxDragData 必须保存原始逻辑路径，源端返回后临时目录即删除。
                     items.push(IkunDragItemData {
                         index: idx,
-                        file_path: temp_str,
+                        file_path: item.file_path.clone(),
                         display_name: item.display_name.clone(),
                     });
                     if idx == item_idx as usize {
@@ -664,7 +666,7 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
         // Single-item OLE drag (existing logic)
         let temp_dir = std::env::temp_dir().join("ikun_ole_drag");
         let _ = std::fs::create_dir_all(&temp_dir);
-        let (item_idx, file_path, display_name, icon_handle) = {
+        let (item_idx, hdrop_path, logical_file_path, display_name, icon_handle) = {
             let data = match unsafe { get_data(hwnd) } {
                 Some(d) => d,
                 None => {
@@ -699,9 +701,12 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
                 let _ = super::icon_hider::copy_path_recursive(&resolved, &temp_path);
             }
             let resolved_str = temp_path.to_string_lossy().to_string();
+            // 2026-11-04 自检审计：CF_HDROP 只暴露临时副本；框间消费方必须拿到
+            // 原始逻辑路径，否则源端 DoDragDrop 返回并删除临时目录后数据失效。
             (
                 item_idx,
                 resolved_str,
+                item.file_path.clone(),
                 item.display_name.clone(),
                 item.icon_handle,
             )
@@ -710,7 +715,12 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
         // ★ 不销毁拖拽残影，让它在 OLE 拖拽期间保持存活
         // unsafe { super::drag_image::destroy_drag_overlay(); }
 
-        log::info!("分类框→Explorer OLE: {} (path={})", display_name, file_path);
+        log::info!(
+            "分类框→Explorer OLE: {} (logical={}, hdrop={})",
+            display_name,
+            logical_file_path,
+            hdrop_path
+        );
 
         // 构造 OLE 拖拽数据（CF_HDROP + IkunBoxDragData 自定义格式）
         let box_drag_data = IkunBoxDragData {
@@ -718,7 +728,7 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
             source_config_id: config_id_str,
             items: vec![IkunDragItemData {
                 index: item_idx as usize,
-                file_path: file_path.clone(),
+                file_path: logical_file_path,
                 display_name: display_name.clone(),
             }],
         };
@@ -731,7 +741,7 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (ex_style | WS_EX_TRANSPARENT) as isize);
         }
         let drop_succeeded =
-            super::ole_dnd::start_box_drag(vec![file_path], box_drag_data, icon_handle);
+            super::ole_dnd::start_box_drag(vec![hdrop_path], box_drag_data, icon_handle);
         unsafe {
             let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (ex_style & !WS_EX_TRANSPARENT) as isize);
@@ -758,16 +768,14 @@ fn start_grid_ole_drag(hwnd: HWND, _external_hwnd: HWND) {
 // =============================================================================
 // Config save helper (used by drag_drop sub-module)
 // =============================================================================
-/// 拖拽操作后保存配置
+/// 拖拽操作后保存配置（经唯一配置写入口：内存真源与磁盘同锁更新，
+/// 杜绝「Tauri 命令用陈旧内存回写整文件冲掉新布局」，见 config_writeback）
 pub(crate) fn save_config() {
     let layouts = super::grid_window::collect_grid_layout();
-    if let Ok(mut config) = crate::config::AppConfig::load() {
+    if super::config_writeback::write_platform_config("拖拽后布局", move |config| {
         config.layout.boxes = layouts;
-        if let Err(e) = config.save() {
-            log::warn!("拖拽后保存配置失败: {}", e);
-        } else {
-            log::info!("拖拽后配置已保存");
-        }
+    }) {
+        log::info!("拖拽后配置已保存");
     }
 }
 
@@ -874,6 +882,10 @@ mod tests {
         let mut drag_over_item: i32 = 2;
         let mut drag_over_insert_col: i32 = 1;
         let mut drag_over_insert_row: i32 = 0;
+        // 初态断言：拖拽已激活、索引均为有效值（也消除“初值从未被读取”告警）。
+        assert!(drag_pending && drag_active);
+        assert!(drag_item_index >= 0 && drag_over_item >= 0);
+        assert!(drag_over_insert_col >= 0 && drag_over_insert_row >= 0);
 
         // Reset (same pattern as start_grid_ole_drag)
         drag_pending = false;
@@ -916,6 +928,12 @@ mod tests {
         let mut drag_over_insert_col: i32 = 1;
         let mut drag_over_insert_row: i32 = 0;
         let mut multi_drag_items: Vec<usize> = vec![1, 2, 3];
+        // 初态断言：激活中且索引有效。
+        assert!(drag_active);
+        assert!(!drag_pending);
+        assert!(drag_item_index >= 0 && drag_over_item >= 0);
+        assert!(drag_over_insert_col >= 0 && drag_over_insert_row >= 0);
+        assert_eq!(multi_drag_items.len(), 3);
 
         // 模拟 end_drag 的状态重置（与实际代码一致）
         drag_active = false;

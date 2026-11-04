@@ -43,8 +43,7 @@ use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_11_0,
 };
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-    D3D11_SDK_VERSION,
+    D3D11CreateDevice, ID3D11Device, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION,
 };
 use windows::Win32::Graphics::DirectComposition::{
     DCompositionCreateDevice2, IDCompositionDesktopDevice,
@@ -199,7 +198,6 @@ pub(crate) fn dcomp_device() -> Option<IDCompositionDesktopDevice> {
 #[derive(Clone)]
 pub(crate) struct SharedGpu {
     pub device: ID3D11Device,
-    pub context: ID3D11DeviceContext,
     pub dxgi_device: IDXGIDevice,
     /// 建 composition swap chain 用（`CreateSwapChainForComposition` 需要 factory2）
     pub factory2: IDXGIFactory2,
@@ -232,7 +230,6 @@ pub(crate) fn shared_gpu() -> Option<SharedGpu> {
 unsafe fn build_shared_gpu() -> Option<SharedGpu> {
     let levels = [D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0];
     let mut device: Option<ID3D11Device> = None;
-    let mut context: Option<ID3D11DeviceContext> = None;
     let mut chosen = D3D_FEATURE_LEVEL::default();
     if let Err(error) = D3D11CreateDevice(
         None,
@@ -244,13 +241,13 @@ unsafe fn build_shared_gpu() -> Option<SharedGpu> {
         D3D11_SDK_VERSION,
         Some(&mut device),
         Some(&mut chosen),
-        Some(&mut context),
+        // 立即上下文无人消费，不再请求（原字段存而不用，属重构残留）。
+        None,
     ) {
         log::error!("创建共享 D3D11 设备失败: {error:?}");
         return None;
     }
     let device = device?;
-    let context = context?;
 
     let dxgi_device: IDXGIDevice = match device.cast() {
         Ok(d) => d,
@@ -282,7 +279,6 @@ unsafe fn build_shared_gpu() -> Option<SharedGpu> {
     };
     Some(SharedGpu {
         device,
-        context,
         dxgi_device,
         factory2,
         d2d_device,

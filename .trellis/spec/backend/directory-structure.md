@@ -35,23 +35,13 @@ src/
 │   └── log_cmd.rs          #   前端日志转发
 │
 ├── box_core/               # 平台无关业务逻辑（禁止 use windows / HWND）
-│   ├── box_model.rs        #   分类框数据模型
-│   ├── box_manager.rs      #   框生命周期管理
 │   ├── layout_calc.rs      #   网格布局计算（calculate_grid/hit_test）
 │   ├── view_engine.rs      #   视图参数（get_view_params）
-│   ├── sort_engine.rs      #   排序引擎
-│   ├── group_engine.rs     #   分组引擎
-│   ├── interaction.rs      #   交互状态
 │   ├── drag_logic.rs       #   拖拽纯逻辑（compute_drag_over_state/apply_shift_insert）
-│   ├── drag_state.rs       #   拖拽生命周期状态机 + 常量
-│   ├── geometry.rs         #   几何计算（对齐检测/像素边界/等比居中）
 │   ├── layout.rs           #   布局重排（reflow_positions）
-│   ├── selection.rs        #   全局多选注册表（跨容器选择/锚点/框选；测试带 serial() 串行锁）
-│   └── types.rs            #   共享几何类型（Rect/Point/Pixel32）
+│   └── selection.rs        #   全局多选注册表（跨容器选择；测试带 serial() 串行锁）
 │
 ├── classification/         # 分类系统
-│   ├── matcher.rs          #   规则匹配
-│   ├── database.rs         #   分类数据库
 │   └── ai_classifier.rs    #   OpenAI 兼容 AI 分类器
 │
 ├── config/
@@ -59,7 +49,7 @@ src/
 │
 ├── platform/
 │   ├── mod.rs              # 薄壳：SystemTrayAction 枚举 + pub use windows::*
-│   └── windows/            # 全部 Windows 原生实现（47 文件，分区如下）
+│   └── windows/            # 全部 Windows 原生实现（分区如下）
 │       ├── types.rs        #   共享数据结构（DesktopIcon/IconData/...）
 │       ├── 窗口            #   grid_window / menu_window / control_panel_window / wnd_proc /
 │       │                   #   zorder / occlusion / grid_layout
@@ -71,9 +61,6 @@ src/
 │       ├── Shell/系统      #   shell_menu / global_hotkey / sys_tray / rename_editor /
 │       │                   #   ffi_imports / ffi_types
 │       ├── 对齐辅助线      #   alignment_guide/
-│       ├── 桌面覆盖层      #   desktop_overlay/（overlay_window / overlay_render / overlay_wnd_proc /
-│       │                   #   overlay_mouse_hook / overlay_grid / overlay_drag_ops /
-│       │                   #   overlay_drop_target / desktop_watcher）
 │       └── 监控            #   monitor_utils / mem_probe
 │
 └── utils/
@@ -92,6 +79,14 @@ tauri.conf.json             # 4 个 WebView 窗口 + NSIS/MSI bundle
 已删除模块（2026-10 重构）：`src/plugin/`（自研插件体系）、`src/gpui_app/` + `src/ui/` + `src/app.rs`
 （legacy UI 回退）、`src/ipc/`（空占位）、`src/shared/`（并入 box_core）、`platform` trait 抽象层、
 macOS 依赖与构建面。**不得复活**。
+2026-11-04 自检审计追加删除：`box_core/{box_model,box_manager,sort_engine,group_engine,interaction,
+geometry,drag_state,types}.rs`（817 行「无根模块」：零生产调用或与平台侧实现重复）、
+`classification/{matcher,database}.rs`（0 字节残留）、`liquid_glass.rs`/`occlusion.rs`（被
+liquid-verre-rs 取代）、**整个 `platform/windows/desktop_overlay/` 孤儿源码树**（9 文件约 5500 行，
+b040c6c「移除覆盖区域窗口，使用原生桌面渲染未分类图标」后未删净：无任何 `mod` 声明、不在编译图内，
+仅靠 `WM_USER_OVERLAY_*`/`TIMER_ID_OVERLAY_*` 常量与 `selection::ContainerType::Overlay` 留了幻觉引用）。
+`Config.overlay`（icon_positions 等）作为磁盘兼容字段保留，仅读侧（icon_hider 恢复逻辑）仍在使用。**新增模块必须有生产调用方；抽取到 box_core 的算法必须同步迁移调用方，
+禁止平台侧留双份实现**（用 `cargo clippy --all-targets` 无 allowlist 临时跑一遍即可暴露死代码）。
 
 ---
 

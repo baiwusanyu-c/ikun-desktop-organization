@@ -58,7 +58,7 @@ pub async fn start_ai_classification(
     tokio::spawn(async move {
         log::info!("[AI] tokio 任务已启动");
         log::info!("[AI] 开始调用 perform_ai_classification_async");
-        match perform_ai_classification_async(runtime_clone.clone(), config).await {
+        match perform_ai_classification_async(config).await {
             Ok(groups) => {
                 log::info!("[AI] AI 分类成功，共 {} 个分类", groups.len());
                 // 在主线程创建分类框
@@ -99,7 +99,6 @@ pub async fn start_ai_classification(
 
 /// 异步执行 AI 分类
 async fn perform_ai_classification_async(
-    runtime: SharedTauriRuntime,
     config: crate::config::AppConfig,
 ) -> Result<std::collections::HashMap<String, Vec<crate::platform::DesktopIcon>>, String> {
     use std::collections::HashMap;
@@ -285,6 +284,25 @@ fn create_classified_boxes(
     }
 
     log::info!("创建了 {}/{} 个分类框", created, box_count);
+
+    // 重建后必须把新布局经运行时锁回写「内存真源 + 磁盘」：
+    // 旧实现只改窗口不落配置，后续任何 Tauri 配置命令都会拿 AI 分类前的
+    // 陈旧布局整文件回写，把新框冲掉（2026-11-04 自检审计 P1）。
+    {
+        let layouts = crate::platform::collect_grid_layout();
+        match runtime.lock() {
+            Ok(mut rt) => {
+                rt.ctx.config.layout.boxes = layouts;
+                rt.ctx.config.last_modified = chrono::Utc::now();
+                if let Err(e) = rt.ctx.config.save() {
+                    log::warn!("[AI] 分类框新布局落盘失败: {e}");
+                } else {
+                    log::info!("[AI] 分类框新布局已落盘（内存与磁盘同步）");
+                }
+            }
+            Err(e) => log::warn!("[AI] 运行时锁不可用，分类框新布局未落盘: {e}"),
+        }
+    }
 
     // ★ 最后，对于所有 non-public 图标，调用 hide_single_desktop_icon 隐藏
     // 这确保了如果创建分类框失败，non-public 图标还在桌面上

@@ -150,68 +150,62 @@ pub fn create_box(
         return Err(validation.message);
     }
 
-    #[cfg(windows)]
-    {
-        use crate::platform::{
-            collect_grid_layout, create_grid_window, get_grid_count, get_primary_monitor_dpi,
-            get_screen_resolution, GridCreateParams,
-        };
+    use crate::platform::{
+        collect_grid_layout, create_grid_window, get_grid_count, get_primary_monitor_dpi,
+        get_screen_resolution, GridCreateParams,
+    };
 
-        let (screen_width_physical, screen_height_physical) = get_screen_resolution();
-        let dpi = get_primary_monitor_dpi().max(96);
-        let screen_width = screen_width_physical * 96 / dpi as i32;
-        let screen_height = screen_height_physical * 96 / dpi as i32;
-        let existing = get_grid_count();
-        let width = 400;
-        let height = 400;
-        let position_x = ((screen_width - width) / 2 + (existing as i32 * 40) % 200).max(10);
-        let position_y = ((screen_height - height) / 2 + (existing as i32 * 30) % 150).max(10);
-        let config_id = Uuid::new_v4();
+    let (screen_width_physical, screen_height_physical) = get_screen_resolution();
+    let dpi = get_primary_monitor_dpi().max(96);
+    let screen_width = screen_width_physical * 96 / dpi as i32;
+    let screen_height = screen_height_physical * 96 / dpi as i32;
+    let existing = get_grid_count();
+    let width = 400;
+    let height = 400;
+    let position_x = ((screen_width - width) / 2 + (existing as i32 * 40) % 200).max(10);
+    let position_y = ((screen_height - height) / 2 + (existing as i32 * 30) % 150).max(10);
+    let config_id = Uuid::new_v4();
 
-        create_grid_window(GridCreateParams {
-            id: existing,
-            title: name.clone(),
-            x: position_x,
-            y: position_y,
-            width,
-            height,
-            items: Vec::new(),
-            view_mode: config.box_defaults.view_mode.clone(),
+    create_grid_window(GridCreateParams {
+        id: existing,
+        title: name.clone(),
+        x: position_x,
+        y: position_y,
+        width,
+        height,
+        items: Vec::new(),
+        view_mode: config.box_defaults.view_mode.clone(),
+        locked: false,
+        sort_mode: config.box_defaults.sort_mode.clone(),
+        sort_ascending: config.box_defaults.sort_ascending,
+        group_by: config.box_defaults.group_by.clone(),
+        config_id,
+        edit_box_callback: Some(edit_box_callback(app)),
+    })
+    .map_err(|error| format!("创建分类框失败: {error}"))?;
+
+    config.layout.boxes = collect_grid_layout();
+    config.last_modified = chrono::Utc::now();
+    config
+        .save()
+        .map_err(|error| format!("分类框已创建，但保存布局失败: {error}"))?;
+    runtime.replace_config(config.clone());
+
+    let created = config
+        .layout
+        .boxes
+        .iter()
+        .find(|item| item.id == config_id)
+        .map(BoxData::from)
+        .unwrap_or(BoxData {
+            id: config_id.to_string(),
+            name,
             locked: false,
-            sort_mode: config.box_defaults.sort_mode.clone(),
-            sort_ascending: config.box_defaults.sort_ascending,
-            group_by: config.box_defaults.group_by.clone(),
-            config_id,
-            edit_box_callback: Some(edit_box_callback(app)),
-        })
-        .map_err(|error| format!("创建分类框失败: {error}"))?;
-
-        config.layout.boxes = collect_grid_layout();
-        config.last_modified = chrono::Utc::now();
-        config
-            .save()
-            .map_err(|error| format!("分类框已创建，但保存布局失败: {error}"))?;
-        runtime.replace_config(config.clone());
-
-        let created = config
-            .layout
-            .boxes
-            .iter()
-            .find(|item| item.id == config_id)
-            .map(BoxData::from)
-            .unwrap_or(BoxData {
-                id: config_id.to_string(),
-                name,
-                locked: false,
-                position: [position_x as f32, position_y as f32],
-                size: [width as f32, height as f32],
-                item_count: 0,
-            });
-        Ok(created)
-    }
-
-    #[cfg(not(windows))]
-    Err("当前平台不支持原生分类框".to_string())
+            position: [position_x as f32, position_y as f32],
+            size: [width as f32, height as f32],
+            item_count: 0,
+        });
+    Ok(created)
 }
 
 /// 编辑分类框名称并同步原生窗口与配置。

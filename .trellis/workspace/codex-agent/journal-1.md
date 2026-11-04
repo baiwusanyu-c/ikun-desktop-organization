@@ -920,3 +920,34 @@ debug 产物已重建：`target/debug/ikun_organizer.exe`。
 ### Next Steps
 
 - None - task complete
+
+
+## Session 12: Rust 自检审计：20926b54..2bc9dfcf 重构后修复与规范沉淀
+
+**Date**: 2026-11-04
+**Task**: Rust 自检审计：20926b54..2bc9dfcf 重构后修复与规范沉淀
+**Branch**: `master`
+
+### Summary
+
+三路子代理审计+主线修复。P0 配置双写源经 config_writeback 唯一写入口修复；glass_engine 重建状态恢复（WM_USER_GLASS_REBUILT）、DPI old_ratio、缩放夹取收敛、GetClassNameW 加固；sink 合成消息坐标统一 message_content_point；参考线负原点坐标/会话 generation；OLE MOVE 保守化、CANVAS_ROUTED 引用计数、无界读取收口；FFI 混用清零；删除 box_core 817 行无根模块与 desktop_overlay 5500 行孤儿树；CI allowlist 缩减 5 项。门禁：fmt/check/493 test/严格 clippy 全绿。详见 .trellis/tasks/11-04-11-04-rust-self-check-audit/audit-report.md
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

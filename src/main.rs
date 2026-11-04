@@ -80,7 +80,16 @@ fn install_panic_hook() {
         #[cfg(windows)]
         if let Some(location) = info.location() {
             if location.file().replace('\\', "/").contains("liquid-verre") {
-                crate::platform::windows::glass_engine::mark_engine_suspect();
+                // 库渲染线程名为 `liquid-verre-render`：只接受渲染线程（或未命名
+                // 线程）上的库 panic 作为嫌疑信号，避免其它线程的库内 panic 把
+                // 健康引擎误判死亡并触发无谓重建（2026-11-04 自检审计 P2）。
+                let on_engine_thread = std::thread::current()
+                    .name()
+                    .map(|n| n.contains("liquid-verre") || n.contains("glass"))
+                    .unwrap_or(true);
+                if on_engine_thread {
+                    crate::platform::windows::glass_engine::mark_engine_suspect();
+                }
             }
         }
         let backtrace = std::backtrace::Backtrace::force_capture();

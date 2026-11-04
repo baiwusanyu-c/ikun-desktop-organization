@@ -1,156 +1,30 @@
-//! 文件图标提取
+//! File icon extraction.
+//!
+//! Content files prefer `IShellItemImageFactory` thumbnails. Applications and
+//! shortcuts use the typed Shell icon APIs from the `windows` crate.
 
-#![allow(dead_code)] // Windows 平台组件，部分在当前构建路径未使用
-//!
-//! 获取文件缩略图或系统图标句柄 (HICON)。
-//!
-//! 内容文件优先使用 `IShellItemImageFactory` 缩略图；应用文件和 `.lnk`
-//! 快捷方式使用 `SHDefExtractIconW` 等 Shell 图标 API，避免缩略图画布留白。
+#![allow(dead_code)]
 
 use std::ffi::c_void;
 
+use windows::core::{Interface, GUID, PCWSTR};
+use windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES;
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CoUninitialize, IPersistFile, CLSCTX_INPROC_SERVER,
+    COINIT_APARTMENTTHREADED, STGM_READ,
+};
+use windows::Win32::UI::Shell::Common::ITEMIDLIST;
+use windows::Win32::UI::Shell::{
+    ILFree, IShellLinkW, SHDefExtractIconW, SHGetFileInfoW, SHParseDisplayName, SHFILEINFOW,
+    SHGFI_DISPLAYNAME, SHGFI_ICON, SHGFI_LARGEICON, SHGFI_PIDL, SHGFI_SMALLICON, SHGFI_TYPENAME,
+};
+use windows::Win32::UI::WindowsAndMessaging::HICON as WinHICON;
+
 type HICON = *mut c_void;
-type HRESULT = i32;
 type RawHBITMAP = *mut c_void;
 
-const SHGFI_ICON: u32 = 0x000000100;
-const SHGFI_DISPLAYNAME: u32 = 0x000000200;
-const SHGFI_TYPENAME: u32 = 0x000000400;
-const SHGFI_LARGEICON: u32 = 0x000000000;
-const SHGFI_SMALLICON: u32 = 0x000000001;
-const SHGFI_PIDL: u32 = 0x00000008;
-
-// COM 常量
-const S_OK: HRESULT = 0;
-const COINIT_APARTMENTTHREADED: u32 = 0x2;
-
 // CLSID_ShellLink = {00021401-0000-0000-C000-000000000046}
-const CLSID_SHELLLINK: [u8; 16] = [
-    0x01, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
-];
-
-// IID_IShellLinkW = {000214F9-0000-0000-C000-000000000046}
-const IID_ISHELLLINKW: [u8; 16] = [
-    0xF9, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
-];
-
-// IID_IPersistFile = {0000010B-0000-0000-C000-000000000046}
-const IID_IPERSISTFILE: [u8; 16] = [
-    0x0B, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
-];
-
-// IID_IShellItemImageFactory = {bcc18b79-ba16-442f-80c4-8a59c30c463b}
-
-#[repr(C)]
-#[allow(dead_code)]
-struct IUnknownVtbl {
-    query_interface: unsafe extern "system" fn(*mut c_void, *const u8, *mut *mut c_void) -> HRESULT,
-    add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
-    release: unsafe extern "system" fn(*mut c_void) -> u32,
-}
-
-/// IPersistFile vtable（继承 IPersist → IUnknown）
-#[repr(C)]
-struct IPersistFileVtbl {
-    // IUnknown
-    query_interface: unsafe extern "system" fn(*mut c_void, *const u8, *mut *mut c_void) -> HRESULT,
-    add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
-    release: unsafe extern "system" fn(*mut c_void) -> u32,
-    // IPersist
-    get_class_id: unsafe extern "system" fn(*mut c_void, *mut u8) -> HRESULT,
-    // IPersistFile
-    is_dirty: unsafe extern "system" fn(*mut c_void) -> HRESULT,
-    load: unsafe extern "system" fn(*mut c_void, *const u16, u32) -> HRESULT,
-}
-
-/// IShellLinkW vtable（继承 IUnknown）
-#[repr(C)]
-struct IShellLinkWVtbl {
-    // IUnknown
-    query_interface: unsafe extern "system" fn(*mut c_void, *const u8, *mut *mut c_void) -> HRESULT,
-    add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
-    release: unsafe extern "system" fn(*mut c_void) -> u32,
-    // IShellLinkW - GetPath 是第一个方法
-    get_path: unsafe extern "system" fn(
-        *mut c_void,
-        *mut u16,
-        i32,
-        *mut c_void, // WIN32_FIND_DATAW*
-        u32,
-    ) -> HRESULT,
-}
-
-#[repr(C)]
-#[allow(non_snake_case)]
-struct IShellLinkW {
-    lpVtbl: *const IShellLinkWVtbl,
-}
-
-#[repr(C)]
-#[allow(non_snake_case)]
-struct IPersistFile {
-    lpVtbl: *const IPersistFileVtbl,
-}
-
-/// ITEMIDLIST 占位类型（仅用于指针传递，不需要解引用）
-#[repr(C)]
-struct ITEMIDLIST {
-    _mkid: [u8; 0],
-}
-
-/// SHFILEINFOW 结构体
-#[repr(C)]
-pub struct SHFILEINFOW {
-    pub h_icon: HICON,
-    pub i_icon: i32,
-    pub dw_attributes: u32,
-    pub sz_display_name: [u16; 260],
-    pub sz_type_name: [u16; 80],
-}
-
-impl Default for SHFILEINFOW {
-    fn default() -> Self {
-        unsafe { std::mem::zeroed() }
-    }
-}
-
-extern "system" {
-    fn SHGetFileInfoW(
-        pszPath: *const u16,
-        dwFileAttributes: u32,
-        psfi: *mut SHFILEINFOW,
-        cbFileInfo: u32,
-        uFlags: u32,
-    ) -> usize;
-    fn DestroyIcon(hIcon: HICON) -> i32;
-    fn SHDefExtractIconW(
-        pszIconFile: *const u16,
-        iIndex: i32,
-        uFlags: u32,
-        phiconLarge: *mut HICON,
-        phiconSmall: *mut HICON,
-        nIconSize: u32,
-    ) -> i32;
-    // COM
-    fn CoInitializeEx(pvReserved: *mut c_void, dwCoInit: u32) -> HRESULT;
-    fn CoUninitialize();
-    fn CoCreateInstance(
-        rclsid: *const u8,
-        pUnkOuter: *mut c_void,
-        dwClsContext: u32,
-        riid: *const u8,
-        ppv: *mut *mut c_void,
-    ) -> HRESULT;
-    // Shell 名称解析与 PIDL 管理（用于虚拟 Shell 对象图标提取）
-    fn SHParseDisplayName(
-        pszName: *const u16,
-        pbc: *mut c_void,
-        ppidl: *mut *mut ITEMIDLIST,
-        sfgaoIn: u32,
-        psfgaoOut: *mut u32,
-    ) -> HRESULT;
-    fn ILFree(pidl: *mut ITEMIDLIST);
-}
+const CLSID_SHELL_LINK: GUID = GUID::from_u128(0x00021401_0000_0000_C000_000000000046);
 
 /// 文件图标信息
 pub struct FileIconInfo {
@@ -169,74 +43,20 @@ pub struct FileIconInfo {
 pub fn resolve_shortcut_target(lnk_path: &str) -> Option<String> {
     let lnk_wide: Vec<u16> = lnk_path.encode_utf16().chain(std::iter::once(0)).collect();
 
-    // COM 可能已被 Tauri/WebView 线程初始化，RPC_E_CHANGED_MODE 表示已有 COM 环境可用
-    let hr = unsafe { CoInitializeEx(std::ptr::null_mut(), COINIT_APARTMENTTHREADED) };
-    let we_initialized_com = hr == S_OK;
+    // COM may already be initialized on this thread. A successful call, including
+    // S_FALSE, must be paired with CoUninitialize.
+    let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    let we_initialized_com = hr.is_ok();
 
     let result = (|| -> Option<String> {
-        // 创建 ShellLink COM 对象
-        let mut link_ptr: *mut c_void = std::ptr::null_mut();
-        let hr = unsafe {
-            CoCreateInstance(
-                CLSID_SHELLLINK.as_ptr(),
-                std::ptr::null_mut(),
-                1, // CLSCTX_INPROC_SERVER
-                IID_ISHELLLINKW.as_ptr(),
-                &mut link_ptr,
-            )
-        };
-        if hr != S_OK || link_ptr.is_null() {
-            return None;
-        }
+        let link: IShellLinkW =
+            unsafe { CoCreateInstance(&CLSID_SHELL_LINK, None, CLSCTX_INPROC_SERVER) }.ok()?;
+        let persist: IPersistFile = link.cast().ok()?;
 
-        let link = link_ptr as *mut IShellLinkW;
+        unsafe { persist.Load(PCWSTR(lnk_wide.as_ptr()), STGM_READ) }.ok()?;
 
-        // 获取 IPersistFile 接口用于加载 .lnk 文件
-        let mut persist_ptr: *mut c_void = std::ptr::null_mut();
-        let hr = unsafe {
-            ((*(*link).lpVtbl).query_interface)(
-                link_ptr,
-                IID_IPERSISTFILE.as_ptr(),
-                &mut persist_ptr,
-            )
-        };
-        if hr != S_OK || persist_ptr.is_null() {
-            unsafe { ((*(*link).lpVtbl).release)(link_ptr) };
-            return None;
-        }
-
-        let persist = persist_ptr as *mut IPersistFile;
-
-        // 加载 .lnk 文件
-        let hr = unsafe { ((*(*persist).lpVtbl).load)(persist_ptr, lnk_wide.as_ptr(), 0) };
-        if hr != S_OK {
-            unsafe {
-                ((*(*persist).lpVtbl).release)(persist_ptr);
-                ((*(*link).lpVtbl).release)(link_ptr);
-            }
-            return None;
-        }
-
-        // 获取目标路径
-        let mut path_buf = vec![0u16; 1024];
-        let hr = unsafe {
-            ((*(*link).lpVtbl).get_path)(
-                link_ptr,
-                path_buf.as_mut_ptr(),
-                1024,
-                std::ptr::null_mut(),
-                0,
-            )
-        };
-
-        unsafe {
-            ((*(*persist).lpVtbl).release)(persist_ptr);
-            ((*(*link).lpVtbl).release)(link_ptr);
-        }
-
-        if hr != S_OK {
-            return None;
-        }
+        let mut path_buf = [0u16; 1024];
+        unsafe { link.GetPath(&mut path_buf, std::ptr::null_mut(), 0) }.ok()?;
 
         let len = path_buf.iter().position(|&c| c == 0).unwrap_or(0);
         if len == 0 {
@@ -268,87 +88,86 @@ fn extract_clsid_icon(clsid_path: &str) -> Option<FileIconInfo> {
         .chain(std::iter::once(0))
         .collect();
 
-    // 解析 CLSID 字符串为 PIDL
     let mut pidl: *mut ITEMIDLIST = std::ptr::null_mut();
-    let mut sfgao_out: u32 = 0;
-    let hr = unsafe {
+    let mut sfgao_out = 0u32;
+    if let Err(e) = unsafe {
         SHParseDisplayName(
-            path_wide.as_ptr(),
-            std::ptr::null_mut(),
+            PCWSTR(path_wide.as_ptr()),
+            None,
             &mut pidl,
             0,
-            &mut sfgao_out,
+            Some(&mut sfgao_out),
         )
-    };
-    if hr != S_OK || pidl.is_null() {
-        log::warn!(
-            "SHParseDisplayName 失败 (hr={:#X}): {}",
-            hr as u32,
-            clsid_path
-        );
+    } {
+        log::warn!("SHParseDisplayName failed: {}: {}", e, clsid_path);
+        return None;
+    }
+    if pidl.is_null() {
+        log::warn!("SHParseDisplayName returned a null PIDL: {}", clsid_path);
         return None;
     }
 
-    // 提取显示名称和类型名称
     let mut name_info = SHFILEINFOW::default();
     unsafe {
         SHGetFileInfoW(
-            pidl as *const u16,
-            0,
-            &mut name_info,
+            PCWSTR(pidl as *const u16),
+            FILE_FLAGS_AND_ATTRIBUTES(0),
+            Some(&mut name_info as *mut SHFILEINFOW),
             std::mem::size_of::<SHFILEINFOW>() as u32,
             SHGFI_PIDL | SHGFI_DISPLAYNAME | SHGFI_TYPENAME,
         );
     }
     let name_len = name_info
-        .sz_display_name
+        .szDisplayName
         .iter()
         .position(|&c| c == 0)
         .unwrap_or(0);
-    let display_name = String::from_utf16_lossy(&name_info.sz_display_name[..name_len]);
+    let display_name = String::from_utf16_lossy(&name_info.szDisplayName[..name_len]);
     let type_len = name_info
-        .sz_type_name
+        .szTypeName
         .iter()
         .position(|&c| c == 0)
         .unwrap_or(0);
-    let type_name = String::from_utf16_lossy(&name_info.sz_type_name[..type_len]);
+    let type_name = String::from_utf16_lossy(&name_info.szTypeName[..type_len]);
 
-    // 提取大图标 (32x32)
     let mut icon_info = SHFILEINFOW::default();
     let result = unsafe {
         SHGetFileInfoW(
-            pidl as *const u16,
-            0,
-            &mut icon_info,
+            PCWSTR(pidl as *const u16),
+            FILE_FLAGS_AND_ATTRIBUTES(0),
+            Some(&mut icon_info as *mut SHFILEINFOW),
             std::mem::size_of::<SHFILEINFOW>() as u32,
             SHGFI_PIDL | SHGFI_ICON | SHGFI_LARGEICON,
         )
     };
 
-    let hicon = if result != 0 && !icon_info.h_icon.is_null() {
-        icon_info.h_icon
+    let hicon = if result != 0 && !icon_info.hIcon.0.is_null() {
+        icon_info.hIcon.0 as HICON
     } else {
-        // 回退：小图标 (16x16)
         let result2 = unsafe {
             SHGetFileInfoW(
-                pidl as *const u16,
-                0,
-                &mut icon_info,
+                PCWSTR(pidl as *const u16),
+                FILE_FLAGS_AND_ATTRIBUTES(0),
+                Some(&mut icon_info as *mut SHFILEINFOW),
                 std::mem::size_of::<SHFILEINFOW>() as u32,
                 SHGFI_PIDL | SHGFI_ICON | SHGFI_SMALLICON,
             )
         };
-        if result2 != 0 && !icon_info.h_icon.is_null() {
-            icon_info.h_icon
+        if result2 != 0 && !icon_info.hIcon.0.is_null() {
+            icon_info.hIcon.0 as HICON
         } else {
-            unsafe { ILFree(pidl) };
+            unsafe { ILFree(Some(pidl)) };
             return None;
         }
     };
 
-    unsafe { ILFree(pidl) };
+    unsafe { ILFree(Some(pidl)) };
 
-    log::debug!("虚拟对象图标提取成功: {} -> {}", clsid_path, display_name);
+    log::debug!(
+        "virtual shell icon extracted: {} -> {}",
+        clsid_path,
+        display_name
+    );
     Some(FileIconInfo {
         hicon,
         display_name,
@@ -409,7 +228,8 @@ fn extract_file_thumbnail(file_path: &str, size: i32) -> Option<RawHBITMAP> {
 /// The converted HICON is rendered through draw_icon_d2d.
 fn thumbnail_to_hicon(hbitmap: RawHBITMAP) -> HICON {
     use windows::Win32::Graphics::Gdi::{
-        CreateBitmap, DeleteObject, GetDC, ReleaseDC, HBITMAP as WinHBITMAP,
+        CreateBitmap, DeleteObject, GetDC, GetDIBits, ReleaseDC, BITMAPINFO, BITMAPINFOHEADER,
+        DIB_RGB_COLORS, HBITMAP as WinHBITMAP,
     };
     use windows::Win32::UI::WindowsAndMessaging::{CreateIconIndirect, ICONINFO};
 
@@ -420,61 +240,23 @@ fn thumbnail_to_hicon(hbitmap: RawHBITMAP) -> HICON {
     // Get bitmap dimensions
     let screen_dc = unsafe { GetDC(None) };
 
-    #[repr(C)]
-    struct BitmapInfoHeader {
-        bi_size: u32,
-        bi_width: i32,
-        bi_height: i32,
-        bi_planes: u16,
-        bi_bit_count: u16,
-        bi_compression: u32,
-        bi_size_image: u32,
-        bi_x_pels_per_meter: i32,
-        bi_y_pels_per_meter: i32,
-        bi_clr_used: u32,
-        bi_clr_important: u32,
-    }
-
-    let mut bi = BitmapInfoHeader {
-        bi_size: std::mem::size_of::<BitmapInfoHeader>() as u32,
-        bi_width: 0,
-        bi_height: 0,
-        bi_planes: 0,
-        bi_bit_count: 0,
-        bi_compression: 0,
-        bi_size_image: 0,
-        bi_x_pels_per_meter: 0,
-        bi_y_pels_per_meter: 0,
-        bi_clr_used: 0,
-        bi_clr_important: 0,
-    };
-
-    extern "system" {
-        fn GetDIBits(
-            hdc: *mut c_void,
-            hbm: *mut c_void,
-            start: u32,
-            lines: u32,
-            bits: *mut c_void,
-            bi: *mut c_void,
-            usage: u32,
-        ) -> i32;
-    }
+    let mut bi = BITMAPINFO::default();
+    bi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
 
     let get_result = unsafe {
         GetDIBits(
-            screen_dc.0,
-            hbitmap,
+            screen_dc,
+            WinHBITMAP(hbitmap),
             0,
             0,
-            std::ptr::null_mut(),
-            &mut bi as *mut BitmapInfoHeader as *mut c_void,
-            0,
+            None,
+            &mut bi,
+            DIB_RGB_COLORS,
         )
     };
 
-    let bmp_w = bi.bi_width;
-    let bmp_h = bi.bi_height.abs();
+    let bmp_w = bi.bmiHeader.biWidth;
+    let bmp_h = bi.bmiHeader.biHeight.abs();
 
     unsafe {
         let _ = ReleaseDC(None, screen_dc);
@@ -554,21 +336,17 @@ pub fn extract_file_icon(file_path: &str) -> Option<FileIconInfo> {
     let mut info = SHFILEINFOW::default();
     unsafe {
         SHGetFileInfoW(
-            display_path_wide.as_ptr(),
-            0,
-            &mut info,
+            PCWSTR(display_path_wide.as_ptr()),
+            FILE_FLAGS_AND_ATTRIBUTES(0),
+            Some(&mut info as *mut SHFILEINFOW),
             std::mem::size_of::<SHFILEINFOW>() as u32,
             SHGFI_DISPLAYNAME | SHGFI_TYPENAME,
         );
     }
-    let name_len = info
-        .sz_display_name
-        .iter()
-        .position(|&c| c == 0)
-        .unwrap_or(0);
-    let display_name = String::from_utf16_lossy(&info.sz_display_name[..name_len]);
-    let type_len = info.sz_type_name.iter().position(|&c| c == 0).unwrap_or(0);
-    let type_name = String::from_utf16_lossy(&info.sz_type_name[..type_len]);
+    let name_len = info.szDisplayName.iter().position(|&c| c == 0).unwrap_or(0);
+    let display_name = String::from_utf16_lossy(&info.szDisplayName[..name_len]);
+    let type_len = info.szTypeName.iter().position(|&c| c == 0).unwrap_or(0);
+    let type_name = String::from_utf16_lossy(&info.szTypeName[..type_len]);
 
     // 对 .lnk 快捷方式，始终解析目标路径并提取目标图标，避免 Shell 缓存图标
     // 自带的"快捷方式"小箭头覆层。
@@ -608,22 +386,22 @@ pub fn extract_file_icon(file_path: &str) -> Option<FileIconInfo> {
     }
 
     // 1. 尝试高质量图标提取（128×128，缩放后不失真）
-    let mut hq_icon: HICON = std::ptr::null_mut();
+    let mut hq_icon = WinHICON::default();
     let icon_size: u32 = 128;
     let hq_result = unsafe {
         SHDefExtractIconW(
-            path_wide.as_ptr(),
+            PCWSTR(path_wide.as_ptr()),
             0,
             0,
-            &mut hq_icon,
-            std::ptr::null_mut(),
+            Some(&mut hq_icon as *mut WinHICON),
+            None,
             icon_size,
         )
     };
-    if hq_result == 0 && !hq_icon.is_null() {
+    if hq_result.is_ok() && !hq_icon.0.is_null() {
         log::debug!("高清图标提取成功: {} (128x128)", file_path);
         return Some(FileIconInfo {
-            hicon: hq_icon,
+            hicon: hq_icon.0 as HICON,
             display_name,
             type_name,
         });
@@ -638,16 +416,16 @@ pub fn extract_file_icon(file_path: &str) -> Option<FileIconInfo> {
     let mut fallback_info = SHFILEINFOW::default();
     let result = unsafe {
         SHGetFileInfoW(
-            path_wide.as_ptr(),
-            0,
-            &mut fallback_info,
+            PCWSTR(path_wide.as_ptr()),
+            FILE_FLAGS_AND_ATTRIBUTES(0),
+            Some(&mut fallback_info as *mut SHFILEINFOW),
             std::mem::size_of::<SHFILEINFOW>() as u32,
             SHGFI_ICON | SHGFI_LARGEICON,
         )
     };
-    if result != 0 && !fallback_info.h_icon.is_null() {
+    if result != 0 && !fallback_info.hIcon.0.is_null() {
         return Some(FileIconInfo {
-            hicon: fallback_info.h_icon,
+            hicon: fallback_info.hIcon.0 as HICON,
             display_name,
             type_name,
         });
@@ -656,16 +434,16 @@ pub fn extract_file_icon(file_path: &str) -> Option<FileIconInfo> {
     // 3. 回退：小图标（16×16）
     let result2 = unsafe {
         SHGetFileInfoW(
-            path_wide.as_ptr(),
-            0,
-            &mut fallback_info,
+            PCWSTR(path_wide.as_ptr()),
+            FILE_FLAGS_AND_ATTRIBUTES(0),
+            Some(&mut fallback_info as *mut SHFILEINFOW),
             std::mem::size_of::<SHFILEINFOW>() as u32,
             SHGFI_ICON | SHGFI_SMALLICON,
         )
     };
-    if result2 != 0 && !fallback_info.h_icon.is_null() {
+    if result2 != 0 && !fallback_info.hIcon.0.is_null() {
         return Some(FileIconInfo {
-            hicon: fallback_info.h_icon,
+            hicon: fallback_info.hIcon.0 as HICON,
             display_name,
             type_name,
         });
@@ -700,7 +478,7 @@ fn should_extract_thumbnail(file_path: &str) -> bool {
 pub fn destroy_icon(hicon: HICON) {
     if !hicon.is_null() {
         unsafe {
-            DestroyIcon(hicon);
+            let _ = windows::Win32::UI::WindowsAndMessaging::DestroyIcon(WinHICON(hicon));
         }
     }
 }

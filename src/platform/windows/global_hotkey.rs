@@ -160,25 +160,6 @@ pub fn setup_global_hotkey(hotkey_str: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// 取消当前全局热键注册。
-pub fn unregister_global_hotkey() {
-    let id = CURRENT_HOTKEY_ID.load(Ordering::SeqCst);
-    if id == 0 {
-        return;
-    }
-
-    let hwnd = HOTKEY_HWND.load(Ordering::SeqCst);
-    if hwnd == 0 {
-        return;
-    }
-
-    unsafe {
-        UnregisterHotKey(hwnd as HWND, id as i32);
-    }
-    CURRENT_HOTKEY_ID.store(0, Ordering::SeqCst);
-    log::info!("全局热键已取消注册");
-}
-
 /// 消费待处理的热键切换事件。
 ///
 /// 返回 `true` 表示用户按下了切换面板快捷键。

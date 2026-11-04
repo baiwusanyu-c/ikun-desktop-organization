@@ -171,13 +171,3 @@ pub(crate) fn update_drag_over_visual(hwnd: HWND, screen_x: i32, screen_y: i32) 
         render_layered_window(hwnd);
     }
 }
-
-/// 计算 shift-drag 插入后的新位置布局（委托到 box_core::drag_logic）
-pub(crate) fn compute_shift_insert_positions(
-    positions: &[(i32, i32)],
-    dragged_idx: usize,
-    insert_lin: i32,
-    cols: i32,
-) -> Vec<(i32, i32)> {
-    apply_shift_insert(positions, dragged_idx, insert_lin, cols)
-}

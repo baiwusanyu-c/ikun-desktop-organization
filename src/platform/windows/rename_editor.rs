@@ -17,11 +17,8 @@ const WM_USER_RENAME_CANCEL: u32 = 0x8102;
 const WM_USER_QUIT_EDIT: u32 = 0x8101;
 
 struct RenameState {
-    edit_hwnd: HWND,
-    container_hwnd: HWND,
-    parent_hwnd: HWND,
-    item_index: i32,
-    original_name: String,
+    /// 唯一被消费的资源：收尾时 DeleteObject（其余句柄/索引均为局部值，
+    /// 存而不用属重构残留，2026-11-04 自检审计删除）。
     font_handle: HGDIOBJ,
 }
 
@@ -206,14 +203,7 @@ unsafe fn edit_thread_main(params: ThreadParams) {
     }
 
     // 保存状态
-    *RENAME_STATE.lock().unwrap() = Some(RenameState {
-        edit_hwnd,
-        container_hwnd,
-        parent_hwnd,
-        item_index,
-        original_name: current_name.clone(),
-        font_handle,
-    });
+    *RENAME_STATE.lock().unwrap() = Some(RenameState { font_handle });
 
     // 设置文本
     let text_wide: Vec<u16> = current_name

@@ -856,7 +856,7 @@ fn render_layered_window_inner(hwnd: HWND) {
     // 锚定左上角，新露出的边缘暂时只有玻璃），会话收尾必然清时间戳补一次全量。
     const SESSION_CONTENT_MIN_MS: u64 = 12;
     if need_content
-        && (data.glass_session_active || data.box_drag_active)
+        && data.glass_session_active
         && data.content_last_render_ms != 0
         && super::glass_engine::now_ms().saturating_sub(data.content_last_render_ms)
             < SESSION_CONTENT_MIN_MS
@@ -1286,7 +1286,7 @@ fn render_layered_window_inner(hwnd: HWND) {
     if glass_active && !dcomp_active {
         let size_matches =
             data.submitted_glass && data.submitted_w == outer_w && data.submitted_h == outer_h;
-        let in_session = data.glass_session_active || data.box_drag_active;
+        let in_session = data.glass_session_active;
         if size_matches || in_session {
             unsafe {
                 ReleaseDC(std::ptr::null_mut(), screen_dc);

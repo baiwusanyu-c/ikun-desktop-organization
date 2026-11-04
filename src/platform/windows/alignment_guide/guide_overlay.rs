@@ -21,10 +21,6 @@ const SAMPLE_GRID_SIZE: i32 = 10;
 
 /// 参考线 Overlay 的窗口数据
 struct GuideOverlayData {
-    /// 画布宽度（物理像素）
-    width: i32,
-    /// 画布高度（物理像素）
-    height: i32,
     /// D2D Factory
     d2d_factory: Option<ID2D1Factory>,
     /// DC RenderTarget
@@ -180,6 +176,19 @@ static CACHED_GUIDE_COLOR: Mutex<Option<windows::Win32::Graphics::Direct2D::Comm
     Mutex::new(None);
 
 static GUIDE_OVERLAY: Mutex<Option<GuideOverlayWindow>> = Mutex::new(None);
+static LAST_HIT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+static LAST_RENDER: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// Reset render throttling state when a size/move session starts or ends.
+pub(crate) fn reset_guide_render_state() {
+    if let Ok(mut last_hit) = LAST_HIT.lock() {
+        *last_hit = None;
+    }
+    if let Ok(mut last_render) = LAST_RENDER.lock() {
+        *last_render = None;
+    }
+}
+
 static CLASS_REGISTERED: Mutex<bool> = Mutex::new(false);
 
 static CLASS_NAME: &[u16] = &[
@@ -190,6 +199,16 @@ static CLASS_NAME: &[u16] = &[
 
 /// 参考线线宽（物理像素）
 const GUIDE_LINE_WIDTH: f32 = 3.0;
+
+fn guide_window_position(
+    local_position: (i32, i32),
+    virtual_desktop_origin: (i32, i32),
+) -> (i32, i32) {
+    (
+        local_position.0 + virtual_desktop_origin.0,
+        local_position.1 + virtual_desktop_origin.1,
+    )
+}
 
 /// 取 Overlay 窗口的用户数据
 fn get_guide_data(hwnd: HWND) -> Option<&'static mut GuideOverlayData> {
@@ -316,8 +335,6 @@ pub fn create_guide_overlay() -> Result<(), &'static str> {
 
     // 挂载窗口数据
     let data = Box::new(GuideOverlayData {
-        width,
-        height,
         d2d_factory: None,
         d2d_target: None,
     });
@@ -353,11 +370,11 @@ pub fn destroy_guide_overlay() {
     }
 }
 
-/// 更新参考线显示
+/// Update the guide overlay from screen-space alignment matches.
 ///
-/// # 参数
-/// - `alignment`: 对齐检测结果（横线 / 竖线集合）
-/// - `work_area_offset`: 虚拟桌面左上角偏移（把屏幕坐标转成本窗坐标）
+/// `work_area_offset` is the screen-space origin of the virtual desktop.
+/// Guide geometry is converted to overlay-local coordinates for DIB drawing,
+/// while the top-level overlay window itself is positioned in screen space.
 pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i32)) {
     let guard = match GUIDE_OVERLAY.lock() {
         Ok(g) => g,
@@ -375,18 +392,10 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
         None => return,
     };
 
-    // 对齐参考线可见性控制（三个 static 必须在函数作用域共享）：
-    // - 有命中 → 刷新 LAST_HIT，按 33ms 节流渲染（DIB 只是线条包围盒，不是全屏）
-    // - 无命中 → 300ms 宽限期内不调 ULW（分层窗保留上一帧位图 = 参考线继续可见），
-    //   超过才隐藏。检测每 16ms 跑一次但移动框矩形有 1~2 拍延迟，命中间歇性，
-    //   立刻隐藏 = 参考线闪一帧就消失（2026-11-03 用户报「不显示」根因：
-    //   原实现把 LAST_HIT 声明在两个不同的 if 分支里 = 两个独立的 static，
-    //   写一个读另一个 → 宽限期永远 None → 每次都立刻隐藏）。
+    // Keep the previous layered-window frame visible during the 300 ms grace
+    // period, then throttle successful renders to roughly 30 Hz.
     let has_lines =
         !alignment.horizontal_matches.is_empty() || !alignment.vertical_matches.is_empty();
-
-    static LAST_HIT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
-    static LAST_RENDER: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
     if !has_lines {
         let now = std::time::Instant::now();
@@ -464,15 +473,21 @@ pub fn update_guide_lines(alignment: &AlignmentResult, work_area_offset: (i32, i
         }
         return;
     }
-    by0 -= margin;
-    bx1 += margin;
-    by1 += margin;
     let off_x = bx0;
     let off_y = by0;
     let bw = bx1 - bx0;
     let bh = by1 - by0;
+    let (window_x, window_y) = guide_window_position((bx0, by0), work_area_offset);
     unsafe {
-        SetWindowPos(hwnd, HWND_TOPMOST, bx0, by0, bw, bh, SWP_NOACTIVATE);
+        SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            window_x,
+            window_y,
+            bw,
+            bh,
+            SWP_NOACTIVATE,
+        );
     }
     init_d2d_devices(data);
 
@@ -687,6 +702,16 @@ pub fn is_guide_overlay_created() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_guide_window_position_negative_virtual_origin_x() {
+        assert_eq!(guide_window_position((100, 50), (-1920, 0)), (-1820, 50));
+    }
+
+    #[test]
+    fn test_guide_window_position_negative_virtual_origin_y() {
+        assert_eq!(guide_window_position((100, 50), (0, -1080)), (100, -1030));
+    }
 
     #[test]
     fn test_relative_luminance_black() {

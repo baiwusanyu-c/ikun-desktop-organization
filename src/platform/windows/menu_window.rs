@@ -144,17 +144,21 @@ pub fn show_menu_window(parent_hwnd: HWND) {
             // parent_data 已失效，不再访问
             // 3. 销毁后重绘所有剩余窗口（修复 DestroyWindow 导致其他分层窗口失效）
             super::grid_window::rerender_all_grid_windows();
-            // 4. 按 UUID 精确删除配置
-            match crate::config::AppConfig::load() {
-                Ok(mut config) => {
-                    config.layout.boxes.retain(|b| b.id != config_id);
-                    if let Err(e) = config.save() {
-                        log::warn!("删除后保存配置失败: {}", e);
-                    } else {
-                        log::info!("已删除 '{}', 剩余 {} 个", title, config.layout.boxes.len());
-                    }
-                }
-                Err(e) => log::warn!("加载配置失败: {}", e),
+            // 4. 按 UUID 精确删除配置（唯一配置写入口；内存真源同步删除，
+            // 防止后续任何整文件回写把被删的框复活）
+            let removed_id = config_id;
+            let removed_title = title.clone();
+            let removed =
+                super::config_writeback::write_platform_config("删除分类框", move |config| {
+                    config.layout.boxes.retain(|b| b.id != removed_id);
+                    log::info!(
+                        "已删除 '{}', 剩余 {} 个",
+                        removed_title,
+                        config.layout.boxes.len()
+                    );
+                });
+            if !removed {
+                log::warn!("删除分类框后配置落盘失败: {config_id}");
             }
             // 还原仓库中不再被任何剩余分类框管理的图标到桌面
             super::icon_hider::restore_unmanaged_vault_icons();
@@ -165,13 +169,6 @@ pub fn show_menu_window(parent_hwnd: HWND) {
         render_layered_window(parent_hwnd);
     }
 }
-
-#[allow(dead_code)]
-pub fn is_menu_visible() -> bool {
-    false
-}
-#[allow(dead_code)]
-pub fn hide_menu_window() {}
 
 // ===== 菜单项构建 =====
 

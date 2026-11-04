@@ -102,6 +102,10 @@ static LAST_SNAPSHOT_EPOCH: AtomicU64 = AtomicU64::new(0);
 static SNAPSHOT_STALL_TICKS: AtomicU64 = AtomicU64::new(0);
 /// 最近一次自动复活的单调时钟毫秒（限流，防止复活风暴）。
 static LAST_REVIVE_MS: AtomicU64 = AtomicU64::new(0);
+/// 连续观察到「引擎不在运行」的 tick 数（死亡双拍确认用，仅 tick 线程读写）。
+static NOT_RUNNING_TICKS: AtomicU64 = AtomicU64::new(0);
+/// 重建单飞标志：同一时刻只允许一个线程在重建引擎（自检审计 P2）。
+static REBUILDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// panic hook 入口：标记「渲染线程可能已被这次 panic 打死」。
 ///
@@ -241,8 +245,9 @@ pub(crate) fn phys_to_logical_rect(phys: &RECT, ratio: f32) -> [f32; 4] {
     } else {
         1.0
     };
-    let w = (phys.right - phys.left) as f32 / ratio;
-    let h = (phys.bottom - phys.top) as f32 / ratio;
+    // saturating 减法：入口允许任意 RECT，极端坐标不得溢出 panic（自检审计 P2）
+    let w = phys.right.saturating_sub(phys.left) as f32 / ratio;
+    let h = phys.bottom.saturating_sub(phys.top) as f32 / ratio;
     [phys.left as f32, phys.top as f32, w, h]
 }
 
@@ -355,6 +360,26 @@ pub(crate) fn glass_resize_floor(dpi: u32) -> (f32, f32) {
     (min_w.max(24.0), min_h.max(24.0))
 }
 
+/// 托底夹取后的缩放配置：`block_config_for` / `apply_settings` / `set_box_locked`
+/// 共用口径。2026-11-04 自检审计：解锁路径此前直接下发原始配置的超限下限
+/// （历史上复现过 605x1150），锁定→解锁一次分类框就被重新钉死；
+/// 三份重复的夹取逻辑收敛到本函数，杜绝再漏第三个调用点。
+#[must_use]
+fn clamped_resize_options(style_cfg: &LiquidGlassConfig, dpi: u32) -> ResizeOptions {
+    let mut resize = resize_options_from(&style_cfg.resize);
+    let (floor_w, floor_h) = glass_resize_floor(dpi);
+    if resize.min_width > floor_w || resize.min_height > floor_h {
+        log::warn!(
+            "玻璃缩放最小尺寸被夹取: ({},{}) -> ({floor_w:.0},{floor_h:.0}) dpi={dpi}（配置值大于最小跟踪尺寸）",
+            resize.min_width,
+            resize.min_height,
+        );
+        resize.min_width = resize.min_width.min(floor_w);
+        resize.min_height = resize.min_height.min(floor_h);
+    }
+    resize
+}
+
 /// 分类框状态 → 下发给库的块参数（`attach_box` 与引擎重建共用一份口径）。
 ///
 /// # 为什么锁定不能关 `interactive`（2026-10-27 分类框全灭根因）
@@ -375,19 +400,8 @@ fn block_config_for(
     locked: bool,
     dpi: u32,
 ) -> WindowConfig {
-    let mut resize = resize_options_from(&style_cfg.resize);
-    // 最小尺寸只能「托底」不能「钉死」：超过宿主上限的部分一律压回
-    // （见 `glass_resize_floor`），否则样式页里一个误拉的滑条就让全部框改不了大小。
-    let (floor_w, floor_h) = glass_resize_floor(dpi);
-    if resize.min_width > floor_w || resize.min_height > floor_h {
-        log::warn!(
-            "玻璃缩放最小尺寸被夹取: ({},{}) -> ({floor_w:.0},{floor_h:.0}) dpi={dpi}（配置值大于最小跟踪尺寸）",
-            resize.min_width,
-            resize.min_height,
-        );
-        resize.min_width = resize.min_width.min(floor_w);
-        resize.min_height = resize.min_height.min(floor_h);
-    }
+    // 最小尺寸只能「托底」不能「钉死」：统一走 `clamped_resize_options` 口径。
+    let mut resize = clamped_resize_options(style_cfg, dpi);
     if locked {
         resize.enabled = false;
     }
@@ -495,6 +509,18 @@ fn start_engine_with_handler(mut engine: Engine) -> Result<Engine, liquid_verre:
         EngineEvent::ResizeEnded { id, .. } | EngineEvent::MoveEnded { id, .. } => {
             dispatch_glass_session(*id, false);
         }
+        // FocusHint 即时投递：回调跑在库渲染线程上，这里只做一次异步
+        // PostMessage（不碰 HOLDER/库锁、不阻塞）。等 100ms 的 poll_events_to_log
+        // 消费会把焦点反馈拖慢最多一整拍（2026-11-04 自检审计 P2）。
+        // 轮询路径的同名分支保留为兜底，重复 SetFocus 幂等无害。
+        EngineEvent::FocusHint { hwnd, .. } if *hwnd != 0 => unsafe {
+            super::ffi_imports::PostMessageW(
+                *hwnd as *mut std::ffi::c_void,
+                super::ffi_types::WM_USER_GLASS_FOCUS,
+                0,
+                0,
+            );
+        },
         _ => {}
     })));
     engine.start()?;
@@ -533,13 +559,27 @@ pub fn wake_canvas_idle() {
 /// 需重启进程才能彻底清掉——这是「分类框全灭」与「留一层残影」的取舍。
 pub fn revive_if_dead(app: &AppConfig) {
     let suspect = ENGINE_SUSPECT.swap(false, Ordering::SeqCst);
-    let dead = match HOLDER.lock() {
-        Ok(guard) => match guard.as_ref() {
-            Some(holder) => !holder.engine.is_running(),
+    // 死亡判定必须连续两拍成立：`Engine::start` 返回只代表线程被 spawn，
+    // `set_running(true)` 在新线程里执行；刚重建完的一毫秒内读到
+    // is_running=false 会把健康引擎误杀重建（2026-11-04 自检审计 P2）。
+    let mut dead = false;
+    {
+        let guard = match HOLDER.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        match guard.as_ref() {
+            Some(holder) => {
+                if holder.engine.is_running() {
+                    NOT_RUNNING_TICKS.store(0, Ordering::Relaxed);
+                } else {
+                    let seen = NOT_RUNNING_TICKS.fetch_add(1, Ordering::Relaxed) + 1;
+                    dead = seen >= 2;
+                }
+            }
             None => return,
-        },
-        Err(_) => return,
-    };
+        }
+    }
     let panic_killed_thread = suspect && snapshot_stalled();
     if !dead && !panic_killed_thread {
         return;
@@ -669,16 +709,22 @@ pub fn is_active() -> bool {
 
 /// 关闭引擎并清空全部玻璃块（应用退出路径）。
 pub fn shutdown() {
-    if let Ok(mut guard) = HOLDER.lock() {
-        if let Some(mut holder) = guard.take() {
-            for entry in holder.boxes.values() {
-                entry.window.close();
-            }
-            holder.boxes.clear();
-            holder.engine.shutdown();
-            registry_clear();
-            log::info!("玻璃引擎已关闭");
+    let holder = match HOLDER.lock() {
+        Ok(mut guard) => guard.take(),
+        Err(_) => None,
+    };
+    if let Some(mut holder) = holder {
+        for entry in holder.boxes.values() {
+            entry.window.close();
         }
+        holder.boxes.clear();
+        holder.engine.shutdown();
+        registry_clear();
+        // 画布即将销毁：注销挂在画布上的 OLE 拖放转发器（AddRef/Release
+        // 配对回收；2026-11-04 自检审计：原实现只注册不回收）。
+        // 锁已释放后才调用：revoke 内部不得再碰 HOLDER，保持既有锁纪律。
+        super::drop_target::revoke_all_canvas_drop_targets();
+        log::info!("玻璃引擎已关闭");
     }
 }
 
@@ -697,6 +743,13 @@ pub fn attach_box(box_id: Uuid, hwnd: isize, content_phys: &RECT, dpi: u32, lock
     let Some(holder) = guard.as_mut() else {
         return false;
     };
+    if !holder.engine.is_running() {
+        // 渲染线程已退出但 holder 尚未被 revive 清理：必须快速失败，
+        // 否则 create_window 只会被库命令队列静默丢弃，调用方白等 300ms
+        // 才发现没有块（2026-11-04 自检审计 P2）。
+        log::warn!("玻璃引擎渲染线程未运行，attach 拒绝（该分类框回退旧渲染路径）");
+        return false;
+    }
     if holder.boxes.contains_key(&box_id) {
         // 已存在（如重复恢复布局）：改为同步几何。
         return update_box_rect_locked(holder, box_id, content_phys, dpi);
@@ -878,9 +931,15 @@ pub fn set_box_locked(box_id: Uuid, locked: bool) {
     entry.window.set_movable(!locked);
     entry.window.set_resizable(!locked);
     if !locked {
+        // 解锁按当前 DPI 重新走托底夹取（自检审计 P1：旧代码直接把未夹取的
+        // 配置下限灌回库，分类框又被钉死）。
+        let style_cfg = holder.style_cfg;
+        let dpi_now =
+            unsafe { super::ffi_imports::GetDpiForWindow(entry.hwnd as *mut std::ffi::c_void) };
+        let dpi = if dpi_now > 0 { dpi_now } else { 96 };
         entry
             .window
-            .set_resize_options(resize_options_from(&holder.style_cfg.resize));
+            .set_resize_options(clamped_resize_options(&style_cfg, dpi));
     }
 }
 
@@ -932,32 +991,24 @@ pub fn apply_settings(app: &AppConfig) {
     }
     holder.style_cfg = *glass;
     let style = glass_style_from(glass);
-    let mut resize = resize_options_from(&glass.resize);
-    // 与 block_config_for 同口径夹取：否则样式切换会把原始配置的 605x1150
-    // 直接推给每个块 set_resize_options，框又被钉死（2026-11-03 用户复验）。
     holder.engine.set_default_style(style);
     let primary = get_primary_monitor_dpi();
+    // 逐块按**窗口真实 DPI** 走 `clamped_resize_options` 统一夹取口径。
+    // （旧式 `entry.ratio * primary` 在非 96 主屏上会算出错误 DPI；
+    //  样式切换不得把超限下限直接推给块，2026-11-03 用户复验。）
     for entry in holder.boxes.values_mut() {
-        let dpi = (entry.ratio * primary as f32).round() as u32;
-        let (fw, fh) = glass_resize_floor(dpi);
-        let mut r = resize;
-        if r.min_width > fw || r.min_height > fh {
-            r.min_width = r.min_width.min(fw);
-            r.min_height = r.min_height.min(fh);
-        }
+        let dpi_now =
+            unsafe { super::ffi_imports::GetDpiForWindow(entry.hwnd as *mut std::ffi::c_void) };
+        let dpi = if dpi_now > 0 { dpi_now } else { primary };
+        let r = clamped_resize_options(glass, dpi);
         entry.window.set_style(Some(style));
         if !entry.locked {
             entry.window.set_resize_options(r);
         }
     }
     // default_resize 也要夹（新建块的兜底）。
-    let primary_dpi = primary;
-    let (dfw, dfh) = glass_resize_floor(primary_dpi);
-    if resize.min_width > dfw || resize.min_height > dfh {
-        resize.min_width = resize.min_width.min(dfw);
-        resize.min_height = resize.min_height.min(dfh);
-    }
-    holder.engine.set_default_resize(resize);
+    let default_resize = clamped_resize_options(glass, primary);
+    holder.engine.set_default_resize(default_resize);
     holder.engine.request_render();
 }
 
@@ -979,6 +1030,20 @@ fn spawn_holder_and_reattach(
     engine_cfg: GlassEngineConfig,
     boxes: Vec<(Uuid, isize, [f32; 4], f32, bool)>,
 ) -> bool {
+    // 单飞：并发的第二个重建直接放弃（第一个重建用的是同一份最新配置，
+    // 覆盖执行只会把已挂好的块再拆一遍，2026-11-04 自检审计 P2）。
+    if REBUILDING.swap(true, Ordering::SeqCst) {
+        log::warn!("玻璃引擎重建已在进行中，跳过并发重建");
+        return false;
+    }
+    struct RebuildGuard;
+    impl Drop for RebuildGuard {
+        fn drop(&mut self) {
+            REBUILDING.store(false, Ordering::SeqCst);
+        }
+    }
+    let _rebuild_guard = RebuildGuard;
+
     let mut config = engine_config_from(app);
     config.default_style = glass_style_from(&style_cfg);
     config.default_resize = resize_options_from(&style_cfg.resize);
@@ -1002,19 +1067,19 @@ fn spawn_holder_and_reattach(
         engine_cfg,
         style_cfg,
     };
-    for (id, hwnd, logical, ratio, locked) in boxes {
+    for (id, hwnd, logical, old_ratio, locked) in boxes {
         // 按代理窗口当前 DPI 重算比例：热插拔后主屏 DPI 可能已变，
         // 沿用旧 ratio 会让块尺寸成倍膨胀（200% ↔ 100% 时正好 2x）。
         let dpi_now = unsafe { super::ffi_imports::GetDpiForWindow(hwnd as *mut std::ffi::c_void) };
         let ratio = if dpi_now > 0 {
             monitor_dpi_ratio(dpi_now)
         } else {
-            ratio
+            old_ratio
         };
         // 旧 logical 是按旧 ratio 折算的尺寸，按新 ratio 重新折算物理尺寸。
-        let old_ratio = with_holder(|holder| holder.boxes.get(&id).map(|e| e.ratio))
-            .flatten()
-            .unwrap_or(ratio);
+        // 自检审计 P1：旧实现从全局 HOLDER 读 old_ratio，但所有调用方进本
+        // 函数前都已清空 HOLDER，读取恒 miss → DPI 换算从未生效；
+        // old_ratio 必须直接取自重建元组里的旧 entry.ratio。
         let logical = if (old_ratio - ratio).abs() > 1e-3 {
             [
                 logical[0],
@@ -1061,6 +1126,10 @@ fn spawn_holder_and_reattach(
     press_canvas_bottom();
     // 画布压在别的窗口之上期间，OLE 放置目标也要跟着重挂（同 attach_box 口径）。
     super::drop_target::rebind_canvas_drop_targets();
+    // 广播「重建完成」：各分类框在自己的线程里重新发布命中几何（ROUTES.geom
+    // 对新块是 None）、失效内容缓存并向新块重推全量内容。
+    // 自检审计 P1：缺这一步时重建后玻璃块只剩底板、标题拖拽/手型退化。
+    super::grid_window::notify_glass_rebuilt_all();
     true
 }
 
@@ -1091,7 +1160,9 @@ fn dispatch_glass_session(glass_id: u32, started: bool) {
 
 /// 桌面类窗口（画布必须正好压在它们之上，除此之外的任何窗口都不该比画布低）。
 fn is_desktop_class(hwnd: isize) -> bool {
-    let mut buf = [0u16; 64];
+    let mut buf = [0u16; 256];
+    // SAFETY: buf 为本函数栈上所有权，长度随 cchClassName 一起传入；
+    // hwnd 来自调用方 EnumWindows/GetWindow 的有效句柄。
     let n = unsafe {
         super::ffi_imports::GetClassNameW(
             hwnd as *mut std::ffi::c_void,
@@ -1102,7 +1173,10 @@ fn is_desktop_class(hwnd: isize) -> bool {
     if n <= 0 {
         return false;
     }
-    let class = String::from_utf16_lossy(&buf[..n as usize]);
+    // 防御性钳制：文档约定返回值为不含 NUL 的复制长度（≤buf），
+    // 但任何异常返回都不得让切片越界 panic 打死 runtime tick（审计 P1）。
+    let len = (n as usize).min(buf.len());
+    let class = String::from_utf16_lossy(&buf[..len]);
     class == "Progman" || class == "WorkerW"
 }
 
@@ -1340,7 +1414,8 @@ pub fn poll_events_to_log() {
 // 内部小工具
 // =============================================================================
 
-/// 当前生效的分类框样式缓存（供内容层渲染读取，替代旧 `liquid_glass::get_box_style_config`）。
+/// 当前生效的分类框样式缓存（供内容层渲染读取）。旧 `liquid_glass` 模块已在
+/// 2026-10 的 liquid-verre-rs 重构中删除，这里就是唯一真源。
 static BOX_STYLE_CACHE: Mutex<Option<crate::config::app_config::BoxStyleConfig>> = Mutex::new(None);
 
 /// 缓存当前分类框样式（配置应用线程调用，渲染线程读取）。
@@ -1427,10 +1502,10 @@ pub fn engine_metrics() -> Option<(f32, u8, usize)> {
 /// 还原内容矩形，再走与 `push_box_rect` 相同的去重下发。
 pub fn push_geometry_for_window(box_id: Uuid, outer_phys: &RECT, padding: i32, dpi: u32) {
     let content = RECT {
-        left: outer_phys.left + padding,
-        top: outer_phys.top + padding,
-        right: outer_phys.right - padding,
-        bottom: outer_phys.bottom - padding,
+        left: outer_phys.left.saturating_add(padding),
+        top: outer_phys.top.saturating_add(padding),
+        right: outer_phys.right.saturating_sub(padding),
+        bottom: outer_phys.bottom.saturating_sub(padding),
     };
     push_box_rect(box_id, &content, dpi);
 }
@@ -1442,7 +1517,7 @@ pub fn push_geometry_for_window(box_id: Uuid, outer_phys: &RECT, padding: i32, d
 /// lParam 打包（x 低 16 位、y 高 16 位，Win32 标准形态）。
 #[must_use]
 fn pack_lparam(x: i32, y: i32) -> isize {
-    (((y << 16) | (x & 0xFFFF)) as i32) as isize
+    ((y << 16) | (x & 0xFFFF)) as isize
 }
 
 /// 块内坐标 → 屏幕坐标（代理窗口矩形与块矩形恒等对齐，engine 模式 padding=0）。
@@ -1745,11 +1820,11 @@ pub fn push_content_dirty(
 // 用它测掉帧等于制造掉帧。计数器只读写几个原子量。
 // =============================================================================
 /// 会话驱动次数（跟随拍数 / 拖拽 Move 数）
-pub static SESSION_TICKS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static SESSION_TICKS: AtomicU64 = AtomicU64::new(0);
 /// 会话期「块矩形相对上一拍发生变化」的次数（= 内容真正需要跟上的次数）
-pub static SESSION_RECT_CHANGES: AtomicU64 = AtomicU64::new(0);
+pub(crate) static SESSION_RECT_CHANGES: AtomicU64 = AtomicU64::new(0);
 /// 会话期内容纹理重推次数
-pub static SESSION_CONTENT_PUSHES: AtomicU64 = AtomicU64::new(0);
+pub(crate) static SESSION_CONTENT_PUSHES: AtomicU64 = AtomicU64::new(0);
 /// 上一拍读到的块矩形（i64::MIN = 未初始化）
 static SESSION_LAST_RECT: [AtomicI64; 4] = [
     AtomicI64::new(i64::MIN),
@@ -1762,7 +1837,7 @@ static SESSION_LOG_NEXT_MS: AtomicU64 = AtomicU64::new(0);
 
 /// 读库侧帧计数：`(快照 epoch, fps)`；引擎不可用时 `(0, 0.0)`。
 #[must_use]
-pub fn engine_frame_stats() -> (u64, f32) {
+pub(crate) fn engine_frame_stats() -> (u64, f32) {
     with_holder(|holder| {
         let s = holder.engine.snapshot();
         (s.epoch, s.fps)
@@ -1951,8 +2026,9 @@ mod tests {
         // `scale_for_dpi(200, dpi) / (dpi / primary_dpi)` 与 dpi 无关。高 DPI 副屏
         // 上的最小框必须和主屏一样大，否则跨屏拖一下尺寸下限就跳变。
         let (w96, h96) = glass_resize_floor(96);
-        let (w192, h192) = glass_resize_floor(192);
-        let (w144, h144) = glass_resize_floor(144);
+        // 只断言宽对宽、高对高：另一分量与本题无关，下划线消音。
+        let (w192, _h192) = glass_resize_floor(192);
+        let (_w144, h144) = glass_resize_floor(144);
         assert!(
             (w96 - w192).abs() < 1.0,
             "最小宽不该随 DPI 变化: {w96} vs {w192}"

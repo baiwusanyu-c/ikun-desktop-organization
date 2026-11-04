@@ -62,23 +62,6 @@ impl AppContext {
             config_loaded,
         })
     }
-
-    /// Save config to ~/.ikun_organizer.json
-    pub fn save_config(&mut self) -> anyhow::Result<()> {
-        self.config.last_modified = chrono::Utc::now();
-        self.config.save()
-    }
-
-    /// Export config to specified path
-    pub fn export_config(&self, path: &std::path::Path) -> anyhow::Result<()> {
-        self.config.export_to(path)
-    }
-
-    /// Import config from specified path and save
-    pub fn import_config(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
-        self.config = AppConfig::import_from(path)?;
-        self.save_config()
-    }
 }
 
 #[cfg(test)]
