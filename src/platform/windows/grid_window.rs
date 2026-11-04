@@ -611,7 +611,7 @@ pub(crate) fn lower_timer_resolution() {
         std::sync::atomic::Ordering::SeqCst,
         |v| if v > 0 { Some(v - 1) } else { None },
     );
-    if prev.map_or(false, |v| v > 0) {
+    if prev.is_ok_and(|v| v > 0) {
         unsafe { super::ffi_imports::timeEndPeriod(1) };
     }
 }
@@ -1874,7 +1874,6 @@ pub(crate) fn on_grid_refresh_tick(hwnd: HWND) {
         && !data.submitted_glass
         && !data.glass_session_active
         && !data.box_drag_active;
-    drop(data);
     if stale_fallback {
         super::d2d_render::render_layered_window(hwnd);
     }

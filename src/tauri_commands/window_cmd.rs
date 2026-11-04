@@ -144,7 +144,7 @@ pub fn record_heartbeat(label: &str, frames: u64) {
     let progressed = match hang_watchdog::LAST_FRAMES.lock() {
         Ok(mut map) => {
             let last = map.insert(label.to_string(), frames);
-            last.map_or(true, |prev| frames != prev)
+            last != Some(frames)
         }
         Err(_) => true,
     };
