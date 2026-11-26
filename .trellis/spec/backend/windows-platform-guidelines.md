@@ -1539,6 +1539,112 @@ KillTimer(hwnd, TIMER_ID_OVERLAY_HOVER);
 - `src/platform/windows/icon_extract.rs` -- Thumbnail extraction + HICON conversion
 - `src/platform/windows/d2d_render.rs` -- Text trimming for icon labels
 
+## 多显示器拖拽边界与双击保护（2026-11-26）
+
+> 用户报「分类框拖到主屏/副屏过渡时显示异常、有时整块漂出屏幕」
+> 「双击图标有时候没反应」。两条都属于**跨层几何/输入契约**问题，改任何一处前先看本节。
+
+### 玻璃块是单屏模型（不可绕过的事实）
+
+liquid-verre-rs 的块只归属**中心所在那一片画布**，并按 `策略 ①` 不做跨屏大玻璃：
+
+- `core::block::rehome_block`：中心跨屏 → 换屏 + 按两屏 DPI 比例重采样宽高，
+  并把块**中心**钳制在该屏内（即允许一半悬在屏外）；
+- 每块屏一张整屏画布（`SetWindowRgn` 裁剪）→ 超出归属屏的那半块**根本不渲染**。
+
+后果：分类框停在跨屏位置时，玻璃只显示一半，而代理窗口占满两块屏
+—— 观感就是「一半主屏一半副屏显示异常」，且此时点击落点与块不一致。
+
+### 宿主的边界职责（口径固定，勿再发明）
+
+| 时机 | 动作 | 实现 |
+|------|------|------|
+| 建窗 / 恢复布局 | 单屏吸附 | `grid_window::create_grid_window` |
+| 引擎模式标题拖拽 | 单屏吸附（**唯一真实源头**） | `wnd_proc` 的 `WM_WINDOWPOSCHANGED` |
+| 回退模式模态拖拽 | 单屏吸附 | `wnd_proc` 的 `WM_MOVING` |
+| 布局落盘 | 非法位置吸附后再写配置 | `grid_window::collect_grid_layout` |
+| 库会话跟随中 | **只夹虚拟桌面**，镜像块矩形 | `grid_window::follow_glass_session` |
+| 库会话收尾 | 块与窗口同屏一致性纠偏 | `grid_window::end_glass_resize_session` |
+
+强制口径：
+
+- 纯算术一律下沉 `src/box_core/monitor_geom.rs`（0 unsafe、可单测）：
+  `clamp_to_bounds` / `monitor_index_for_center` / `snap_into_single_monitor` /
+  `rect_fits_any_monitor`；平台层只做 `RECT` ↔ 数组的薄转换。
+- **引擎模式下 `WM_MOVING` 不会触发**（标题拖拽走本窗口 `SetWindowPos`），
+  只在 `WM_MOVING` 加边界 = 等于没加（本次踩坑点）。
+- 吸附必须**幂等**（只改位置不改尺寸），且**绝不**在库会话期间把块往回拽：
+  会话期块矩形是几何真源，宿主反向 push 会污染库的会话锚点。
+- 归属屏按**块中心**判定（与库 `rehome_block` 同构），宿主另起一套判据必然与库漂移。
+- `collect_grid_layout` 会被 Tauri 命令线程调用：此处**禁止**跨线程 `SetWindowPos`
+  / 渲染（历史前科：卡死 WebView2 事件循环），只允许吸附要写进配置的值。
+
+### DPI 比例以块为准
+
+`glass_engine` 宿主侧 `entry.ratio` 只在 push 时按 `GetDpiForWindow` 更新，
+跨屏过渡那一拍代理窗 DPI 常常还是旧屏值 → 内容窗口/内容纹理按旧 DPI 尺寸落位。
+
+- 回读块矩形必须用 `snapshot.scale`（块自己的权威比例），不要用 `entry.ratio`；
+- 跟随 tick 里检测 `block_ratio_drifted` → `sync_block_ratio` +
+  作废 `content_valid` / `submitted_glass` 强制全量重绘（200ms 去抖）。
+- `WM_DPICHANGED`：系统建议矩形要在**进入 handler 时**一次性读干净
+  （`RECT` 非 `Copy`，且 handler 返回后 `lparam` 指向的临时结构即失效，
+  在 `SetWindowPos` 之后再解引用是 UB）；DPI 变大导致物理尺寸超过落位屏时，
+  用 `monitor_utils::fit_content_rect_into_monitor` 兜底（必要时允许缩小）。
+
+### 图标拖拽不得抢走双击
+
+- 拖拽启动阈值必须按窗口 DPI 折算：
+  `drag_logic::drag_threshold_physical_px(GetSystemMetrics(SM_C?DRAG), dpi)`，
+  夹在 `[5, 16]`。硬编码 `DRAG_THRESHOLD = 5` 物理像素在高 DPI 下等于手抖即拖。
+- `DoDragDrop` **阻塞本框消息线程**，且起拖时会给本框加 `WS_EX_TRANSPARENT`。
+  分类框常驻 `HWND_BOTTOM`，资源管理器窗口几何上盖住它时，
+  「光标落在 Explorer 矩形内」不代表用户把图标拖出了框 ——
+  必须再判一条「光标已离开 `GridWindowData::drag_box_rect`」才允许升级 OLE。
+- `WM_LBUTTONDBLCLK` 开头必须先收尾进行中的自定义拖拽
+  （`drag_pending`/`drag_active` + `KillTimer(TIMER_ID_GRID_DRAG)` + 销毁残影），
+  否则残影/OLE 模态循环会吞掉双击，表现为「有时候没反应」。
+
+### 借纪律：绝不在持有 `&mut GridWindowData` 时调用同步 Win32
+
+`SetWindowPos` / `EndDeferWindowPos` 会在**本线程同步重入**窗口过程，嵌套的消息处理会
+再次 `get_data(hwnd)` 取一个 `&mut GridWindowData` —— 两个可变引用指向同一块内存即 UB。
+`glass_session_active` 一类的上游守卫只是「碰巧挡住了重入分支」，任何一处漏判就破口。
+
+- 固定写法：**读 → 结束借用 → 做动作 → 需要时重新 `get_data` 写回**；
+- 需要跨动作使用的值（`config_id` / `render_padding` / `dpi` / 矩形）一律先抄成局部变量；
+- 本仓库自持的 `RECT` 既非 `Copy` 也非 `Clone`，复用请显式 `copy_rect()`，
+  不要为两个字段去改跨模块共用的 FFI 类型派生。
+
+已按此纪律改造：`WM_WINDOWPOSCHANGED` 的吸附分支、`grid_window::follow_glass_session`、
+`grid_window::end_glass_resize_session`。
+
+### 会话期保护：任何回推库的入口都要判 `block_in_session`
+
+`WM_MOVING` 里给玻璃块回推几何同样要 `!glass_session_active && !block_in_session(...)`：
+会话起止是 PostMessage 异步送达的，标志位还没置上的那几拍里反推一次，就会把库的会话锚点搞脏。
+
+### 落盘与 DPI 基准（已知遗留，改动前先读）
+
+- `collect_grid_layout` 把「物理坐标 ÷ 当前窗口 DPI」当逻辑坐标写盘，
+  `create_grid_window` 恢复时又按「建窗初始落点的 DPI」缩放 ——
+  **跨 DPI 屏恢复的缩放基准可能与目标屏不符**（历史上表现为副屏的框位置飘）。
+  彻底修需要把「显示器身份 + 屏内相对坐标」写进配置；本阶段的兜底是
+  「无论基准怎么偏，吸附都会把框放回某块屏内」，并补了双屏异 DPI 的回归测试要求。
+- `collect_grid_layout` 可能在 Tauri 命令线程执行：这里**只规范化要写进配置的值**，
+  不搬窗口（跨线程 `SetWindowPos` 会同步等待平台线程，历史前科是卡死 WebView2 事件循环）。
+
+### 检查清单
+
+- [ ] 新增的几何推进入口是否经过单屏吸附（或明确属于「库会话镜像」例外）？
+- [ ] 吸附是否幂等、是否可能触发 `WM_WINDOWPOSCHANGED` 回环抖动？
+- [ ] 是否在库会话期间反向 push 了块矩形？（禁止）
+- [ ] 归属屏判据是否用块中心？是否与库 `rehome_block` 一致？
+- [ ] 跨线程路径是否避免了对平台线程窗口的同步调用？
+- [ ] 是否在持有 `&mut GridWindowData` 时调用了会重入消息的 Win32（SetWindowPos 等）？
+- [ ] 回推玻璃块几何的入口是否都判了 `block_in_session`？
+- [ ] 阈值/边界纯函数是否落在 `box_core` 并带单测？
+
 ## 开机自启（Registry Run）健壮性
 
 ### 写入规则

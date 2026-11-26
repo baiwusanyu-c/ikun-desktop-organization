@@ -134,6 +134,50 @@ Rust `on_window_event` 和前端 `installHideOnClose` 双重拦截；托盘/信�
 DXGI 初始化阶段可能返回平均 RGB 接近 `(1,1,1)` 的不透明占位黑帧；渲染器最多跳过前三帧，并由
 `src/platform/windows/d2d_render.rs` 使用白色半透明回退，取得真实桌面帧后立即缓存。单帧捕获失败继续使用上一成功帧。
 
+## 多屏拖拽与几何边界契约（2026-11-26）
+
+液态玻璃块是**单屏模型**（库 `core::block::rehome_block`：块只归属中心所在屏的画布，
+中心钳到该屏内，明确「不做跨屏大玻璃」；每屏一张整屏画布并 `SetWindowRgn` 裁剪）。
+因此「分类框停在跨屏位置」时，玻璃只渲染落在归属屏内的那一半，而代理窗口横跨两块屏
+—— 用户看到的「一半主屏一半副屏显示异常」就是这两者不一致，不是渲染 bug。
+
+宿主的边界职责（口径唯一，改前先看 `.trellis/spec/backend/windows-platform-guidelines.md`
+的「多显示器拖拽边界与双击保护」）：
+
+- 纯算术判据全部下沉 `src/box_core/monitor_geom.rs`（0 unsafe、可单测），
+  平台层只做 `RECT` ↔ `[l,t,r,b]` 薄转换；坐标口径恒为**虚拟桌面物理像素**
+  （副屏可能在负坐标区），`phys_to_logical_rect` 的「x/y 物理、w/h 逻辑」约定不得改动。
+- **宿主驱动的几何推进必须单屏吸附**（整框留在中心所属屏内）：
+  建窗 / 恢复布局 / `WM_MOVING` / `WM_WINDOWPOSCHANGED` 反推下发 / 布局落盘前。
+  注意引擎模式下标题拖拽由本窗口 `SetWindowPos` 驱动，**`WM_MOVING` 不会触发**，
+  只在 `WM_MOVING` 加边界等于没加。
+- **库会话（移动/缩放）进行中不得反向拽块**：块矩形是几何真源，跟随侧
+  （`follow_glass_session` / `end_glass_resize_session`）只允许「夹虚拟桌面边界」
+  这一层兜底，以及会话结束后做一次「块与代理窗同屏」一致性纠偏
+  （不一致时按块的中心吸附窗口并重发块矩形）。
+- 回读块矩形一律用 `snapshot.scale`（块自己的权威 DPI 比例），
+  不得依赖宿主 `entry.ratio`（跨屏那一拍代理窗 DPI 常是旧屏值）；
+  检测到比例漂移要 `sync_block_ratio` + 作废内容层缓存强制全量重绘。
+- `collect_grid_layout` 可能被 Tauri 命令线程调用：该路径**禁止**跨线程
+  `SetWindowPos` / 渲染，只吸附要写入配置的坐标值。
+
+与双击的耦合（同一批缺陷）：
+
+- 吸附后代理窗口与块恒等对齐，否则 `WM_LBUTTONDBLCLK` / `WM_LBUTTONDOWN`
+  的命中坐标落在块外，双击链路静默失效。
+- 图标拖拽阈值必须按 `GetDpiForWindow` 折算（`drag_logic::drag_threshold_physical_px`），
+  且「光标已离开本框内容矩形」才允许升级为阻塞式 `DoDragDrop`
+  （`DoDragDrop` 期间本框被置 `WS_EX_TRANSPARENT`，会吞掉双击的第二次按下）；
+  `WM_LBUTTONDBLCLK` 进入时必须先收尾进行中的自定义拖拽
+  （杀 `TIMER_ID_GRID_DRAG` + 销毁残影 + 复位 `drag_*` 字段）。
+- 借纪律：`WM_WINDOWPOSCHANGED` / `follow_glass_session` / `end_glass_resize_session`
+  都必须「读值 → 结束 `get_data` 借用 → 再调 `SetWindowPos`」；`SetWindowPos` 会同步重入
+  窗口过程，持引用调用等于造出两个 `&mut GridWindowData`（UB）。
+- 任何回推块几何的入口（含 `WM_MOVING`）都必须判
+  `!glass_session_active && !glass_engine::block_in_session(id)`。
+- 仍然禁止：宿主重算块的遮挡/层序判据、在 sink 里自行合成双击、
+  用 `set_default_resize` 之类「催发布」hack。
+
 ## 验证用例
 
 - Good：修改圆角/背景色/玻璃开关后，`update_box_style` 或 `update_liquid_glass` 返回成功，现有分类框立即重绘。
@@ -144,6 +188,10 @@ DXGI 初始化阶段可能返回平均 RGB 接近 `(1,1,1)` 的不透明占位�
 - Bad：DXGI 占位黑帧不得进入成功帧缓存，也不得作为分类框首次可见画面提交。
 - Bad：缺失命令参数、非法名称或不存在的分类框不得静默成功，前端必须显示错误状态。
 - Bad：未知窗口标签、`file:`/`javascript:` URL 和锁中毒不得触发窗口或进程级副作用。
+- Good：分类框可在主屏与副屏之间拖拽切换；松手后整框完整落在其中一块屏内，
+  不会停在「一半主屏一半副屏」，也不会漂出虚拟桌面（含负坐标副屏与拔掉副屏后的旧位置）。
+- Bad：资源管理器窗口几何上覆盖分类框时，双击图标仍必须打开文件
+  （不得因手抖几像素就升级为阻塞式 OLE 拖拽而吞掉双击）。
 
 ## 必需检查
 

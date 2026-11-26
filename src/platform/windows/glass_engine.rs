@@ -750,11 +750,11 @@ pub fn attach_box(box_id: Uuid, hwnd: isize, content_phys: &RECT, dpi: u32, lock
         log::warn!("玻璃引擎渲染线程未运行，attach 拒绝（该分类框回退旧渲染路径）");
         return false;
     }
+    let ratio = monitor_dpi_ratio(dpi);
     if holder.boxes.contains_key(&box_id) {
         // 已存在（如重复恢复布局）：改为同步几何。
-        return update_box_rect_locked(holder, box_id, content_phys, dpi);
+        return update_box_rect_locked(holder, box_id, content_phys, ratio);
     }
-    let ratio = monitor_dpi_ratio(dpi);
     let logical = phys_to_logical_rect(content_phys, ratio);
     let config = block_config_for(&holder.style_cfg, logical, locked, dpi);
     let created = match holder.engine.create_window(config) {
@@ -814,29 +814,48 @@ pub fn detach_box(box_id: Uuid) {
     }
 }
 
+/// 库会话跟随时的边界兜底：只夹虚拟桌面，不改尺寸、不做单屏吸附。
+#[must_use]
+pub fn clamp_content_to_desktop(content_phys: &RECT) -> RECT {
+    super::monitor_utils::clamp_content_rect_to_desktop(content_phys)
+}
+
 /// 把分类框内容窗口的新位置同步到玻璃块（标题栏原生拖拽的 `WM_MOVING` 路径）。
 ///
 /// 去重：与最后已知逻辑矩形一致时不下发命令，避免消息风暴。
 pub fn push_box_rect(box_id: Uuid, content_phys: &RECT, dpi: u32) {
+    push_box_rect_with_ratio(box_id, content_phys, monitor_dpi_ratio(dpi));
+}
+
+/// 使用库当前权威缩放比例下发物理矩形。
+///
+/// 会话收尾的吸附只能改位置，不能再用可能滞后的 `GetDpiForWindow` 重算逻辑宽高：
+/// 那会让库按新屏 scale 再乘一次，跨 DPI 收尾时玻璃块尺寸跳变。`ratio` 必须来自
+/// 同一份 [`block_scale`] 快照，确保宿主摆窗与库块使用同一换算基准。
+pub fn push_box_rect_with_ratio(box_id: Uuid, content_phys: &RECT, ratio: f32) {
+    let ratio = if ratio.is_finite() && ratio > 0.0 {
+        ratio
+    } else {
+        1.0
+    };
     let Ok(mut guard) = HOLDER.lock() else {
         return;
     };
     let Some(holder) = guard.as_mut() else {
         return;
     };
-    update_box_rect_locked(holder, box_id, content_phys, dpi);
+    update_box_rect_locked(holder, box_id, content_phys, ratio);
 }
 
 fn update_box_rect_locked(
     holder: &mut GlassEngineHolder,
     box_id: Uuid,
     content_phys: &RECT,
-    dpi: u32,
+    ratio: f32,
 ) -> bool {
     let Some(entry) = holder.boxes.get_mut(&box_id) else {
         return false;
     };
-    let ratio = monitor_dpi_ratio(dpi);
     let logical = phys_to_logical_rect(content_phys, ratio);
     entry.ratio = ratio;
     if approx_eq_rect(&entry.last_logical, &logical) {
@@ -853,17 +872,78 @@ fn update_box_rect_locked(
 /// 内容层据此贴回玻璃块。返回 `None` 表示该框没有玻璃块或快照不可用。
 #[must_use]
 pub fn block_content_rect(box_id: Uuid) -> Option<RECT> {
-    let phys = with_holder(|holder| {
+    with_holder(|holder| {
         let entry = holder.boxes.get(&box_id)?;
         let snapshot = entry.window.snapshot()?;
-        Some((
-            logical_to_phys_rect(&snapshot.rect, entry.ratio),
-            [snapshot.rect[2], snapshot.rect[3]],
-            entry.ratio,
-        ))
-    })??;
-    let (rect, _block_logical, _ratio) = phys;
-    Some(rect)
+        // x/y 本身就是虚拟屏物理像素，w/h 必须用**块自己的 scale** 还原：
+        // entry.ratio 是宿主上次 push 时的窗口 DPI，跨屏会话里会慢一屏，
+        // 内容窗口按旧 DPI 尺寸落位就是「一半主屏一半副屏显示异常」的直接来源。
+        let scale = snapshot.scale.max(1e-3);
+        Some(logical_to_phys_rect(&snapshot.rect, scale))
+    })?
+}
+
+/// 库侧块的**权威 DPI 比例**（= `snapshot.scale`，块当前归属屏 dpi/主屏 dpi）。
+///
+/// 跨屏时库会把块重采样到新屏比例（`core::block::rehome_block`），而宿主
+/// `entry.ratio` 只有在下一次 push 时才按 `GetDpiForWindow` 更新 —— 代理窗口的
+/// DPI 在这一拍常常还是旧屏值（`WM_DPICHANGED` 尚未处理完），于是宿主按陈旧
+/// 比例换算宽高，内容窗口/内容纹理比玻璃块小/大一个 DPI 倍数
+/// （2026-11-26 用户报「拖到主副屏过渡时显示异常」的直接根因）。
+#[must_use]
+pub fn block_scale(box_id: Uuid) -> Option<f32> {
+    with_holder(|holder| {
+        holder
+            .boxes
+            .get(&box_id)
+            .and_then(|e| e.window.snapshot())
+            .map(|snapshot| snapshot.scale.max(1e-3))
+    })
+    .flatten()
+}
+
+/// 宿主记录的 DPI 比例是否与库侧块的权威比例漂移（跨屏重采样的判据）。
+///
+/// 返回 `true` 时调用方必须做一次全量重绘 + 内容重推，并把比例对齐
+/// （见 `sync_block_ratio`），否则内容窗口/内容纹理会与玻璃块差一个 DPI 倍数。
+#[must_use]
+pub fn block_ratio_drifted(box_id: Uuid) -> bool {
+    let drifted = with_holder(|holder| {
+        let entry = holder.boxes.get(&box_id)?;
+        let snapshot = entry.window.snapshot()?;
+        let scale = snapshot.scale.max(1e-3);
+        Some(((scale - entry.ratio).abs() / entry.ratio.max(1e-3)) > 0.01)
+    });
+    drifted.flatten().unwrap_or(false)
+}
+
+/// 把宿主侧记录的 DPI 比例对齐到库的权威值，返回**是否发生了纠偏**。
+///
+/// 仅在跟随库会话时调用：会话期间块矩形/块缩放由库全权驱动，宿主唯一的
+/// 正确动作是让换算基准跟上库，而不是自己重算几何（见契约禁令）。
+pub fn sync_block_ratio(box_id: Uuid, scale: f32) -> bool {
+    if !scale.is_finite() || scale <= 0.0 {
+        return false;
+    }
+    let Ok(mut guard) = HOLDER.lock() else {
+        return false;
+    };
+    let Some(holder) = guard.as_mut() else {
+        return false;
+    };
+    let Some(entry) = holder.boxes.get_mut(&box_id) else {
+        return false;
+    };
+    if (entry.ratio - scale).abs() <= 1e-4 {
+        return false;
+    }
+    log::info!(
+        "玻璃块跨屏 DPI 比例纠偏: box={box_id} {:.3} -> {:.3}",
+        entry.ratio,
+        scale
+    );
+    entry.ratio = scale;
+    true
 }
 
 /// 该玻璃块当前是否正处于库驱动的缩放会话（内容层跟随定时器据此开关）。
@@ -1326,6 +1406,9 @@ pub fn poll_events_to_log() {
             }
             EngineEvent::MonitorsChanged { monitor_count } => {
                 log::info!("显示器集合变化，画布与采集已重建，显示器数量: {monitor_count}");
+                // 热插拔后宿主的显示器矩形缓存必须立即作废，
+                // 否则跨屏吸附会按旧屏集合把分类框摆到已经不存在的屏上。
+                super::monitor_utils::invalidate_monitor_rects_cache();
                 press_canvas_bottom();
             }
             EngineEvent::WindowCreated { id } => {
@@ -1507,6 +1590,8 @@ pub fn push_geometry_for_window(box_id: Uuid, outer_phys: &RECT, padding: i32, d
         right: outer_phys.right.saturating_sub(padding),
         bottom: outer_phys.bottom.saturating_sub(padding),
     };
+    // 这里**不做**单屏吸附：吸附只在几何源头（WM_MOVING / 建窗 / 恢复布局）做，
+    // 否则窗口合法、块被拽偏，代理窗与块错位反而让点击落空（见 push_box_rect_snapped 文档）。
     push_box_rect(box_id, &content, dpi);
 }
 

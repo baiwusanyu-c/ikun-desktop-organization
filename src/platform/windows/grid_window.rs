@@ -238,7 +238,14 @@ pub(crate) struct GridWindowData {
     // ===== 拖拽状态（自定义拖拽跟踪，替代 OLE Drag Source）=====
     /// 是否正在检测拖拽阈值（鼠标按下后跟踪）
     pub(crate) drag_pending: bool,
-    /// 拖拽检测起始位置（窗口坐标）
+    /// 起拖时记录的分类框内容矩形（虚拟桌面物理坐标）。
+    ///
+    /// 「拖到资源管理器/桌面即升级为 OLE 拖拽」的判据必须要求光标**已离开本框**：
+    /// 分类框常驻 HWND_BOTTOM，资源管理器窗口几何上盖住它时，
+    /// 旧实现单击图标 + 手抖 6px 就会进入阻塞式 DoDragDrop 并把本框置为鼠标透明，
+    /// 双击的第二次按下被彻底吞掉（2026-11-26 用户报「双击图标有时候没反应」）。
+    pub(crate) drag_box_rect: [i32; 4],
+    /// 拖拽检测起始位置（内容层坐标）
     pub(crate) drag_start_x: i32,
     pub(crate) drag_start_y: i32,
     /// 自定义拖拽是否已激活（超过阈值后）
@@ -397,6 +404,8 @@ pub(crate) struct GridWindowData {
     /// 连续 2 拍在外才补发 `WM_MOUSELEAVE`：单拍越界（DPI 取整、光标贴边缘）
     /// 会让 hover 进出抖动，表现为图标/按钮高亮闪烁。
     pub(crate) hover_out_ticks: u8,
+    /// 上次因跨屏 DPI 比例漂移触发全量重绘的单调毫秒（0 = 从未，去抖用）。
+    pub(crate) cross_dpi_fix_ms: u64,
 }
 
 unsafe impl Send for GridWindowData {}
@@ -480,6 +489,7 @@ impl GridWindowData {
             base_window_w: 400,
             base_window_h: 600,
             drag_pending: false,
+            drag_box_rect: [0, 0, 0, 0],
             drag_start_x: 0,
             drag_start_y: 0,
             drag_active: false,
@@ -530,6 +540,7 @@ impl GridWindowData {
             glass_session_seen_resizing: false,
             glass_session_idle_ticks: 0,
             hover_out_ticks: 0,
+            cross_dpi_fix_ms: 0,
         }
     }
 }
@@ -812,8 +823,22 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
     let scaled_x = scale_for_dpi(params.x, dpi);
     let scaled_y = scale_for_dpi(params.y, dpi);
     let shadow_padding = shadow_padding_for_dpi(dpi);
-    let outer_x = scaled_x - shadow_padding;
-    let outer_y = scaled_y - shadow_padding;
+    // 建窗/恢复布局是几何源头：非法落点（显示器拔掉、上次被拖到屏外并落盘）
+    // 必须在此吸附回「完整留在单块显示器内」，否则用户重启后看不到分类框。
+    // 已知遗留（不在本次范围）：`dpi` 取自建窗初始落点，而配置里存的是
+    // 「按保存时所在屏 DPI 折算的逻辑坐标」，跨 DPI 屏恢复时缩放基准可能与目标屏不符。
+    // 彻底修需把「显示器身份 + 屏内相对坐标」写进配置（已记入规范）；
+    // 本处吸附至少保证：无论基准怎么偏，框都不会落到所有屏之外。
+    let content = super::monitor_utils::snap_content_rect_to_single_monitor(&RECT {
+        left: scaled_x,
+        top: scaled_y,
+        right: scaled_x.saturating_add(scaled_w),
+        bottom: scaled_y.saturating_add(scaled_h),
+    });
+    let restored_x = content.left;
+    let restored_y = content.top;
+    let outer_x = content.left.saturating_sub(shadow_padding);
+    let outer_y = content.top.saturating_sub(shadow_padding);
     let outer_w = scaled_w + shadow_padding * 2;
     let outer_h = scaled_h + shadow_padding * 2;
     let title_h = scale_for_dpi(40, dpi);
@@ -828,8 +853,10 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
     let cell_w = grid_layout.cell_w;
     let cell_h = grid_layout.cell_h;
 
-    // 如果 DPI 不是 96，调整窗口位置和尺寸（逻辑像素 → 物理像素）
-    if dpi != initial_dpi {
+    // DPI 变化或越界吸附都可能改变最终外框。不能只在 dpi != 96 时落位：
+    // 96 DPI 下把历史越界布局吸附回屏幕时，CreateWindowExW 仍会停在旧位置。
+    if outer_x != initial_x || outer_y != initial_y || outer_w != initial_w || outer_h != initial_h
+    {
         unsafe {
             SetWindowPos(
                 hwnd,
@@ -842,10 +869,10 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
             );
         }
         log::info!(
-            "DPI 自适应: {} -> 内容位置 ({},{}), 内容尺寸 {}x{}, shadow_padding={}, title_h={}, icon_size={}, cols={}",
+            "窗口几何校正: dpi={} -> 内容位置 ({},{}), 内容尺寸 {}x{}, shadow_padding={}, title_h={}, icon_size={}, cols={}",
             dpi,
-            scaled_x,
-            scaled_y,
+            restored_x,
+            restored_y,
             scaled_w,
             scaled_h,
             shadow_padding,
@@ -905,6 +932,7 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         base_window_w: scaled_w,
         base_window_h: scaled_h,
         drag_pending: false,
+        drag_box_rect: [0, 0, 0, 0],
         drag_start_x: 0,
         drag_start_y: 0,
         drag_active: false,
@@ -956,6 +984,7 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         glass_session_seen_resizing: false,
         glass_session_idle_ticks: 0,
         hover_out_ticks: 0,
+        cross_dpi_fix_ms: 0,
     });
     let data_ptr = Box::into_raw(data);
     unsafe {
@@ -1917,6 +1946,17 @@ fn poll_glass_hover(hwnd: HWND) {
     }
 }
 
+/// 跨屏比例纠偏后强制一次全量重绘，并让内容纹理按新尺寸重新上传。
+///
+/// 只清 `content_valid` 不够：`submitted_glass` 还记着旧纹理已推送，
+/// 不一起复位会出现玻璃块已经换尺寸、前景仍按上一屏 DPI 拉伸。
+fn force_full_content_refresh(hwnd: HWND, data: &mut GridWindowData) {
+    data.content_valid = false;
+    data.submitted_glass = false;
+    data.content_last_render_ms = 0;
+    super::d2d_render::render_layered_window(hwnd);
+}
+
 /// 库缩放会话的高频跟随 tick：玻璃块矩形是真值，内容窗口保持相对留白跟随。
 ///
 /// 会话的开始由引擎事件回调（`WM_USER_GLASS_RESIZE`）触发；本函数只做
@@ -1924,6 +1964,10 @@ fn poll_glass_hover(hwnd: HWND) {
 /// ②确认会话结束（快照 `resizing` 回落后收尾：卸载定时器、恢复参考线、
 /// 持久化布局）。库画布若被独占全屏让路等原因丢块，同样走收尾路径。
 fn follow_glass_session(hwnd: HWND) {
+    // 与 end_glass_resize_session 同一条纪律：**不得**持有 GridWindowData 的引用时
+    // 调用 SetWindowPos / 重绘。会话期 WM_WINDOWPOSCHANGED 会被 glass_session_active
+    // 短路（不会二次 get_data），但「靠上游守卫保证不重入」太脆，任何一处漏判就是
+    // 两个 &mut 指向同一结构体。这里统一：读→结束借用→做动作→重新借用写回。
     let Some(data) = (unsafe { get_data(hwnd) }) else {
         return;
     };
@@ -1938,11 +1982,22 @@ fn follow_glass_session(hwnd: HWND) {
     if !data.glass_session_active {
         return;
     }
-    let Some(content) = super::glass_engine::block_content_rect(box_id) else {
+    let Some(raw_content) = super::glass_engine::block_content_rect(box_id) else {
+        // 块已不存在（画布重建/引擎异常）：走收尾路径，不能把会话标志挂着。
         end_glass_resize_session(hwnd);
         return;
     };
+    // 块矩形先夹虚拟桌面边界：库的归屏钳制只保证「中心不出屏」，
+    // 副屏拔掉 / 极端拖拽仍可能把块推到所有屏之外（用户报「漂移出屏幕」）。
+    // 会话期间**不做**单屏吸附（块是真值，宿主拽回去会与库会话锚点争抢），
+    // 单屏归位在 end_glass_resize_session 收尾时一次性完成。
+    let content = super::glass_engine::clamp_content_to_desktop(&raw_content);
     let padding = data.render_padding;
+    let need_ratio_fix = super::glass_engine::block_ratio_drifted(box_id)
+        && super::glass_engine::now_ms().saturating_sub(data.cross_dpi_fix_ms) >= 200;
+    let seen = data.glass_session_seen_resizing;
+    let idle = data.glass_session_idle_ticks;
+
     let mut outer = RECT {
         left: 0,
         top: 0,
@@ -1951,17 +2006,36 @@ fn follow_glass_session(hwnd: HWND) {
     };
     let have_rect = unsafe { GetWindowRect(hwnd, &mut outer) } != 0;
     let want = RECT {
-        left: content.left - padding,
-        top: content.top - padding,
-        right: content.right + padding,
-        bottom: content.bottom + padding,
+        left: content.left.saturating_sub(padding),
+        top: content.top.saturating_sub(padding),
+        right: content.right.saturating_add(padding),
+        bottom: content.bottom.saturating_add(padding),
     };
-    if have_rect
+    let should_move = have_rect
         && (outer.left != want.left
             || outer.top != want.top
             || outer.right - outer.left != want.right - want.left
-            || outer.bottom - outer.top != want.bottom - want.top)
-    {
+            || outer.bottom - outer.top != want.bottom - want.top);
+    // 移动会话只有 moving、缩放会话只有 resizing：两者都要当作「会话还活着」，
+    // 否则移动会话会被宽限期提前掐断。
+    let active =
+        super::glass_engine::block_resizing(box_id) || super::glass_engine::block_moving(box_id);
+    let (next_seen, next_idle, should_end) = session_next(active, seen, idle);
+    // ---- 上面读完就不再碰 data：下面的动作若同步重入消息，
+    // 只允许通过 `get_data` 重新取（见函数头注释的纪律说明） ----
+    if need_ratio_fix {
+        // 跨屏 DPI 纠偏：块被库重采样到新屏比例后，宿主 entry.ratio 可能还是旧屏值
+        // （代理窗口 DPI 滞后），继续按旧比例换算内容尺寸/纹理，就会出现
+        // 「一半主屏一半副屏时显示异常」（尺寸跳变、内容错位）。
+        if let Some(scale) = super::glass_engine::block_scale(box_id) {
+            super::glass_engine::sync_block_ratio(box_id, scale);
+        }
+        if let Some(fresh) = unsafe { get_data(hwnd) } {
+            fresh.cross_dpi_fix_ms = super::glass_engine::now_ms();
+            force_full_content_refresh(hwnd, fresh);
+        }
+    }
+    if should_move {
         unsafe {
             SetWindowPos(
                 hwnd,
@@ -1981,19 +2055,12 @@ fn follow_glass_session(hwnd: HWND) {
         content.bottom,
     ]);
     super::glass_engine::maybe_log_session_stats();
-    // 移动会话只有 moving、缩放会话只有 resizing：两者都要当作「会话还活着」，
-    // 否则移动会话会被宽限期提前掐断。
-    let active =
-        super::glass_engine::block_resizing(box_id) || super::glass_engine::block_moving(box_id);
-    let (seen, idle, should_end) = session_next(
-        active,
-        data.glass_session_seen_resizing,
-        data.glass_session_idle_ticks,
-    );
-    data.glass_session_seen_resizing = seen;
-    data.glass_session_idle_ticks = idle;
+    if let Some(fresh) = unsafe { get_data(hwnd) } {
+        fresh.glass_session_seen_resizing = next_seen;
+        fresh.glass_session_idle_ticks = next_idle;
+    }
     if should_end {
-        log::debug!("库会话收尾：moving/resizing 连续 {idle} 拍为 false（seen={seen}）");
+        log::debug!("库会话收尾：moving/resizing 连续 {next_idle} 拍为 false（seen={next_seen}）");
         end_glass_resize_session(hwnd);
     }
 }
@@ -2037,26 +2104,109 @@ pub(crate) fn end_glass_resize_session(hwnd: HWND) {
     data.content_last_render_ms = 0;
     lower_timer_resolution();
     exit_glass_resize_session(hwnd);
-    // 最后做一次几何同步，避免内容窗口停在落后玻璃块不足一 tick 的位置。
-    if let Some(content) = super::glass_engine::block_content_rect(data.config_id) {
-        let padding = data.render_padding;
-        let want = RECT {
-            left: content.left - padding,
-            top: content.top - padding,
-            right: content.right + padding,
-            bottom: content.bottom + padding,
-        };
+    // 会话收尾：把「库权威块矩形」与「代理窗口实际矩形」对齐，并对跨屏 DPI
+    // 漂移做一次全量重绘。要点：
+    // ① 必须比较**当前窗口**而不是由块算出的目标矩形（旧实现拿 target 与 target
+    //    比，跨屏错位永远判不出来）；
+    // ② 必须与**未吸附的原始块矩形**比较，否则「块整块在屏外、吸附后才合法」
+    //    这一档判成 content_moved=false，玻璃块会被留在屏外（自检 #4）；
+    // ③ 全程不得持有 GridWindowData 引用时调用 SetWindowPos / 重绘：它们会同步
+    //    重入本窗口线程消息（嵌套 WM_WINDOWPOSCHANGED 再次 get_data &mut），
+    //    构成别名 UB。故先抄出全部标量，结束借用，再做动作。
+    let (config_id, padding) = (data.config_id, data.render_padding);
+    let raw_content = super::glass_engine::block_content_rect(config_id);
+    let block_scale = super::glass_engine::block_scale(config_id);
+    let ratio_drifted = super::glass_engine::block_ratio_drifted(config_id);
+    let dpi = {
+        let d = unsafe { GetDpiForWindow(hwnd) };
+        if d > 0 {
+            d
+        } else {
+            96
+        }
+    };
+    let mut actual_outer = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    let have_actual = unsafe { GetWindowRect(hwnd, &mut actual_outer) } != 0;
+
+    let Some(raw) = raw_content else {
+        super::alignment_guide::on_exit_size_move(hwnd);
+        super::drag_handler::save_config();
+        log::debug!("分类框退出库缩放会话（无块矩形），布局已持久化");
+        return;
+    };
+
+    // 单屏吸附（内含虚拟桌面兜底）：停在主副屏交界的块会被单屏画布裁掉半截，
+    // 不吸附就会一直显示异常，直到用户再拖一次。
+    let final_content = super::monitor_utils::snap_content_rect_to_single_monitor(&raw);
+    let content_moved = final_content.left != raw.left || final_content.top != raw.top;
+    let want = RECT {
+        left: final_content.left.saturating_sub(padding),
+        top: final_content.top.saturating_sub(padding),
+        right: final_content.right.saturating_add(padding),
+        bottom: final_content.bottom.saturating_add(padding),
+    };
+    let window_matches = have_actual
+        && actual_outer.left == want.left
+        && actual_outer.top == want.top
+        && actual_outer.right.saturating_sub(actual_outer.left)
+            == want.right.saturating_sub(want.left)
+        && actual_outer.bottom.saturating_sub(actual_outer.top)
+            == want.bottom.saturating_sub(want.top);
+    let actual_monitor = have_actual.then(|| {
+        crate::box_core::monitor_geom::rect_center([
+            actual_outer.left,
+            actual_outer.top,
+            actual_outer.right,
+            actual_outer.bottom,
+        ])
+        .and_then(|(x, y)| super::monitor_utils::monitor_index_of_point(x, y))
+    });
+    let content_monitor = crate::box_core::monitor_geom::rect_center([
+        final_content.left,
+        final_content.top,
+        final_content.right,
+        final_content.bottom,
+    ])
+    .and_then(|(x, y)| super::monitor_utils::monitor_index_of_point(x, y));
+    let monitor_desynced = have_actual && actual_monitor.flatten() != content_monitor;
+
+    // ---- 以下全部在没有 data 借用的情况下执行 ----
+    if content_moved {
+        // 吸附只改位置不改宽高；下发必须继续沿用**库当前 scale**，
+        // 用可能滞后的 GetDpiForWindow 会让玻璃块在收尾瞬间按错误比例缩放。
+        match block_scale {
+            Some(scale) => {
+                super::glass_engine::push_box_rect_with_ratio(config_id, &final_content, scale);
+            }
+            None => super::glass_engine::push_box_rect(config_id, &final_content, dpi),
+        }
+    }
+    if let Some(scale) = block_scale {
+        super::glass_engine::sync_block_ratio(config_id, scale);
+    }
+    if !window_matches {
         unsafe {
             SetWindowPos(
                 hwnd,
                 std::ptr::null_mut(),
                 want.left,
                 want.top,
-                want.right - want.left,
-                want.bottom - want.top,
+                want.right.saturating_sub(want.left),
+                want.bottom.saturating_sub(want.top),
                 SWP_NOZORDER | SWP_NOACTIVATE,
             );
         }
+    }
+    if ratio_drifted || content_moved || monitor_desynced {
+        let Some(data) = (unsafe { get_data(hwnd) }) else {
+            return;
+        };
+        force_full_content_refresh(hwnd, data);
     }
     super::alignment_guide::on_exit_size_move(hwnd);
     super::drag_handler::save_config();
@@ -2161,6 +2311,34 @@ pub fn collect_grid_layout() -> Vec<crate::config::BoxLayoutData> {
         // 读取用户可见内容矩形（排除透明外投影留白）。
         let Some(wr) = get_grid_content_rect(grid.hwnd) else {
             continue;
+        };
+
+        // 落盘前最后兜底：只保存「确实完整落在某块屏内」的位置。
+        // 跨屏 DPI 下「物理坐标 / 当时窗口 DPI」的逻辑坐标并不自洽
+        // （恢复时按新落位屏的 DPI 重新缩放），把这种位置写进配置，
+        // 重启后就会出现在副屏上看不见的框（用户报的「漂移出屏幕」有一半来自这里）。
+        let wr = if crate::box_core::monitor_geom::rect_fits_any_monitor(
+            [wr.left, wr.top, wr.right, wr.bottom],
+            &super::monitor_utils::get_monitor_rects()
+                .into_iter()
+                .map(|(ox, oy, w, h)| ((ox, oy), (w, h)))
+                .collect::<Vec<((i32, i32), (i32, i32))>>(),
+        ) {
+            wr
+        } else {
+            let snapped = super::monitor_utils::snap_content_rect_to_single_monitor(&wr);
+            log::warn!(
+                "collect_grid_layout: 分类框位置跨屏/越界，落盘前吸附 ({},{}) -> ({},{})",
+                wr.left,
+                wr.top,
+                snapped.left,
+                snapped.top
+            );
+            // 只吸附「要写进配置」的值：本函数会被 Tauri 命令线程调用，
+            // 跨线程 SetWindowPos 会同步等待平台线程（历史前科：卡死 WebView2 事件循环）。
+            // 真实窗口位置不在此处搬动，由该窗口下一次 WM_WINDOWPOSCHANGED
+            // （激活 / 层级变化都会触发）的吸附自愈。
+            snapped
         };
 
         // 物理像素 → 逻辑像素（DPI 96 基准），避免恢复时双重缩放

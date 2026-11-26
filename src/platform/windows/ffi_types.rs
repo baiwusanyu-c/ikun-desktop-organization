@@ -254,6 +254,14 @@ pub const SM_CXSCREEN: i32 = 0;
 #[allow(dead_code)]
 pub const SM_CYSCREEN: i32 = 1;
 
+/// 系统拖拽启动阈值（主屏 96 DPI 逻辑像素，Windows 默认 4）。
+///
+/// 分类框的图标拖拽阈值必须以此为基准再按窗口 DPI 折算，
+/// 不能再用硬编码常量（2026-11-26「双击图标偶发没反应」根因之一）。
+pub const SM_CXDRAG: i32 = 68;
+/// 系统拖拽启动阈值（垂直方向）。
+pub const SM_CYDRAG: i32 = 69;
+
 // ===== Alpha Blend Constants =====
 pub const AC_SRC_OVER: u8 = 0x00;
 pub const AC_SRC_ALPHA: u8 = 0x01;

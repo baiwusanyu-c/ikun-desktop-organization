@@ -1715,7 +1715,17 @@ mod tests {
 
     #[test]
     fn test_drag_threshold() {
-        assert_eq!(DRAG_THRESHOLD, 5, "拖拽启动阈值应为 5 像素");
+        // DRAG_THRESHOLD 仅保留为「阈值下限」语义（历史常量），
+        // 实际生效值由 box_core::drag_logic::drag_threshold_physical_px 按 DPI 折算。
+        assert_eq!(
+            DRAG_THRESHOLD,
+            crate::box_core::drag_logic::MIN_DRAG_THRESHOLD_PX,
+            "拖拽启动阈值下限应为 5 像素"
+        );
+        assert!(
+            crate::box_core::drag_logic::drag_threshold_physical_px(4, 192) > DRAG_THRESHOLD,
+            "高 DPI 下阈值必须随之放大，否则手抖就会误判成拖拽"
+        );
     }
 
     #[test]

@@ -81,6 +81,75 @@ pub fn apply_shift_insert(
     result
 }
 
+// =============================================================================
+// 拖拽启动判据（DPI 阈值 + 起拖位置）
+//
+// 背景（2026-11-26 用户报「在分类框中双击图标打开，有时候没反应」）：
+// 旧实现用硬编码 `DRAG_THRESHOLD = 5` 物理像素判阈值，既不随 DPI 放大，
+// 又允许「光标仍在框内」就发起阻塞式 OLE 拖拽。分类框常驻 HWND_BOTTOM，
+// 只要资源管理器窗口几何上盖在它上面，单击图标 + 手抖 6px 就会进入
+// DoDragDrop 模态循环并把本框置为 WS_EX_TRANSPARENT —— 双击的第二次按下
+// 被彻底吞掉（表现为「没反应」），还会误发起一次文件复制。
+// =============================================================================
+
+/// 拖拽启动阈值下限（物理像素），与历史行为保持一致。
+pub const MIN_DRAG_THRESHOLD_PX: i32 = 5;
+/// 拖拽启动阈值上限（物理像素），高 DPI 下不得放大到「拖不动」。
+pub const MAX_DRAG_THRESHOLD_PX: i32 = 16;
+
+/// 计算拖拽启动阈值（物理像素）。
+///
+/// 系统拖拽阈值 `SM_CXDRAG/SM_CYDRAG` 以主屏（96 DPI）逻辑像素为准，
+/// 在高 DPI 分类框上必须按 DPI 等比放大，否则 200% 缩放下手抖 5 物理像素
+/// 就等于 100% 下的 10 像素，极易误判成拖拽。
+///
+/// - `system_drag_px <= 0`（取不到系统值）→ 回退 [`MIN_DRAG_THRESHOLD_PX`]；
+/// - 结果夹在 [`MIN_DRAG_THRESHOLD_PX`, `MAX_DRAG_THRESHOLD_PX`]。
+#[must_use]
+pub fn drag_threshold_physical_px(system_drag_px: i32, dpi: u32) -> i32 {
+    if system_drag_px <= 0 {
+        return MIN_DRAG_THRESHOLD_PX;
+    }
+    let dpi = if dpi == 0 { 96 } else { dpi };
+    let scaled = (system_drag_px as i64 * dpi as i64 / 96)
+        .clamp(MIN_DRAG_THRESHOLD_PX as i64, MAX_DRAG_THRESHOLD_PX as i64);
+    scaled as i32
+}
+
+/// 位移是否超过拖拽阈值（任一轴超过即算，与旧实现判据一致）。
+#[must_use]
+pub fn drag_threshold_exceeded(start: (i32, i32), current: (i32, i32), threshold: i32) -> bool {
+    let dx = (current.0 as i64 - start.0 as i64).abs();
+    let dy = (current.1 as i64 - start.1 as i64).abs();
+    dx > threshold as i64 || dy > threshold as i64
+}
+
+/// 点是否落在矩形内（半开区间 `[left,right)` / `[top,bottom)`）。
+#[must_use]
+pub fn point_in_rect(x: i32, y: i32, rect: &[i32; 4]) -> bool {
+    x >= rect[0] && x < rect[2] && y >= rect[1] && y < rect[3]
+}
+
+/// 自定义拖拽残影是否应升级为「拖往外部窗口」的 OLE 拖拽。
+///
+/// 判据：光标已离开起拖时记录的分类框内容矩形。
+/// 未离开时不得起 OLE —— `DoDragDrop` 会阻塞本框消息线程并把窗口置为
+/// 鼠标透明，双击/后续点击全部丢失（见本段顶部注释）。
+#[must_use]
+pub fn should_start_external_ole_drag(
+    cursor: (i32, i32),
+    source_box_rect: &[i32; 4],
+    external_window_found: bool,
+) -> bool {
+    // 源矩形无效时必须失败关闭：宁可本次不升级 OLE 拖拽，也不能在无法证明
+    // 光标已离开分类框时进入阻塞式 DoDragDrop（会吞掉双击并误复制文件）。
+    let source_rect_valid =
+        source_box_rect[2] > source_box_rect[0] && source_box_rect[3] > source_box_rect[1];
+    external_window_found
+        && source_rect_valid
+        && !point_in_rect(cursor.0, cursor.1, source_box_rect)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,5 +287,79 @@ mod tests {
         let r = apply_shift_insert(&p, 0, 2, 2);
         assert_eq!(r[0], shift_pos(1, 0));
         assert_eq!(r[1], shift_pos(0, 0));
+    }
+
+    // ===== 拖拽启动判据 =====
+
+    #[test]
+    fn drag_threshold_falls_back_when_system_value_missing() {
+        assert_eq!(drag_threshold_physical_px(0, 96), MIN_DRAG_THRESHOLD_PX);
+        assert_eq!(drag_threshold_physical_px(-4, 192), MIN_DRAG_THRESHOLD_PX);
+    }
+
+    #[test]
+    fn drag_threshold_scales_with_dpi() {
+        // 100%：系统值 4 → 取下限 5（保持历史行为）
+        assert_eq!(drag_threshold_physical_px(4, 96), 5);
+        // 150%：4*1.5=6
+        assert_eq!(drag_threshold_physical_px(4, 144), 6);
+        // 200%：4*2=8
+        assert_eq!(drag_threshold_physical_px(4, 192), 8);
+        // 极端系统值必须被上限夹住，否则高 DPI 下永远拖不起来
+        assert_eq!(drag_threshold_physical_px(64, 192), MAX_DRAG_THRESHOLD_PX);
+    }
+
+    #[test]
+    fn drag_threshold_boundary_is_exclusive() {
+        // 恰好等于阈值不算拖拽（与旧 `dx <= THRESHOLD` 判据一致）
+        assert!(!drag_threshold_exceeded((100, 100), (105, 100), 5));
+        assert!(drag_threshold_exceeded((100, 100), (106, 100), 5));
+        assert!(drag_threshold_exceeded((100, 100), (100, 106), 5));
+    }
+
+    #[test]
+    fn drag_threshold_handles_negative_coordinates() {
+        // 负坐标副屏上不得因 i32 相减溢出误判
+        assert!(drag_threshold_exceeded((-4000, -200), (-3990, -200), 5));
+        assert!(!drag_threshold_exceeded((-4000, -200), (-3996, -200), 5));
+    }
+
+    #[test]
+    fn point_in_rect_is_half_open() {
+        let rect = [0, 0, 100, 100];
+        assert!(point_in_rect(0, 0, &rect));
+        assert!(point_in_rect(99, 99, &rect));
+        assert!(!point_in_rect(100, 50, &rect));
+        assert!(!point_in_rect(-1, 50, &rect));
+    }
+
+    #[test]
+    fn external_ole_drag_suppressed_while_cursor_inside_box() {
+        let box_rect = [100, 100, 500, 400];
+        // 光标还在框内（哪怕几何上被资源管理器盖住）→ 绝不起 OLE
+        assert!(!should_start_external_ole_drag((300, 200), &box_rect, true));
+        // 光标已离开框且命中外部窗口 → 允许起 OLE
+        assert!(should_start_external_ole_drag((900, 200), &box_rect, true));
+        // 没命中外部窗口时永远不起
+        assert!(!should_start_external_ole_drag(
+            (900, 200),
+            &box_rect,
+            false
+        ));
+    }
+
+    #[test]
+    fn external_ole_drag_fails_closed_for_invalid_source_rect() {
+        // 取不到内容矩形（全 0）时不得退回历史“全放行”行为。
+        assert!(!should_start_external_ole_drag(
+            (900, 200),
+            &[0, 0, 0, 0],
+            true
+        ));
+        assert!(!should_start_external_ole_drag(
+            (900, 200),
+            &[500, 500, 100, 100],
+            true
+        ));
     }
 }

@@ -1,0 +1,13 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": "src/box_core/drag_logic.rs", "reason": "拖拽阈值/边界纯逻辑现状，新增判据函数的落点"}
+{"file": "src/box_core/mod.rs", "reason": "box_core 模块注册，新增多屏几何模块需在此声明"}
+{"file": "src/platform/windows/drag_handler.rs", "reason": "拖拽生命周期与 handle_grid_drag_timer 误起 OLE 拖拽根因"}
+{"file": "src/platform/windows/wnd_proc.rs", "reason": "WM_LBUTTONDBLCLK/WM_MOVING/WM_WINDOWPOSCHANGED 交互与几何链路"}
+{"file": "src/platform/windows/glass_engine.rs", "reason": "玻璃块几何下发/回读与 sink 输入路由（单屏模型）"}
+{"file": "src/platform/windows/grid_window.rs", "reason": "玻璃会话跟随 end_glass_resize_session 与内容窗口摆位"}
+{"file": "src/platform/windows/monitor_utils.rs", "reason": "显示器/DPI/虚拟桌面边界工具，需补多显示器矩形查询"}
+{"file": "src/platform/windows/ffi_types.rs", "reason": "DRAG_THRESHOLD 常量与 Win32 常量、scale_for_dpi"}
+{"file": "src/platform/windows/zorder.rs", "reason": "find_external_window_at_point 判据（仅匹配资源管理器矩形）"}
+{"file": ".trellis/spec/backend/windows-platform-guidelines.md", "reason": "Windows 平台规范：分层窗口/坐标换算/定时器陷阱"}
+{"file": ".trellis/spec/guides/tauri-window-contract.md", "reason": "窗口与玻璃块跨层契约：几何真源、指针事件口径、禁止重复实现库判据"}

@@ -509,6 +509,16 @@ extern "system" {
 
     pub fn MonitorFromPoint(pt: POINT, dwFlags: u32) -> HMONITOR;
 
+    pub fn EnumDisplayMonitors(
+        hdc: HDC,
+
+        lprcClip: *const RECT,
+
+        lpfnEnum: Option<unsafe extern "system" fn(HMONITOR, HDC, *mut RECT, LPARAM) -> i32>,
+
+        dwData: LPARAM,
+    ) -> i32;
+
     pub fn GetMonitorInfoW(hMonitor: HMONITOR, lpmi: *mut MONITORINFO) -> i32;
 
     pub fn GetDpiForMonitor(

@@ -44,6 +44,18 @@ thread_local! {
     static PROPOSED_Y: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
 }
 
+/// `RECT`（本仓库自持的 FFI 定义）既非 `Copy` 也非 `Clone`，需要显式逐字段抄一份，
+/// 否则一次传借用后就没法再复用（避免为此改动跨模块共用的 FFI 类型派生）。
+#[must_use]
+fn copy_rect(r: &RECT) -> RECT {
+    RECT {
+        left: r.left,
+        top: r.top,
+        right: r.right,
+        bottom: r.bottom,
+    }
+}
+
 fn window_dpi(hwnd: HWND) -> u32 {
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     if dpi > 0 {
@@ -582,11 +594,9 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             let new_dpi = (wparam & 0xFFFF) as u32;
             log::info!("DPI 变化: {} → 重新计算布局", new_dpi);
             let suggested_rect = lparam as *const RECT;
-            let outer_w = unsafe { (*suggested_rect).right - (*suggested_rect).left };
-            let outer_h = unsafe { (*suggested_rect).bottom - (*suggested_rect).top };
+            let suggested_outer_w = unsafe { (*suggested_rect).right - (*suggested_rect).left };
+            let suggested_outer_h = unsafe { (*suggested_rect).bottom - (*suggested_rect).top };
             let padding = shadow_padding_for_dpi(new_dpi);
-            let new_w = (outer_w - padding * 2).max(0);
-            let new_h = (outer_h - padding * 2).max(0);
 
             // DPI 变化后留白的物理像素值也变了，必须同步写回窗口，
             // 后面的布局重算与重绘都依赖这个字段。
@@ -595,17 +605,38 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             }
             super::grid_window::update_dcomp_scale(hwnd);
 
+            // DPI 变大后重算的物理尺寸可能超过新落位屏（副屏小分辨率 + 高缩放），
+            // 直接把系统建议矩形摆上去，玻璃块会比画布还大 → 跨界瞬间「显示异常」。
+            // 只在进入本 handler 时读一次系统建议矩形：`lparam` 指向的临时结构
+            // 在 handler 返回后即失效，SetWindowPos 之后再解引用是未定义行为。
+            let suggested_left = unsafe { (*suggested_rect).left };
+            let suggested_top = unsafe { (*suggested_rect).top };
+            let pad = window_padding(hwnd, new_dpi);
+            let fitted_content = super::monitor_utils::fit_content_rect_into_monitor(&RECT {
+                left: suggested_left.saturating_add(pad),
+                top: suggested_top.saturating_add(pad),
+                right: suggested_left
+                    .saturating_add(suggested_outer_w)
+                    .saturating_sub(pad),
+                bottom: suggested_top
+                    .saturating_add(suggested_outer_h)
+                    .saturating_sub(pad),
+            });
+            let new_w = fitted_content.right - fitted_content.left;
+            let new_h = fitted_content.bottom - fitted_content.top;
+            let outer_w = new_w.saturating_add(pad * 2).max(1);
+            let outer_h = new_h.saturating_add(pad * 2).max(1);
+            // 尺寸可能被兜底缩小过，重算布局要用实际内容宽高，而不是系统建议值。
             if let Some(data) = get_data(hwnd) {
                 reflow_items(data);
                 recalculate_layout(data, new_w, new_h, new_dpi);
             }
-
             unsafe {
                 SetWindowPos(
                     hwnd,
                     std::ptr::null_mut(),
-                    (*suggested_rect).left,
-                    (*suggested_rect).top,
+                    fitted_content.left.saturating_sub(pad),
+                    fitted_content.top.saturating_sub(pad),
                     outer_w,
                     outer_h,
                     SWP_NOZORDER,
@@ -1140,6 +1171,32 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             let (click_x, click_y) = message_content_point(hwnd, lparam);
 
             if let Some(data) = get_data(hwnd) {
+                // 双击优先于「进行中的自定义拖拽」：第一次按下已把 drag_pending/drag_active
+                // 置位并起了 8ms 轮询定时器；不先干净收尾，残影覆盖窗与（可能已发起的）
+                // 阻塞式 DoDragDrop 会把这次双击吞掉 —— 用户看到的正是「双击图标有时候没反应」。
+                if data.drag_active || data.drag_pending {
+                    log::info!(
+                        "[DBLCLICK] 取消进行中的图标拖拽（active={} pending={}）以保证双击生效",
+                        data.drag_active,
+                        data.drag_pending
+                    );
+                    let had_overlay = data.drag_active;
+                    data.drag_active = false;
+                    data.drag_pending = false;
+                    data.drag_item_index = -1;
+                    data.drag_over_item = -1;
+                    data.drag_over_insert_col = -1;
+                    data.drag_over_insert_row = -1;
+                    data.multi_drag_items.clear();
+                    unsafe {
+                        KillTimer(hwnd, TIMER_ID_GRID_DRAG);
+                        // 残影只在拖拽真正激活后才存在，别在纯 pending 时白销毁一次。
+                        if had_overlay {
+                            super::drag_image::destroy_drag_overlay();
+                        }
+                    }
+                }
+
                 let Some(wr) = get_grid_content_rect(hwnd) else {
                     return 0;
                 };
@@ -1590,32 +1647,71 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         // 只处理「非库会话」的变化（原生标题拖拽由 WM_MOVING 同步、库会话期间
         // 块矩形是真值不得回推），覆盖程序化移动：DPI 切换、菜单位置、折叠等。
         WM_WINDOWPOSCHANGED => {
-            if let Some(data) = get_data(hwnd) {
-                // 库会话（移动/缩放）期间块矩形是真值，绝不能用窗口几何反推。
-                // 除了本地标志，还要**直接问库**：会话起止是 PostMessage 异步送达的，
-                // 标志位还没置上的那几拍里反推一次，就会把库的会话锚点搞脏
-                // （实测：光标 (+220,+130) 拖出 (+315,+32) 的落位）。
-                if !data.glass_session_active
-                    && super::glass_engine::is_active()
-                    && super::glass_engine::has_box(data.config_id)
-                    && !super::glass_engine::block_in_session(data.config_id)
+            // 注意 borrowed 顺序：`SetWindowPos` 会**同步重入**本窗口过程（嵌套的
+            // WM_WINDOWPOSCHANGED 会再次 get_data 取 &mut），因此绝不能持有
+            // GridWindowData 的引用时调用它 —— 先把需要的值抄成局部变量、结束借用，
+            // 再做几何动作（2026-11-26 自检发现，属 UB 风险）。
+            let pending = (unsafe { get_data(hwnd) }).and_then(|data| {
+                if data.glass_session_active
+                    || !super::glass_engine::is_active()
+                    || !super::glass_engine::has_box(data.config_id)
+                    || super::glass_engine::block_in_session(data.config_id)
                 {
-                    let mut wr = RECT {
-                        left: 0,
-                        top: 0,
-                        right: 0,
-                        bottom: 0,
+                    return None;
+                }
+                let mut wr = RECT {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                };
+                if unsafe { GetWindowRect(hwnd, &mut wr) } == 0 {
+                    return None;
+                }
+                Some((data.config_id, data.render_padding, window_dpi(hwnd), wr))
+            });
+            if let Some((config_id, padding, dpi, wr)) = pending {
+                // 跨屏/越界吸附：这里是**引擎模式标题拖拽的唯一几何源头**
+                // （标题拖拽由本窗口 SetWindowPos 驱动，系统模态的 WM_MOVING 压根不会来）。
+                // 不拦截就会出现用户报的两种现象：
+                // ① 块停在跨屏位置被单屏画布裁掉半截 → 「一半主屏一半副屏显示异常」；
+                // ② 代理窗口被推到屏外 → 整块玻璃漂出屏幕再也找不回来。
+                // snap_outer_rect_for_drag 内含「单屏吸附 + 虚拟桌面夹取」，
+                // 且对已合法矩形是幂等的（原样返回）。
+                let (snapped_outer, moved) =
+                    super::monitor_utils::snap_outer_rect_for_drag(&wr, padding);
+                // 系统模态移动循环进行中不抢位置：WM_MOVING 已吸附过，
+                // 这里再动窗口会与模态循环互相打架（表现为拖拽抖动）。
+                if moved && !IN_DRAG.get() {
+                    log::debug!(
+                        "[MULTIMON] 位置吸附: 外框 ({},{}) -> ({},{})",
+                        wr.left,
+                        wr.top,
+                        snapped_outer.left,
+                        snapped_outer.top
+                    );
+                    // 引擎模式下代理窗只是透明命中层，移动它没有视觉成本，
+                    // 但必须移动，才能让「块 == 命中层 == 内容」三者恒等对齐；
+                    // 回退模式下它就是可见内容层，同样应摆回合法位置。
+                    let _ = unsafe {
+                        SetWindowPos(
+                            hwnd,
+                            std::ptr::null_mut(),
+                            snapped_outer.left,
+                            snapped_outer.top,
+                            (snapped_outer.right - snapped_outer.left).max(1),
+                            (snapped_outer.bottom - snapped_outer.top).max(1),
+                            SWP_NOZORDER | SWP_NOACTIVATE,
+                        )
                     };
-                    if unsafe { GetWindowRect(hwnd, &mut wr) } != 0 {
-                        let dpi = unsafe { GetDpiForWindow(hwnd) };
-                        let dpi = if dpi > 0 { dpi } else { 96 };
-                        super::glass_engine::push_geometry_for_window(
-                            data.config_id,
-                            &wr,
-                            data.render_padding,
-                            dpi,
-                        );
+                    // 以系统实际落位为准下发（重读一次，避免与吸附值差 1px 形成拉锯）。
+                    let mut actual = copy_rect(&snapped_outer);
+                    if unsafe { GetWindowRect(hwnd, &mut actual) } == 0 {
+                        actual = copy_rect(&snapped_outer);
                     }
+                    super::glass_engine::push_geometry_for_window(config_id, &actual, padding, dpi);
+                } else {
+                    super::glass_engine::push_geometry_for_window(config_id, &wr, padding, dpi);
                 }
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -1889,6 +1985,25 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             let proposed_rect = lparam as *mut RECT;
             if !proposed_rect.is_null() {
                 let rect = unsafe { &mut *proposed_rect };
+                // 拖拽边界（回退模式 / 系统模态移动循环）：可见内容必须完整留在单块
+                // 显示器内。过去这里零约束（`get_virtual_desktop_bounds` 全项目无人调用），
+                // 分类框可被整块拖出屏幕并落盘，重启后仍然看不见（用户报「漂移出屏幕」）；
+                // 而液态玻璃是单屏模型（块只画在中心所在屏的画布上），停在跨屏位置
+                // 会被画布裁掉半截 → 「一半主屏一半副屏显示异常」。
+                // 已合法的矩形原样返回（幂等），所以跨屏切换本身照常顺滑。
+                let padding = window_padding(hwnd, window_dpi(hwnd));
+                let (snapped_outer, moved) =
+                    super::monitor_utils::snap_outer_rect_for_drag(rect, padding);
+                if moved {
+                    log::debug!(
+                        "[MULTIMON] WM_MOVING 吸附: ({},{}) -> ({},{})",
+                        rect.left,
+                        rect.top,
+                        snapped_outer.left,
+                        snapped_outer.top
+                    );
+                    *rect = snapped_outer;
+                }
                 // 保存用户期望的位置
                 PROPOSED_X.set(rect.left);
                 PROPOSED_Y.set(rect.top);
@@ -1897,8 +2012,12 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 // （命令队列去重下发，渲染线程 ≤1 帧内贴上；玻璃动画由库线程
                 // 独立驱动，内容层此刻是静态前景，不需要宿主同步重绘）。
                 if let Some(data) = get_data(hwnd) {
+                    // 库会话（移动/缩放）进行中**绝不**回推：会话期块矩形是几何真源，
+                    // 反向 push 会污染库的会话锚点（见 tauri-window-contract 禁令）。
                     if super::glass_engine::is_active()
                         && super::glass_engine::has_box(data.config_id)
+                        && !data.glass_session_active
+                        && !super::glass_engine::block_in_session(data.config_id)
                     {
                         let padding = data.render_padding;
                         let content = RECT {

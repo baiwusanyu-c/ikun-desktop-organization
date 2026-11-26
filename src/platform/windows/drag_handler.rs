@@ -9,7 +9,7 @@
 
 use super::ffi_imports::*;
 use super::ffi_types::*;
-use super::grid_window::get_data;
+use super::grid_window::{get_data, get_grid_content_rect};
 
 // Re-exports for external callers (wnd_proc, overlay_wnd_proc, etc.)
 pub(crate) use super::drag_drop::{
@@ -31,14 +31,27 @@ pub(crate) fn check_drag_threshold(hwnd: HWND, mx: i32, my: i32) -> bool {
         return false;
     }
 
-    let dx = (mx - data.drag_start_x).abs();
-    let dy = (my - data.drag_start_y).abs();
-    if dx <= DRAG_THRESHOLD && dy <= DRAG_THRESHOLD {
+    // 阈值必须按窗口 DPI 折算：旧实现用硬编码 5 物理像素，
+    // 高 DPI 下等于 100% 时的 2~3 像素手抖量，单击图标极易误判成拖拽
+    // （进而抢走双击，见 handle_grid_drag_timer 的 OLE 判据注释）。
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    let dpi = if dpi > 0 { dpi } else { 96 };
+    let threshold = super::monitor_utils::drag_threshold_for_dpi(dpi);
+    if !crate::box_core::drag_logic::drag_threshold_exceeded(
+        (data.drag_start_x, data.drag_start_y),
+        (mx, my),
+        threshold,
+    ) {
         return false;
     }
 
     // 超过阈值 → 激活自定义拖拽
     data.drag_pending = false;
+    // 记录起拖时的内容矩形：外部窗口 OLE 升级必须等光标离开本框。
+    data.drag_box_rect = match get_grid_content_rect(hwnd) {
+        Some(r) => [r.left, r.top, r.right, r.bottom],
+        None => [0, 0, 0, 0],
+    };
     let item_idx = data.selected_item;
     if item_idx < 0 || (item_idx as usize) >= data.items.len() {
         return false;
@@ -463,10 +476,22 @@ pub(crate) fn handle_grid_drag_timer(hwnd: HWND) {
     // ★ 优先检测外部窗口（Explorer 等）— 必须在分类框检测之前！
     // 分类框的窗口矩形(GetWindowRect)可能很大，光标虽然在桌面/Explorer上，
     // 但仍落在某个分类框的窗口矩形内，导致 find_grid_window_at_point 误判。
+    //
+    // 但「几何上落在 Explorer 矩形里」不等于「用户把图标拖出了分类框」：
+    // 分类框常驻 HWND_BOTTOM，Explorer 窗口在 Z 序上盖着它时，
+    // 光标明明还在框内也会命中 Explorer —— 旧实现在此刻直接起 DoDragDrop，
+    // 该调用阻塞本框消息线程并把窗口置为 WS_EX_TRANSPARENT，
+    // 于是双击的第二次按下永远到不了 wnd_proc（用户报「双击图标有时候没反应」），
+    // 顺带还误发起了一次「复制到资源管理器」。判据补一条：必须先离开本框。
     let ext_hwnd = super::zorder::find_external_window_at_point(pt.x, pt.y);
-    if !ext_hwnd.is_null() {
+    // 源矩形缺失时纯判据会失败关闭：无法确认光标已离开本框，就不升级 OLE。
+    if crate::box_core::drag_logic::should_start_external_ole_drag(
+        (pt.x, pt.y),
+        &data.drag_box_rect,
+        !ext_hwnd.is_null(),
+    ) {
         log::info!(
-            "[GRID-TIMER] 检测到外部窗口 {:?} at ({}, {}), 启动 OLE 拖拽",
+            "[GRID-TIMER] 光标已离开本框并命中外部窗口 {:?} at ({}, {}), 启动 OLE 拖拽",
             ext_hwnd,
             pt.x,
             pt.y

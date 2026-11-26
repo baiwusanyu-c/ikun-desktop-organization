@@ -1,0 +1,9 @@
+{"file": ".claude/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".claude/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": "src/box_core/drag_logic.rs", "reason": "校验纯逻辑新增：0 unsafe、可单测、无 unwrap"}
+{"file": "src/platform/windows/drag_handler.rs", "reason": "校验拖拽判据修复未引入回归（残影清理/定时器配对）"}
+{"file": "src/platform/windows/wnd_proc.rs", "reason": "校验消息处理坐标口径统一与边界钳制未破坏既有会话"}
+{"file": "src/platform/windows/glass_engine.rs", "reason": "校验未重复实现库侧遮挡/层序判据、几何换算口径一致"}
+{"file": "src/platform/windows/grid_window.rs", "reason": "校验会话收尾重绘/内容重推与定时器降频配对"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "自检依据：禁止模式与必须模式"}
+{"file": ".trellis/spec/guides/tauri-window-contract.md", "reason": "自检依据：跨层契约不变量"}

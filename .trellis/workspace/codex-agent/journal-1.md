@@ -951,3 +951,104 @@ debug 产物已重建：`target/debug/ikun_organizer.exe`。
 ### Next Steps
 
 - None - task complete
+
+
+## Session 13: 修复分类框图标双击偶发无反应 + 多屏拖拽显示异常/漂移出屏
+
+**Date**: 2026-11-26
+**Task**: 11-26-fix-dblclick-and-multimonitor-drag
+**Branch**: `master`
+
+### Summary
+
+用户外部反馈两条 bug，代码走查定位到 6 个可实证根因并修复（玻璃/回退两条路径都覆盖）。
+
+**Bug1 双击图标偶发没反应**
+1. `DRAG_THRESHOLD = 5` 是硬编码物理像素，不随 DPI 放大 → 高 DPI 下手抖即误判成拖拽；
+   改为 `drag_logic::drag_threshold_physical_px(SM_CXDRAG/SM_CYDRAG, dpi)`，夹 [5,16]。
+2. `handle_grid_drag_timer` 只要光标几何上落在资源管理器矩形内就起**阻塞式 DoDragDrop**
+   并给本框加 `WS_EX_TRANSPARENT`；而分类框常驻 HWND_BOTTOM，Explorer 在 Z 序上盖着它时
+   「光标还在框内」也会命中 Explorer → 双击的第二次按下被模态循环吞掉（还会误发起复制）。
+   新增 `GridWindowData::drag_box_rect`（起拖时记录内容矩形）+ 纯判据
+   `should_start_external_ole_drag`：光标必须**离开本框**才升级 OLE。
+3. `WM_LBUTTONDBLCLK` 进入时先干净收尾进行中的自定义拖拽（复位 drag_* + 杀
+   `TIMER_ID_GRID_DRAG` + 销毁残影），保证双击优先。
+
+**Bug2 多屏拖拽显示异常 + 漂移出屏**
+4. `get_virtual_desktop_bounds` 此前**全项目零调用**，拖拽无任何边界；新增纯逻辑
+   `box_core/monitor_geom.rs`（clamp_to_bounds / monitor_index_for_center /
+   snap_into_single_monitor / rect_fits_any_monitor），在 create_grid_window、
+   WM_MOVING、**WM_WINDOWPOSCHANGED**（引擎模式标题拖拽的真实几何源头——WM_MOVING 不会触发）、
+   collect_grid_layout 落盘前、follow/end 会话收尾全部接入单屏吸附；
+   吸附幂等、只改位置不改尺寸，归属屏按块中心（与库 `rehome_block` 同构）。
+5. `glass_engine::block_content_rect` 用宿主可能陈旧的 `entry.ratio` 还原宽高
+   （库已按新屏 `snapshot.scale` 重采样）→ 跨屏那一拍内容窗口/纹理按旧 DPI 尺寸落位，
+   就是「一半主屏一半副屏显示异常」的直接来源；改用 `snapshot.scale`，
+   新增 `block_scale/block_ratio_drifted/sync_block_ratio`，跟随 tick 纠偏 +
+   作废 `content_valid/submitted_glass` 强制全量重绘（`cross_dpi_fix_ms` 200ms 去抖）。
+6. `WM_DPICHANGED` 在 `SetWindowPos` 之后仍解引用 `lparam`（handler 返回后临时结构失效 = UB），
+   改为入口一次性读字段；DPI 变大导致物理尺寸超过落位屏时用
+   `monitor_utils::fit_content_rect_into_monitor` 兜底（必要时允许缩小）。
+
+### Main Changes
+
+- 新增：`src/box_core/monitor_geom.rs`（多屏边界纯逻辑 + 17 项单测）
+- 修改：`src/box_core/drag_logic.rs`（DPI 阈值 + OLE 升级判据纯函数与单测）、
+  `src/box_core/mod.rs`、`src/platform/windows/monitor_utils.rs`
+  （get_monitor_rects / snap / clamp / monitor_index_of_point / fit / drag_threshold_for_dpi）、
+  `src/platform/windows/glass_engine.rs`、`src/platform/windows/grid_window.rs`、
+  `src/platform/windows/wnd_proc.rs`、`src/platform/windows/drag_handler.rs`、
+  `src/platform/windows/grid_layout.rs`、`src/platform/windows/icon_manager.rs`、
+  `src/platform/windows/ffi_types.rs`（SM_CXDRAG/SM_CYDRAG）、
+  `src/platform/windows/ffi_imports.rs`（EnumDisplayMonitors）
+- 规范：`.trellis/spec/backend/windows-platform-guidelines.md` 新增
+  「多显示器拖拽边界与双击保护」；`.trellis/spec/guides/tauri-window-contract.md` 新增
+  「多屏拖拽与几何边界契约」并补 2 条验证用例。
+
+### Git Commits
+
+(未提交 —— 按红线等用户明确指令)
+
+### Testing
+
+- [OK] `cargo fmt -- --check` 干净
+- [OK] `cargo test` 全绿（519 passed / 0 failed，含新增 17+6 项纯逻辑单测）
+- [OK] CI 严格 clippy 组合（-D warnings + 现有 allowlist）零告警
+- [ ] 待用户实机复验：双屏（主 100%/副 200% 与反向）拖拽切换、跨界停位显示、
+  Explorer 窗口盖住分类框时双击图标、锁定态/菜单打开态拖拽边界
+
+### Status
+
+[OK] **Completed**（待实机复验）
+
+### 五维自检（子代理 Gauss + 主线复核）
+
+子代理审查交回 11 条，逐条处置：
+
+| # | 问题 | 处置 |
+|---|------|------|
+| 1 | `monitor_geom` score 改 i128 但 `best` 仍 i64（E0308） | 已修（`Option<(usize, i128)>`），并保留其 `clamp_axis` / 饱和运算加固 |
+| 2 | `end_glass_resize_session` 的 `Option<RECT>` 借用/移动冲突（E0382） | 已重写为「读值 → 结束借用 → 动作」，用 `have_actual` 布尔量 |
+| 3 | `WM_WINDOWPOSCHANGED` 死赋值（`content` 写了没读） | 已删；吸附统一走 `snap_outer_rect_for_drag`（内含虚拟桌面兜底） |
+| 4 | 收尾先 clamp 再比较 → 块整块在屏外时不 push，玻璃仍留屏外 | 已修：保留 `raw_content`，用 `final_content != raw` 判 `content_moved` |
+| 5 | **UB 风险**：持 `&mut GridWindowData` 调 `SetWindowPos`（同步重入消息会二次 get_data） | 已修：`WM_WINDOWPOSCHANGED` / `follow_glass_session` / `end_glass_resize_session` 全部改为先抄值再动作；纪律写入规范 |
+| 6 | `WM_MOVING` 回推块缺会话保护 | 已修：补 `!glass_session_active && !block_in_session` |
+| 7 | `collect_grid_layout` 的「自愈」承诺无触发源 | 采纳子代理更安全的**失败关闭**版：源矩形无效时不升级 OLE；并把注释改成「只规范化落盘值」 |
+| 8 | 跨 DPI 布局序列化口径不自洽（物理÷DPI 当逻辑存） | 记为已知遗留（彻底修需存「显示器身份 + 屏内相对坐标」），写进规范与本节 |
+| 9 | 建窗 DPI 取样在吸附/目标屏确定之前 | 同 #8 一并记为遗留；当前吸附保证「无论基准怎么偏都不会落到屏外」 |
+| 10 | `fit_content_rect_into_monitor` 缺纯逻辑测试 | 已修：抽出 `monitor_geom::fit_into_bounds`（+3 项单测：负原点副屏 / 超大框 / 非法 bounds），平台函数只做转换 |
+| 11 | 子代理中断时未跑门禁 | 主线补齐（见下） |
+
+主线另补两处收尾：双击分支里两段重复的 `get_data` 取数已合并为一段；
+残影销毁收紧到「拖拽确实激活过」才执行（纯 pending 时不再白销毁一次）。
+
+### 门禁（最终）
+
+`cargo fmt -- --check` 退出 0；`cargo test` **528 passed / 0 failed**；
+CI 严格 clippy 组合（`-D warnings` + 现有 allowlist）**零告警**。
+未执行任何 `git add` / `git commit`。
+
+### Next Steps
+
+- 用户实机复验 4 项后确认；若跨界过渡仍有残影，考虑请库侧支持跨屏双画布投影。
+- 遗留项 #8/#9（跨 DPI 布局序列化基准）建议单开任务：配置增加「显示器身份 + 屏内相对坐标」。
