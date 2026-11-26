@@ -2206,9 +2206,9 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "liquid-verre-rs"
-version = "0.5.3"
+version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec52830fb012311a04013d11e0a53fc53fd5465f6573153ed925478c1072750a"
+checksum = "31e71a10d6e37b8e29f74559e072d8eece54f6837e96343a5e869e655d842f4e"
 dependencies = [
  "log",
  "serde",
