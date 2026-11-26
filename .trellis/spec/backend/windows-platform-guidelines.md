@@ -1772,6 +1772,51 @@ liquid-verre-rs 的块只归属**中心所在那一片画布**，并按 `策略 
 - [ ] 回推玻璃块几何的入口是否都判了 `block_in_session`？
 - [ ] 阈值/边界纯函数是否落在 `box_core` 并带单测？
 
+### 对齐参考线：双色描边 + 每屏一个 overlay（2026-11-26）
+
+`alignment_guide` 是**纯宿主**能力（库只画玻璃块），两条硬纪律：
+
+1. **不得再用「采样桌面亮度二选色」。** 旧实现读 `GetPixel(GetDC(NULL))` = 合成后的整屏
+   （含当时打开的所有窗口），且只在首次拖拽时后台采一次、结果进程级终身缓存 ——
+   主屏开着白色页面时 avg_luminance=0.93 就选中 `rgb(30,40,60)`（视觉纯黑），
+   这就是用户报「参考线怎么变黑了」的全部原因（11-25 同一份代码 avg=0.486 -> 白色）。
+   现在固定**暗色外描边 (0,0,0,0.55) 宽 5px + 亮色内芯 (1,1,1,0.95) 宽 2px**，
+   对任意背景都有对比度，并且顺带去掉了 100 次 GDI `GetPixel` 往返。
+   绘制必须**两遍**：先画完所有描边再画所有内芯，否则交叉点会被后一条线的描边啃出缺口。
+2. **overlay 必须每屏一个窗口，线段按屏裁剪。** 进程是 Per-Monitor-V2，一个跨屏的
+   分层窗口同时压在 200% 与 100% 两块屏上时，DWM 只能按其中一块的 DPI 呈现位图，
+   另一块上的线会被拉伸/位移 —— 跨屏对齐必然错。现在 `create_guide_overlay` 按
+   `monitor_utils::get_monitor_rects()` 每屏建一窗（布局变化自动重建，支持热插拔），
+   `clip_segment_to_monitor` 把线裁进各屏并用**监视器本地坐标**绘制，
+   包围盒再夹进 `[0, mw]/[0, mh]`，绝不让窗口溢出到别的屏。
+   裁剪用右开放边界（`min(mx + mw)`），保证跨屏两段**无缝相接**、不丢 1px。
+
+另外两个配套修正：
+
+- **对齐阈值必须按被拖窗口的 DPI 折算**（`alignment_threshold_for_dpi`，逻辑 5 -> 物理，
+  夹 [3,12]）：固定 5 物理像素在 192 DPI 主屏上只有副屏一半的容差，
+  表现为「主屏吸不住、副屏吸太松」。
+- `update_guide_lines(result)` **不再接收虚拟桌面原点**：线段本就是屏幕坐标，
+  直接减监视器原点即可，少一层换算就少一处错位来源。
+- 检测侧不按显示器过滤候选框（`collect_other_box_rects` 枚举全部其它框），
+  所以「任意两框两两对齐」天然成立；同位置命中会合并成一条线（±1px）。
+
+- **退化判定必须在加 margin 之后、且只在调用方**：单条参考线的包围盒天然是一维的
+  （横线 y0==y1、竖线 x0==x1）。一旦把它塞进 `bounds_of` 这类纯函数里提前判掉，
+  就会出现「**必须两组同时命中才画得出线**」——2026-11-26 用户复验第一轮就是踩了这个
+  2026-11-03 已经踩过的同一个坑。`bounds_of` 只算盒、非空即返回 Some。
+
+**注意（当前只显示不吸附）**：库驱动的缩放/移动会话里，块几何真源在库，宿主**禁止**回推
+几何（见上一节），所以磁吸只能在标题栏拖拽路径（`WM_MOVING` 改 `proposed_rect`）实现；
+若以后要让玻璃驱动的缩放也磁吸，需要在库里加一个会话内几何修正回调，见
+`.trellis/spec/guides/tauri-window-contract.md`。
+
+单测：`clip_splits_one_line_across_two_monitors_into_two_collinear_segments`、
+`clip_returns_none_when_segment_misses_monitor`、`clip_handles_negative_virtual_origin_monitor`、
+`bounds_and_position_keep_overlay_inside_its_monitor`、
+`segments_for_monitor_covers_both_axes_and_skips_other_monitors`、
+`threshold_scales_with_dpi_and_stays_clamped`、`cross_monitor_pairwise_alignment_is_detected`。
+
 ## 开机自启（Registry Run）健壮性
 
 ### 写入规则

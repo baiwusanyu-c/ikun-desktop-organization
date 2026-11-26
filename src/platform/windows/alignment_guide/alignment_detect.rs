@@ -28,8 +28,20 @@ pub struct AlignmentResult {
     pub vertical_matches: Vec<AlignmentMatch>,
 }
 
-/// Default alignment threshold in physical screen pixels.
+/// 默认对齐阈值（**逻辑**像素，96 DPI 基准）。
 pub const DEFAULT_ALIGNMENT_THRESHOLD: i32 = 5;
+
+/// 把逻辑阈值折算成当前 DPI 下的物理像素阈值。
+///
+/// 检测用的是 `GetWindowRect` 的物理坐标，固定 5 物理像素在 192 DPI 主屏上只相当
+/// 2.5 逻辑像素（副屏的一半），表现为「主屏吸不住、副屏吸得太轻松」，
+/// 跨屏对齐尤其明显。夹到 [3, 12]：下限保证任何 DPI 都吸得住，
+/// 上限避免超高缩放下吸力过强造成误对齐。
+#[must_use]
+pub fn alignment_threshold_for_dpi(dpi: u32) -> i32 {
+    let scaled = DEFAULT_ALIGNMENT_THRESHOLD.saturating_mul(dpi.max(96) as i32) / 96;
+    scaled.clamp(3, 12)
+}
 
 /// Detect alignment relationships between the moving rectangle and other boxes.
 ///
@@ -149,6 +161,64 @@ fn check_vertical_alignment(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn threshold_scales_with_dpi_and_stays_clamped() {
+        assert_eq!(alignment_threshold_for_dpi(96), 5, "96 DPI = 逻辑基准");
+        assert_eq!(alignment_threshold_for_dpi(192), 10, "200% 下容差同步放大");
+        assert_eq!(alignment_threshold_for_dpi(144), 7);
+        assert_eq!(alignment_threshold_for_dpi(480), 12, "上限夹住，避免误对齐");
+        assert_eq!(alignment_threshold_for_dpi(0), 5, "非法 dpi 退回基准");
+    }
+
+    #[test]
+    fn cross_monitor_pairwise_alignment_is_detected() {
+        // 主屏一个框 + 副屏一个框 + 主屏另一个框：拖主屏框时必须同时
+        // 命中跨屏的横线与同屏的竖线（检测不得按显示器过滤）。
+        let moving = RECT {
+            left: 200,
+            top: 300,
+            right: 600,
+            bottom: 500,
+        };
+        // 副屏框：顶边 302，与 moving.top=300 差 2px -> 横线命中
+        let secondary_a = RECT {
+            left: 3120,
+            top: 302,
+            right: 3520,
+            bottom: 520,
+        };
+        // 主屏另一个框：左边 601，与 moving.right=600 差 1px -> 竖线命中
+        let primary_c = RECT {
+            left: 601,
+            top: 800,
+            right: 900,
+            bottom: 1000,
+        };
+        let r = detect_alignments(&moving, &[secondary_a, primary_c], 5);
+
+        let h = r
+            .horizontal_matches
+            .iter()
+            .find(|m| m.position == 302)
+            .unwrap_or_else(|| panic!("跨屏顶边对齐没命中: {:?}", r.horizontal_matches));
+        assert!(
+            h.line_start.0 <= 200 && h.line_end.0 >= 3520,
+            "横线必须覆盖两个框的并集（跨屏）: {:?}",
+            h
+        );
+
+        let v = r
+            .vertical_matches
+            .iter()
+            .find(|m| m.position == 601)
+            .unwrap_or_else(|| panic!("同屏左边对齐没命中: {:?}", r.vertical_matches));
+        assert!(
+            v.line_start.1 <= 300 && v.line_end.1 >= 1000,
+            "竖线必须覆盖两个框的并集: {:?}",
+            v
+        );
+    }
+
     use super::*;
 
     fn make_rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {

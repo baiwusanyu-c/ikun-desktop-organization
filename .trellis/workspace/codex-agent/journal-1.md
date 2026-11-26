@@ -1315,3 +1315,100 @@ DPI 双重换算 bug，修完主屏彻底正常）、`layout::reflow_positions` 
 - 验收通过后提交（建议 `fix(分类框): 尺寸变化自动换行 + 统一滚动口径`）。
 - 可选增强（未做，等确认）：滚动条支持鼠标拖动 thumb 与点击轨道翻页；
   框缩小到装不下时是否自动增高（当前按需求 2.2 走滚动而非增高）。
+
+## Session 18: 参考线变黑定位 + 对齐参考线改造（双色描边 / 每屏 overlay / DPI 阈值）
+
+**日期**：2026-11-26（第 6 轮）
+
+### Summary
+
+用户先要提交（已提交 `61045bb`），随后报「对齐参考线怎么变成黑色了」，并追加要求：
+水平+垂直、**跨屏**、**每个框与其它框两两**都能对齐。
+
+**归属判定：不需要改 `liquid-verre-rs`** —— 参考线完全由宿主 overlay 绘制，检测矩形取
+宿主代理窗，候选框枚举不按屏过滤；库驱动的缩放/移动会话也已经通过
+`enter/exit_glass_resize_session -> on_enter/exit_size_move` 接上参考线。
+（唯一「将来可能需要库」的点是**磁吸**：见契约文档新增的
+「可选扩展：会话内几何修正回调」。）
+
+### 变黑的取证
+
+```text
+2026-11-25 13:35  [GuideColor] avg_luminance=0.486 -> selected=rgb(255,255,255)   正常
+2026-11-26 11:27  avg_luminance=0.818 -> rgb(30,40,60)                            黑
+2026-11-26 11:29  avg_luminance=0.948 -> rgb(30,40,60)                            黑
+2026-11-26 13:22 / 13:43  0.949 / 0.929 -> rgb(30,40,60)                          黑
+我用同一公式当场重采：主屏 avg=0.455 -> 会选白色
+```
+
+结论：代码没变，变的是**采样那一刻屏幕上有什么**。根因三条叠加：
+`GetPixel(GetDC(NULL))` 读合成后的整屏（含所有窗口）；只在首次拖拽采一次且进程级终身缓存；
+历史回退 —— 05e3135 把采样移到启动时（调用点在 `src/gpui_app/windows_main.rs`），
+20926b5 删 gpui_app 时把调用一起删了，于是退化成「首次拖拽时看到什么算什么」。
+
+### Main Changes
+
+- `alignment_guide/guide_overlay.rs`：**整段重写绘制层**。删掉 `SAMPLE_GRID_SIZE` /
+  `sample_screen_color` / `relative_luminance` / `init_guide_color` / `get_guide_color` /
+  `CACHED_GUIDE_COLOR` 及其 5 条单测；改固定双色（暗描边 5px α0.55 + 亮内芯 2px α0.95，
+  **两遍绘制**避免交叉点缺口）；overlay 从「一个虚拟桌面大窗」改为
+  **每屏一个窗口**（`MonitorOverlay{hwnd, monitor}`，布局变化自动重建以支持热插拔），
+  新增纯函数 `clip_segment_to_monitor` / `segments_for_monitor` / `bounds_of` /
+  `overlay_window_position`，包围盒夹进本屏，右开放边界保证跨屏两段无缝；
+  `update_guide_lines(result)` 去掉虚拟桌面原点参数。
+- `alignment_guide/alignment_detect.rs`：新增 `alignment_threshold_for_dpi`
+  （逻辑 5 -> 物理，夹 [3,12]）+ 2 条单测（阈值 DPI 折算、跨屏两两对齐）。
+- `alignment_guide/mod.rs`：两条路径（timer / WM_MOVING）改用 DPI 化阈值；
+  每次进入会话都调 `create_guide_overlay()`（内部幂等）以便热插拔重建；
+  删除不再需要的 `is_guide_overlay_created`。
+- 规范：`windows-platform-guidelines.md` 新增「对齐参考线：双色描边 + 每屏一个 overlay」；
+  `tauri-window-contract.md` 新增「可选扩展：会话内几何修正回调」与 2 条验收用例。
+
+### 过程中的坑
+
+- Python 里给 Rust 源码写中文时**不要在脚本里用 `\uXXXX` 双转义**，会原样落到源码里
+  造成 `incorrect unicode escape sequence`（本次 46 处，事后用正则批量解码修复）。
+- `assert_eq!(x, true)` 被 clippy `-D warnings` 拦下，改 `assert!(x)`。
+
+### Git Commits
+
+- 已提交：`cc5ab6f`（升级 0.5.5）、`d54431c`（图标变乱 + 撤销补偿）、`61045bb`（换行 + 滚动口径）
+- 本轮改动**未提交**（等用户当轮指令）
+
+### Testing
+
+- [OK] `cargo fmt -- --check` 干净
+- [OK] `cargo test` **548 passed / 0 failed**（新增 7 条对齐相关纯函数单测）
+- [OK] CI 严格 clippy 组合零告警
+- [OK] `cargo build` 通过，实例已重启（PID 8576，14:09，`RUST_LOG=info`）
+- 待用户实机复验：黑线是否消失、跨屏两框的横线/竖线、三框两两对齐、192/96 DPI 吸合手感
+
+### Status
+
+[OK] **Completed**（宿主侧；库无需改动）
+
+### Next Steps
+
+- 验收通过后提交：`fix(对齐参考线): 双色描边 + 每屏 overlay + DPI 化阈值`。
+- 若确认要「磁吸」（拖拽时真的吸到参考线上）：标题栏拖拽可在宿主 `WM_MOVING` 直接实现；
+  玻璃驱动的缩放/移动需要库加 `GeometryAdjust` 回调（契约文档已写清 API 草案）。
+
+### 用户复验反馈修正（同一轮，14:59）
+
+用户复验指出：**必须 A-B 与 A-C 同时命中才出现参考线**，要求任意一组单独命中也要出线。
+
+根因是我重画 overlay 时把退化判定放进了纯函数 `bounds_of`：单条线的包围盒天然是一维的
+（横线 y0 == y1、竖线 x0 == x1），`x0 >= x1 || y0 >= y1` 在加 margin **之前**判就把单组命中
+整条丢掉，两组不同位置的命中才凑成二维盒 -> 完全吻合用户描述。这正是本模块 2026-11-03
+就踩过一次的同一个坑（旧代码注释写着「margin 先加再做退化判断」），重写时被我搬错了位置。
+
+修正：`bounds_of` 只负责算盒（非空即返回 Some，允许一维），退化判定**只留在加 margin、
+夹进本屏之后**的调用方；新增两条回归单测钉住：
+`single_horizontal_pair_still_produces_a_line`（单组横线/竖线都必须出盒、加 margin 后不退化）、
+`multiple_pairs_are_all_kept`（多组同时命中时三条线都保留）。
+
+门禁复跑：`cargo test` **550 passed / 0 failed**、`cargo fmt --check` 干净、
+CI 严格 clippy 组合零告警（强制 `Checking` 复跑）、`cargo build` 通过、实例重启 PID 26424。
+顺手修掉两处中文错字（复楠 -> 复验）。
+
+**归属不变：仍然不需要改 `liquid-verre-rs`** —— 这条完全在宿主 overlay 的几何里。

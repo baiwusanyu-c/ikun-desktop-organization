@@ -9,10 +9,9 @@ pub mod guide_overlay;
 
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 
-use alignment_detect::{detect_alignments, DEFAULT_ALIGNMENT_THRESHOLD};
+use alignment_detect::{alignment_threshold_for_dpi, detect_alignments};
 use guide_overlay::{
-    create_guide_overlay, hide_guide_lines, is_guide_overlay_created, reset_guide_render_state,
-    update_guide_lines,
+    create_guide_overlay, hide_guide_lines, reset_guide_render_state, update_guide_lines,
 };
 
 pub use guide_overlay::destroy_guide_overlay;
@@ -31,7 +30,9 @@ pub fn on_enter_size_move(hwnd: *mut std::ffi::c_void) {
     let no_guide = std::env::var("IKUN_NO_GUIDE")
         .map(|v| v == "1")
         .unwrap_or(false);
-    if !no_guide && !is_guide_overlay_created() {
+    // 每次进入会话都调：内部幂等，但显示器布局变了会自动重建每屏 overlay。
+    // 否则热插拔 / 改分辨率后新屏上没有窗口，跨屏对齐就看不到参考线。
+    if !no_guide {
         if let Err(e) = create_guide_overlay() {
             log::error!("create guide overlay failed: {}", e);
         }
@@ -101,11 +102,13 @@ pub fn on_alignment_timer(hwnd: *mut std::ffi::c_void) {
     }
 
     let others = collect_other_box_rects(hwnd);
-    let result = detect_alignments(&current_rect, &others, DEFAULT_ALIGNMENT_THRESHOLD);
+    // 阈值按**被拖窗口的 DPI** 折算：DEFAULT 是逻辑像素，直接用 5 物理像素时
+    // 主屏(192) 的容差只有副屏(96) 的一半，跨屏对齐手感不一致。
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    let dpi = if dpi > 0 { dpi } else { 96 };
+    let result = detect_alignments(&current_rect, &others, alignment_threshold_for_dpi(dpi));
     log_first_hits(result.horizontal_matches.len() + result.vertical_matches.len());
-    let (work_x, work_y, _, _) =
-        crate::platform::windows::monitor_utils::get_virtual_desktop_bounds();
-    update_guide_lines(&result, (work_x, work_y));
+    update_guide_lines(&result);
 }
 
 /// WM_MOVING/WM_SIZING 中也触发（兼容，双保险）
@@ -130,10 +133,8 @@ pub fn on_moving(hwnd: *mut std::ffi::c_void, proposed_rect: &mut RECT) {
         },
         grid_window::window_padding(hwnd, dpi),
     );
-    let result = detect_alignments(&content_rect, &others, DEFAULT_ALIGNMENT_THRESHOLD);
-    let (work_x, work_y, _, _) =
-        crate::platform::windows::monitor_utils::get_virtual_desktop_bounds();
-    update_guide_lines(&result, (work_x, work_y));
+    let result = detect_alignments(&content_rect, &others, alignment_threshold_for_dpi(dpi));
+    update_guide_lines(&result);
 }
 
 fn collect_other_box_rects(exclude_hwnd: *mut std::ffi::c_void) -> Vec<RECT> {
