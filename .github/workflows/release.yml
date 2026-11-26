@@ -182,6 +182,55 @@ jobs:
           $lines | Out-File -FilePath target/dist/SHA256SUMS.txt -Encoding utf8
           Get-Content target/dist/SHA256SUMS.txt
 
+      - name: Build release notes body
+        # 把 CHANGELOG.md 里本次 tag 对应的段落拼进 GitHub Release 正文（发布报表的唯一来源）。
+        # CHANGELOG 缺段落时只用静态下载说明，绝不卡住发布。
+        shell: pwsh
+        run: |
+          $version = "${{ steps.ver.outputs.version }}"
+          $tag = "${{ steps.ver.outputs.tag }}"
+          $out = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          $staticLines = @(
+            '> **Beta notice**: this build is unsigned and only smoke-tested.',
+            '> Windows SmartScreen may warn on first run ("More info" -> "Run anyway").',
+            '',
+            '### Downloads',
+            '| File | Description |',
+            '| --- | --- |',
+            '| `*-setup.exe` | NSIS installer (recommended, per-user install) |',
+            '| `*.msi` | MSI installer (stable releases only - MSI requires a numeric version, skipped for pre-releases) |',
+            '| `*.zip` | Portable build (unzip and run) |',
+            '| SHA256SUMS.txt | SHA256 checksums |',
+            '',
+            'Verify integrity (PowerShell): `Get-FileHash <file> -Algorithm SHA256`'
+          )
+          $section = ''
+          if (Test-Path CHANGELOG.md) {
+            $lines = Get-Content CHANGELOG.md -Encoding utf8
+            $start = -1
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+              if ($lines[$i] -match ('^## \[' + [regex]::Escape($tag) + '\]')) { $start = $i; break }
+            }
+            if ($start -ge 0) {
+              $end = $lines.Count
+              for ($i = $start + 1; $i -lt $lines.Count; $i++) {
+                if ($lines[$i] -match '^## \[') { $end = $i; break }
+              }
+              $section = ($lines[$start..($end - 1)] -join "`n").TrimEnd()
+            } else {
+              Write-Host "CHANGELOG.md 没有 $tag 段落，仅使用默认下载说明"
+            }
+          } else {
+            Write-Host "未找到 CHANGELOG.md，仅使用默认下载说明"
+          }
+          $parts = @()
+          if ($section) { $parts += "## Changes in $version"; $parts += ''; $parts += $section; $parts += '' }
+          $parts += ($staticLines -join "`n")
+          $body = ($parts -join "`n") + "`n"
+          Set-Content -Path $out -Value $body -Encoding utf8NoBOM -NoNewline
+          Write-Host '----- release notes -----'
+          Write-Host $body
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -192,16 +241,4 @@ jobs:
           append_body: true
           files: |
             target/dist/*
-          body: |
-            > **Beta notice**: this build is unsigned and only smoke-tested.
-            > Windows SmartScreen may warn on first run ("More info" -> "Run anyway").
-
-            ### Downloads
-            | File | Description |
-            | --- | --- |
-            | `*-setup.exe` | NSIS installer (recommended, per-user install) |
-            | `*.msi` | MSI installer (stable releases only - MSI requires a numeric version, skipped for pre-releases) |
-            | `*.zip` | Portable build (unzip and run) |
-            | `SHA256SUMS.txt` | SHA256 checksums |
-
-            Verify integrity (PowerShell): `Get-FileHash <file> -Algorithm SHA256`
+          body_path: ${{ runner.temp }}/release-notes.md

@@ -25,6 +25,19 @@ Result: GitHub Releases page with installers + SHA256SUMS.txt
   e.g. `0.1.0-beta.1`. The release workflow marks any version containing `-`
   as a GitHub **pre-release** automatically.
 
+## Release notes / 报表
+
+GitHub Release 正文由两部分拼成（见 `release-windows` job 的
+*Build release notes body* 步骤）：
+
+1. `CHANGELOG.md` 中与本次 tag 对应的 `## [vX.Y.Z]` 段落 —— **人工维护，发版前先写好**，
+   这是发布报表的唯一来源；
+2. 固定的 Beta notice + Downloads 表格（写在 workflow 里）。
+
+因此发版顺序是：**先更新 `CHANGELOG.md` -> 再 `pnpm run release:beta:push`**。
+CHANGELOG 缺该段落不会卡住发布，只会退化成第 2 部分；CI 日志里出现
+`CHANGELOG.md 没有 vX.Y.Z 段落` 就说明报表漏写了。
+
 ## Cutting a beta release
 
 One command (bumps beta number, commits, tags, pushes):
