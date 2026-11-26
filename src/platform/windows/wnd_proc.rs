@@ -19,7 +19,8 @@ use super::ffi_imports::*;
 
 use super::ffi_types::*;
 use super::grid_layout::{
-    grid_hit_test, lock_btn_rect, more_btn_rect, recalculate_layout, reflow_items,
+    grid_hit_test, lock_btn_rect, more_btn_rect, relayout_for_dpi, relayout_for_size,
+    scroll_metrics,
 };
 use super::grid_window::{
     client_to_content_point_with_padding, get_data, get_grid_content_rect, shadow_padding_for_dpi,
@@ -554,18 +555,14 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
 
             if win_w > 0 && win_h > 0 {
                 if let Some(data) = get_data(hwnd) {
-                    // 先重排：把固定位置转回自动布局，保持视觉顺序
-                    reflow_items(data);
-                    recalculate_layout(data, win_w, win_h, dpi);
-                    // Clamp scroll_offset after layout change (content may have reflowed)
-                    let view_params = get_view_params(&data.view_mode, dpi);
-                    let grid_layout = calculate_grid(win_w, data.title_h, &view_params, dpi);
-                    let total_rows =
-                        (data.items.len() as i32 + grid_layout.cols - 1) / grid_layout.cols;
-                    let total_content_h = total_rows * grid_layout.cell_h;
-                    let visible_h = win_h - data.title_h;
-                    let max_scroll = (total_content_h - visible_h).max(0);
-                    data.scroll_offset = data.scroll_offset.min(max_scroll);
+                    // 需求 2.1：先按新宽度重算列数，**再**重排固定位。
+                    // 旧代码把 reflow 放在 recalculate 之前，此时 cols 与 layout_cols
+                    // 还是同一个旧值 -> reflow 判成「列数没变」永远早退，固定位留在
+                    // 旧列上 -> 框一缩小图标就跑到框外、放大也不换回上一行。
+                    relayout_for_size(data, win_w, win_h, dpi);
+                    // 滚动上限与渲染端滚动条同口径，把越界的 scroll_offset 收回来。
+                    let (_rows, max_scroll) = scroll_metrics(data, win_w, win_h, dpi);
+                    data.scroll_offset = data.scroll_offset.clamp(0, max_scroll);
                 }
             }
             render_layered_window(hwnd);
@@ -622,15 +619,19 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                     .saturating_add(suggested_outer_h)
                     .saturating_sub(pad),
             });
-            let new_w = fitted_content.right - fitted_content.left;
+            let content_w = fitted_content.right - fitted_content.left;
             let new_h = fitted_content.bottom - fitted_content.top;
+            // 跨屏 DPI 重采样：把内容宽度吸附回「上一轮列数」再重算布局。列数不变
+            // 就不需要重排 -> 图标位置原样保持（需求 1：主副屏之间拖拽切换不能乱）；
+            // 只有真的装不下（超出吸附容差）才让列数变化并自动换行。
+            // 尺寸可能被兜底缩小过，重算布局要用实际内容宽高，而不是系统建议值。
+            let new_w = if let Some(data) = get_data(hwnd) {
+                relayout_for_dpi(data, content_w, new_h, new_dpi)
+            } else {
+                content_w
+            };
             let outer_w = new_w.saturating_add(pad * 2).max(1);
             let outer_h = new_h.saturating_add(pad * 2).max(1);
-            // 尺寸可能被兜底缩小过，重算布局要用实际内容宽高，而不是系统建议值。
-            if let Some(data) = get_data(hwnd) {
-                reflow_items(data);
-                recalculate_layout(data, new_w, new_h, new_dpi);
-            }
             unsafe {
                 SetWindowPos(
                     hwnd,
@@ -1424,7 +1425,11 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
         // ===== 鼠标滚轮滚动 =====
         WM_MOUSEWHEEL => {
             let delta = ((wparam >> 16) as i16) as i32; // HIWORD(wParam)
-            let scroll_amount = 3; // lines per notch
+                                                        // 一次滚轮的整格数：WHEEL_DELTA = 120（系统标准 one-notch）
+            const WHEEL_DELTA: i32 = 120;
+            // 每格滚 2 行：按「行」而不是按像素滚，主/副屏与不同视图模式下
+            // 手感才一致（旧写法 delta * 3 在 192 DPI 与 96 DPI 下距离差一倍）。
+            const SCROLL_ROWS_PER_NOTCH: i32 = 2;
             if let Some(data) = get_data(hwnd) {
                 let dpi = unsafe { GetDpiForWindow(hwnd) };
                 let dpi = if dpi > 0 { dpi } else { 96 };
@@ -1432,18 +1437,19 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                     return 0;
                 };
                 let window_w = wr.right - wr.left;
-                let view_params = get_view_params(&data.view_mode, dpi);
-                let grid_layout = calculate_grid(window_w, data.title_h, &view_params, dpi);
-                let cell_h = grid_layout.cell_h;
-                let cols = grid_layout.cols;
-                let total_rows = (data.items.len() as i32 + cols - 1) / cols;
-                let total_content_h = total_rows * cell_h;
                 let window_h = wr.bottom - wr.top;
-                let visible_h = window_h - data.title_h;
-                let max_scroll = (total_content_h - visible_h).max(0);
+                // 需求 2.2：上限必须与渲染端滚动条同一口径（scroll_metrics 内部
+                // 就是渲染端用的那两个纯函数），否则「滚得动却没滚动条」。
+                let (_rows, max_scroll) = scroll_metrics(data, window_w, window_h, dpi);
+                let cell_h = data.cell_h.max(1);
+                let notches = delta / WHEEL_DELTA;
+                let step = if notches == 0 {
+                    delta / 20 // 高精度滚轮（不足一整格）退化成像素级滚动
+                } else {
+                    notches * SCROLL_ROWS_PER_NOTCH * cell_h
+                };
                 let old_offset = data.scroll_offset;
-                data.scroll_offset =
-                    (data.scroll_offset - delta * scroll_amount).clamp(0, max_scroll);
+                data.scroll_offset = (data.scroll_offset - step).clamp(0, max_scroll);
                 if data.scroll_offset != old_offset {
                     render_layered_window(hwnd);
                 }

@@ -1700,7 +1700,39 @@ liquid-verre-rs 的块只归属**中心所在那一片画布**，并按 `策略 
 - 两条短路：无固定位项 → 不动；`old_cols == new_cols` → 不动
   （跨屏 DPI 重采样后逻辑尺寸不变，列数通常不变，任何一次多余重排都是净伤害）。
 
-### 借纪律：绝不在持有 `&mut GridWindowData` 时调用同步 Win32
+### 内容排布与滚动：列数是唯一的换行真源（2026-11-26 需求 2.1 / 2.2）
+
+四条纪律，全部有单测钉住：
+
+1. **先重算列数，再重排固定位。** 唯一入口 `grid_layout::relayout_for_size(data, w, h, dpi)`：
+   进入时先抄 `prev = data.layout_cols`，`recalculate_layout` 之后再 `reflow_to(data, prev)`。
+   顺序颠倒（旧代码在 `WM_SIZE` 里正是 reflow 先跑）会让 `cols == layout_cols` 恒成立，
+   `reflow_positions` 判成「列数没变」直接早退 -> 缩小宽度时固定位留在旧列上，
+   图标直接画到框外（用户报「缩小不换行」的真根因，与库无关）。
+2. **网格留白/间隙必须 DPI 化。** `calculate_grid` 的 `padding` 必须走
+   `layout_calc::grid_side_pad(dpi)` / `grid_top_gap(dpi)`；写死 8px 会让
+   `cols = (W - 16) / cell_w` 的分子不是 DPI 同比量，同一只框在主屏(192)与副屏(96)
+   会差出整整一列 -> 「拖到另一块屏图标就乱」。DPI 化后**列数对 DPI 恒定**。
+3. **跨屏只允许吸收取整噪声。** DPI 重采样走 `relayout_for_dpi`，它用
+   `snap_width_for_cols` 把内容宽度吸回「上一轮列数」区间，容差只有 ±2x留白；
+   用户真的把框缩小/放大超出容差时**必须放行**，否则需求 2.1 的自动换行会被吸附顶掉。
+4. **滚动只有一个口径。** 行数 = `layout::content_rows(items, cols, |_, it| (it.grid_col,
+   it.grid_row))`（**禁止**再用 `items.len()/cols`：空洞与手动放的深行会被算短，
+   滚动条压根不出现），上限 = `layout::scroll_limit(rows, cell_h, visible_h)`，
+   `visible_h` 一律以 `grid_top` 起算。滚轮（`WM_MOUSEWHEEL`）、`WM_SIZE` 收敛、
+   `d2d_render` 画滚动条三处必须都走 `grid_layout::scroll_metrics`，否则会出现
+   「滚得动却没滚动条 / 有滚动条滚不到底」。滚轮按**行**滚（`SCROLL_ROWS_PER_NOTCH`），
+   不按裸像素，否则 192/96 DPI 下每格距离差一倍。
+
+**归属**：这一组是宿主内容层的排布与滚动，`liquid-verre-rs` 只提供玻璃块与把手；
+滚轮事件由库的 sink 转成 `WM_MOUSEWHEEL` 交给宿主（`glass_engine::PointerPhase::Wheel`），
+**不需要改库**。
+
+验证用例（已入库）：`cols_are_dpi_invariant_across_monitors`、
+`snap_width_only_absorbs_rounding_noise`、`relayout_for_size_wraps_fixed_items_into_narrower_box`、
+`relayout_for_dpi_keeps_cols_across_monitors`、`scroll_metrics_counts_deep_fixed_rows`、
+`content_rows_counts_fixed_positions_beyond_linear_flow`。
+### 借用纪律：绝不在持有 `&mut GridWindowData` 时调用同步 Win32
 
 `SetWindowPos` / `EndDeferWindowPos` 会在**本线程同步重入**窗口过程，嵌套的消息处理会
 再次 `get_data(hwnd)` 取一个 `&mut GridWindowData` —— 两个可变引用指向同一块内存即 UB。

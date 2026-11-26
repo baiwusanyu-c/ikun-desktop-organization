@@ -16,6 +16,7 @@
 //!
 //! 支持 4 种图标模式（ExtraLarge/Large/Medium/Small），未来扩展列表/详细信息/平铺/内容。
 
+use crate::box_core::layout::{content_rows, scroll_limit};
 use crate::box_core::layout_calc::{calculate_grid, GridLayout};
 use crate::box_core::view_engine::{get_view_params, ViewParams};
 
@@ -1873,21 +1874,19 @@ pub fn render_icon_grid(
     }
 
     // ===== Draw scrollbar if content overflows =====
-    let total_rows = (items.len() as i32 + cols - 1) / cols;
-    let total_content_h = total_rows * cell_h;
-    let visible_h = window_height - grid_top;
-    if total_content_h > visible_h && visible_h > 0 {
+    // 行数按条目「实际占据的行」算，可见高以 grid_top 起算：与 wnd_proc::scroll_metrics
+    // 用的是同一对纯函数，滚动条出现条件 / thumb 比例 / 滚轮上限三者必然一致。
+    let total_rows = content_rows(items, cols, |_, it| (it.grid_col, it.grid_row));
+    let total_content_h = total_rows.max(0) * cell_h.max(1);
+    let visible_h = (window_height - grid_top).max(0);
+    let max_scroll = scroll_limit(total_rows, cell_h, visible_h);
+    if max_scroll > 0 && visible_h > 0 {
         // Calculate scrollbar thumb size and position
         let scrollbar_w = scale_for_dpi(6, dpi) as f32;
         let min_thumb_h = scale_for_dpi(30, dpi) as f32;
         let thumb_h =
             (visible_h as f32 * visible_h as f32 / total_content_h as f32).max(min_thumb_h);
-        let max_scroll = total_content_h - visible_h;
-        let scroll_ratio = if max_scroll > 0 {
-            scroll_offset as f32 / max_scroll as f32
-        } else {
-            0.0
-        };
+        let scroll_ratio = (scroll_offset as f32 / max_scroll as f32).clamp(0.0, 1.0);
         let track_h = visible_h as f32 - thumb_h;
         let thumb_y = grid_top as f32 + scroll_ratio * track_h;
 

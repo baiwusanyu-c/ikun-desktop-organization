@@ -3,23 +3,17 @@
 //! 提供网格布局、按钮矩形计算、命中测试等功能。
 //! 所有坐标计算都考虑 DPI 缩放。
 
-use crate::box_core::layout_calc::{calculate_grid, hit_test as layout_hit_test};
+use crate::box_core::layout::{content_rows, scroll_limit};
+use crate::box_core::layout_calc::{
+    calculate_grid, grid_side_pad, hit_test as layout_hit_test, snap_width_for_cols,
+};
 use crate::box_core::view_engine::get_view_params;
 
-/// 在窗口宽度变化时重新映射图标的固定网格位置
+/// 用**显式**旧列数把固定位重排到当前 `data.cols`
 ///
-/// 将每个图标的 (grid_col, grid_row) 按线性索引映射到新的列数下，
-/// 保持视觉顺序和空位不变。
-///
-/// 例如 4 列时 `A, B, _, C`（C 在 col=3），变为 2 列后变成
-/// `A, B` / `_, C`（C 仍然在第 2 列），而不是 `A, B` / `C, _`。
-pub(crate) fn reflow_items(data: &mut super::grid_window::GridWindowData) {
+/// `old_cols <= 0` 时由纯函数退回「max(col)+1」推断（仅供历史数据兜底）。
+pub(crate) fn reflow_to(data: &mut super::grid_window::GridWindowData, old_cols: i32) {
     let new_cols = data.cols;
-    // 旧的「真实列数」：layout_cols 由上一轮 recalculate_layout 写入，
-    // **直接采信，不要与本轮列数取较大** —— 列数变多时取大会把旧列数误判成
-    // 新列数，导致该重排时整帧原样不动（等价于图标越界/叠位）。
-    // layout_cols <= 0（首次/历史数据）时传 0，由纯函数退回「max(col)+1」推断。
-    let old_cols = data.layout_cols.max(0);
     // Extract positions, delegate to shared, write back
     let mut positions: Vec<(i32, i32)> = data
         .items
@@ -55,6 +49,67 @@ pub(crate) fn recalculate_layout(
     data.layout_cols = grid_layout.cols;
     data.cell_w = grid_layout.cell_w;
     data.cell_h = grid_layout.cell_h;
+}
+
+/// 尺寸变化 -> 重算网格 + 重排固定位（需求 2.1 的唯一入口）
+///
+/// **先重算后重排**，旧列数在重算前抄走（重算会把 `layout_cols` 刷成新值）。
+/// 返回列数是否变化：变化即意味着条目已自动换行/换上行。
+pub(crate) fn relayout_for_size(
+    data: &mut super::grid_window::GridWindowData,
+    width: i32,
+    height: i32,
+    dpi: u32,
+) -> bool {
+    let prev_cols = data.layout_cols;
+    recalculate_layout(data, width, height, dpi);
+    if prev_cols > 0 && prev_cols != data.cols {
+        reflow_to(data, prev_cols);
+        return true;
+    }
+    false
+}
+
+/// 跨屏 DPI 重采样 -> 先吸附宽度保住上一轮列数，再重算重排（需求 1）
+///
+/// 返回实际采用的内容宽度，调用方必须按它摆窗口。列数只在「取整噪声」级别被修正，
+/// 用户真正把框缩小到装不下时仍会放行给自动换行（见 `snap_width_for_cols`）。
+pub(crate) fn relayout_for_dpi(
+    data: &mut super::grid_window::GridWindowData,
+    width: i32,
+    height: i32,
+    dpi: u32,
+) -> i32 {
+    let prev_cols = data.layout_cols;
+    let view_params = get_view_params(&data.view_mode, dpi);
+    let pad = grid_side_pad(dpi);
+    let snapped = snap_width_for_cols(width, prev_cols, view_params.cell_w, pad, (pad * 2).max(2));
+    recalculate_layout(data, snapped, height, dpi);
+    if prev_cols > 0 && prev_cols != data.cols {
+        reflow_to(data, prev_cols);
+    }
+    snapped
+}
+
+/// 滚动口径的唯一来源：返回 (内容总行数, max_scroll)
+///
+/// 行数按条目**实际占据的行**算（固定位可能把行号撑得比 `len/cols` 更深），
+/// 可见高以 `grid_top` 起算 —— 与 `d2d_render::render_icon_grid` 画滚动条
+/// 完全同式。滚轮、WM_SIZE 收敛、滚动条绘制三处都必须走这里，否则会
+/// 「滚得动却没滚动条」或「有滚动条却滚不到底」。
+pub(crate) fn scroll_metrics(
+    data: &super::grid_window::GridWindowData,
+    win_w: i32,
+    win_h: i32,
+    dpi: u32,
+) -> (i32, i32) {
+    let view_params = get_view_params(&data.view_mode, dpi);
+    let grid = calculate_grid(win_w, data.title_h, &view_params, dpi);
+    let rows = content_rows(&data.items, grid.cols, |_, item| {
+        (item.grid_col, item.grid_row)
+    });
+    let visible_h = (win_h - grid.grid_top).max(0);
+    (rows, scroll_limit(rows, grid.cell_h, visible_h))
 }
 
 /// 命中测试：根据鼠标位置获取网格项索引
@@ -308,7 +363,8 @@ mod tests {
                                             // test_data 把 layout_cols 设成了本轮新列数（2），这里必须还原「上一轮真实列数 4」
         data.layout_cols = 4;
 
-        reflow_items(&mut data);
+        let old_cols = data.layout_cols;
+        reflow_to(&mut data, old_cols);
 
         // A should be at (0, 0) - linear index 0 -> row 0, col 0
         assert_eq!(data.items[0].grid_col, 0);
@@ -338,7 +394,8 @@ mod tests {
         let mut data = test_data(4, items);
         data.layout_cols = 2;
 
-        reflow_items(&mut data);
+        let old_cols = data.layout_cols;
+        reflow_to(&mut data, old_cols);
 
         // A should be at (0, 0) - linear index 0
         assert_eq!(data.items[0].grid_col, 0);
@@ -364,7 +421,8 @@ mod tests {
         ];
         let mut data = test_data(3, items);
         data.layout_cols = 6;
-        reflow_items(&mut data);
+        let old_cols = data.layout_cols;
+        reflow_to(&mut data, old_cols);
         // 线性位：0 -> (0,0)；3 -> (0,1)；7 -> (1,2)
         assert_eq!((data.items[0].grid_col, data.items[0].grid_row), (0, 0));
         assert_eq!((data.items[1].grid_col, data.items[1].grid_row), (0, 1));
@@ -380,7 +438,8 @@ mod tests {
             ],
         );
         blind.layout_cols = 0;
-        reflow_items(&mut blind);
+        let old_cols = blind.layout_cols;
+        reflow_to(&mut blind, old_cols);
         assert_ne!(
             (blind.items[2].grid_col, blind.items[2].grid_row),
             (1, 2),
@@ -400,7 +459,8 @@ mod tests {
         ];
         let mut data = test_data(4, items);
         data.layout_cols = 6;
-        reflow_items(&mut data);
+        let old_cols = data.layout_cols;
+        reflow_to(&mut data, old_cols);
         // 真实 6 列 → 新 4 列：(3,0) 线性 3 -> (3,0)；(5,1) 线性 11 -> (3,2)
         assert_eq!((data.items[0].grid_col, data.items[0].grid_row), (0, 0));
         assert_eq!((data.items[1].grid_col, data.items[1].grid_row), (3, 0));
@@ -417,7 +477,8 @@ mod tests {
         ];
         let mut data = test_data(4, items);
         data.layout_cols = 4;
-        reflow_items(&mut data);
+        let old_cols = data.layout_cols;
+        reflow_to(&mut data, old_cols);
         assert_eq!((data.items[1].grid_col, data.items[1].grid_row), (3, 2));
         assert_eq!((data.items[2].grid_col, data.items[2].grid_row), (1, 1));
     }
@@ -432,7 +493,8 @@ mod tests {
         ];
         let mut data = test_data(3, items);
 
-        reflow_items(&mut data);
+        let old_cols = data.layout_cols;
+        reflow_to(&mut data, old_cols);
 
         // Auto-layout items should remain unchanged
         assert_eq!(data.items[0].grid_col, -1);
@@ -450,7 +512,8 @@ mod tests {
         let items: Vec<GridFileItem> = vec![];
         let mut data = test_data(3, items);
 
-        reflow_items(&mut data);
+        let old_cols = data.layout_cols;
+        reflow_to(&mut data, old_cols);
 
         // Should not panic
         assert_eq!(data.items.len(), 0);
@@ -461,7 +524,8 @@ mod tests {
         let items = vec![test_item("A", -1, -1), test_item("B", -1, -1)];
         let mut data = test_data(3, items);
 
-        reflow_items(&mut data);
+        let old_cols = data.layout_cols;
+        reflow_to(&mut data, old_cols);
 
         // All items should remain auto-layout
         assert_eq!(data.items[0].grid_col, -1);
@@ -473,10 +537,144 @@ mod tests {
         let items = vec![test_item("A", 0, 0)];
         let mut data = test_data(0, items); // Invalid cols
 
-        reflow_items(&mut data);
+        let old_cols = data.layout_cols;
+        reflow_to(&mut data, old_cols);
 
         // Should not panic and should not modify items
         assert_eq!(data.items[0].grid_col, 0);
         assert_eq!(data.items[0].grid_row, 0);
+    }
+
+    /// 需求 2.1：缩小宽度 -> 列数变少 -> 固定位自动换行且必须落在框内；
+    /// 放大宽度 -> 列数变多 -> 自动换回上一行。
+    ///
+    /// 顺序教训：这两步以前在 wnd_proc 里顺序颠倒（reflow 先于 recalculate），
+    /// 于是 `cols == layout_cols` 恒成立、重排永远早退，缩小后图标直接出框。
+    #[test]
+    fn relayout_for_size_wraps_fixed_items_into_narrower_box() {
+        let items = vec![
+            test_item("A", 0, 0),
+            test_item("B", 1, 0),
+            test_item("C", 2, 0),
+            test_item("D", 3, 0),
+        ];
+        let mut data = test_data(4, items);
+        data.title_h = scale_for_dpi(40, 96);
+
+        // 放大：Medium 在 96 DPI 下 cell_w = 80；宽 816 -> body 800 -> 10 列
+        assert!(
+            relayout_for_size(&mut data, 816, 600, 96),
+            "列数 4 -> 10 必须触发重排"
+        );
+        assert_eq!(data.cols, 10);
+        let up: Vec<(i32, i32)> = data
+            .items
+            .iter()
+            .map(|i| (i.grid_col, i.grid_row))
+            .collect();
+        assert_eq!(
+            up,
+            vec![(0, 0), (1, 0), (2, 0), (3, 0)],
+            "列数变多时四个图标应并排回到第一行"
+        );
+
+        // 缩小：宽 208 -> body 192 -> 2 列
+        assert!(
+            relayout_for_size(&mut data, 208, 600, 96),
+            "列数 10 -> 2 必须触发重排"
+        );
+        assert_eq!(data.cols, 2);
+        let down: Vec<(i32, i32)> = data
+            .items
+            .iter()
+            .map(|i| (i.grid_col, i.grid_row))
+            .collect();
+        assert_eq!(down, vec![(0, 0), (1, 0), (0, 1), (1, 1)], "缩小必须换行");
+        for (col, _) in &down {
+            assert!(*col < data.cols, "固定位越界 = 图标画到框外: col={col}");
+        }
+
+        // 尺寸没变 -> 列数没变 -> 一律不重排（幂等，保护用户手工布局）
+        let before = down;
+        assert!(!relayout_for_size(&mut data, 208, 600, 96));
+        let after: Vec<(i32, i32)> = data
+            .items
+            .iter()
+            .map(|i| (i.grid_col, i.grid_row))
+            .collect();
+        assert_eq!(before, after, "列数不变时不得动任何位置");
+    }
+
+    /// 需求 1：主屏(192 DPI) 与副屏(96 DPI) 之间切换，列数与图标位置必须保持不变。
+    #[test]
+    fn relayout_for_dpi_keeps_cols_across_monitors() {
+        let items = vec![
+            test_item("A", 0, 0),
+            test_item("B", 2, 1),
+            test_item("C", 5, 3),
+        ];
+        let mut data = test_data(6, items);
+        data.title_h = scale_for_dpi(40, 96);
+        // 先在 192 DPI 上按真实宽度定列：cell_w=160、pad=16 -> 738 宽 = 4 列
+        let w192 = 738;
+        relayout_for_size(&mut data, w192, 600, 192);
+        let cols192 = data.cols;
+        assert_eq!(cols192, 4, "738 @ (cell 160, pad 16) 应为 4 列");
+        let pos192: Vec<(i32, i32)> = data
+            .items
+            .iter()
+            .map(|i| (i.grid_col, i.grid_row))
+            .collect();
+
+        // 拖到 96 DPI 副屏：物理宽同比折半
+        let w96 = relayout_for_dpi(&mut data, w192 / 2, 300, 96);
+        assert_eq!(data.cols, cols192, "跨屏 DPI 重采样不得改变列数");
+        assert_eq!(w96, w192 / 2, "宽度落在合法区间内时不该被吸附改动");
+        let pos96: Vec<(i32, i32)> = data
+            .items
+            .iter()
+            .map(|i| (i.grid_col, i.grid_row))
+            .collect();
+        assert_eq!(pos192, pos96, "列数没变 -> 图标位置必须一模一样");
+
+        // 取整噪声（比 4 列下界小 1px）要吸附回去，而不是少算一列把图标挤乱
+        let just_below = 4 * scale_for_dpi(80, 96) + 2 * scale_for_dpi(8, 96) - 1;
+        let snapped = relayout_for_dpi(&mut data, just_below, 300, 96);
+        assert_eq!(data.cols, 4, "1px 取整误差不该让列数从 4 变成 3");
+        assert_eq!(snapped, just_below + 1);
+
+        // 用户真的把框缩到只够 2 列：必须放行，交给自动换行（不能被吸附顶回去）
+        let two = 2 * scale_for_dpi(80, 96) + 2 * scale_for_dpi(8, 96);
+        relayout_for_dpi(&mut data, two, 300, 96);
+        assert_eq!(data.cols, 2);
+        for (col, _) in data.items.iter().map(|i| (i.grid_col, i.grid_row)) {
+            assert!(col < 2, "真缩小后仍要保持在框内: col={col}");
+        }
+    }
+
+    /// 需求 2.2：滚动上限按「条目实际占据的行」算，且与渲染端可见高同口径。
+    #[test]
+    fn scroll_metrics_counts_deep_fixed_rows() {
+        let items = vec![test_item("A", 0, 0), test_item("B", 0, 11)];
+        let mut data = test_data(4, items);
+        data.title_h = scale_for_dpi(40, 96);
+
+        let (rows, max_scroll) = scroll_metrics(&data, 816, 600, 96);
+        assert_eq!(rows, 12, "最后一个固定位在第 12 行 -> 内容 12 行");
+        // cell_h=100 -> 内容高 1200；可见高 = 600 - (40+8) = 552 -> 上限 648
+        assert_eq!(max_scroll, 648);
+
+        // 框够高时没有滚动，也不该出现滚动条（渲染端用同一个 scroll_limit）
+        let (_r2, fit) = scroll_metrics(&data, 816, 2000, 96);
+        assert_eq!(fit, 0, "装得下就不该滚");
+
+        // 纯自动位：行数按当前列数线性排布
+        let auto: Vec<GridFileItem> = (0..7)
+            .map(|i| test_item(&format!("F{i}"), -1, -1))
+            .collect();
+        let mut d2 = test_data(3, auto);
+        d2.title_h = scale_for_dpi(40, 96);
+        let (rows3, _) = scroll_metrics(&d2, 336, 600, 96); // body 320 / 80 = 4 列 -> 2 行
+        assert_eq!(rows3, 2);
     }
 }

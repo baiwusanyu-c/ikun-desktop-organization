@@ -1247,3 +1247,71 @@ DPI 双重换算 bug，修完主屏彻底正常）、`layout::reflow_positions` 
 
 - 实机验收通过 -> 提交（依赖升级 + 图标重排修复 + 规范/取证文档可拆两个 commit）。
 - 遗留候选：布局序列化改「显示器身份 + 屏内相对坐标」，彻底解决跨 DPI 恢复基准。
+
+## Session 17: 内容排布与滚动（需求 2.1 自动换行 / 2.2 滚动条）——判定为宿主侧并修复
+
+**日期**：2026-11-26（第 5 轮）
+
+### Summary
+
+用户提「宽度变化要自动换行、高度不够要出滚动条」并问归属。**判定：全部是宿主问题，
+不需要动 `liquid-verre-rs`** —— 库只画玻璃块与把手，列数/落位/滚动条/滚轮全在宿主
+内容层（`box_core::layout*` + `d2d_render` + `wnd_proc`），滚轮事件本来就由库的 sink
+转成 `WM_MOUSEWHEEL` 交回宿主（`glass_engine::PointerPhase::Wheel`）。
+
+查出四个互相独立的老缺陷：
+
+1. **`WM_SIZE` 里 reflow 跑在 recalculate 之前** -> `cols == layout_cols` 恒成立 ->
+   `reflow_positions` 永远早退 -> 缩小宽度时固定位留在旧列，图标直接出框（需求 2.1 主因）。
+2. **`calculate_grid` 的 `padding = 8` 没随 DPI 缩放** -> `cols = (W-16)/cell_w` 分子不是
+   DPI 同比量 -> 同一只框主屏/副屏算出差一整列 -> 跨屏切换即「图标变乱」（需求 1 的另一半，
+   之前只修了记账，没修这条 DPI 不变性）。
+3. **行数按 `items.len()/cols` 猜** -> 有空洞或用户手动放到第 11 行时算短 ->
+   `max_scroll` 偏小、滚动条不出现（需求 2.2 主因）。
+4. **滚动上限三处口径不一致**：`WM_SIZE`/滚轮用 `win_h - title_h`，渲染用
+   `window_height - grid_top` -> 「滚得动却没滚动条 / 有条滚不到底」；
+   滚轮还是裸像素 `delta * 3`，192 与 96 DPI 下每格距离差一倍。
+
+### Main Changes
+
+- `src/box_core/layout_calc.rs`：新增 `scale_view_px` / `grid_side_pad` / `grid_top_gap`
+  （留白 DPI 化，列数对 DPI 恒定）与 `snap_width_for_cols`（只吸收取整噪声，真缩小必须放行）；
+  `calculate_grid` 改用它们并给 `cell_w` 兜底 `max(1)`。
+- `src/box_core/layout.rs`：新增纯函数 `row_extent` / `content_rows`（按条目实际占据的行）
+  / `scroll_limit`（统一滚动上限）。
+- `src/platform/windows/grid_layout.rs`：**删掉 `reflow_items`**（顺序陷阱的源头），
+  改为显式传旧列数的 `reflow_to` + 两个编排入口 `relayout_for_size`（尺寸变化）/
+  `relayout_for_dpi`（跨屏，返回吸附后的宽度给调用方摆窗口）+ `scroll_metrics`
+  （行数与上限的唯一来源）。10 处旧调用改写。
+- `src/platform/windows/wnd_proc.rs`：`WM_SIZE` -> `relayout_for_size` + `scroll_metrics`；
+  `WM_DPICHANGED` -> `relayout_for_dpi`，并按它返回的宽度算外框再 `SetWindowPos`；
+  `WM_MOUSEWHEEL` -> `scroll_metrics` + 按行滚（`SCROLL_ROWS_PER_NOTCH = 2`，
+  不足整格的高精度滚轮退化成像素级）。
+- `src/platform/windows/d2d_render.rs`：滚动条改走 `content_rows` + `scroll_limit`，
+  `scroll_ratio` 夹到 [0,1]，可见高以 `grid_top` 起算（与滚轮完全同式）。
+- 规范：`windows-platform-guidelines.md` 新增「内容排布与滚动：列数是唯一的换行真源」四条纪律；
+  `tauri-window-contract.md` 补两条验收用例（窄->换行/宽->上行、滚动条与滚到底完整可见）。
+
+### Git Commits
+
+- 已提交：`cc5ab6f chore(deps)`、`d54431c fix(分类框)`
+- 本轮改动**未提交**（等用户当轮指令）
+
+### Testing
+
+- [OK] `cargo fmt -- --check` 干净
+- [OK] `cargo test` **547 passed / 0 failed**（新增 12 条：DPI 不变性 / 吸附容差 /
+  relayout 换行与幂等 / 跨屏保列数 / scroll_metrics 深行）
+- [OK] CI 严格 clippy 组合零告警（改后强制 `Checking` 复跑确认）
+- [OK] `cargo build` + 重启实例（PID 23312，13:43，`RUST_LOG=info`）
+- 待用户实机复验：拖窄/拖宽的实时换行、跨屏列数不变、内容超高时滚动条与滚轮
+
+### Status
+
+[OK] **Completed**（宿主侧修复完毕，无需库改动）
+
+### Next Steps
+
+- 验收通过后提交（建议 `fix(分类框): 尺寸变化自动换行 + 统一滚动口径`）。
+- 可选增强（未做，等确认）：滚动条支持鼠标拖动 thumb 与点击轨道翻页；
+  框缩小到装不下时是否自动增高（当前按需求 2.2 走滚动而非增高）。

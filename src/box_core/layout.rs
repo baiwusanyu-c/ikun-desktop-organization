@@ -59,6 +59,49 @@ pub fn reflow_positions(positions: &mut [(i32, i32)], new_cols: i32, old_cols_hi
     }
 }
 
+/// 单个条目实际占据的行号
+///
+/// 固定位（`grid_col`/`grid_row` 均 >= 0）用自己的 `grid_row`；自动位按当前列数
+/// 线性排布。必须与 `d2d_render::render_icon_grid` 的落位公式**完全同式**，
+/// 否则滚动上限会算短，底部图标永远滚不到。
+#[must_use]
+pub fn row_extent(index: usize, grid_col: i32, grid_row: i32, cols: i32) -> i32 {
+    if grid_col >= 0 && grid_row >= 0 {
+        grid_row.max(0)
+    } else {
+        (index as i32) / cols.max(1)
+    }
+}
+
+/// 内容总行数（按条目实际占据的行取最大，**不能**用 `len()/cols`）
+///
+/// 前科：`total_rows = (len + cols - 1) / cols` 在「有空洞」或「用户把图标手动
+/// 放到很靠下的行」时直接算小，于是 `max_scroll` 偏小、滚动条也不出现，
+/// 表现就是用户报的「缩小时展示不下也没有滚动条」。
+#[must_use]
+pub fn content_rows<T>(
+    items: &[T],
+    cols: i32,
+    position_of: impl Fn(usize, &T) -> (i32, i32),
+) -> i32 {
+    let cols = cols.max(1);
+    items
+        .iter()
+        .enumerate()
+        .map(|(i, it)| {
+            let (col, row) = position_of(i, it);
+            row_extent(i, col, row, cols) + 1
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// 滚动上限 = 内容总高 - 可视高（非负）
+#[must_use]
+pub fn scroll_limit(rows: i32, cell_h: i32, visible_h: i32) -> i32 {
+    (rows.saturating_mul(cell_h.max(0)) - visible_h.max(0)).max(0)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -179,5 +222,39 @@ mod tests {
         assert_eq!(positions[0], (0, 0));
         assert_eq!(positions[1], (0, 1));
         assert_eq!(positions[2], (0, 2));
+    }
+
+    #[test]
+    fn content_rows_counts_fixed_positions_beyond_linear_flow() {
+        // 4 个条目，但最后一个被手动放到第 9 行 -> 真实行数 10，而不是 ceil(4/4)=1
+        let items = vec![(0, 0), (1, 0), (2, 0), (0, 9)];
+        let rows = content_rows(&items, 4, |_, p| *p);
+        assert_eq!(rows, 10);
+        // 用旧口径会算成 1 行 -> 滚动上限 0 -> 第 9 行的图标永远看不见也滚不到
+        assert_eq!((items.len() as i32 + 4 - 1) / 4, 1);
+    }
+    #[test]
+    fn content_rows_matches_linear_flow_for_auto_items() {
+        // 全是自动位（负数）：行数 = ceil(len / cols)，与渲染落位一致
+        let items = vec![(-1, -1); 7];
+        assert_eq!(content_rows(&items, 3, |_, p| *p), 3);
+        assert_eq!(content_rows(&[], 3, |_: usize, p: &(i32, i32)| *p), 0);
+        assert_eq!(
+            content_rows(&items, 0, |_, p| *p),
+            7,
+            "cols<=0 时按每项一行兜底"
+        );
+    }
+    #[test]
+    fn scroll_limit_never_negative_and_matches_overflow() {
+        assert_eq!(scroll_limit(5, 100, 400), 100);
+        assert_eq!(scroll_limit(3, 100, 400), 0, "放得下就不该滚");
+        assert_eq!(scroll_limit(3, 100, -10), 300, "可视高为负也不能算出负上限");
+    }
+    #[test]
+    fn row_extent_prefers_grid_row_for_fixed_items() {
+        assert_eq!(row_extent(0, 2, 7, 4), 7);
+        assert_eq!(row_extent(9, -1, -1, 4), 2, "自动位按线性索引");
+        assert_eq!(row_extent(9, -1, -1, 0), 9, "cols<=0 兜底为一列");
     }
 }
