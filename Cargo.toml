@@ -33,10 +33,12 @@ env_logger = "0.11"
 # ===== Windows API =====
 [target.'cfg(windows)'.dependencies]
 # 液态玻璃渲染引擎库（替代自研 liquid_glass 效果实现、边缘缩放/拖拽交互与视觉反馈）。
-# 精确锁 0.5.3：glass_engine 适配层多处依赖 0.5.2/0.5.3 的行为约定（画布显示与
-# 层级同一次 SetWindowPos、库内建 100ms 唤醒定时器等），0.5.x 漂移可能静默破坏
-# 这些约定；升级必须配合适配层回归（2026-11-04 自检审计 P2）。
-liquid-verre-rs = "=0.5.4"
+# 精确锁 0.5.5：glass_engine 适配层多处依赖库的行为约定（画布显示与层级同一次
+# SetWindowPos、库内建 100ms 唤醒定时器、`snapshot.rect` = 逻辑像素而 `x/y` = 物理像素、
+# 0.5.5 起「缩放会话全程物理域计算，apply 返回 /scale、写回 *scale 相消」），0.5.x
+# 漂移可能静默破坏这些约定；升级必须配合适配层回归（2026-11-04 自检审计 P2，
+# 0.5.5 升级与根因取证见 .trellis/tasks/11-26-fix-cross-screen-icon-scramble-and-resize-drift/）。
+liquid-verre-rs = "=0.5.5"
 # 注：Win32_Graphics_Direct3D_Fxc 供运行时 D3DCompile 编译着色器使用
 # （主项目回退背景与 liquid-verre-rs 各自需要），不是可选 UI 的遗留依赖，勿删。
 windows-numerics = "0.3"
