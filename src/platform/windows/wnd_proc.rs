@@ -1659,6 +1659,21 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
                 {
                     return None;
                 }
+                // 收尾宽限期：本地会话结束后的短暂时间里，本函数会被收尾链路自身
+                // 触发的 WM_WINDOWPOSCHANGED 重入。此时库侧会话可能仍未真正停手
+                // （moving/resizing 是快照，最坏滞后 1 帧），拿「正在落位中的窗口矩形」
+                // 反推给块 = 用陈旧几何覆盖库的会话锚点，之后每一帧都在旧锚点上
+                // 叠加光标位移 → 右边缘持续向右漂。宽限期内只跳过，不纠正。
+                if data.glass_session_ended_at != 0
+                    && super::glass_engine::now_ms().saturating_sub(data.glass_session_ended_at)
+                        < 300
+                {
+                    log::debug!(
+                        "[GLASS-DIAG] 收尾宽限期跳过反向下发: config_id={:?}",
+                        data.config_id
+                    );
+                    return None;
+                }
                 let mut wr = RECT {
                     left: 0,
                     top: 0,

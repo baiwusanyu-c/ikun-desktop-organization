@@ -197,6 +197,12 @@ pub(crate) struct GridWindowData {
     pub(crate) cell_h: i32,
     /// 列数
     pub(crate) cols: i32,
+    /// 上一轮**真实生效**的列数（重排判据用）。
+    ///
+    /// 不能用「已有项里的最大列 + 1」代替：框里只要出现空洞（删过图标 / 手动留空位）
+    /// 或最后一行不满，推断值就偏小，按线性索引重映射会把整个网格拧歪
+    /// （2026-11-26「主副屏之间拖拽后图标位置变乱」根因之一）。
+    pub(crate) layout_cols: i32,
     /// 图标尺寸
     pub(crate) icon_size: i32,
     /// 当前选中项索引（-1 = 无选中）
@@ -406,6 +412,15 @@ pub(crate) struct GridWindowData {
     pub(crate) hover_out_ticks: u8,
     /// 上次因跨屏 DPI 比例漂移触发全量重绘的单调毫秒（0 = 从未，去抖用）。
     pub(crate) cross_dpi_fix_ms: u64,
+    /// 上次打印玻璃块诊断行的单调毫秒（0 = 从未，节流用）。
+    pub(crate) glass_diag_at: u64,
+    /// 本地「库会话结束」的单调毫秒（0 = 从未）。
+    ///
+    /// 用于 `WM_WINDOWPOSCHANGED` 的反向下发宽限期：收尾判定靠快照（最坏滞后 1 帧），
+    /// 若把「moving/resizing 连续几拍为 false」当真结束，而库侧会话其实还活着，
+    /// 紧接着用**陈旧窗口矩形**把块推回去，就会与库的会话锚点互相拉扯 ——
+    /// 表现为「拖左边缘变小时，右边缘一路向右漂」。
+    pub(crate) glass_session_ended_at: u64,
 }
 
 unsafe impl Send for GridWindowData {}
@@ -471,6 +486,7 @@ impl GridWindowData {
             cell_w: 80,
             cell_h: 100,
             cols: 4,
+            layout_cols: 4,
             icon_size: 48,
             selected_item: -1,
             hovered_item: -1,
@@ -541,6 +557,8 @@ impl GridWindowData {
             glass_session_idle_ticks: 0,
             hover_out_ticks: 0,
             cross_dpi_fix_ms: 0,
+            glass_diag_at: 0,
+            glass_session_ended_at: 0,
         }
     }
 }
@@ -914,6 +932,7 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         cell_w,
         cell_h,
         cols,
+        layout_cols: cols,
         icon_size,
         selected_item: -1,
         hovered_item: -1,
@@ -985,6 +1004,8 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         glass_session_idle_ticks: 0,
         hover_out_ticks: 0,
         cross_dpi_fix_ms: 0,
+        glass_diag_at: 0,
+        glass_session_ended_at: 0,
     });
     let data_ptr = Box::into_raw(data);
     unsafe {
@@ -1877,6 +1898,20 @@ pub(crate) fn on_grid_refresh_tick(hwnd: HWND) {
     if stale_fallback {
         super::d2d_render::render_layered_window(hwnd);
     }
+    // 库侧会话事件兜底（2026-11-26 日志实锤）：`ResizeStarted/MoveStarted` 经
+    // `WM_USER_GLASS_RESIZE` 投递，实测存在**事件丢失**（一次缩放会话内块物理宽
+    // 从 502 变到 548，而代理窗 10 秒里一帧没跟 —— 玻璃自己走、命中层留在原地，
+    // 用户看到的就是「拖边缘时一边变小一边向右漂」）。
+    // 因此不能只依赖事件：每拍直接问库要 moving/resizing 真值，
+    // 只要块在会话里就把本地标志补齐，让跟随 tick 立刻启动。
+    if !data.glass_session_active
+        && (super::glass_engine::block_resizing(data.config_id)
+            || super::glass_engine::block_moving(data.config_id))
+    {
+        log::info!("[GLASS-DIAG] 事件丢失兜底：库块已在会话中但本地未置位，直接启动跟随");
+        begin_glass_resize_session(hwnd);
+        return;
+    }
     follow_glass_session(hwnd);
     // 空闲（无库缩放会话、无移动会话）时兼作 hover 轮询。
     poll_glass_hover(hwnd);
@@ -1930,6 +1965,24 @@ fn poll_glass_hover(hwnd: HWND) {
         return;
     };
     let inside = cx >= wr.left && cx < wr.right && cy >= wr.top && cy < wr.bottom;
+    // 诊断（2s 节流）：输入链是否真的通 —— 块状态 / 光标是否落在块内 / 代理窗矩形。
+    {
+        let now = super::glass_engine::now_ms();
+        if now.saturating_sub(data.glass_diag_at) >= 2000 {
+            data.glass_diag_at = now;
+            log::info!(
+                "[GLASS-DIAG] hover cursor=({0},{1}) win=({2},{3})-({4},{5}) inside={6} {7}",
+                cx,
+                cy,
+                wr.left,
+                wr.top,
+                wr.right,
+                wr.bottom,
+                inside,
+                super::glass_engine::block_debug_line(data.config_id)
+            );
+        }
+    }
     if inside {
         data.hover_out_ticks = 0;
         let local_x = cx - wr.left;
@@ -2005,6 +2058,25 @@ fn follow_glass_session(hwnd: HWND) {
         bottom: 0,
     };
     let have_rect = unsafe { GetWindowRect(hwnd, &mut outer) } != 0;
+    // 诊断（一次性，供实机排查「拖左边缘时右边缘向右漂」）：块权威状态 vs 窗口矩形。
+    {
+        let now = super::glass_engine::now_ms();
+        if now.saturating_sub(data.glass_diag_at) >= 200 {
+            data.glass_diag_at = now;
+            log::info!(
+                "[GLASS-DIAG] win=({0},{1})-({2},{3}) content=({4},{5})-({6},{7}) {8}",
+                outer.left,
+                outer.top,
+                outer.right,
+                outer.bottom,
+                content.left,
+                content.top,
+                content.right,
+                content.bottom,
+                super::glass_engine::block_debug_line(box_id)
+            );
+        }
+    }
     let want = RECT {
         left: content.left.saturating_sub(padding),
         top: content.top.saturating_sub(padding),
@@ -2078,6 +2150,25 @@ pub(crate) fn begin_glass_resize_session(hwnd: HWND) {
     data.glass_session_idle_ticks = 0;
     raise_timer_resolution();
     enter_glass_resize_session(hwnd);
+    // 诊断：会话开始时的窗口矩形 + 块权威状态（漂移的起点基准）。
+    {
+        let mut o = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        let ok = unsafe { GetWindowRect(hwnd, &mut o) } != 0;
+        let _ = ok;
+        log::info!(
+            "[GLASS-DIAG] 会话开始 win=({0},{1})-({2},{3}) {4}",
+            o.left,
+            o.top,
+            o.right,
+            o.bottom,
+            super::glass_engine::block_debug_line(data.config_id)
+        );
+    }
     // 0.5.2 起 border 由库在**逐块 pass 内**发射（紧跟自己那块的玻璃、早于任何
     // 更高块，库 core::draw::border_emit_plan）：下层框的反馈白边会被上层框的玻璃
     // 正确遮挡，不再画到上层框身上，因此这里不再抬层 —— 0.5.1 时代的 raise_box
@@ -2102,6 +2193,7 @@ pub(crate) fn end_glass_resize_session(hwnd: HWND) {
     data.glass_session_seen_resizing = false;
     data.glass_session_idle_ticks = 0;
     data.content_last_render_ms = 0;
+    data.glass_session_ended_at = super::glass_engine::now_ms();
     lower_timer_resolution();
     exit_glass_resize_session(hwnd);
     // 会话收尾：把「库权威块矩形」与「代理窗口实际矩形」对齐，并对跨屏 DPI
@@ -2210,6 +2302,21 @@ pub(crate) fn end_glass_resize_session(hwnd: HWND) {
     }
     super::alignment_guide::on_exit_size_move(hwnd);
     super::drag_handler::save_config();
+    let mut end_outer = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    let _ = unsafe { GetWindowRect(hwnd, &mut end_outer) };
+    log::info!(
+        "[GLASS-DIAG] 会话结束 win=({0},{1})-({2},{3}) {4}",
+        end_outer.left,
+        end_outer.top,
+        end_outer.right,
+        end_outer.bottom,
+        super::glass_engine::block_debug_line(config_id)
+    );
     log::debug!("分类框退出库缩放会话，布局已持久化");
 }
 

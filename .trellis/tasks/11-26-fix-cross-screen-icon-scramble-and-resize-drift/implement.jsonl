@@ -1,0 +1,6 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": "src/platform/windows/glass_engine.rs", "reason": "缩放下限 DPI 换算与块几何下发"}
+{"file": "src/box_core/layout.rs", "reason": "图标重排纯逻辑（旧列数判据）"}
+{"file": "src/platform/windows/grid_layout.rs", "reason": "reflow_items/recalculate_layout 列数记账"}
+{"file": "src/platform/windows/grid_window.rs", "reason": "GridWindowData 字段与玻璃会话跟随"}

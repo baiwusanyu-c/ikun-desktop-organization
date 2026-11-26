@@ -15,13 +15,18 @@ use crate::box_core::view_engine::get_view_params;
 /// `A, B` / `_, C`（C 仍然在第 2 列），而不是 `A, B` / `C, _`。
 pub(crate) fn reflow_items(data: &mut super::grid_window::GridWindowData) {
     let new_cols = data.cols;
+    // 旧的「真实列数」：layout_cols 由上一轮 recalculate_layout 写入，
+    // **直接采信，不要与本轮列数取较大** —— 列数变多时取大会把旧列数误判成
+    // 新列数，导致该重排时整帧原样不动（等价于图标越界/叠位）。
+    // layout_cols <= 0（首次/历史数据）时传 0，由纯函数退回「max(col)+1」推断。
+    let old_cols = data.layout_cols.max(0);
     // Extract positions, delegate to shared, write back
     let mut positions: Vec<(i32, i32)> = data
         .items
         .iter()
         .map(|item| (item.grid_col, item.grid_row))
         .collect();
-    crate::box_core::layout::reflow_positions(&mut positions, new_cols);
+    crate::box_core::layout::reflow_positions(&mut positions, new_cols, old_cols);
     for (item, (col, row)) in data.items.iter_mut().zip(positions) {
         item.grid_col = col;
         item.grid_row = row;
@@ -46,6 +51,8 @@ pub(crate) fn recalculate_layout(
     // 通过 layout_calc 计算网格（自动 clamp：窄窗口时 cell_w 缩小到 body_w，保证图标不超出可视区域）
     let grid_layout = calculate_grid(width, data.title_h, &view_params, dpi);
     data.cols = grid_layout.cols;
+    // 记下本轮真实列数，供下一次重排当作「旧列数」（跨屏/缩放时判据来源）。
+    data.layout_cols = grid_layout.cols;
     data.cell_w = grid_layout.cell_w;
     data.cell_h = grid_layout.cell_h;
 }
@@ -211,6 +218,7 @@ mod tests {
             cell_w: 80,
             cell_h: 100,
             cols,
+            layout_cols: cols,
             icon_size: 48,
             selected_item: -1,
             hovered_item: -1,
@@ -279,6 +287,8 @@ mod tests {
             glass_session_idle_ticks: 0,
             hover_out_ticks: 0,
             cross_dpi_fix_ms: 0,
+            glass_diag_at: 0,
+            glass_session_ended_at: 0,
             d2d_target: None,
             icon_bitmap_cache: std::collections::HashMap::new(),
             renaming_item_index: -1,
@@ -295,6 +305,8 @@ mod tests {
             test_item("C", 3, 0),
         ];
         let mut data = test_data(2, items); // Change to 2 cols
+                                            // test_data 把 layout_cols 设成了本轮新列数（2），这里必须还原「上一轮真实列数 4」
+        data.layout_cols = 4;
 
         reflow_items(&mut data);
 
@@ -321,7 +333,10 @@ mod tests {
             test_item("B", 1, 0),
             test_item("C", 0, 1),
         ];
-        let mut data = test_data(4, items); // Change to 4 cols
+        // 本轮新列数 4、上一轮真实列数 2（必须由 layout_cols 提供，
+        // 而不是从「已有项的最大列 + 1」猜——有空洞时那个值必然偏小）。
+        let mut data = test_data(4, items);
+        data.layout_cols = 2;
 
         reflow_items(&mut data);
 
@@ -336,6 +351,75 @@ mod tests {
         // C should be at (2, 0) - linear index 2
         assert_eq!(data.items[2].grid_col, 2);
         assert_eq!(data.items[2].grid_row, 0);
+    }
+
+    #[test]
+    fn test_reflow_items_hole_grid_uses_layout_cols_not_inference() {
+        // 真实 6 列、只用过 col 0..3（行内有空洞）：推断值只有 4，
+        // 用它当「旧列数」会把项挪到错误的行列（= 用户看到的「图标位置变乱」）。
+        let items = vec![
+            test_item("A", 0, 0),
+            test_item("B", 3, 0),
+            test_item("C", 1, 1),
+        ];
+        let mut data = test_data(3, items);
+        data.layout_cols = 6;
+        reflow_items(&mut data);
+        // 线性位：0 -> (0,0)；3 -> (0,1)；7 -> (1,2)
+        assert_eq!((data.items[0].grid_col, data.items[0].grid_row), (0, 0));
+        assert_eq!((data.items[1].grid_col, data.items[1].grid_row), (0, 1));
+        assert_eq!((data.items[2].grid_col, data.items[2].grid_row), (1, 2));
+
+        // 对照：不给 layout_cols（退回推断=4）时结果确实不同 —— 钉住本修复的必要性。
+        let mut blind = test_data(
+            3,
+            vec![
+                test_item("A", 0, 0),
+                test_item("B", 3, 0),
+                test_item("C", 1, 1),
+            ],
+        );
+        blind.layout_cols = 0;
+        reflow_items(&mut blind);
+        assert_ne!(
+            (blind.items[2].grid_col, blind.items[2].grid_row),
+            (1, 2),
+            "推断口径与真实口径必须给出不同结果"
+        );
+    }
+
+    #[test]
+    fn test_reflow_items_uses_layout_cols_across_dpi_change() {
+        // 6 列真实布局：A(0,0) B(3,0) C(5,1) —— 行内有空洞。
+        // 跨屏后新算出 4 列：必须按「旧列数 6」重映射，而不是按 max(col)+1=6 猜；
+        // 这里同时钉住 layout_cols 参与判据（回归「主副屏拖拽后图标变乱」）。
+        let items = vec![
+            test_item("A", 0, 0),
+            test_item("B", 3, 0),
+            test_item("C", 5, 1),
+        ];
+        let mut data = test_data(4, items);
+        data.layout_cols = 6;
+        reflow_items(&mut data);
+        // 真实 6 列 → 新 4 列：(3,0) 线性 3 -> (3,0)；(5,1) 线性 11 -> (3,2)
+        assert_eq!((data.items[0].grid_col, data.items[0].grid_row), (0, 0));
+        assert_eq!((data.items[1].grid_col, data.items[1].grid_row), (3, 0));
+        assert_eq!((data.items[2].grid_col, data.items[2].grid_row), (3, 2));
+    }
+
+    #[test]
+    fn test_reflow_items_noop_when_cols_unchanged() {
+        // 跨屏 DPI 重采样后列数往往没变，此时任何重映射都是净伤害（不可逆打乱布局）。
+        let items = vec![
+            test_item("A", 0, 0),
+            test_item("B", 3, 2),
+            test_item("C", 1, 1),
+        ];
+        let mut data = test_data(4, items);
+        data.layout_cols = 4;
+        reflow_items(&mut data);
+        assert_eq!((data.items[1].grid_col, data.items[1].grid_row), (3, 2));
+        assert_eq!((data.items[2].grid_col, data.items[2].grid_row), (1, 1));
     }
 
     #[test]

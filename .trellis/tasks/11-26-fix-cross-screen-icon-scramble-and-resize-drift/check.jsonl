@@ -1,0 +1,5 @@
+{"file": ".claude/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".claude/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": "src/box_core/layout.rs", "reason": "校验重排判据与幂等单测"}
+{"file": "src/platform/windows/glass_engine.rs", "reason": "校验 DPI 口径未再双重换算"}
+{"file": ".trellis/spec/guides/tauri-window-contract.md", "reason": "跨层契约不变量"}

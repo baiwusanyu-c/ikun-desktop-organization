@@ -73,6 +73,8 @@ struct GlassBoxEntry {
     ratio: f32,
     /// 当前是否处于锁定（固定）状态。
     locked: bool,
+    /// 上次打印下发热诊断行的单调毫秒（0 = 从未，节流用）。
+    push_diag_at: u64,
 }
 
 /// 引擎持有者（进程内单份）。
@@ -337,7 +339,8 @@ pub(crate) fn resize_options_from(cfg: &GlassResizeConfig) -> ResizeOptions {
     }
 }
 
-/// 库缩放会话最小尺寸在**宿主侧的硬上限**（单位 = 库逻辑像素，见 `phys_to_logical_rect`）。
+/// 库缩放会话最小尺寸在**宿主侧的硬上限**（单位 = 库逻辑像素 = 主屏物理像素，
+/// 见 `phys_to_logical_rect`；与调用方窗口 DPI **无关**）。
 ///
 /// 为什么需要上限：`box_style.liquid_glass.resize.min_width/min_height` 是样式页
 /// 滑条能写到 4096 的原始值，用户配置里实测出现过 605x1150（正好等于示例玻璃框
@@ -346,19 +349,31 @@ pub(crate) fn resize_options_from(cfg: &GlassResizeConfig) -> ResizeOptions {
 /// （2026-11-03 用户报「拖到一定程度就无法改变大小」；日志里 `缩放结束` 的宽全部
 /// 停在 605/732 这类 >=605 的值、高恒为 1150，即为实锤）。
 ///
-/// 上限取 `WM_GETMINMAXINFO` 已经在用的最小跟踪尺寸同一口径（宽
-/// `scale_for_dpi(200)`，高 `title_h + scale_for_dpi(100)`，都不含外投影留白），
-/// 保证全项目只有一个「最小分类框」定义，玻璃块与代理窗口不会各按各的。
+/// 上限口径与 `WM_GETMINMAXINFO` 的最小跟踪尺寸一致（宽 200、高 40+100，
+/// 均以 96-DPI 基线计），保证全项目只有一个「最小分类框」定义。
 #[must_use]
-pub(crate) fn glass_resize_floor(dpi: u32) -> (f32, f32) {
-    let dpi = if dpi > 0 { dpi } else { 96 };
-    let ratio = monitor_dpi_ratio(dpi).max(1e-3);
-    let title_h = super::ffi_types::scale_for_dpi(40, dpi) as f32;
-    let min_w = super::ffi_types::scale_for_dpi(200, dpi) as f32 / ratio;
-    let min_h = (title_h + super::ffi_types::scale_for_dpi(100, dpi) as f32) / ratio;
+pub(crate) fn glass_resize_floor(_dpi: u32) -> (f32, f32) {
+    // 注意：**刻意不读 dpi**。库的 `min_width/min_height` 是逻辑像素（= 主屏物理像素），
+    // 库自己会按块的 scale 折算成物理像素；宿主若再按窗口 DPI 乘/除一次，
+    // 在非 96-DPI 主屏的多屏机器上就会双重换算（详见下面常量注释）。
     // 24 = 库 `core::block::MIN_SIZE`，再小库自己也会夹回去。
-    (min_w.max(24.0), min_h.max(24.0))
+    (LOGICAL_MIN_W.max(24.0), LOGICAL_MIN_H.max(24.0))
 }
+
+/// 库逻辑像素口径的「最小分类框」：200x140（= 96 DPI 基线的 200 宽 + 40 标题 + 100 高）。
+///
+/// 库的 `scale = 该屏 DPI / 主屏 DPI`，块物理尺寸 = 逻辑尺寸 ** scale；
+/// 而 `scale_for_dpi(v, dpi) = v * dpi / 96`、`monitor_dpi_ratio(dpi) = dpi / 主屏 DPI`，
+/// 两者相除只在「主屏恰好 96 DPI」时等于 `v`。本仓实测主屏 192 DPI、副屏 96 DPI
+/// （ratio=0.5），旧写法 `scale_for_dpi(200, 96) / 0.5 = 400` 逻辑像素 = 副屏
+/// **400 物理像素**，比历史最小框（377px）还宽 —— 副屏上任何框从建好起就在下限以下，
+/// 于是出现两个用户可见故障：
+///   ① 拖左边缘时 `w` 立刻被 `max(min_w)` 抬到 400、`x = x0 + (w0 - w)` 变成负数
+///      → 左边缘反而外扩、**右边缘持续向右漂移**（主屏 ratio=1 时 200<宽，无此现象）；
+///   ② 尺寸被强行改动 → 列数变化触发图标重排 →「图标位置变乱」。
+/// 正解：逻辑单位本身就是主屏物理像素，最小值直接给常量逻辑值，与窗口 DPI 无关。
+const LOGICAL_MIN_W: f32 = 200.0;
+const LOGICAL_MIN_H: f32 = 140.0;
 
 /// 托底夹取后的缩放配置：`block_config_for` / `apply_settings` / `set_box_locked`
 /// 共用口径。2026-11-04 自检审计：解锁路径此前直接下发原始配置的超限下限
@@ -503,11 +518,15 @@ use liquid_verre::GlassWindow;
 /// `new` 之后渲染线程尚不存在，写 handler 无竞争；`start` 后主线程不再触碰写锁。
 fn start_engine_with_handler(mut engine: Engine) -> Result<Engine, liquid_verre::Error> {
     engine.set_event_handler(Some(Arc::new(|event| match event {
-        EngineEvent::ResizeStarted { id, .. } | EngineEvent::MoveStarted { id, .. } => {
-            dispatch_glass_session(*id, true);
+        EngineEvent::ResizeStarted { id, handle } => {
+            // 把手方向随事件一起透传（wparam 高位），宿主据此知道「哪条边不该动」。
+            dispatch_glass_session(*id, true, resize_handle_bits(*handle));
+        }
+        EngineEvent::MoveStarted { id } => {
+            dispatch_glass_session(*id, true, 0);
         }
         EngineEvent::ResizeEnded { id, .. } | EngineEvent::MoveEnded { id, .. } => {
-            dispatch_glass_session(*id, false);
+            dispatch_glass_session(*id, false, 0);
         }
         // FocusHint 即时投递：回调跑在库渲染线程上，这里只做一次异步
         // PostMessage（不碰 HOLDER/库锁、不阻塞）。等 100ms 的 poll_events_to_log
@@ -785,6 +804,7 @@ pub fn attach_box(box_id: Uuid, hwnd: isize, content_phys: &RECT, dpi: u32, lock
                     last_logical: logical,
                     ratio,
                     locked,
+                    push_diag_at: 0,
                 },
             );
             true
@@ -861,6 +881,27 @@ fn update_box_rect_locked(
     if approx_eq_rect(&entry.last_logical, &logical) {
         return true;
     }
+    // 诊断（节流 200ms）：宿主「下发了什么」与「库当前是什么」并列打印。
+    // 若窗口每拍按新矩形下发、而库块的右缘仍按 2x 位移跑掉，
+    // 说明 x 与 w 的单位口径在某一侧不一致（本行即判据）。
+    let now = crate::platform::windows::glass_engine::now_ms();
+    if now.saturating_sub(entry.push_diag_at) >= 200 {
+        entry.push_diag_at = now;
+        let cur = entry.window.snapshot().map(|snapshot| snapshot.rect);
+        log::info!(
+            "[GLASS-PUSH] phys=({0},{1})-({2},{3}) ratio={4:.3} -> logical=[{5:.1},{6:.1},{7:.1},{8:.1}] 库当前={9:?}",
+            content_phys.left,
+            content_phys.top,
+            content_phys.right,
+            content_phys.bottom,
+            ratio,
+            logical[0],
+            logical[1],
+            logical[2],
+            logical[3],
+            cur
+        );
+    }
     entry.window.set_rect(logical);
     entry.last_logical = logical;
     true
@@ -900,6 +941,41 @@ pub fn block_scale(box_id: Uuid) -> Option<f32> {
             .map(|snapshot| snapshot.scale.max(1e-3))
     })
     .flatten()
+}
+
+/// 诊断用：把块的库侧权威状态格式化成一行文本（会话期排查尺寸/锚点漂移专用）。
+///
+/// 单位口径务必看清：`logical` 是库逻辑像素（= 主屏物理像素），`physW/H` 是块
+/// **实际渲染**的物理尺寸（= logical x scale）；`ratio` 是宿主 `entry.ratio`。
+/// 三者不一致就是「拖边缘时窗口与玻璃块各走各路」的直接证据。
+#[must_use]
+pub fn block_debug_line(box_id: Uuid) -> String {
+    let line = with_holder(|holder| {
+        let entry = holder.boxes.get(&box_id)?;
+        let snapshot = entry.window.snapshot()?;
+        let scale = snapshot.scale.max(1e-3);
+        Some(format!(
+            "glass: logical=[{:.1},{:.1},{:.1},{:.1}] scale={:.3} physW={:.1} physH={:.1} mon={} visible={} interactive={} movable={} occluded={} hovered={} moving={} resizing={} hostRatio={:.3}",
+            snapshot.rect[0],
+            snapshot.rect[1],
+            snapshot.rect[2],
+            snapshot.rect[3],
+            scale,
+            snapshot.rect[2] * scale,
+            snapshot.rect[3] * scale,
+            snapshot.monitor_index,
+            snapshot.visible,
+            snapshot.interactive,
+            snapshot.movable,
+            snapshot.occluded,
+            snapshot.hovered,
+            snapshot.moving,
+            snapshot.resizing,
+            entry.ratio
+        ))
+    });
+    line.flatten()
+        .unwrap_or_else(|| "glass: <无块/无快照>".to_string())
 }
 
 /// 宿主记录的 DPI 比例是否与库侧块的权威比例漂移（跨屏重采样的判据）。
@@ -1181,6 +1257,7 @@ fn spawn_holder_and_reattach(
                     GlassBoxEntry {
                         window,
                         hwnd,
+                        push_diag_at: 0,
                         last_logical: logical,
                         ratio,
                         locked,
@@ -1217,10 +1294,26 @@ fn spawn_holder_and_reattach(
 // Z 序与事件
 // =============================================================================
 
+/// `ResizeHandle` → 位标志（1=left 2=right 4=top 8=bottom），随事件透传给宿主。
+#[must_use]
+fn resize_handle_bits(handle: liquid_verre::ResizeHandle) -> usize {
+    use liquid_verre::ResizeHandle as H;
+    match handle {
+        H::Left => 1,
+        H::Right => 2,
+        H::Top => 4,
+        H::Bottom => 8,
+        H::TopLeft => 4 | 1,
+        H::TopRight => 4 | 2,
+        H::BottomLeft => 8 | 1,
+        H::BottomRight => 8 | 2,
+    }
+}
+
 /// 把库会话（移动 / 缩放）的起止转发到对应分类框窗口的消息循环。
 ///
 /// 只在渲染线程回调里执行：查表 + 非阻塞 PostMessage，不重入引擎、不加锁等待。
-fn dispatch_glass_session(glass_id: u32, started: bool) {
+fn dispatch_glass_session(glass_id: u32, started: bool, edge_bits: usize) {
     let hwnd = match ROUTES.lock() {
         Ok(map) => map.get(&glass_id).map(|route| route.agent),
         Err(_) => None,
@@ -1232,7 +1325,7 @@ fn dispatch_glass_session(glass_id: u32, started: bool) {
         super::ffi_imports::PostMessageW(
             hwnd as *mut std::ffi::c_void,
             super::ffi_types::WM_USER_GLASS_RESIZE,
-            if started { 1 } else { 0 },
+            if started { 1 | (edge_bits << 1) } else { 0 },
             0,
         );
     }
@@ -2111,21 +2204,26 @@ mod tests {
         // `scale_for_dpi(200, dpi) / (dpi / primary_dpi)` 与 dpi 无关。高 DPI 副屏
         // 上的最小框必须和主屏一样大，否则跨屏拖一下尺寸下限就跳变。
         let (w96, h96) = glass_resize_floor(96);
-        // 只断言宽对宽、高对高：另一分量与本题无关，下划线消音。
-        let (w192, _h192) = glass_resize_floor(192);
-        let (_w144, h144) = glass_resize_floor(144);
+        let (w192, h192) = glass_resize_floor(192);
+        let (w144, h144) = glass_resize_floor(144);
         assert!(
-            (w96 - w192).abs() < 1.0,
-            "最小宽不该随 DPI 变化: {w96} vs {w192}"
+            (w96 - w192).abs() < 1.0 && (w96 - w144).abs() < 1.0,
+            "最小宽不该随 DPI 变化: {w96}/{w192}/{w144}"
         );
         assert!(
-            (h96 - h144).abs() < 1.0,
-            "最小高不该随 DPI 变化: {h96} vs {h144}"
+            (h96 - h192).abs() < 1.0 && (h96 - h144).abs() < 1.0,
+            "最小高不该随 DPI 变化: {h96}/{h192}/{h144}"
         );
         assert!(w96 >= 24.0 && h96 >= 24.0, "不得低于库 MIN_SIZE=24");
         assert!(
             w96 <= 1024.0 && h96 <= 1024.0,
             "上限本身也得合理: {w96}x{h96}"
+        );
+        // 关键回归：主屏 192 DPI 时旧实现会把副屏（96 DPI）下限抬成 400 逻辑像素，
+        // 比历史最小框（377 物理像素）还宽，导致「拖左边缘 → 右边缘一直向右漂」。
+        assert!(
+            w96 <= 240.0 && h96 <= 180.0,
+            "逻辑下限必须等于 96-DPI 基线口径，不得被 DPI 二次放大: {w96}x{h96}"
         );
     }
 

@@ -1605,6 +1605,101 @@ liquid-verre-rs 的块只归属**中心所在那一片画布**，并按 `策略 
   （`drag_pending`/`drag_active` + `KillTimer(TIMER_ID_GRID_DRAG)` + 销毁残影），
   否则残影/OLE 模态循环会吞掉双击，表现为「有时候没反应」。
 
+### 库逻辑像素口径：最小尺寸禁止再按窗口 DPI 换算（2026-11-26）
+
+库（liquid-verre-rs）的坐标单位契约：
+
+- `scale = 该屏 DPI / 主屏 DPI`（**主屏 DPI，不是 96**）；
+- 块**物理**尺寸 = 逻辑尺寸 × `scale`；逻辑像素 = 主屏物理像素；
+- `ResizeOptions.min_width / min_height` 是**逻辑像素**硬下限
+  （`input::drag::ResizeState::apply` 里 `w.max(min_w)`，夹住后
+  `x = x0 + (w0 - w)` 会反向挪左边缘）。
+
+宿主侧 `monitor_dpi_ratio(dpi)` 已经是同一个 scale，因此：
+
+```text
+正确： min_logical = 期望物理尺寸(dpi) / scale   = scale_for_dpi(v, dpi) / ratio
+错误： 只在「主屏恰好 96 DPI」时等于 v
+```
+
+本机实测主屏 192 DPI、副屏 96 DPI（ratio=0.5）：旧写法得到
+`scale_for_dpi(200,96)/0.5 = 400` **逻辑**像素 = 400 物理像素，
+比历史最小框（355/377）还宽 → 副屏上每个框天生低于硬下限，直接产出两个可见故障：
+
+1. 拖左边缘 → 宽度立刻被抬到 400、锚定式把左边缘外扩 → **右边缘持续向右漂移**；
+2. 尺寸被强改 → 列数变化 → 图标重排 →「位置变乱」。
+
+**定案**：`glass_resize_floor` 一律返回常量逻辑值（200 x 140，与
+`WM_GETMINMAXINFO` 的 96-DPI 基线同源），**不接受窗口 DPI 参与换算**；
+单测同时钉「与 dpi 无关」与「不得被 DPI 二次放大（<=240x180）」。
+
+判断任何「跨屏尺寸跳变」问题时，先把这三条单位链写清楚再动手：
+`GetDpiForWindow` → `monitor_dpi_ratio` → 库 `snapshot.scale` → 块物理尺寸。
+
+### 副屏缩放「锚定边漂移」是 `liquid-verre-rs` 的缺陷，宿主不要纠正（2026-11-26 定案）
+
+副屏（100%）+ 主屏（200%）一次左缘拖拽实测（`RUST_LOG=info` 块矩形）：
+
+```text
+光标    3139 -> 3339  (+200)
+块左缘  3139 -> 3339  (+200)   正确：跟手
+块右缘  3637 -> 3737  (+100)   错误：锚定边本该为 0
+```
+
+规律：**左缘位移 = δ，宽度变化 = δ x scale**，锚定边位移 = δ(1 - scale)。
+主屏 scale = 1 位移为 0（用户报告「主屏没有问题」），副屏 scale = 0.5 每 200px 漂 100px，
+与两轮实测数据完全吻合。
+
+根因在库（0.5.4 源码已定位，完整取证与补丁见
+`.trellis/tasks/11-26-fix-cross-screen-icon-scramble-and-resize-drift/liquid-verre-rs-defect.md`）：
+
+1. `src/input/drag.rs::ResizeState::apply` 里 `x = x0 + (w0 - w)`（以及 `y = y0 + (h0 - h)`）
+   把**逻辑像素**的宽度增量直接加到**物理像素**的 `x` 上 —— `origin.x/y` 是虚拟屏物理像素、
+   `origin.w/h` 是逻辑像素（库自己的注释就是这么写的），量纲不一致，只在 scale = 1 时侥幸成立；
+2. `src/runtime/mod.rs` 每帧的 `drag_scale` 取 `app.scale_of(b.monitor)`，而会话原点
+   （`src/platform/window.rs`）与快照物理尺寸用的是 `b.scale`；`App::scale_of` 在下标越界时
+   `map_or(1.0, ..)` 静默返回 1.0。两套 scale 一旦不一致，缩放算术立刻错位（本机实测即此形态）。
+
+**宿主侧无法修复**（下列三条都试过，已全部回退）：`ResizeState` / `DragSession` 是
+`pub(crate)`，宿主拿不到也改不了会话原点；库每帧都用**会话开始时记录的 origin** 重算并整块
+覆盖 `b.x/b.y/b.width`，所以宿主中途 `set_rect` 回推下一帧就被抹掉；只夹代理窗口等于没修，
+因为可见的是**库画的玻璃块**，结果变成「玻璃走、内容不走」的双层错位。因此：
+
+1. 缩放/移动会话期间**禁止**按宿主判据改写块几何（锚点回推、夹对侧边这类补偿一律不许）；
+   曾实现过的 `glass_resize_anchor` / `apply_resize_anchor` / `session_content_rect` 已于
+   2026-11-26 删除，**不要往回加**。
+2. 会话期宿主只做**虚拟桌面边界夹取**（`clamp_content_to_desktop`）；单屏归位留到
+   `end_glass_resize_session` 收尾一次性完成；`WM_WINDOWPOSCHANGED` 的反向下发在本地会话
+   结束后保留 300ms 宽限期（`GridWindowData::glass_session_ended_at`），避免用落位中的
+   陈旧窗口矩形去覆盖库的会话原点。
+3. 根治只有两条路：修库并发版（首选）；或临时把 `box_style.liquid_glass.resize.enabled`
+   关掉改由宿主驱动缩放（实测掉到约 45-54Hz、失去库的把手/边缘反馈，需产品确认后才做）。
+
+判据日志（`RUST_LOG=info`）：`[GLASS-PUSH] phys=.. -> logical=.. 库当前=[..]`、
+`[GLASS-DIAG] .. glass: logical=[..] scale=.. physW=.. hostRatio=..`。
+排查「拖边缘时某条边不钉住」：看 `x + w x scale` 是否守恒；不守恒 = 库缺陷，不要写宿主补偿。
+
+**0.5.5 落地记录（2026-11-26 13:08）**：库侧按本缺陷报告根修并发布 `liquid-verre-rs 0.5.5`
+（commit `14751faf`，tag `v0.5.5`），修法是**缩放会话全程物理域计算**（比报告 5.1 的
+「补一个 `* s`」更彻底：`origin` 改存按下时刻物理矩形、`dx/dy` 不再 `/ s`、返回 `/ s`
+与写回 `* s` 相消），并补了 4 条判别单测（0.5 / 2.0 锚定零漂移、会话中途 scale 翻转
+物理不变、min-clamp 半 scale 锚定精确 —— 旧实现逐条必红）。宿主已升级
+`=0.5.4 -> =0.5.5`，`cargo check/test/clippy/fmt` 全绿且适配层**零代码改动**（新契约见
+`spec/guides/tauri-window-contract.md`「缩放会话量纲契约」）。本节第 1 条禁令仍然有效：
+**库会话期内宿主不得改写块几何**。
+### 图标重排的「旧列数」必须记账，不能靠猜
+
+`box_core::layout::reflow_positions(positions, new_cols, old_cols_hint)`：
+
+- 旧实现用 `max(grid_col)+1` 当旧列数 —— 框里只要有空洞（删过图标 / 手动留空位 /
+  最后一行不满）就**必然偏小**（列数变多时又必然偏大），线性重映射随之整体错位，
+  且**不可逆**（一次错位永久留在配置里）；
+- 现在由 `GridWindowData::layout_cols` 在每轮 `recalculate_layout` 记下真实生效列数，
+  `reflow_items` 直接采信（**不与本轮列数取较大**，否则「列数变多」会被误判成没变）；
+  `layout_cols <= 0` 才退回推断，兼容历史数据；
+- 两条短路：无固定位项 → 不动；`old_cols == new_cols` → 不动
+  （跨屏 DPI 重采样后逻辑尺寸不变，列数通常不变，任何一次多余重排都是净伤害）。
+
 ### 借纪律：绝不在持有 `&mut GridWindowData` 时调用同步 Win32
 
 `SetWindowPos` / `EndDeferWindowPos` 会在**本线程同步重入**窗口过程，嵌套的消息处理会

@@ -1052,3 +1052,198 @@ CI 严格 clippy 组合（`-D warnings` + 现有 allowlist）**零告警**。
 
 - 用户实机复验 4 项后确认；若跨界过渡仍有残影，考虑请库侧支持跨屏双画布投影。
 - 遗留项 #8/#9（跨 DPI 布局序列化基准）建议单开任务：配置增加「显示器身份 + 屏内相对坐标」。
+
+
+## Session 14: 修复跨屏拖拽后图标变乱 + 副屏拖左边缘右漂移
+
+**Date**: 2026-11-26
+**Task**: 11-26-fix-cross-screen-icon-scramble-and-resize-drift
+**Branch**: `master`
+
+### Summary
+
+承接 48d2619 后的两条实机反馈，实测取证（`GetDpiForWindow` / `GetDpiForMonitor` /
+`WindowFromPoint` / EnumWindows 矩形）确认本机为 **主屏 1560x1040@192DPI(200%) +
+副屏 (3120,0)-(5040,1080)@96DPI(100%)**，三个分类框当前都在副屏，
+配置 `resize.min_width/min_height = 605x1150`。
+
+**共同根因：玻璃缩放下限被 DPI 双重换算**
+`glass_resize_floor(dpi)` 用 `scale_for_dpi(200,dpi) / monitor_dpi_ratio(dpi)`，
+而库的 `scale = 该屏 DPI / **主屏** DPI`（不是 96）→ 主屏非 96 DPI 时该式不再等于 200。
+本机副屏 ratio=0.5 → 下限变成 **400 逻辑=400 物理像素**，比现有框（355/377）还宽：
+
+1. Bug「副屏拖左边缘 → 右边缘一直向右漂」：库
+   `w=(w0-dx).max(min_w)` 立刻被抬到 400（>w0），锚定式 `x = x0 + (w0-w)` 变负
+   → 左边缘外扩、右边缘右移；主屏 ratio=1（下限 200 < 框宽）故正常 —— 与用户描述逐字吻合。
+2. Bug「跨屏后图标变乱」之一：尺寸被硬下限强改 → 列数变化 → 触发图标重排。
+
+**第二根因（独立缺陷）：重排用「猜」的旧列数**
+`reflow_positions` 用 `max(grid_col)+1` 当旧列数；有空洞 / 末行不满时必然偏小，
+线性重映射整体错位且**不可逆**，而跨屏途中 `WM_SIZE` 会多次触发重排。
+
+### Main Changes
+
+- `src/platform/windows/glass_engine.rs`：`glass_resize_floor` 改为返回常量逻辑口径
+  （`LOGICAL_MIN_W=200 / LOGICAL_MIN_H=140`，不再接受窗口 DPI 参与换算）；
+  单测加「不得被 DPI 二次放大（<=240x180）」断言。
+- `src/box_core/layout.rs`：`reflow_positions` 新增 `old_cols_hint` 参数
+  （给了就直接采信、不与新列数取较大；没给才退回推断），
+  并加两条幂等短路（无固定位项 / 列数未变）；新增 4 项单测（空洞对照、双向 hint、幂等）。
+- `src/platform/windows/grid_window.rs`：`GridWindowData` 新增 `layout_cols`
+  （三处初始化 + `Default`/`test_default`）。
+- `src/platform/windows/grid_layout.rs`：`recalculate_layout` 每轮写 `layout_cols`，
+  `reflow_items` 用它当旧列数；补 2 项回归单测（含「不给 hint 时结果必然不同」的对照）。
+- 规范：`windows-platform-guidelines.md` 新增「库逻辑像素口径」与「重排旧列数必须记账」两节。
+
+### Git Commits
+
+- 上一条已提交：`48d2619 fix(分类框): 修「双击图标偶发没反应」+ 多屏拖拽边界与跨屏 DPI 错位`
+- 本轮改动**未提交**（等用户明确指令）
+
+### Testing
+
+- [OK] `cargo fmt -- --check` 干净
+- [OK] `cargo test` **535 passed / 0 failed**
+- [OK] CI 严格 clippy 组合零告警
+- [ ] 待实机复验：副屏拖左边缘右边缘是否钉住；主副屏来回拖拽后图标行列是否不变
+
+### Status
+
+[OK] **Completed**（待实机复验）
+
+### Next Steps
+
+- 实机复验通过后连同上一轮一起提交。
+- 遗留：布局序列化「物理 / 当时 DPI」的跨 DPI 恢复基准（建议存「显示器身份 + 屏内相对坐标」）。
+
+## Session 15: 定案——副屏缩放漂移根因在 `liquid-verre-rs`，撤销宿主补偿
+
+**日期**：2026-11-26（第 3 轮，用户要求判定归属并给出库更新路径）
+
+### Summary
+
+用户三轮验收后「副屏拖左边缘、右边缘持续向右漂」仍在。本轮改为**读库源码定案**而非继续试错：
+从 cargo registry 里的 `liquid-verre-rs-0.5.4` 源码逆出缩放会话的完整单位链，与两轮实测数据
+逐像素对齐，确认是库的缺陷且宿主在结构上无法修复，于是**删除本轮加的锚点补偿**，产出可提交的
+库侧缺陷报告 + 补丁 + 更新流程。
+
+### 定案依据（三条互锁）
+
+1. **量纲错**：`input/drag.rs::ResizeState::apply` 里 `x = x0 + (w0 - w)` 把逻辑像素增量
+   直接加到物理像素 `x` 上（库注释 `drag.rs:6-7` 自己写明 `x/y` 物理、`w/h` 逻辑），
+   锚定边位移 = δ x (1 - scale)，scale=1 时才为 0。
+2. **两套 scale**：`runtime/mod.rs:740` 每帧用 `app.scale_of(b.monitor)`，而会话原点
+   （`platform/window.rs:551`）与快照物理尺寸用 `b.scale`；`scale_of` 越界时
+   `map_or(1.0, ..)` 静默返回 1.0。推演出的 Δ(被拖边)=δ、Δ(物理宽)=δ x scale 与
+   合成输入（+200/+100）和真实鼠标（-26/+13）两轮实测**完全一致**。
+3. **测试盲区**：`drag.rs` 所有会动 x/y 的锚定用例（:289 :308 :319 :327 :338）全传 scale=1.0，
+   唯一带 scale 的 :356 用的是不改 x 的 `E::RIGHT`。
+
+宿主无法修：`ResizeState`/`DragSession` 是 `pub(crate)`；库每帧用会话 origin 重算并整块覆盖
+`b.x/b.width`，宿主 push 下一帧即被抹掉；只夹代理窗口会造成「玻璃走、内容不走」双层错位。
+
+### Main Changes
+
+- `grid_window.rs`：**删除** `glass_resize_anchor` 字段、`apply_resize_anchor`、
+  `session_content_rect`、`drop_use_of_data` 占位函数与 2 个锚定单测（净 -218 行）；
+  `begin_glass_resize_session(hwnd, edges)` 还原为 `begin_glass_resize_session(hwnd)`；
+  跟随 tick 只做虚拟桌面夹取；收尾回推改用块的原始矩形。
+- `glass_engine.rs`：删除 `glass_resize_edges_from_wparam`，把被 `resize_handle_bits`
+  截断的 `dispatch_glass_session` 文档注释归位；保留 `[GLASS-PUSH]` / `block_debug_line` 诊断。
+- `wnd_proc.rs`：`WM_USER_GLASS_RESIZE` 调用还原为单参（300ms 收尾宽限期**保留**，
+  它是防止宿主用陈旧矩形污染库会话锚点的正确做法）。
+- 规范：`windows-platform-guidelines.md` 把「锚点归宿主所有」一节整体改写为
+  「副屏缩放锚定边漂移是库缺陷，宿主不要纠正」，含复现数据、源码定位、允许做的三件事。
+- 新增缺陷报告：`.trellis/tasks/11-26-.../liquid-verre-rs-defect.md`（291 行，含可直接
+  apply 的补丁、要补的 scale 维度回归测试、方案 A/B/C 三条更新路径 + 适配层回归清单 6 条）。
+
+**未动**（上一轮的真实收益，继续留在工作区）：`glass_resize_floor` 常量逻辑值（宿主自己的
+DPI 双重换算 bug，修完主屏彻底正常）、`layout::reflow_positions` 旧列数记账（图标变乱）、
+`layout_cols` 记账、`glass_session_ended_at` 宽限期、事件丢失兜底、诊断日志。
+
+### Git Commits
+
+- 已提交（上一轮）：`48d2619 fix(分类框): 修「双击图标偶发没反应」+ 多屏拖拽边界与跨屏 DPI 错位`
+- 本轮**未提交**（遵守 commit 红线，等用户当轮指令）
+
+### Testing
+
+- [OK] `cargo fmt -- --check` 干净
+- [OK] `cargo test` **535 passed / 0 failed**（删掉 2 个已废弃的锚定单测）
+- [OK] CI 严格 clippy 组合零告警
+- [OK] `cargo build` 通过，已重启实例（PID 12420，`RUST_LOG=info`）供用户验收
+- 待用户复验：双击打开、主/副屏拖拽后图标行列、副屏拖边缘（预期仍漂 = 库缺陷，非回退）
+
+### Status
+
+[OK] **Completed**（宿主侧能做的已做完；副屏缩放漂移移交库侧，已出缺陷报告）
+
+### Next Steps
+
+- 用户按方案 A 在库仓库应用 `drag.rs` 两处 `* s` + `mod.rs` 的 `drag_scale` 改用 `b.scale`，
+  用 `[patch]` 指本地库验证后发 0.5.5，再把宿主依赖从 `=0.5.4` 升到 `=0.5.5` 并过适配层回归 6 条。
+- 若要先出可用版本：可关 `box_style.liquid_glass.resize.enabled` 由宿主驱动缩放（需产品确认）。
+- 遗留：布局序列化「物理 / 当时 DPI」的跨 DPI 恢复基准（建议存「显示器身份 + 屏内相对坐标」）。
+
+## Session 16: 升级到 liquid-verre-rs 0.5.5，适配层回归通过
+
+**日期**：2026-11-26（第 4 轮，用户发布库 0.5.5 后升级宿主）
+
+### Summary
+
+用户按 Session 15 的缺陷报告在库侧根修并发布 `liquid-verre-rs 0.5.5`
+（commit `14751faf`，13:08）。本轮完成宿主升级 + 逐条适配层回归。
+
+### Main Changes
+
+- `Cargo.toml`：`liquid-verre-rs = "=0.5.4"` -> `"=0.5.5"`，依赖注释改写为 0.5.5 的
+  新契约（缩放会话全程物理域、`min_size` 仍是逻辑像素、apply 返回 `/ scale` 与写回
+  `* scale` 成对相消），并保留「升级必须配合适配层回归」的 P2 纪律。
+- `Cargo.lock`：仅 `liquid-verre-rs` 一条版本变更（rsproxy 镜像已同步）。
+- 规范：`tauri-window-contract.md` 新增「缩放会话量纲契约（库 >= 0.5.5）」+
+  一条验收用例（副屏拖左缘 `x + w x scale` 守恒）；`windows-platform-guidelines.md`
+  在「副屏缩放锚定边漂移是库缺陷」一节追加 0.5.5 落地记录。
+- 缺陷报告追加第 10 节结案：库的实际修法、4 条新判别单测、5.2 双口径为何已被消解、
+  适配层回归逐条结论。
+- 代码：**零改动**（`cargo check --all-targets` 直接过，说明 0.5.5 未破坏任何宿主可见 API）。
+
+### 取证核对（读 0.5.5 发布包源码）
+
+- `platform/window.rs:549` `let origin = [b.x, b.y, b.width, b.height];`（物理矩形，不再 `/ s`）
+- `input/drag.rs:212-236` `dx = cursor - start`（物理）、`x = x0 + (w0 - w)`（同量纲）、
+  返回 `[x, y, w / s, h / s]`
+- `runtime/mod.rs:771` `b.width = r[2] * scale;`（与 apply 内同一个 scale，相消）
+- 新测试：`resize_left_edge_half_scale_anchor_zero_drift`、
+  `resize_top_edge_double_scale_anchor_zero_drift`、
+  `resize_scale_flip_mid_session_keeps_physical_rect`、
+  `resize_min_clamp_half_scale_anchor_still_fixed`
+
+### 过程中的坑（记一笔，别再犯）
+
+- 用 Python 文本模式写 md 时，`newline="\r\n"` 会把字符串里已有的 `\r\n` 再翻一层，
+  得到 `\r\r\n`，git 视作整文件改写（一次 `--stat` 冒出 3473 行）。定案：**一律二进制写**
+  （`while \r\r\n in b: replace` 收敛后统一成纯 CRLF），或文本模式用 `newline=""`。
+
+### Git Commits
+
+- 已提交（Session 13）：`48d2619`（双击 + 多屏边界）
+- 本轮及 Session 15 改动**未提交**（等用户当轮指令）
+
+### Testing
+
+- [OK] `cargo fmt -- --check` 干净
+- [OK] `cargo test` **535 passed / 0 failed**
+- [OK] CI 严格 clippy 组合零告警（44.8s 全量）
+- [OK] `cargo tree` 确认 `liquid-verre-rs v0.5.5`
+- [OK] `cargo build` 通过并已重启（PID 21668，13:20，`RUST_LOG=info`）
+- 待用户实机复验：副屏拖左缘右缘是否钉住（本缺陷主验收项）、主副屏过渡是否跳尺寸、
+  跨屏拖拽后图标行列、双击打开
+
+### Status
+
+[OK] **Completed**（宿主升级完毕，等待实机验收）
+
+### Next Steps
+
+- 实机验收通过 -> 提交（依赖升级 + 图标重排修复 + 规范/取证文档可拆两个 commit）。
+- 遗留候选：布局序列化改「显示器身份 + 屏内相对坐标」，彻底解决跨 DPI 恢复基准。
