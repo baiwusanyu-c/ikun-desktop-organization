@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 14
+- **Total Sessions**: 15
 - **Last Active**: 2026-11-27
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1557 | Active |
+| `journal-1.md` | ~1624 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 19 | 2026-11-27 | 控制面板检查更新 + 在线自动升级（tauri-plugin-updater） | - | `master` |
 | 14 | 2026-11-27 | 拔屏重定位两轮复测修复（双重DPI换算/系统救援污染）+ 三维自检 | - | `master` |
 | 13 | 2026-11-27 | 修复：拔掉副屏后分类框丢失（等比重定位+重连自动搬回） | - | `master` |
 | 12 | 2026-11-04 | Rust 自检审计：20926b54..2bc9dfcf 重构后修复与规范沉淀 | - | `master` |

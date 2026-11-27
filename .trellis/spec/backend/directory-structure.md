@@ -32,6 +32,7 @@ src/
 │   ├── window_cmd.rs       #   持久 WebView 窗口生命周期（show/hide/toggle/复用）
 │   ├── app_cmd.rs          #   应用信息/退出/屏幕查询
 │   ├── ai_cmd.rs           #   AI 分类命令（异步执行 + 结果落框）
+│   ├── update_cmd.rs       #   检查更新/在线升级（tauri-plugin-updater，禁用官方 install）
 │   └── log_cmd.rs          #   前端日志转发
 │
 ├── box_core/               # 平台无关业务逻辑（禁止 use windows / HWND）

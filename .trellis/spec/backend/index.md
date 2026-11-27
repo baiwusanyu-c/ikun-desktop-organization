@@ -76,7 +76,7 @@ UI 层
 
 | Crate | 用途 |
 |-------|------|
-| `tauri` + `tauri-plugin-opener` + `tauri-plugin-dialog` | 唯一 WebView shell、IPC、持久窗口、安全外链与文件对话框 |
+| `tauri` + `tauri-plugin-opener` + `tauri-plugin-dialog` + `tauri-plugin-updater` | 唯一 WebView shell、IPC、持久窗口、安全外链、文件对话框与在线升级 |
 | `anyhow` | 错误处理（统一使用 `anyhow::Result`） |
 | `log + env_logger` | 日志系统 |
 | `serde + serde_json + serde_yaml` | 配置/规则序列化 |

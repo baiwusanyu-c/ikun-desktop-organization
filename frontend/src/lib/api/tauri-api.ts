@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 export interface ValidationResult {
   valid: boolean;
@@ -251,6 +252,29 @@ export interface AppInfo {
   build_date: string;
 }
 
+/**
+ * 检查更新结果。
+ * 字段与 Rust `tauri_commands::update_cmd::UpdateCheck` 一一对应（snake_case 直传）。
+ */
+export interface UpdateCheck {
+  current_version: string;
+  available: boolean;
+  latest_version: string | null;
+  notes: string | null;
+  pub_date: string | null;
+  download_page: string;
+}
+
+/** 下载进度事件负载，字段与 Rust `update_cmd::UpdateProgress` 一一对应。 */
+export interface UpdateProgress {
+  downloaded: number;
+  total: number | null;
+  percent: number;
+}
+
+/** Rust 侧 `update_cmd::UPDATE_PROGRESS_EVENT` 常量。 */
+const UPDATE_PROGRESS_EVENT = "update-download-progress";
+
 export interface EditBoxPayload {
   config_id: string;
   current_name: string;
@@ -312,8 +336,29 @@ export async function openUrl(url: string): Promise<void> {
   await invoke("open_url", { url });
 }
 
-export async function checkUpdate(): Promise<string> {
-  return invoke<string>("check_update");
+export async function checkUpdate(): Promise<UpdateCheck> {
+  return invoke<UpdateCheck>("check_update");
+}
+
+/**
+ * 下载并安装更新。
+ *
+ * 成功路径下 Rust 侧会拉起安装代理并触发应用优雅退出，进程随即结束，
+ * 因此调用方**不能**依赖返回值渲染最终状态，必须在调用前就呈现「即将重启」。
+ * 只有失败（网络 / 清单缺失 / 验签不通过）才会把错误抛回前端。
+ */
+export async function installUpdate(): Promise<string> {
+  return invoke<string>("install_update");
+}
+
+/**
+ * 订阅更新包下载进度事件，返回取消订阅函数。
+ * 事件名与 Rust `update_cmd::UPDATE_PROGRESS_EVENT` 绑定，改名必须双侧同步。
+ */
+export async function onUpdateProgress(
+  handler: (progress: UpdateProgress) => void,
+): Promise<() => void> {
+  return listen<UpdateProgress>(UPDATE_PROGRESS_EVENT, (event) => handler(event.payload));
 }
 
 export async function getAppInfo(): Promise<AppInfo> {

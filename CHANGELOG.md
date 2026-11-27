@@ -4,6 +4,42 @@
 会抓取与本次 tag 对应的 `## [vX.Y.Z]` 段落，拼进 GitHub Release 正文。
 发版操作见 `RELEASE.md`，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [v0.1.0-beta.9] - 2026-11-27
+
+Windows-only 版本，本轮新增**控制面板「检查更新」与在线自动升级**。
+
+### Added
+- **检查更新真实可用**：关于页的「检查更新」此前是写死返回 `No updates available` 的
+  空壳，现接入 Tauri 官方 `tauri-plugin-updater`，与 GitHub Releases 的 `beta` 更新通道
+  做 semver 比对。断网 / 清单缺失 / 公钥未配置 / 验签失败四类错误返回可区分的中文提示，
+  并保留「前往下载页」兜底。
+- **一键在线升级，无需手动重装**：点「立即升级」→ 后台下载更新包并完成 minisign 验签 →
+  拉起独立安装代理 → 应用自行退出 → NSIS 静默覆盖安装 → 自动重启为新版本。配置
+  （`~/.ikun_organizer.json`）与分类框布局完整保留；exe 名与安装路径跨版本不变，因此
+  开机自启注册表条目升级后继续有效，无需重新注册。
+- **下载进度可见**：新增 `update-download-progress` 事件，关于页显示进度条与百分比
+  （按 256KB 间隔节流，不刷爆 IPC）。
+
+### Changed
+- 更新源采用固定滚动 tag `beta` 的 `latest.json`，而**不是**官方文档给的
+  `releases/latest/download/latest.json`——GitHub 的 "latest" 永不包含 prerelease，
+  本项目当前全是 beta，照抄必然 404。
+- 发布链路要求 minisign 签名密钥（`TAURI_SIGNING_PRIVATE_KEY` /
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`），CI 自动产出 `*-setup.exe.sig` 与
+  `latest.json`，并把清单覆盖更新到 `beta` 通道。公钥仍为占位值时 release job 直接失败，
+  避免发布一个老用户验签不过的版本。
+- 更新逻辑全部落在 Rust 命令层：前端不引入 updater JS 插件，`capabilities` 也未放开
+  `updater:*` / `process:*` 权限（capability 只约束 WebView IPC）。
+
+### Fixed
+- **规避「升级后桌面图标停留在隐藏态」**：插件在 Windows 上的 `install()` /
+  `download_and_install()` 以 `std::process::exit(0)` 收尾，会跳过本项目退出清理链
+  （分类框布局落盘、玻璃引擎 shutdown、托盘注销、桌面注册表清理、**隐藏图标还原**）。
+  改为只借用其 `download()`（返回前已完成验签），安装交给独立代理脚本，本进程走既有
+  优雅退出路径。顺带绕开上游 `install()` 不返回与 NSIS `Failed to kill <App>` 两个已知缺陷。
+- `.gitignore` 补上签名密钥防护：`signer generate -w ~/.tauri/...` 里的 `~` 在 Windows
+  不展开，会在仓库根建出字面量 `~` 目录，把私钥落进工作区。
+
 ## [v0.1.0-beta.8] - 2026-11-26
 
 Windows-only 版本，本轮集中在**多显示器（主 200% / 副 100% 混 DPI）**与**分类框交互**。

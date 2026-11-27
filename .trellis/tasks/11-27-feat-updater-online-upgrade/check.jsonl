@@ -1,0 +1,4 @@
+{"file": ".claude/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".claude/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "自检需核对禁止模式与 fmt/clippy/test 门禁"}
+{"file": ".trellis/spec/guides/tauri-window-contract.md", "reason": "自检需核对 Rust/TS 字段是否双侧同步"}

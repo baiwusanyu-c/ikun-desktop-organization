@@ -4,8 +4,9 @@
 # Flow:
 #   1. Triggered by a version tag (v*) push or manual dispatch.
 #   2. Test gate: fmt + clippy + cargo test must pass first.
-#   3. Only then are Windows artifacts packaged.
-#   4. Artifacts + SHA256 are published to the GitHub Releases page.
+#   3. Only then are Windows artifacts packaged and updater packages signed.
+#   4. Artifacts + SHA256 + latest.json are published to the version release.
+#   5. latest.json is mirrored to the fixed prerelease `beta` rolling channel.
 #
 # Trigger from local (recommended):
 #   pnpm run release -- --bump beta --push     (scripts/release.mjs)
@@ -143,6 +144,23 @@ jobs:
           }
           Write-Host "Version check passed: $versionLine"
 
+      - name: Verify updater public key is configured
+        shell: pwsh
+        run: |
+          $config = Get-Content tauri.conf.json -Raw -Encoding utf8 | ConvertFrom-Json
+          $pubkey = "$($config.plugins.updater.pubkey)".Trim()
+          if ([string]::IsNullOrWhiteSpace($pubkey) -or $pubkey -eq 'REPLACE_WITH_MINISIGN_PUBLIC_KEY') {
+            $message = @(
+              'tauri.conf.json 的 plugins.updater.pubkey 仍是占位值 REPLACE_WITH_MINISIGN_PUBLIC_KEY（或缺失）。'
+              '未配置真实 minisign 公钥就发布会生成无法被客户端验签的更新，老用户升级会失败。'
+              '请先运行 pnpm dlx @tauri-apps/cli@2 signer generate 生成密钥，把公钥写入该字段，'
+              '并把私钥与密码配置到 GitHub Secrets（TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_PASSWORD）后再发布。'
+            ) -join "`n"
+            Write-Error $message
+            exit 1
+          }
+          Write-Host "Updater public key is configured."
+
       - name: Setup pnpm
         # 版本取自根 package.json 的 packageManager 字段（pnpm@11.5.1）；
         # 必须先于 setup-node，否则其 cache: pnpm 找不到 pnpm 可执行文件
@@ -170,7 +188,75 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build Windows artifacts
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: node scripts/build.mjs --platform win --mode release
+
+      - name: Generate latest.json
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = "${{ steps.ver.outputs.version }}"
+          $tag = "${{ steps.ver.outputs.tag }}"
+
+          $setupAssetName = "ikun_organizer-v$version-windows-x64-setup.exe"
+          $setupAssetPath = Join-Path 'target/dist' $setupAssetName
+          if (-not (Test-Path -LiteralPath $setupAssetPath -PathType Leaf)) {
+            Write-Error "Missing updater setup asset: $setupAssetPath. The signed build must produce and copy the renamed NSIS setup.exe into target/dist."
+            exit 1
+          }
+
+          $signaturePath = "$setupAssetPath.sig"
+          if (-not (Test-Path -LiteralPath $signaturePath -PathType Leaf)) {
+            Write-Error "Missing updater signature: $signaturePath. The signed build did not produce *-setup.exe.sig for the updater setup asset."
+            exit 1
+          }
+
+          # .sig 实测为单行 base64（无 CR/LF）；仍显式 Trim：手工重打包或跨工具复制引入空白后，
+          # 客户端 STANDARD base64 引擎不容忍空白，会直接验签失败。
+          $signature = (Get-Content -LiteralPath $signaturePath -Raw -Encoding utf8).Trim()
+          if ([string]::IsNullOrWhiteSpace($signature)) {
+            Write-Error "Updater signature is empty: $signaturePath"
+            exit 1
+          }
+
+          $notes = ''
+          if (Test-Path CHANGELOG.md) {
+            $lines = Get-Content CHANGELOG.md -Encoding utf8
+            $start = -1
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+              if ($lines[$i] -match ('^## \[' + [regex]::Escape($tag) + '\]')) { $start = $i; break }
+            }
+            if ($start -ge 0) {
+              $end = $lines.Count
+              for ($i = $start + 1; $i -lt $lines.Count; $i++) {
+                if ($lines[$i] -match '^## \[') { $end = $i; break }
+              }
+              if ($end - $start -gt 1) {
+                $notes = ($lines[($start + 1)..($end - 1)] -join "`n").Trim()
+              }
+            }
+          }
+
+          $pubDate = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+          $manifest = [ordered]@{
+            version = $version
+            notes = $notes
+            pub_date = $pubDate
+            platforms = [ordered]@{
+              'windows-x86_64' = [ordered]@{
+                signature = $signature
+                url = "https://github.com/baiwusanyu-c/ikun-desktop-organization/releases/download/$tag/$setupAssetName"
+              }
+            }
+          }
+
+          $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath target/dist/latest.json -Encoding utf8NoBOM
+          Write-Host "Generated target/dist/latest.json"
+          Write-Host "  version: $version"
+          Write-Host "  updater asset: $setupAssetName"
+          Write-Host "  signature: $signaturePath"
 
       - name: Generate SHA256 checksums
         shell: pwsh
@@ -197,9 +283,11 @@ jobs:
             '### Downloads',
             '| File | Description |',
             '| --- | --- |',
-            '| `*-setup.exe` | NSIS installer (recommended, per-user install) |',
+            '| `*-setup.exe` | NSIS installer and v2 updater asset (recommended, per-user install) |',
             '| `*.msi` | MSI installer (stable releases only - MSI requires a numeric version, skipped for pre-releases) |',
-            '| `*.zip` | Portable build (unzip and run) |',
+            '| `ikun_organizer-v*-windows-x64.zip` | Portable build (unzip and run) |',
+            '| `*-setup.exe.sig` | minisign signature used by `latest.json` |',
+            '| `latest.json` | Updater manifest (also mirrored to the `beta` channel) |',
             '| SHA256SUMS.txt | SHA256 checksums |',
             '',
             'Verify integrity (PowerShell): `Get-FileHash <file> -Algorithm SHA256`'
@@ -242,3 +330,21 @@ jobs:
           files: |
             target/dist/*
           body_path: ${{ runner.temp }}/release-notes.md
+
+      - name: Publish beta rolling channel
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view beta --json tagName 2>$null | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "beta release does not exist; creating rolling channel..."
+            gh release create beta --target "${{ github.sha }}" --title "Beta update channel" --prerelease --notes "Rolling beta update channel. The latest update manifest is attached as latest.json."
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } else {
+            Write-Host "beta release exists; replacing latest.json..."
+          }
+
+          gh release upload beta target/dist/latest.json --clobber
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "Beta updater endpoint: https://github.com/baiwusanyu-c/ikun-desktop-organization/releases/download/beta/latest.json"

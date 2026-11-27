@@ -76,9 +76,21 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ4NjAyRjAwMzk2NDM0MjgKUldRb05HUTVBQzlnMk5KcGc1OUprdTBTZDUwbkNmcFBzbVhNcWhNa0dqYUtkQTZubDIwSXZpYjAK",
+      "endpoints": [
+        "https://github.com/baiwusanyu-c/ikun-desktop-organization/releases/download/beta/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["nsis", "msi"],
+    "createUpdaterArtifacts": true,
     "icon": [
       "tauri/icons/icon.ico"
     ],

@@ -158,6 +158,7 @@ fn run_tauri_app() -> anyhow::Result<()> {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(runtime.clone())
         .invoke_handler(tauri::generate_handler![
             // Config commands
@@ -185,6 +186,7 @@ fn run_tauri_app() -> anyhow::Result<()> {
             tauri_commands::close_window,
             tauri_commands::open_url,
             tauri_commands::check_update,
+            tauri_commands::install_update,
             // App commands
             tauri_commands::get_app_info,
             tauri_commands::quit_app,

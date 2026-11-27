@@ -1555,3 +1555,70 @@ CI 严格 clippy 组合零告警（强制 `Checking` 复跑）、`cargo build` �
 ### Next Steps
 
 - None - task complete
+
+## Session 19: 控制面板检查更新 + 在线自动升级（tauri-plugin-updater）
+
+**Date**: 2026-11-27
+**Task**: 控制面板检查更新 + 在线自动升级（tauri-plugin-updater）
+
+### Summary
+
+把假 check_update 换成真实 updater 链路；因插件 Windows install() 用 std::process::exit(0) 会跳过本项目退出清理（图标还原），改为 download()+detached 安装代理+既有优雅退出；beta 滚动通道绕开 GitHub latest 不含 prerelease；v2 原生 setup.exe+.sig 产物
+
+### Main Changes
+
+### 1. 会话概要
+
+任务：`11-27-feat-updater-online-upgrade` —— 把控制面板「关于」页里写死返回 `No updates available` 的假 `check_update`，换成基于 Tauri 官方 `tauri-plugin-updater` 的真实「检查更新 + 一键在线升级」链路。
+
+### 2. 关键取证（决定了整体架构，不是照抄官方文档）
+
+- **`tauri-plugin-updater 2.14.1` 的 Windows `install_inner` 在 `ShellExecuteW` 之后直接 `std::process::exit(0)`**（插件 `updater.rs:1050`）。这条路径完全跳过本项目 `platform_runtime.rs:666-742` 的退出清理链——布局落盘、玻璃引擎 shutdown、托盘注销、桌面注册表清理、**隐藏图标还原**全部不执行，后果是「升级后用户桌面图标停留在隐藏态」；且 `std::process::exit` 会跑 CRT atexit / DllMain，与仍在飞 COM 调用的 WebView2/D2D/DComp 线程对撞（项目注释里已有实测崩溃记录）。
+- 因此**只借用插件的 `download()`**（`updater.rs:891` 在返回前已 minisign `verify`），拿到可信字节后自己收尾：落盘 → 拉起 detached 安装代理 → 置 `quit_requested` 走既有完整清理。这样同时绕开上游两个已知缺陷（`install()` 不返回 tauri#2558、NSIS `Failed to kill` tauri#16277/#6984）。
+- **GitHub 的 `releases/latest` 永不包含 prerelease**，而本项目当前全是 beta，官方文档给的 `releases/latest/download/latest.json` 必然 404 → 改用固定滚动 tag `beta`。
+- **`createUpdaterArtifacts` 是 `Bool | "v1Compatible"` 二选一**（`tauri-utils/config.rs:1554-1574`）。选 v2 原生 `true`：产物就是现有 `*-setup.exe` + 同名 `*-setup.exe.sig`，少一层 zip 解压。实测 `tauri signer sign` 产出的 `.sig` 是**单行 base64、无 CR/LF**（400 字节），可直接作为 `latest.json` 的 `signature`。
+- 插件 `init` 的 setup 只做 `config().clone()` + `manage()`，**不解析 pubkey**，所以占位公钥不会让应用启动失败；`Builder` 无 endpoint 方法，endpoints 只能来自 `tauri.conf.json`。
+
+### 3. 实现落点
+
+| 层 | 文件 | 要点 |
+| --- | --- | --- |
+| Rust | `src/tauri_commands/update_cmd.rs`（新增） | `check_update` / `install_update` 两个命令 + `build_updater()`（公钥按 trim 后传给插件，与守卫同源）+ 安装代理脚本生成 + 6 个单元测试 |
+| Rust | `window_cmd.rs` / `app_cmd.rs` / `mod.rs` / `main.rs` | 删除 stub；`request_quit` 提升 `pub(crate)` 供更新命令复用同一条退出路径；注册插件与命令 |
+| 配置 | `tauri.conf.json` | `plugins.updater`（占位 pubkey + beta 通道 endpoint + `installMode: passive`）、`bundle.createUpdaterArtifacts: true` |
+| 前端 | `tauri-api.ts` / `AboutTab.svelte` | 结构化 `UpdateCheck` / `UpdateProgress` 契约 + `update-download-progress` 事件；状态机 `idle/checking/upToDate/available/downloading/installing/notConfigured/error` |
+| 权限 | `capabilities/default.json` | **零改动**：更新逻辑全在 Rust 命令层，不向 WebView 放开 `updater:*` / `process:*` |
+| CI | `scripts/build.mjs` / `release.yml` | 收集 `setup.exe.sig`；公钥占位值守卫；生成 `latest.json`；发布 `beta` 滚动通道（只放清单不放安装包） |
+| 规范 | `spec/backend/*`、`spec/guides/tauri-window-contract.md` | 补 `update_cmd` 模块、updater 依赖、IPC payload、错误矩阵与 Good/Base/Bad 用例（含「绝不允许调用官方 install 路径」禁令） |
+
+### 4. 门禁
+
+`cargo fmt --check` / `cargo clippy --all-targets -- -D warnings`（CI allowlist 内）/ `cargo test` 556 passed（其中 updater 专项 6 passed）/ `pnpm -C frontend run check` 0 errors / `node --check scripts/build.mjs` / release.yml YAML 解析 —— 全部通过。
+
+### 5. 依赖漂移（必须单独回归，不是免费搭车）
+
+`cargo add tauri-plugin-updater` 连带把 tauri 栈从 2.11.5 推到 2.12.7、`tauri-build/codegen/macros` 2.6.3→2.7.6，新增 `tauri-plugin-updater 2.14.1` / `zip 9.8.2` / `minisign-verify 0.3.0`，`Cargo.lock` +738/-251。`liquid-verre-rs = "=0.5.5"` 锁定未动。这些包直接关系 WebView/窗口行为，需要一轮安装版回归。
+
+### 6. 遗留（阻塞在用户侧）
+
+1. `tauri.conf.json` 的 `plugins.updater.pubkey` 仍是占位值 `REPLACE_WITH_MINISIGN_PUBLIC_KEY`，需要用户 `tauri signer generate` 后填入真实公钥（验证用的临时密钥已生成→实测→删除，未进工作区）。
+2. GitHub Secrets 未配置：`TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`；CI 守卫会按设计拒绝发布。
+3. 真实升级链路（静默覆盖安装、自动重启、图标还原、配置保留、beta 通道匿名 GET）尚未端到端验证——依赖上面两项。
+4. 按 git commit 红线，全部改动留在工作区未提交。
+
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

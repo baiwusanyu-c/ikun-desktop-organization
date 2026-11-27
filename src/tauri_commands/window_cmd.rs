@@ -519,13 +519,6 @@ pub async fn open_url(app: tauri::AppHandle, url: String) -> Result<(), String> 
         .map_err(|error| format!("打开 URL 失败: {error}"))
 }
 
-/// 检查应用更新。
-#[tauri::command]
-pub async fn check_update() -> Result<String, String> {
-    log::info!("[tauri_cmd] check_update called");
-    Ok("No updates available".to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -36,8 +36,12 @@
 | `get_pending_edit_box` | 无 | `EditBoxPayload` 或 `null` | 无 pending 数据时返回 `null` |
 | `show_window` / `hide_window` / `close_window` | `{ label: string }` | `()` | 仅接受三个固定标签；`close_window` 对兼容调用也执行 hide |
 | `open_url` | `{ url: string }` | `()` | 仅允许带 host 的 HTTP/HTTPS URL，由 `tauri-plugin-opener` 打开 |
+| `check_update` | 无 | `UpdateCheck`（`current_version` / `available` / `latest_version` / `notes` / `pub_date` / `download_page`） | 公钥占位、网络失败、清单缺失、验签失败返回可区分中文错误 |
+| `install_update` | 无 | `string`（即将退出的提示） | 下载或落盘失败返回中文错误；成功时必须先拉起安装代理，再置 `quit_requested` 走完整清理链 |
 
-`capabilities/default.json` 只授予 `opener:allow-open-url`，不得恢复通用 shell 执行或文件打开权限。
+`capabilities/default.json` 只授予既有窗口/事件/外链/对话框能力，不得恢复通用 shell 执行、文件打开权限，也不得新增 `updater:*` / `process:*`。
+
+更新进度事件固定为 `update-download-progress`，payload 为 `{ downloaded: number, total: number | null, percent: number }`；Rust `UpdateProgress` 与 `tauri-api.ts` 字段、事件名必须逐字一致。更新命令不得调用 `tauri-plugin-updater` 的 `install()` / `download_and_install()`（Windows 上会 `std::process::exit(0)` 跳过项目退出清理）。
 
 `EditBoxPayload` 的字段固定为 `{ config_id: string, current_name: string }`。
 双击原生分类框标题后，Rust 先写入 pending，再发送 `edit-box-opened` 事件；编辑页先注册监听，再读取 pending，以覆盖首次事件竞态。
@@ -239,6 +243,22 @@ pub trait GeometryAdjust: Send + Sync {
 - Good：主屏与副屏上各一个分类框，拖动其中一个 -> 水平/垂直参考线都能出现，且跨屏那条线
   在两块屏上按各自 DPI 正确显示（每屏一个 overlay，无缝相接不断线）。
 - Good：无论桌面是纯白还是纯黑壁纸，参考线都必须可见（暗色外描边 + 亮色内芯，不再采样桌面）。
+
+- Good：`关于` 页点「检查更新」→ 有新版则展示版本号与 notes → 点「立即升级」→ 进度条推进 →
+  应用自行退出 → NSIS 静默覆盖安装 → 自动重启为新版本；**升级后桌面图标全部可见、分类框位置与
+  `~/.ikun_organizer.json` 完整保留、HKCU `Run` 自启键仍指向有效 exe**（exe 名与安装路径跨版本不变）。
+- Good：`plugins.updater.pubkey` 仍是占位值时点检查更新，得到「尚未配置签名公钥」中文提示，
+  而不是插件内部的 base64 解码异常（守卫在 `build_updater()` 之前，且公钥按 trim 后判断）。
+- Base：断网 / `latest.json` 404 / 验签不通过三类失败各自返回可区分的中文文案，
+  前端回落到 `error` 态并给出 Release 页兜底，不白屏、不卡死。
+- Bad：更新命令**绝不**调用 `tauri-plugin-updater` 的 `install()` / `download_and_install()`——
+  它们在 Windows 上以 `std::process::exit(0)` 收尾，会跳过 `platform_runtime.rs` 的退出清理链，
+  用户桌面图标停留在隐藏态（本功能最严重的回归面）。只允许 `download()` + 自建安装代理。
+- Bad：安装代理**不得**依赖 NSIS 自己杀掉旧进程，也**不得**传 `/R`——前者是上游已知缺陷
+  （`Failed to kill <App>`），后者会与代理脚本双重拉起应用。
+- Bad：`latest.json` 的 `signature` **不得**按 zip 载体假设。`createUpdaterArtifacts: true`（v2 原生）
+  产出的是 `*-setup.exe` + 同名 `*-setup.exe.sig`，`.sig` 内容是单行 base64，直接作为 signature；
+  不存在 `*.nsis.zip`（那是 `"v1Compatible"` 的格式）。
 
 ## 必需检查
 

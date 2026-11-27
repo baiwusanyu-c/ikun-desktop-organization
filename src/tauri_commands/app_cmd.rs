@@ -26,7 +26,7 @@ pub async fn get_app_info() -> Result<AppInfo, String> {
     })
 }
 
-fn request_quit(runtime: &SharedTauriRuntime) -> Result<(), String> {
+pub(crate) fn request_quit(runtime: &SharedTauriRuntime) -> Result<(), String> {
     runtime
         .lock()
         .map_err(|error| format!("运行时状态不可用: {error}"))?

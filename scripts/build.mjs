@@ -270,7 +270,7 @@ function findFiles(dir, pattern) {
     .map((f) => join(dir, f));
 }
 
-function collectWindowsArtifacts(version) {
+function collectWindowsArtifacts(version, opts) {
   const targetDir = join(PROJECT_ROOT, "target", "release");
   const bundleDir = join(targetDir, "bundle");
   const prefix = `ikun_organizer-v${version}-windows-x64`;
@@ -282,10 +282,48 @@ function collectWindowsArtifacts(version) {
   const exe = join(targetDir, "ikun_organizer.exe");
   copyIf(exe, join(DIST_DIR, `${prefix}.exe`));
 
-  // NSIS installer
+  // NSIS installer. Tauri v2's native updater signs this setup.exe directly;
+  // minisign covers the file bytes, so the dist copy can be renamed safely.
   const nsisDir = join(bundleDir, "nsis");
-  for (const f of findFiles(nsisDir, /setup\.exe$/i)) {
-    copyIf(f, join(DIST_DIR, `${prefix}-setup.exe`));
+  const setupAssetName = `${prefix}-setup.exe`;
+  const signatureAssetName = `${setupAssetName}.sig`;
+  const nsisBundleRequested =
+    !opts.noInstaller &&
+    (!opts.bundles ||
+      opts.bundles.split(",").some((bundle) => bundle.trim().toLowerCase() === "nsis"));
+
+  if (opts.noInstaller) {
+    log("  Skip updater setup: installer bundling disabled (--no-installer)");
+  } else if (!nsisBundleRequested) {
+    log("  Skip updater setup: NSIS bundle not requested");
+  } else {
+    const versionMarker = `_${version}_`;
+    const setupInstallers = findFiles(nsisDir, /setup\.exe$/i).filter((file) =>
+      basename(file).includes(versionMarker)
+    );
+    if (setupInstallers.length !== 1) {
+      const found = setupInstallers.map((file) => basename(file)).join(", ") || "(none)";
+      throw new Error(
+        `Expected exactly one NSIS setup.exe for version ${version} in ${nsisDir}, ` +
+          `found ${setupInstallers.length}: ${found}`
+      );
+    }
+
+    const sourceSetup = setupInstallers[0];
+    const sourceSignature = `${sourceSetup}.sig`;
+    if (!existsSync(sourceSignature)) {
+      throw new Error(
+        `Missing updater signature for ${basename(sourceSetup)}: ${sourceSignature}. ` +
+          "A signed bundle must produce setup.exe.sig."
+      );
+    }
+
+    copyIf(sourceSetup, join(DIST_DIR, setupAssetName));
+    copyIf(sourceSignature, join(DIST_DIR, signatureAssetName));
+    log(
+      `  Updater package pair: ${basename(sourceSetup)} + ${basename(sourceSignature)} ` +
+        `-> ${setupAssetName} + ${signatureAssetName}`
+    );
   }
 
   // MSI installer
@@ -361,7 +399,7 @@ async function main() {
   const version = getVersion();
   log(`Version: ${version}`);
 
-  collectWindowsArtifacts(version);
+  collectWindowsArtifacts(version, opts);
 
   // Summary
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);

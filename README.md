@@ -73,7 +73,7 @@ RUST_LOG=debug cargo run
 | `cargo test` | 全量单元测试（590+） |
 | `cargo fmt` / `cargo clippy` | 格式化 / Lint |
 | `pnpm -C frontend run check` | 前端类型检查（svelte-check + tsc） |
-| `pnpm run pack:win` | 发布构建，产出 NSIS/MSI 安装包到 `target/dist/` |
+| `pnpm run pack:win` | 签名发布构建，产出 NSIS/MSI 与 updater 签名到 `target/dist/`（需 `TAURI_SIGNING_PRIVATE_KEY`） |
 | `pnpm run pack:fast` | 快速打包（debug、无安装包） |
 | `pnpm run release:beta:push` | 版本号 +1、打 tag、推送触发发布流水线 |
 
@@ -84,7 +84,7 @@ RUST_LOG=debug cargo run
 ├── src/
 │   ├── main.rs            # 入口：单例信号文件协议 + DPI/OLE 初始化 + Tauri 启动
 │   ├── context.rs         # AppContext（唯一配置模型，共享运行时注入）
-│   ├── tauri_commands/    # IPC 适配层：config/box/window/app/ai/log 命令 + 平台轮询运行时
+│   ├── tauri_commands/    # IPC 适配层：config/box/window/app/update/ai/log 命令 + 平台轮询运行时
 │   ├── box_core/          # 平台无关业务逻辑：布局/排序/视图/分组引擎 + 拖拽/多选/几何纯逻辑
 │   ├── classification/    # 分类规则匹配 + AI 分类器
 │   ├── config/            # 统一 JSON 配置（~/.ikun_organizer.json）
@@ -96,7 +96,7 @@ RUST_LOG=debug cargo run
 ├── build/                 # build.rs（清单嵌入 + tauri-build）
 ├── tauri/icons/           # 应用图标唯一来源（icon.ico：exe 嵌入与安装包共用）
 ├── capabilities/          # Tauri 窗口权限清单（tauri-build 约定扫描路径，不可移动）
-├── tauri.conf.json        # Tauri 配置（4 个 WebView 窗口 + NSIS/MSI 打包）
+├── tauri.conf.json        # Tauri 配置（4 个 WebView 窗口 + NSIS/MSI/updater 打包）
 ├── .trellis/spec/         # 开发规范（backend/frontend/guides）
 └── .github/workflows/     # Windows CI + Release 流水线
 ```
@@ -104,7 +104,7 @@ RUST_LOG=debug cargo run
 ## 发布
 
 见 [RELEASE.md](RELEASE.md)。打 tag（`v*`）触发 Release 流水线：质量门禁（fmt/clippy/test）
-通过后构建 NSIS（预发布版）或 NSIS + MSI（正式版），发布 GitHub Release 并附 SHA256SUMS。
+通过后构建并签名 NSIS（预发布版）或 NSIS + MSI（正式版），发布版本 Release（含 `latest.json` / `.sig` / SHA256SUMS），并把 `latest.json` 同步到 `beta` 滚动通道。
 
 ## 已知边界
 

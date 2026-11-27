@@ -10,7 +10,8 @@ Local:  pnpm run release:beta:push          (scripts/release.mjs)
 GitHub: tag push triggers Release workflow
           Job 1 test (fmt + clippy + cargo test)   <- quality gate
           Job 2 release-windows (needs: test)      <- package + publish
-Result: GitHub Releases page with installers + SHA256SUMS.txt
+Result: version release with installers + signed updater setup.exe/.sig + latest.json;
+          beta release mirrors latest.json
 ```
 
 ## Versioning
@@ -62,11 +63,12 @@ After the push, the **Release** workflow:
 1. **Test gate**: `cargo fmt --check`, clippy, `cargo test`. Any failure
    aborts the release - nothing gets packaged or published.
 2. Verifies the tag matches the `Cargo.toml` version.
-3. Builds Windows artifacts via `scripts/build.mjs --platform win`.
+3. Builds and signs Windows artifacts via `scripts/build.mjs --platform win`.
 4. Generates `SHA256SUMS.txt`.
 5. Publishes the GitHub Release with:
-   `*-setup.exe` (NSIS), portable `*.zip`, checksums
-   (plus `*.msi` for stable releases - MSI cannot encode pre-release tags).
+   `*-setup.exe` + `*-setup.exe.sig` (NSIS updater pair), `latest.json`,
+   portable `*.zip`, checksums (plus `*.msi` for stable releases - MSI cannot
+   encode pre-release tags).
 
 Download page:
 `https://github.com/baiwusanyu-c/ikun-desktop-organization/releases`
@@ -77,11 +79,80 @@ Actions -> **Release** -> *Run workflow* -> enter the version (e.g.
 `0.1.0-beta.2`). The workflow creates the tag and the release. The version
 must already be present in `Cargo.toml`.
 
+## Online updater release (minisign)
+
+The in-app updater uses a static manifest instead of the GitHub API:
+
+```text
+signed build (TAURI_SIGNING_PRIVATE_KEY)
+  -> target/release/bundle/nsis/*-setup.exe + *-setup.exe.sig
+  -> build.mjs copies setup.exe to ikun_organizer-v<version>-windows-x64-setup.exe
+     and copies the signature beside it as ...-setup.exe.sig
+  -> Generate latest.json (version / notes / pub_date / platform url)
+  -> version release: installers + updater setup asset + signature + latest.json
+  -> fixed `beta` release: latest.json only (rolling update channel)
+App endpoint: https://github.com/baiwusanyu-c/ikun-desktop-organization/releases/download/beta/latest.json
+```
+
+`latest.json` points to the renamed setup.exe asset stored in `target/dist`.
+The signature file is renamed alongside it; this is safe because minisign signs
+the file bytes, not the path. The workflow validates that both files exist and
+fails rather than publishing a broken manifest. The `platforms` key must remain
+`windows-x86_64`, and `pub_date` is emitted as UTC RFC 3339 (a missing/invalid
+date is treated by Tauri as 1970).
+
+> **Artifact format:** this project deliberately keeps Tauri v2's native
+> self-contained updater (`createUpdaterArtifacts: true`). Tauri signs
+> `*-setup.exe` directly. We intentionally avoid `"v1Compatible"` because that
+> would wrap setup.exe in a zip and add an unnecessary extraction step and
+> failure mode.
+
+### One-time signing key setup
+
+1. Generate the minisign key pair:
+
+   ```powershell
+   pnpm dlx @tauri-apps/cli@2 signer generate -w ~/.tauri/ikun_updater.key
+   ```
+
+2. Put the generated **public key** into `tauri.conf.json` at
+   `plugins.updater.pubkey`. Replacing the
+   `REPLACE_WITH_MINISIGN_PUBLIC_KEY` placeholder is mandatory; the release
+   workflow fails early while it is still present.
+
+3. Add the private key and its password as GitHub Actions repository secrets:
+
+   - `TAURI_SIGNING_PRIVATE_KEY` - the private key content
+   - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` - the password chosen during generation
+
+### Private key backup and recovery
+
+**Back up the private key offline** (for example on an encrypted USB drive or in
+an offline password vault). A GitHub secret is a deployment copy, not a backup.
+
+Existing installations trust the public key embedded in the version they
+already installed. If the private key is lost, those users cannot receive any
+future updater asset signed with a replacement key. Recovery requires signing
+and publishing a new installer containing the new public key, then asking users
+to download and reinstall it manually.
+
+### minisign is not Authenticode
+
+The updater signature protects the download and proves that it came from the
+holder of the private key. It is **not** Authenticode code signing and does not
+change Windows SmartScreen behavior; the warning described in
+[Code signing (not configured)](#code-signing-not-configured) still applies.
+
 ## Local one-click packaging
 
 ```bash
 pnpm run pack:win    # full release build into target/dist/
 ```
+
+Full packaging signs the updater artifact because
+`bundle.createUpdaterArtifacts` is enabled, so it requires
+`TAURI_SIGNING_PRIVATE_KEY` (and the password secret when one is configured).
+For an unsigned debug smoke build use `pnpm run pack:fast` (no installer).
 
 The same script runs in CI; local and CI artifacts use the identical
 pipeline (`scripts/build.mjs --platform win`). See
@@ -114,4 +185,7 @@ before the build step.
 | Release workflow fails at test gate | Fix fmt/clippy/test locally, push the fix, delete + re-push the tag |
 | Build fails with `os error 32` (file in use) | A running `ikun_organizer.exe` or stale cargo process holds a lock - close the app and retry |
 | Pre-release has no `.msi` | Expected: MSI (WiX) only accepts numeric versions. `build.mjs` auto-selects NSIS-only for pre-releases; stable releases get NSIS + MSI automatically |
-| SmartScreen warning | Expected for unsigned builds |
+| SmartScreen warning | Expected for unsigned builds (minisign updater signatures do not replace Authenticode) |
+| `latest.json` returns 404 | The fixed `beta` release was not updated or has no manifest asset. Check the *Publish beta rolling channel* step, then inspect `gh release view beta` and re-upload `target/dist/latest.json`. |
+| Updater fails signature verification | The `plugins.updater.pubkey` does not match the private key used for the build. Restore the matching key pair; if the old private key is lost, publish a new installer with the new public key for manual reinstall. |
+| Installer reports `Failed to kill` / process in use | Another `ikun_organizer.exe` instance is still running, or the old process has not finished its cleanup. Close all instances, wait for `Cleanup complete`, and retry. Avoid force-killing because that skips the app's desktop-icon cleanup. |

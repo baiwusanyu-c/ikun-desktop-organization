@@ -1,0 +1,10 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend development guide"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "新增命令需遵循 anyhow->Result<T,String> 与中文错误文案约定"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "禁止 unwrap/expect、禁止硬编码路径、必须补单测"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "新增 src/tauri_commands/update_cmd.rs 需符合模块组织与命名规范"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "更新链路日志级别与中文日志要求，禁止高频日志"}
+{"file": ".trellis/spec/frontend/tauri-svelte-architecture.md", "reason": "AboutTab 状态机与 tauri-api.ts adapter 契约"}
+{"file": ".trellis/spec/guides/tauri-window-contract.md", "reason": "IPC payload 结构与共享状态跨层契约"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "更新功能横跨 Rust/前端/CI 三层"}
