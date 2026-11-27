@@ -73,7 +73,7 @@ RUST_LOG=debug cargo run
 | `cargo test` | 全量单元测试（590+） |
 | `cargo fmt` / `cargo clippy` | 格式化 / Lint |
 | `pnpm -C frontend run check` | 前端类型检查（svelte-check + tsc） |
-| `pnpm run pack:win` | 签名发布构建，产出 NSIS/MSI 与 updater 签名到 `target/dist/`（需 `TAURI_SIGNING_PRIVATE_KEY`） |
+| `pnpm run pack:win` | 本地发布级构建，产出 NSIS/MSI 到 `target/dist/`（**不签名**，无需私钥；签名产物仅发布链路用 `--updater`） |
 | `pnpm run pack:fast` | 快速打包（debug、无安装包） |
 | `pnpm run release:beta:push` | 版本号 +1、打 tag、推送触发发布流水线 |
 

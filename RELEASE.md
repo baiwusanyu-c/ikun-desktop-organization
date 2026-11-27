@@ -84,7 +84,8 @@ must already be present in `Cargo.toml`.
 The in-app updater uses a static manifest instead of the GitHub API:
 
 ```text
-signed build (TAURI_SIGNING_PRIVATE_KEY)
+release build: build.mjs --platform win --mode release --updater
+  (requires TAURI_SIGNING_PRIVATE_KEY + ..._PASSWORD)
   -> target/release/bundle/nsis/*-setup.exe + *-setup.exe.sig
   -> build.mjs copies setup.exe to ikun_organizer-v<version>-windows-x64-setup.exe
      and copies the signature beside it as ...-setup.exe.sig
@@ -102,10 +103,19 @@ fails rather than publishing a broken manifest. The `platforms` key must remain
 date is treated by Tauri as 1970).
 
 > **Artifact format:** this project deliberately keeps Tauri v2's native
-> self-contained updater (`createUpdaterArtifacts: true`). Tauri signs
-> `*-setup.exe` directly. We intentionally avoid `"v1Compatible"` because that
-> would wrap setup.exe in a zip and add an unnecessary extraction step and
-> failure mode.
+> self-contained updater. Tauri signs `*-setup.exe` directly. We intentionally
+> avoid `"v1Compatible"` because that would wrap setup.exe in a zip and add an
+> unnecessary extraction step and failure mode.
+>
+> **Where the flag lives:** `tauri.conf.json` keeps
+> `bundle.createUpdaterArtifacts: false`, and only `build.mjs --updater` turns
+> it on (via `tauri build --config` deep-merge). That split is deliberate:
+> hard-coding `true` makes *every* `tauri build` demand
+> `TAURI_SIGNING_PRIVATE_KEY`, including the `Windows CI` workflow that runs on
+> pull requests - where fork PRs cannot read secrets at all, so CI would be
+> permanently red, and ordinary CI builds would have no business holding the
+> production signing key. A regression test
+> (`updater_artifacts_are_gated_behind_the_release_flag`) guards both sides.
 
 ### One-time signing key setup
 
@@ -149,9 +159,19 @@ change Windows SmartScreen behavior; the warning described in
 pnpm run pack:win    # full release build into target/dist/
 ```
 
-Full packaging signs the updater artifact because
-`bundle.createUpdaterArtifacts` is enabled, so it requires
-`TAURI_SIGNING_PRIVATE_KEY` (and the password secret when one is configured).
+`pnpm run pack:win` builds **without** updater signing: the config keeps
+`createUpdaterArtifacts: false`, so no private key is needed and the output has
+no `setup.exe.sig`. That is the right default for local iteration.
+
+To reproduce the exact release artifacts locally (signed, with `setup.exe.sig`),
+inject the key and pass the release-only flag:
+
+```bash
+$env:TAURI_SIGNING_PRIVATE_KEY_PATH = "$env:USERPROFILE\.tauri\ikun_updater.key"
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "<your password>"
+node scripts/build.mjs --platform win --mode release --updater
+```
+
 For an unsigned debug smoke build use `pnpm run pack:fast` (no installer).
 
 The same script runs in CI; local and CI artifacts use the identical

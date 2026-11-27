@@ -545,7 +545,7 @@ mod tests {
         let create_updater_artifacts = config
             .pointer("/bundle/createUpdaterArtifacts")
             .and_then(|value| value.as_bool())
-            .expect("必须显式开启 createUpdaterArtifacts");
+            .expect("必须显式声明 bundle.createUpdaterArtifacts");
         // 未填真实公钥时，配置值必须正好等于占位常量，否则守卫失效
         assert!(
             pubkey == PUBLIC_KEY_PLACEHOLDER || pubkey.starts_with("dW50cnVzdGVk"),
@@ -557,9 +557,12 @@ mod tests {
             "https://github.com/baiwusanyu-c/ikun-desktop-organization/releases/download/beta/latest.json",
             "更新源必须使用可匿名访问的 beta 滚动 latest.json",
         );
+        // 配置文件必须保持 false：写死 true 会让任何 tauri build（含 fork PR 的 CI 构建）
+        // 都要求 TAURI_SIGNING_PRIVATE_KEY，而 PR 拿不到 secrets，只能恒红。
+        // 签名产物改由 `build.mjs --updater` 经 --config 深合并开启（见下方守卫测试）。
         assert!(
-            create_updater_artifacts,
-            "createUpdaterArtifacts 必须为 true，才能产出 setup.exe + .sig",
+            !create_updater_artifacts,
+            "createUpdaterArtifacts 必须为 false，签名产物由 build.mjs --updater 覆盖开启",
         );
 
         let capabilities =
@@ -602,5 +605,53 @@ mod tests {
         ] {
             assert!(api.contains(field), "前端更新契约缺少字段或定义: {field}");
         }
+    }
+
+    /// `createUpdaterArtifacts` 与发布开关必须分处两地：配置文件保持 false
+    /// （普通 CI 构建无需签名私钥），发布链路通过 `build.mjs --updater` 深合并覆盖成 true。
+    ///
+    /// 任一侧被误改都会静默破坏：写回 true 让 fork PR 恒红（PR 拿不到 secrets）；
+    /// 发布侧丢掉 --updater 则产物没有 setup.exe.sig，老用户永远收不到可验签的更新。
+    #[test]
+    fn updater_artifacts_are_gated_behind_the_release_flag() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let build_script = std::fs::read_to_string(format!("{manifest_dir}/scripts/build.mjs"))
+            .expect("scripts/build.mjs 必须可读");
+        assert!(
+            build_script.contains(r#"case "--updater""#),
+            "build.mjs 必须提供 --updater 开关"
+        );
+        assert!(
+            build_script.contains("createUpdaterArtifacts: true"),
+            "--updater 必须通过 overlay 把 createUpdaterArtifacts 置为 true"
+        );
+        assert!(
+            build_script.contains("--config"),
+            "overlay 必须经 tauri build --config 深合并注入，不能改回写死配置"
+        );
+
+        let workflow =
+            std::fs::read_to_string(format!("{manifest_dir}/.github/workflows/release.yml"))
+                .expect(".github/workflows/release.yml 必须可读");
+        assert!(
+            workflow.contains("build.mjs --platform win --mode release --updater"),
+            "发布 workflow 必须显式带 --updater，否则产物缺少 setup.exe.sig"
+        );
+        assert!(
+            workflow.contains("TAURI_SIGNING_PRIVATE_KEY:"),
+            "发布 workflow 必须注入签名私钥环境变量"
+        );
+
+        // 普通 CI 构建绝不应该持有生产签名私钥
+        let ci = std::fs::read_to_string(format!("{manifest_dir}/.github/workflows/build.yml"))
+            .expect(".github/workflows/build.yml 必须可读");
+        assert!(
+            !ci.contains("--updater"),
+            "普通 CI 构建不得带 --updater：它不应该持有生产签名私钥"
+        );
+        assert!(
+            !ci.contains("TAURI_SIGNING_PRIVATE_KEY"),
+            "普通 CI 构建不得注入签名私钥环境变量"
+        );
     }
 }

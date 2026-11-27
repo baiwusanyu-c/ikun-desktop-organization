@@ -90,7 +90,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis", "msi"],
-    "createUpdaterArtifacts": true,
+    "createUpdaterArtifacts": false,
     "icon": [
       "tauri/icons/icon.ico"
     ],

@@ -42,7 +42,15 @@ const TAURI_CLI = "pnpm dlx --package @tauri-apps/cli@2 tauri";
 // ─── CLI Argument Parsing ───────────────────────────────────────
 function parseArgs() {
   const args = process.argv.slice(2);
-  const opts = { mode: "release", noInstaller: false, noFrontend: false, target: null, platform: null, bundles: null };
+  const opts = {
+    mode: "release",
+    noInstaller: false,
+    noFrontend: false,
+    updater: false,
+    target: null,
+    platform: null,
+    bundles: null,
+  };
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
       case "--mode":
@@ -53,6 +61,9 @@ function parseArgs() {
         break;
       case "--no-frontend":
         opts.noFrontend = true;
+        break;
+      case "--updater":
+        opts.updater = true;
         break;
       case "--target":
         opts.target = args[++i] || null;
@@ -87,6 +98,8 @@ Options:
   --platform <win>        Packaging target; Windows is the only supported platform
   --bundles <list>        Tauri bundle targets, comma-separated (e.g. nsis / msi / nsis,msi).
                           Default: all configured targets. Useful to skip MSI where WiX download is blocked.
+  --updater                 产出签名更新包（setup.exe + setup.exe.sig），需要 TAURI_SIGNING_PRIVATE_KEY。
+                          仅发布构建使用；普通 CI/本地构建不加此开关，因此无需持有签名私钥。
   --target <triple>       Rust target triple (e.g. x86_64-pc-windows-msvc)
   -h, --help              Show this help
   `);
@@ -240,6 +253,21 @@ function buildTauri(opts) {
     log("Pre-release version detected: building NSIS only (MSI requires a numeric version)");
   }
 
+  if (opts.updater) {
+    // createUpdaterArtifacts 刻意不写死在 tauri.conf.json：那样会让任何 tauri build
+    // （包括 pull_request 触发的 CI 构建）都要求 TAURI_SIGNING_PRIVATE_KEY，
+    // 而 fork PR 拿不到 secrets，只能恒红。这里用 --config 深合并，仅发布构建开启。
+    const overlay = join(PROJECT_ROOT, "target", "updater-artifacts.json");
+    mkdirSync(join(PROJECT_ROOT, "target"), { recursive: true });
+    writeFileSync(
+      overlay,
+      JSON.stringify({ bundle: { createUpdaterArtifacts: true } }, null, 2) + "\n",
+      "utf-8"
+    );
+    parts.push(`--config "${overlay}"`);
+    log("Updater artifacts ON (--updater)：产物附带 setup.exe.sig，需要 TAURI_SIGNING_PRIVATE_KEY");
+  }
+
   // If skipping frontend, set empty beforeBuildCommand
   if (opts.noFrontend) {
     log("Skipping frontend build (--no-frontend)");
@@ -326,19 +354,26 @@ function collectWindowsArtifacts(version, opts) {
 
     const sourceSetup = setupInstallers[0];
     const sourceSignature = `${sourceSetup}.sig`;
-    if (!existsSync(sourceSignature)) {
+    const hasSignature = existsSync(sourceSignature);
+
+    if (opts.updater && !hasSignature) {
       throw new Error(
         `Missing updater signature for ${basename(sourceSetup)}: ${sourceSignature}. ` +
-          "A signed bundle must produce setup.exe.sig."
+          "--updater 发布构建必须产出 setup.exe.sig，请确认 TAURI_SIGNING_PRIVATE_KEY 与密码已注入。"
       );
     }
 
     copyIf(sourceSetup, join(DIST_DIR, setupAssetName));
-    copyIf(sourceSignature, join(DIST_DIR, signatureAssetName));
-    log(
-      `  Updater package pair: ${basename(sourceSetup)} + ${basename(sourceSignature)} ` +
-        `-> ${setupAssetName} + ${signatureAssetName}`
-    );
+    if (hasSignature) {
+      copyIf(sourceSignature, join(DIST_DIR, signatureAssetName));
+      log(
+        `  Updater package pair: ${basename(sourceSetup)} + ${basename(sourceSignature)} ` +
+          `-> ${setupAssetName} + ${signatureAssetName}`
+      );
+    } else {
+      // 普通构建没有 .sig 是预期结果：不报警、不失败
+      log(`  Unsigned setup.exe（无 setup.exe.sig）：不参与更新通道，发布请用 --updater`);
+    }
   }
 
   // MSI installer
