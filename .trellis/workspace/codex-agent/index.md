@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 12
-- **Last Active**: 2026-11-04
+- **Total Sessions**: 14
+- **Last Active**: 2026-11-27
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~953 | Active |
+| `journal-1.md` | ~1557 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,8 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 14 | 2026-11-27 | 拔屏重定位两轮复测修复（双重DPI换算/系统救援污染）+ 三维自检 | - | `master` |
+| 13 | 2026-11-27 | 修复：拔掉副屏后分类框丢失（等比重定位+重连自动搬回） | - | `master` |
 | 12 | 2026-11-04 | Rust 自检审计：20926b54..2bc9dfcf 重构后修复与规范沉淀 | - | `master` |
 | 11 | 2026-11-04 | 接线 liquid-verre-rs 0.5.3：下层框亮边从「画在哪」变成「该不该亮」 | - | `master` |
 | 10 | 2026-11-04 | 接入 liquid-verre-rs 0.5.2：修下层框 border 盖到上层框 + 退役临时绕行 | - | `master` |

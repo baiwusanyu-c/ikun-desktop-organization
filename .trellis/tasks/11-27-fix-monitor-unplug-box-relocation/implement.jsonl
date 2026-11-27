@@ -1,0 +1,9 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "禁止模式/必须模式/测试串行锁"}
+{"file": ".trellis/spec/backend/windows-platform-guidelines.md", "reason": "窗口消息/坐标系/DPI 口径"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "BoxLayoutData 持久化字段新增规范"}
+{"file": ".trellis/spec/guides/tauri-window-contract.md", "reason": "玻璃引擎跨层契约（不得重复实现库判据）"}
+{"file": "src/box_core/monitor_geom.rs", "reason": "既有几何纯逻辑，等比映射要复用其口径"}
+{"file": "src/platform/windows/grid_window.rs", "reason": "GridWindowData 记账 + collect_grid_layout + 会话收尾"}
+{"file": "src/platform/windows/wnd_proc.rs", "reason": "WM_DISPLAYCHANGE/WM_TIMER 钩子点"}

@@ -351,13 +351,44 @@ impl TauriRuntime {
                 });
             }
 
+            // 归属屏对账（2026-11-27 拔屏重定位 / 重连自动搬回）：
+            // 按持久化「归属屏 + 屏内比例」恢复落位。归属屏在岗 → 直接落回
+            // （配置带 relocated 时这一步天然就是「重启期间已接回 → 搬回」）；
+            // 归属屏离岗 → 等比映射到最近在岗屏并保留待搬回语义。
+            // plan_restore 返回 None（历史配置 / 屏集暂空枚举失败）→ 维持旧坐标，
+            // 由建窗吸附兜底；持久化的 monitor 仍随 hint 带入窗口记账。
+            let restored = crate::platform::windows::display_reconcile::plan_restore(box_data);
+            let (x, y, width, height, monitor_hint, monitor_dpi_hint) = match &restored {
+                Some(g) => {
+                    let dpi = if g.dpi > 0 { f64::from(g.dpi) } else { 96.0 };
+                    let to_logical =
+                        |physical: i32| (f64::from(physical) * 96.0 / dpi).round() as i32;
+                    (
+                        to_logical(g.content[0]),
+                        to_logical(g.content[1]),
+                        to_logical(g.content[2].saturating_sub(g.content[0])),
+                        to_logical(g.content[3].saturating_sub(g.content[1])),
+                        Some(g.origin.clone()),
+                        Some(g.dpi),
+                    )
+                }
+                None => (
+                    box_data.position[0] as i32,
+                    box_data.position[1] as i32,
+                    box_data.size[0] as i32,
+                    box_data.size[1] as i32,
+                    box_data.monitor.clone(),
+                    None,
+                ),
+            };
+
             let params = GridCreateParams {
                 id: i,
                 title: box_data.name.clone(),
-                x: box_data.position[0] as i32,
-                y: box_data.position[1] as i32,
-                width: box_data.size[0] as i32,
-                height: box_data.size[1] as i32,
+                x,
+                y,
+                width,
+                height,
                 items,
                 view_mode: box_data.view_mode.clone(),
                 locked: box_data.locked,
@@ -368,6 +399,8 @@ impl TauriRuntime {
                 edit_box_callback: Some(crate::tauri_commands::box_cmd::edit_box_callback(
                     app.clone(),
                 )),
+                monitor_hint,
+                monitor_dpi_hint,
             };
 
             match create_grid_window(params) {

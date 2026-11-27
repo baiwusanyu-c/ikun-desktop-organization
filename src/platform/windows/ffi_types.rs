@@ -194,12 +194,19 @@ pub const WM_WINDOWPOSCHANGED: u32 = 0x0047;
 pub const WM_ENTERSIZEMOVE: u32 = 0x0231;
 pub const WM_EXITSIZEMOVE: u32 = 0x0232;
 pub const WM_MOVING: u32 = 0x0216;
+/// 显示器拓扑/分辨率变化广播（热插拔、关屏后发给全部顶层窗口）。
+///
+/// 拔屏瞬间系统**不会**给滞留窗口发位置消息，分类框必须在本消息后
+/// 防抖对账（见 `display_reconcile`），否则框会消失在已不存在的坐标区。
+pub const WM_DISPLAYCHANGE: u32 = 0x007E;
 pub const WM_SIZING: u32 = 0x0214;
 pub const TIMER_ID_ALIGNMENT: usize = 0x4F56_0003;
 // 0x4F56_0004 / 0x4F56_0006：覆盖层悬停/框选定时器 ID，随 2026-11 自检审计
 // 删除孤儿 desktop_overlay 模块一并移除；编号保留占位说明，勿复用。
 /// 分类框液态玻璃刷新定时器（约 30 FPS）
 pub const TIMER_ID_LIQUID_GLASS: usize = 0x4F56_0005;
+/// 显示器变化对账防抖定时器（WM_DISPLAYCHANGE 落定后搬移滞留框 / 搬回）
+pub const TIMER_ID_MONITOR_RECONCILE: usize = 0x4F56_0007;
 
 // ===== Hit Test Constants =====
 pub const HTCLIENT: i32 = 1;
@@ -386,6 +393,19 @@ pub struct MONITORINFO {
     pub rcMonitor: RECT,
     pub rcWork: RECT,
     pub dwFlags: u32,
+}
+
+/// Win32 MONITORINFOEXW 结构体（比 MONITORINFO 多设备名，头部布局兼容）。
+///
+/// `GetMonitorInfoW` 直接接受本结构的指针（先置 `cb_size`），用于读取
+/// 显示器设备名，支撑分类框的「归属屏身份」记账。
+#[repr(C)]
+pub struct MONITORINFOEXW {
+    pub cb_size: u32,
+    pub rc_monitor: RECT,
+    pub rc_work: RECT,
+    pub dw_flags: u32,
+    pub sz_device: [u16; 32],
 }
 
 /// Win32 TRACKMOUSEEVENT 结构体（用于 WM_MOUSELEAVE 跟踪）
@@ -695,6 +715,9 @@ pub const WM_USER_GLASS_FOCUS: u32 = WM_APP + 26;
 /// 玻璃引擎重建完成广播：各分类框重新发布命中几何、失效内容缓存并向新块
 /// 重推全量内容（2026-11-04 自检审计 P1：重建/复活后状态不恢复）。
 pub const WM_USER_GLASS_REBUILT: u32 = WM_APP + 27;
+/// 显示器拓扑变化广播（玻璃引擎线程 → 各分类框窗口线程）：
+/// 在线程内防抖执行「拔屏等比重定位 / 重连自动搬回」对账。
+pub const WM_USER_DISPLAY_RECONCILE: u32 = WM_APP + 31;
 /// 鼠标按键状态标志（合成消息 wparam 用，与 Win32 MK_* 同值）
 pub const MK_LBUTTON: usize = 0x0001;
 pub const MK_RBUTTON: usize = 0x0002;

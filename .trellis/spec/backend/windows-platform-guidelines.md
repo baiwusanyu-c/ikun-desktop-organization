@@ -107,6 +107,53 @@ Before implementing layered window features:
 
 ---
 
+## 显示器热插拔与归属屏身份（2026-11-27 拔屏重定位定案）
+
+### 触发与线程
+
+- 拔屏 / 关屏瞬间系统**不给滞留窗口发位置消息**：`WM_WINDOWPOSCHANGED`
+  类自愈吸附不会被触发，必须监听 `WM_DISPLAYCHANGE`（广播到每个顶层窗口）
+  并防抖对账（`display_reconcile`，500ms 首轮 + 1.5s 确认拍，最多 2 拍）。
+- `monitor_utils::get_monitor_rects` 的 TTL 缓存是 **thread_local**：
+  引擎线程 `invalidate_monitor_rects_cache()` 覆盖不到窗口线程，
+  对账 tick 必须在自己线程先失效再枚举。
+- 对账搬动只允许发生在分类框自己的窗口线程（跨线程 SetWindowPos 历史前科）。
+
+### 归属屏身份（每框一份，随配置持久化）
+
+- `BoxLayoutData.monitor`：`{ device, rect, rel[x,y], relocated }`。
+  `device` 为 `\\.\DISPLAYn`；`rel` 只存**位置**比例（尺寸不落盘，见下）。
+- 身份匹配（`box_core::monitor_remap::origin_matches`）：几何 IoU>=0.75，
+  或 设备名相同且（分辨率相同 | 屏原点相同）；设备名可能被 Windows
+  复用/重排，禁止只凭设备名认定「同一块屏」。
+- 尺寸口径：位置按屏内比例、尺寸保持 **96 逻辑基准**（目标物理 =
+  当前物理 x 目标DPI/当前窗口DPI），与手工跨屏拖拽 `WM_DPICHANGED` 同构；
+  装不下按长宽比等比缩。玻璃下限常量与 `glass_engine::glass_resize_floor`
+  同源（`monitor_remap::GLASS_MIN_LOGICAL_*`，有测试钉死）。
+- 用户驱动几何稳定（建窗 / 玻璃会话收尾 / `WM_EXITSIZEMOVE`）必须
+  `adopt_current_monitor` 重新收养归属并清除 relocated（手动挪 = 接受当前落位）；
+  程序化对账搬动不得走收养路径。
+
+### DPI 换算唯一真源（双重换算防线，2026-11-27 两轮复测定案）
+
+- 跨 DPI 搬框的尺寸换算**只允许由 `display_reconcile::apply_relocation` 做一次**：
+  目标物理尺寸 = `box_core::monitor_remap::target_physical_size(cur_phys, cur_dpi, target_dpi)`
+  （逻辑口径保持，与手工拖框的 `WM_DPICHANGED` 语义同构）。
+- 搬窗前必须写 `GridWindowData.dpi_suppress_until_ms / dpi_suppress_dpi`（1s 窗口），
+  `WM_DPICHANGED` handler 用 `consume_dpi_suppress(hwnd, new_dpi)` 命中即消费：
+  抑制期内只更新 `render_padding` / `update_dcomp_scale` / 重绘，**不得**再按
+  系统建议矩形改尺寸。违反 = 复测过的「拔屏后变小 / 搬回又减半」回归。
+- 错误矩阵：
+  | 场景 | 错误做法 | 正确做法 |
+  |---|---|---|
+  | 对账搬框跨 DPI | 预换算尺寸后不管系统消息 | 预换算 + 抑制窗口消费一次 |
+  | 手工拖框跨 DPI | 走抑制逻辑 | 正常 `WM_DPICHANGED` 路径（无抑制标记） |
+  | SetWindowPos 失败 | 照常推进 relocated | `apply_relocation` 返回 None，撤销抑制、不推状态机 |
+- 验证测试（必保持全绿）：`plan_relocate_scales_size_by_target_dpi_logical_baseline`、
+  `size_follows_logical_baseline_across_dpi`、`glass_min_constants_track_resize_floor`、
+  `reconcile_timer_converges_within_max_passes`、`plan_settled_keeps_home_and_marks_waiting_when_system_rescued_box`、
+  `plan_does_not_return_home_after_user_readopted_primary`。
+
 ## Window Message Handling
 
 ### Coordinate Systems

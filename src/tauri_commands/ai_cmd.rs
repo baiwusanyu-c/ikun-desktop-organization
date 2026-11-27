@@ -274,6 +274,9 @@ fn create_classified_boxes(
             edit_box_callback: Some(crate::tauri_commands::box_cmd::edit_box_callback(
                 app.clone(),
             )),
+            // AI 分类新建框无历史归属：建窗收尾自动收养当前所在屏
+            monitor_hint: None,
+            monitor_dpi_hint: None,
         };
 
         if let Err(e) = create_grid_window(params) {

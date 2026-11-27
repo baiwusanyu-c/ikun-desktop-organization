@@ -22,6 +22,9 @@ pub mod config_writeback;
 mod d2d_render;
 pub mod desktop_manager;
 pub mod desktop_utils;
+/// 显示器对账（拔屏等比重定位 / 重连自动搬回，2026-11-27）：
+/// 对账动作跑在各分类框窗口线程，`plan_restore` 供启动恢复（tauri_commands）使用。
+pub(crate) mod display_reconcile;
 pub mod drag_drop;
 pub mod drag_handler;
 mod drag_image;

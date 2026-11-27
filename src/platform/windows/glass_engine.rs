@@ -1501,8 +1501,13 @@ pub fn poll_events_to_log() {
                 log::info!("显示器集合变化，画布与采集已重建，显示器数量: {monitor_count}");
                 // 热插拔后宿主的显示器矩形缓存必须立即作废，
                 // 否则跨屏吸附会按旧屏集合把分类框摆到已经不存在的屏上。
+                // 注意这是 runtime 线程的 thread_local，窗口线程的缓存由
+                // 对账 tick 自己失效。
                 super::monitor_utils::invalidate_monitor_rects_cache();
                 press_canvas_bottom();
+                // 广播各分类框在窗口线程做显示器对账：拔掉副屏后滞留在消失
+                // 坐标区的框必须被等比重定位回在岗屏（2026-11-27 用户报）。
+                super::grid_window::notify_display_changed_all();
             }
             EngineEvent::WindowCreated { id } => {
                 log::debug!("玻璃块已创建: id={id}");

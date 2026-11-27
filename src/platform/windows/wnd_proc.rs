@@ -45,6 +45,12 @@ thread_local! {
     static PROPOSED_Y: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
 }
 
+/// 当前窗口线程是否处于系统模态移动/缩放会话（`WM_ENTERSIZEMOVE` 到
+/// `WM_EXITSIZEMOVE`）。显示器对账必须让位，不能抢模态循环的几何真值。
+pub(crate) fn user_move_resize_in_progress() -> bool {
+    IN_DRAG.with(std::cell::Cell::get)
+}
+
 /// `RECT`（本仓库自持的 FFI 定义）既非 `Copy` 也非 `Clone`，需要显式逐字段抄一份，
 /// 否则一次传借用后就没法再复用（避免为此改动跨模块共用的 FFI 类型派生）。
 #[must_use]
@@ -586,9 +592,34 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             0
         }
 
+        // ===== 显示器拓扑变化（热插拔 / 关屏 / 分辨率改动）=====
+        //
+        // 拔屏瞬间系统不会给「滞留在消失坐标区」的窗口发位置消息，既有的
+        // WM_WINDOWPOSCHANGED 自愈吸附永远不会触发（2026-11-27 用户报
+        // 「关掉副屏后副屏上的分类框不可见、无法操控」）。必须在本消息后
+        // 防抖对账：滞留框等比重定位到最近在岗屏；归属屏重连则自动搬回。
+        // 每个分类框只搬自己（thread_local 缓存失效也必须发生在窗口线程），
+        // 因此不存在跨线程 SetWindowPos。
+        WM_DISPLAYCHANGE => {
+            super::display_reconcile::schedule_reconcile(hwnd);
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+
         // ===== DPI 变化（跨显示器移动）=====
         WM_DPICHANGED => {
             let new_dpi = (wparam & 0xFFFF) as u32;
+            // 对账搬动抑制窗口（见 display_reconcile::apply_relocation）：尺寸已由
+            // 宿主按目标 DPI 换算一次，这里不得再按系统建议矩形二次缩放，
+            // 只刷 DPI 口径与重绘（2026-11-27 二次复测「双重换算」修正）。
+            if super::display_reconcile::consume_dpi_suppress(hwnd, new_dpi) {
+                if let Some(data) = get_data(hwnd) {
+                    data.render_padding = shadow_padding_for_dpi(new_dpi);
+                }
+                super::grid_window::update_dcomp_scale(hwnd);
+                render_layered_window(hwnd);
+                log::debug!("DPI 变化 {new_dpi}：属对账跨屏搬动，尺寸已由宿主换算，跳过建议矩形");
+                return 0;
+            }
             log::info!("DPI 变化: {} → 重新计算布局", new_dpi);
             let suggested_rect = lparam as *const RECT;
             let suggested_outer_w = unsafe { (*suggested_rect).right - (*suggested_rect).left };
@@ -1619,6 +1650,16 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             0
         }
 
+        // ===== 显示器拓扑变化广播（玻璃引擎线程 → 窗口线程）=====
+        //
+        // 引擎轮询 MonitorsChanged 跑在 runtime 线程，它的 thread_local 矩形缓存
+        // 失效覆盖不到窗口线程；转发到这里与 WM_DISPLAYCHANGE 同入口防抖对账
+        // （两条腿互为兜底，重复触发幂等无害）。
+        WM_USER_DISPLAY_RECONCILE => {
+            super::display_reconcile::schedule_reconcile(hwnd);
+            0
+        }
+
         // ===== 库 FocusHint 转发：同线程 SetFocus（代理窗全透明但可见，合法可聚焦）=====
         WM_USER_GLASS_FOCUS => {
             // 例外：这次按压已经把焦点交给了模态 UI（三点菜单 / 图标就地重命名）。
@@ -1843,6 +1884,10 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             if wparam == TIMER_ID_ALIGNMENT {
                 super::alignment_guide::on_alignment_timer(hwnd);
             }
+            // 显示器变化对账 tick（防抖首轮 / 1.5s 复查轮，幂等，见 display_reconcile）
+            if wparam == TIMER_ID_MONITOR_RECONCILE {
+                super::display_reconcile::on_reconcile_timer(hwnd);
+            }
             0
         }
         // ===== 捕获丢失处理：纯清理兆底 =====
@@ -1995,6 +2040,10 @@ pub(super) unsafe extern "system" fn grid_wnd_proc(
             IN_DRAG.set(false);
             IN_MOVE.set(false); // 重置移动标记
             super::alignment_guide::on_exit_size_move(hwnd);
+            // 用户驱动的拖拽/缩放收尾：重新收养归属屏（回退模式路径；
+            // 玻璃模式在会话收尾里做）。手动挪动即代表接受当前落位，
+            // 同时清除「拔屏暂搬、待重连搬回」标记。必须在 save_config 之前。
+            super::display_reconcile::adopt_current_monitor(hwnd);
             // Save layout after move/resize
             super::drag_handler::save_config();
             0

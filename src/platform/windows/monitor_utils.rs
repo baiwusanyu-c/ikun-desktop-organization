@@ -84,6 +84,100 @@ pub fn get_monitor_rects() -> Vec<(i32, i32, i32, i32)> {
     rects
 }
 
+/// 枚举全部在岗显示器：（设备名, 完整矩形）。低频对账/恢复路径专用。
+///
+/// 设备名作为「归属屏是否回归」的判据之一；拔插 / 拓扑变化后
+/// Windows 可能复用或重排该名字，调用方必须同时校验几何（见
+/// `box_core::monitor_remap::origin_matches`）。本函数**不走 TTL 缓存**，
+/// 返回实时拓扑：`WM_DISPLAYCHANGE` 对账需要即时的屏集合。
+/// 枚举失败返回空表，调用方按「拓扑暂不稳定」延后重试。
+#[must_use]
+pub fn get_monitors_named() -> Vec<(String, (i32, i32, i32, i32))> {
+    unsafe extern "system" fn collect(
+        hmonitor: HMONITOR,
+        _hdc: HDC,
+        _rect: *mut RECT,
+        data: LPARAM,
+    ) -> i32 {
+        let list = &mut *(data as *mut Vec<(String, (i32, i32, i32, i32))>);
+        let mut info = MONITORINFOEXW {
+            cb_size: std::mem::size_of::<MONITORINFOEXW>() as u32,
+            rc_monitor: RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            },
+            rc_work: RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            },
+            dw_flags: 0,
+            sz_device: [0u16; 32],
+        };
+        let ok = GetMonitorInfoW(
+            hmonitor,
+            &mut info as *mut MONITORINFOEXW as *mut MONITORINFO,
+        );
+        if ok != 0 {
+            let r = info.rc_monitor;
+            let w = r.right.saturating_sub(r.left);
+            let h = r.bottom.saturating_sub(r.top);
+            if w > 0 && h > 0 {
+                let end = info
+                    .sz_device
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(info.sz_device.len());
+                let device = String::from_utf16_lossy(&info.sz_device[..end]);
+                list.push((device, (r.left, r.top, w, h)));
+            }
+        }
+        1
+    }
+
+    let mut out: Vec<(String, (i32, i32, i32, i32))> = Vec::new();
+    let ok = unsafe {
+        EnumDisplayMonitors(
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            Some(collect),
+            &mut out as *mut Vec<(String, (i32, i32, i32, i32))> as LPARAM,
+        )
+    };
+    if ok == 0 {
+        log::warn!("带设备名的显示器枚举失败，本轮对账按「拓扑暂不稳定」处理");
+        return Vec::new();
+    }
+    out
+}
+
+/// 枚举带身份信息的在岗显示器（设备名 + 屏矩形 + DPI），对账 / 启动恢复的直接输入。
+///
+/// 低频路径（`WM_DISPLAYCHANGE` 对账拍、`restore_layout`），不做缓存；
+/// DPI 取屏中心点的 effective DPI（`GetDpiForMonitor`），非法屏兜底 96。
+#[must_use]
+pub fn get_live_monitors() -> Vec<crate::box_core::monitor_remap::LiveMonitor> {
+    get_monitors_named()
+        .into_iter()
+        .map(|(device, bounds)| {
+            let (x, y, w, h) = bounds;
+            let dpi = if w > 0 && h > 0 {
+                dpi_at_screen_point(x.saturating_add(w / 2), y.saturating_add(h / 2))
+            } else {
+                96
+            };
+            crate::box_core::monitor_remap::LiveMonitor {
+                device,
+                bounds,
+                dpi,
+            }
+        })
+        .collect()
+}
+
 /// 让显示器矩形缓存立即失效（显示器集合变化 / DPI 结构调整时调用）。
 pub fn invalidate_monitor_rects_cache() {
     thread_local! {
@@ -423,6 +517,22 @@ mod tests {
         assert_eq!(once.0.top, twice.0.top, "吸附必须幂等");
         assert_eq!(once.0.right - once.0.left, 600, "只改位置不改宽");
         assert_eq!(once.0.bottom - once.0.top, 500, "只改位置不改高");
+    }
+
+    #[test]
+    fn monitors_named_is_non_empty_with_valid_rects() {
+        let list = get_monitors_named();
+        assert!(!list.is_empty(), "在岗显示器枚举不应为空");
+        assert!(
+            list.iter().all(|(_, (_, _, w, h))| *w > 0 && *h > 0),
+            "设备名枚举返回的显示器宽高必须为正"
+        );
+        // 与无设备名枚举口径一致（同一拓扑的屏数相同）
+        assert_eq!(
+            list.len(),
+            get_monitor_rects().len(),
+            "两种枚举路径的屏数应一致"
+        );
     }
 
     #[test]

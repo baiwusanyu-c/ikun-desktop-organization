@@ -1412,3 +1412,146 @@ CI 严格 clippy 组合零告警（强制 `Checking` 复跑）、`cargo build` �
 顺手修掉两处中文错字（复楠 -> 复验）。
 
 **归属不变：仍然不需要改 `liquid-verre-rs`** —— 这条完全在宿主 overlay 的几何里。
+
+## Session 13: 修复：拔掉副屏后分类框丢失（等比重定位+重连自动搬回）
+
+**Date**: 2026-11-27
+**Task**: 修复：拔掉副屏后分类框丢失（等比重定位+重连自动搬回）
+**Branch**: `master`
+
+### Summary
+
+新增 box_core/monitor_remap 纯映射 + platform/windows/display_reconcile 对账编排；WM_DISPLAYCHANGE 防抖重定位、重连自动搬回、持久化显示器身份（serde 兼容）；fmt/clippy/test 全绿（573），未提交
+
+### Main Changes
+
+# 会话：拔屏分类框等比重定位 + 重连自动搬回（2026-11-27）
+
+## 任务
+
+`.trellis/tasks/11-27-fix-monitor-unplug-box-relocation`
+
+用户报：多屏下关掉副屏后，副屏上的分类框不可见、不可操控。要求等比例映射到
+主屏对应位置（允许重叠），并确认了「副屏重连后自动搬回」。
+
+## 根因
+
+- 全项目无 `WM_DISPLAYCHANGE` 处理；玻璃引擎 MonitorsChanged 只失效缓存 + 压层，
+  不搬框；拔屏瞬间系统不给滞留窗口发位置消息，所有既有吸附自愈全部失效。
+- `BoxLayoutData` 无显示器身份（11-26 任务预留遗留项）。
+
+## 实现（14 个文件）
+
+- `src/box_core/monitor_remap.rs`（新）：MonitorOrigin{device,rect,rel[x,y]}、
+  to/from_relative、target_physical_size（逻辑口径换算）、origin_matches
+  （IoU>=0.75 或 设备名+分辨率/原点）、plan_for_box（Skip/Settled/ReturnHome/
+  Relocate/Snap 五分支纯决策）、config 双向 From。16 项单测。
+- `src/platform/windows/display_reconcile.rs`（新）：窗口线程对账编排
+  （schedule 防抖 500ms + 1.5s 确认拍最多 2 拍；busy 让位不消耗拍）、
+  apply_relocation（保列数重采样 + 目标屏宽度钳制 + 玻璃 push + 全量重绘）、
+  adopt_current_monitor（用户几何稳定收养）、plan_restore（启动恢复按屏身份，
+  离岗屏保留 relocated=true 等待搬回）。含与 glass_resize_floor 的同源常量测试。
+- `wnd_proc.rs`：WM_DISPLAYCHANGE / WM_TIMER(TIMER_ID_MONITOR_RECONCILE) /
+  WM_USER_DISPLAY_RECONCILE / WM_EXITSIZEMOVE 收养 + user_move_resize_in_progress。
+- `grid_window.rs`：GridWindowData.monitor_origin/monitor_relocated/reconcile_pass；
+  GridCreateParams.monitor_hint/monitor_dpi_hint；collect_grid_layout 落盘 monitor；
+  玻璃会话两收尾 adopt；notify_display_changed_all。
+- `glass_engine.rs`：MonitorsChanged → 广播窗口线程对账。
+- `monitor_utils.rs`：get_monitors_named（MONITORINFOEXW 设备名）+ get_live_monitors（含 DPI）。
+- `ffi_types.rs`：WM_DISPLAYCHANGE / TIMER_ID_MONITOR_RECONCILE /
+  WM_USER_DISPLAY_RECONCILE / MONITORINFOEXW。
+- `app_config.rs`：BoxMonitorOrigin + BoxLayoutData.monitor（serde default 向后兼容，
+  roundtrip + 缺省字段测试）。
+- `platform_runtime.rs`：restore_layout 经 plan_restore 映射（含 DPI hint）。
+
+## 关键决策
+
+- 不按屏拆分 boxes 列表；每框记「显示器身份 + 屏内位置比例」。
+- 尺寸保持 96 逻辑口径（目标物理 = 当前 x 目标DPI/当前DPI），与手工跨屏拖拽
+  WM_DPICHANGED 同构；仅装不下时按长宽比等比缩。
+- 自动搬回可被用户手动挪动取消（会话收尾收养即清 relocated）。
+- 拔屏期间重启、重启后接屏：启动恢复天然完成搬回（relocated 持久化）。
+
+## 验证
+
+- cargo fmt --check：通过；CI 严格 clippy 组合：通过；
+- cargo test：573 全绿（新增 16 纯逻辑测试 + 常量同源测试 + serde 兼容测试）。
+- 待实机验收：拔屏 ≤1s 等比重定位；重连自动搬回；滞留期间手动拖框取消搬回；
+  拔屏重启恢复；192/96 DPI 组合不重排图标；玻璃/回退双路径块=命中层=内容对齐。
+
+## 提交状态
+
+- 未 commit（红线：等用户明确指令）。工作区改动完整保留。
+
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 14: 拔屏重定位两轮复测修复（双重DPI换算/系统救援污染）+ 三维自检
+
+**Date**: 2026-11-27
+**Task**: 拔屏重定位两轮复测修复（双重DPI换算/系统救援污染）+ 三维自检
+**Branch**: `master`
+
+### Summary
+
+修复双重DPI换算（抑制窗口）与系统救援归属污染（保留原屏身份）；确认主屏手动挪动取消搬回语义并补回归测试；fmt/clippy/test 575 全绿；未提交
+
+### Main Changes
+
+# 会话14：拔屏重定位两轮复测修复 + 三维自检（2026-11-27）
+
+## 缺陷轮1（用户复测：尺寸异常 + 重连不搬回）
+- 根因A：apply_relocation 预换算与系统 WM_DPICHANGED 建议矩形双重换算叠加。
+  修复=换算只由对账层做一次 + dpi_suppress_* 抑制窗口（1s，consume_dpi_suppress 命中即清）。
+- 根因B：Win11 拔线自动救援把框放上主屏，对账 Settled 误收养新屏、丢原屏身份 → 永不搬回。
+  修复=plan_for_box fits 分支「origin 不在岗」保留身份 + relocated=true；用户会话收尾 adopt 才可改判。
+- 环境坑：RUST_LOG=warn 继承导致 INFO 日志缺失，排障需干净环境启动。
+- 用户复测通过（位置等比正确、大小视觉一致、重连搬回正常）。
+
+## 需求再确认
+- 用户明确：拔屏后若在主屏主动挪动过某框，重连不搬回该框（= adopt 清 relocated 语义，
+  已补回归测试 plan_does_not_return_home_after_user_readopted_primary）。
+
+## 三维自检（本会话）
+- 过度设计检查：无新增冗余（各分支均映射真实 Windows 行为）；日志文案 moved=false 改为
+  「系统救援已落位，标记待搬回」。
+- Rust 实践：saturating/i64/i128、0 生产 unwrap、#[must_use]、MONITORINFOEXW 兼容指针惯例、
+  f32 比较仅限幂等记账。
+- 架构符合性：box_core 纯逻辑、窗口线程执行、写回唯一入口、玻璃契约让位。
+- 残留风险（记入 PRD）：cur_dpi 竞态 / monitor_dpi_hint 理论漂移 / 抑制 1s 残留。
+
+## 门禁
+- cargo fmt --check ✅ CI 严格 clippy ✅ cargo test 575 全绿 ✅
+- 未 commit（红线，等用户指令）。
+
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

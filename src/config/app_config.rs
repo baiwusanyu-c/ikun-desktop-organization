@@ -957,6 +957,32 @@ pub struct BoxLayoutData {
     pub grid_positions: Vec<[i32; 2]>,
     /// 此框样式覆盖（None = 使用全局 box_style 默认值）
     pub style_overrides: Option<BoxStyleOverrides>,
+    /// 归属显示器身份（设备名 + 记录时屏矩形 + 屏内比例位置 + 待搬回标记）。
+    ///
+    /// 支撑「拔副屏后分类框等比重定位 / 重连自动搬回 / 启动恢复落屏」
+    /// （2026-11-27）。None = 历史配置或身份未知，按绝对坐标 + 吸附兜底恢复。
+    #[serde(default)]
+    pub monitor: Option<BoxMonitorOrigin>,
+}
+
+/// 分类框的归属显示器身份（持久化形态）。
+///
+/// 字段语义与 `box_core::monitor_remap::MonitorOrigin` 一致：
+/// - `device`：Win32 显示器设备名，空 = 未知（仅按几何匹配）；
+/// - `rect`：记录时归属屏完整矩形 `[x, y, w, h]`（虚拟桌面物理像素）；
+/// - `rel`：框在屏内的比例位置 `[x, y]`（0.0..=1.0，等比映射的载荷）；
+/// - `relocated`：归属屏已被拔掉、框暂搬在别的在岗屏，重连后应自动搬回。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct BoxMonitorOrigin {
+    /// 显示器设备名（空 = 未知）
+    pub device: String,
+    /// 记录时归属屏完整矩形 [x, y, w, h]（虚拟桌面物理像素）
+    pub rect: [i32; 4],
+    /// 框在归属屏内的比例位置 [x, y]
+    pub rel: [f32; 2],
+    /// 归属屏不在岗、框被暂搬（等待自动搬回）
+    pub relocated: bool,
 }
 
 impl Default for BoxLayoutData {
@@ -975,6 +1001,7 @@ impl Default for BoxLayoutData {
             display_names: Vec::new(),
             grid_positions: Vec::new(),
             style_overrides: None,
+            monitor: None,
         }
     }
 }
@@ -1457,6 +1484,12 @@ mod tests {
             display_names: vec!["程序A".to_string(), "程序B".to_string()],
             grid_positions: Vec::new(),
             style_overrides: None,
+            monitor: Some(BoxMonitorOrigin {
+                device: "\\\\.\\DISPLAY2".to_string(),
+                rect: [1920, 0, 2560, 1440],
+                rel: [0.03125, 0.0694],
+                relocated: true,
+            }),
         };
 
         let json = serde_json::to_string(&layout).unwrap();
@@ -1471,6 +1504,16 @@ mod tests {
         assert_eq!(parsed.view_mode, ViewMode::Large);
         assert_eq!(parsed.group_by, GroupBy::Name);
         assert_eq!(parsed.icon_names.len(), 2);
+        assert_eq!(
+            parsed.monitor, layout.monitor,
+            "归属屏身份与 relocated 标记必须完整 roundtrip"
+        );
+    }
+
+    #[test]
+    fn test_box_monitor_origin_missing_fields_use_default() {
+        let monitor: BoxMonitorOrigin = serde_json::from_str("{}").unwrap();
+        assert_eq!(monitor, BoxMonitorOrigin::default());
     }
 
     // ---- 部分 JSON 容错（serde default）----
@@ -1651,6 +1694,7 @@ mod tests {
             display_names: vec!["测试".to_string(), "控制面板".to_string()],
             grid_positions: Vec::new(),
             style_overrides: None,
+            monitor: None,
         };
 
         let json = serde_json::to_string(&layout).unwrap();
@@ -1684,6 +1728,10 @@ mod tests {
             "旧配置应默认 display_names 为空"
         );
         assert_eq!(parsed.icon_names.len(), 1);
+        assert!(
+            parsed.monitor.is_none(),
+            "旧配置缺少 monitor 字段时必须默认 None"
+        );
     }
 }
 

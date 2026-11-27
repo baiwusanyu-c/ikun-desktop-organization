@@ -129,6 +129,17 @@ pub struct GridCreateParams {
     pub config_id: uuid::Uuid,
     /// 编辑分类框回调函数（双击标题栏时调用）
     pub edit_box_callback: Option<Box<dyn Fn(uuid::Uuid, &str) + Send + Sync>>,
+    /// 归属显示器提示（启动恢复专用，2026-11-27 拔屏重定位）。
+    ///
+    /// Some = 按持久化身份落地归属记账（relocated 时保留「待重连自动搬回」语义，
+    /// 不做在岗屏收养）；None = 新建框 / 历史配置，建窗完成后收养当前所在屏。
+    pub monitor_hint: Option<crate::config::BoxMonitorOrigin>,
+    /// 目标显示器 DPI 提示（启动恢复专用）。
+    ///
+    /// 恢复坐标是「物理像素 → 96 基准逻辑像素」得到的目标屏位置，建窗时必须
+    /// 用同一目标屏 DPI 缩回物理像素；若改用初始落点窗口的 DPI，副屏在右侧且
+    /// 跨 DPI 时会先落回主屏，导致恢复位置整体漂移。
+    pub monitor_dpi_hint: Option<u32>,
 }
 
 /// 格子窗口内部数据（存储在 GWLP_USERDATA）
@@ -421,6 +432,30 @@ pub(crate) struct GridWindowData {
     /// 紧接着用**陈旧窗口矩形**把块推回去，就会与库的会话锚点互相拉扯 ——
     /// 表现为「拖左边缘变小时，右边缘一路向右漂」。
     pub(crate) glass_session_ended_at: u64,
+
+    // ===== 归属显示器身份（2026-11-27 拔屏重定位 / 重连自动搬回）=====
+    /// 归属屏身份（设备名 + 记录时屏矩形 + 屏内比例位置）。
+    ///
+    /// 在「几何稳定时刻」写入：建窗收尾、用户拖拽/缩放会话收尾、显示器对账。
+    /// 拔屏时对账按它的屏内比例把框等比映射回在岗屏；归属屏回归时按它自动搬回。
+    /// 详见 `box_core::monitor_remap` 与 `display_reconcile`。
+    pub(crate) monitor_origin: Option<crate::box_core::monitor_remap::MonitorOrigin>,
+    /// 归属屏已被拔掉、框暂搬在别的在岗屏（true = 等待重连自动搬回）。
+    ///
+    /// 用户滞留期间手动拖动过分类框（会话收尾重新收养）即置 false：
+    /// 用户已接受当前落位，不再自动搬回。
+    pub(crate) monitor_relocated: bool,
+    /// 显示器对账拍数（首轮防抖 + 一次 1.5s 复查；新事件清零）。
+    pub(crate) reconcile_pass: u8,
+    /// 对账搬动的「DPI 再换算抑制窗口」截止时间（单调毫秒，0 = 无抑制）。
+    ///
+    /// `display_reconcile::apply_relocation` 跨 DPI 搬窗时**自己**已把尺寸换算到
+    /// 目标屏口径；同一次 SetWindowPos 系统还会同步发 WM_DPICHANGED，若再按
+    /// 建议矩形重缩就双重换算（2026-11-27 复测「拔屏后变小 / 搬回再减半」根因）。
+    /// 抑制窗口内该消息只更新 DPI 口径、不改几何尺寸。
+    pub(crate) dpi_suppress_until_ms: u64,
+    /// 抑制窗口针对的目标 DPI（与 WM_DPICHANGED 的 new_dpi 精确匹配才消费）。
+    pub(crate) dpi_suppress_dpi: u32,
 }
 
 unsafe impl Send for GridWindowData {}
@@ -559,6 +594,11 @@ impl GridWindowData {
             cross_dpi_fix_ms: 0,
             glass_diag_at: 0,
             glass_session_ended_at: 0,
+            monitor_origin: None,
+            monitor_relocated: false,
+            reconcile_pass: 0,
+            dpi_suppress_until_ms: 0,
+            dpi_suppress_dpi: 0,
         }
     }
 }
@@ -698,7 +738,10 @@ static CLASS_NAME: &[u16] = &[
 ]; // "DesktopOrgGrid"
 
 fn ensure_class_registered() -> HINSTANCE {
-    let mut registered = CLASS_REGISTERED.lock().unwrap();
+    let mut registered = CLASS_REGISTERED.lock().unwrap_or_else(|poisoned| {
+        log::warn!("窗口类注册锁中毒，恢复内部状态后继续建窗");
+        poisoned.into_inner()
+    });
     let hinstance = unsafe { GetModuleHandleW(std::ptr::null()) };
 
     if !*registered {
@@ -829,12 +872,22 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         log::warn!("分类框捕获排除设置失败，液态玻璃可能出现递归画面: {error}");
     }
 
-    // 查询实际 DPI 并重新计算尺寸
-    let dpi = unsafe { GetDpiForWindow(hwnd) };
-    if dpi == 0 {
-        log::warn!("GetDpiForWindow 返回 0，使用默认 DPI 96");
-    }
-    let dpi = if dpi > 0 { dpi } else { 96 };
+    // 查询实际 DPI 并重新计算尺寸。启动恢复带目标屏 DPI 提示时必须优先使用：
+    // 初始窗口按 96 基准逻辑坐标创建，位置可能暂时落在另一块屏上，直接取
+    // GetDpiForWindow 会把恢复坐标按错误 DPI 缩放（右侧高 DPI 副屏最常见）。
+    let dpi = if let Some(hinted_dpi) = params.monitor_dpi_hint.filter(|dpi| *dpi > 0) {
+        hinted_dpi
+    } else {
+        let dpi = unsafe { GetDpiForWindow(hwnd) };
+        if dpi == 0 {
+            log::warn!("GetDpiForWindow 返回 0，使用默认 DPI 96");
+        }
+        if dpi > 0 {
+            dpi
+        } else {
+            96
+        }
+    };
 
     let scaled_w = scale_for_dpi(params.width, dpi);
     let scaled_h = scale_for_dpi(params.height, dpi);
@@ -843,10 +896,8 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
     let shadow_padding = shadow_padding_for_dpi(dpi);
     // 建窗/恢复布局是几何源头：非法落点（显示器拔掉、上次被拖到屏外并落盘）
     // 必须在此吸附回「完整留在单块显示器内」，否则用户重启后看不到分类框。
-    // 已知遗留（不在本次范围）：`dpi` 取自建窗初始落点，而配置里存的是
-    // 「按保存时所在屏 DPI 折算的逻辑坐标」，跨 DPI 屏恢复时缩放基准可能与目标屏不符。
-    // 彻底修需把「显示器身份 + 屏内相对坐标」写进配置（已记入规范）；
-    // 本处吸附至少保证：无论基准怎么偏，框都不会落到所有屏之外。
+    // 启动恢复路径传入 `monitor_dpi_hint` 后，缩放基准与持久化目标屏一致；
+    // 历史配置仍按初始落点 DPI 折算，再由吸附兜底留在可见屏内。
     let content = super::monitor_utils::snap_content_rect_to_single_monitor(&RECT {
         left: scaled_x,
         top: scaled_y,
@@ -1006,6 +1057,16 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
         cross_dpi_fix_ms: 0,
         glass_diag_at: 0,
         glass_session_ended_at: 0,
+        // 启动恢复的归属提示（含「待搬回」标记）原样落地；无提示的普通新建
+        // 在注册到全局列表后收养「当前实际所在在岗屏」（见 create_grid_window 尾部）。
+        monitor_origin: params
+            .monitor_hint
+            .as_ref()
+            .map(crate::box_core::monitor_remap::MonitorOrigin::from),
+        monitor_relocated: params.monitor_hint.as_ref().is_some_and(|m| m.relocated),
+        reconcile_pass: 0,
+        dpi_suppress_until_ms: 0,
+        dpi_suppress_dpi: 0,
     });
     let data_ptr = Box::into_raw(data);
     unsafe {
@@ -1138,6 +1199,18 @@ pub fn create_grid_window(params: GridCreateParams) -> Result<HWND> {
             hwnd,
             id: params.id,
         });
+    }
+
+    // 5. 归属屏记账（2026-11-27 拔屏重定位）：带归属提示（启动恢复 / 跨屏搬回）
+    //    时保留提示值（可能携带「待重连搬回」语义，不得被在岗屏收养覆盖）；
+    //    新建框 / 历史配置收养「当前实际所在在岗屏」。
+    if params.monitor_hint.is_none() {
+        super::display_reconcile::adopt_current_monitor(hwnd);
+    } else {
+        // 启动恢复带 hint 时不能在建窗收尾直接收养（会覆盖 pending home），
+        // 但要安排一轮窗口线程复查：WM_DPICHANGED 可能在落位后再次调整几何，
+        // 或启动瞬间屏集尚未稳定。对账在 relocated=true 时会保留原屏身份。
+        super::display_reconcile::schedule_reconcile(hwnd);
     }
 
     log::info!(
@@ -2003,10 +2076,15 @@ fn poll_glass_hover(hwnd: HWND) {
 ///
 /// 只清 `content_valid` 不够：`submitted_glass` 还记着旧纹理已推送，
 /// 不一起复位会出现玻璃块已经换尺寸、前景仍按上一屏 DPI 拉伸。
-fn force_full_content_refresh(hwnd: HWND, data: &mut GridWindowData) {
-    data.content_valid = false;
-    data.submitted_glass = false;
-    data.content_last_render_ms = 0;
+///
+/// 借用纪律：这里自行读取并立即结束 data 借用，随后才调用渲染。渲染可能同步
+/// 重入 `wnd_proc`，绝不能让外部持有的 `&mut GridWindowData` 跨过这一步。
+pub(crate) fn force_full_content_refresh(hwnd: HWND) {
+    if let Some(data) = unsafe { get_data(hwnd) } {
+        data.content_valid = false;
+        data.submitted_glass = false;
+        data.content_last_render_ms = 0;
+    }
     super::d2d_render::render_layered_window(hwnd);
 }
 
@@ -2104,8 +2182,8 @@ fn follow_glass_session(hwnd: HWND) {
         }
         if let Some(fresh) = unsafe { get_data(hwnd) } {
             fresh.cross_dpi_fix_ms = super::glass_engine::now_ms();
-            force_full_content_refresh(hwnd, fresh);
         }
+        force_full_content_refresh(hwnd);
     }
     if should_move {
         unsafe {
@@ -2227,6 +2305,8 @@ pub(crate) fn end_glass_resize_session(hwnd: HWND) {
 
     let Some(raw) = raw_content else {
         super::alignment_guide::on_exit_size_move(hwnd);
+        // 用户驱动的会话收尾：重新收养归属屏（含「手动挪动即取消自动搬回」语义）
+        super::display_reconcile::adopt_current_monitor(hwnd);
         super::drag_handler::save_config();
         log::debug!("分类框退出库缩放会话（无块矩形），布局已持久化");
         return;
@@ -2295,12 +2375,11 @@ pub(crate) fn end_glass_resize_session(hwnd: HWND) {
         }
     }
     if ratio_drifted || content_moved || monitor_desynced {
-        let Some(data) = (unsafe { get_data(hwnd) }) else {
-            return;
-        };
-        force_full_content_refresh(hwnd, data);
+        force_full_content_refresh(hwnd);
     }
     super::alignment_guide::on_exit_size_move(hwnd);
+    // 用户驱动的会话收尾：重新收养归属屏（含「手动挪动即取消自动搬回」语义）
+    super::display_reconcile::adopt_current_monitor(hwnd);
     super::drag_handler::save_config();
     let mut end_outer = RECT {
         left: 0,
@@ -2349,6 +2428,16 @@ pub fn request_all_grid_windows_redraw() {
 /// 重建/复活后 ROUTES 几何与库纹理不恢复，玻璃块只剩底板）。
 pub fn notify_glass_rebuilt_all() {
     post_to_all_grid_windows(super::ffi_types::WM_USER_GLASS_REBUILT);
+}
+
+/// 广播「显示器拓扑变化」：各分类框在自己线程里防抖对账
+/// （拔屏滞留框等比重定位 / 归属屏重连自动搬回，2026-11-27）。
+///
+/// 只是触发入口：真正的对账在 `WM_DISPLAYCHANGE` / 本消息共用的防抖定时器里执行，
+/// 判据与写回都是幂等的，重复广播无害。玻璃引擎线程轮询到 `MonitorsChanged`
+/// 时从这里转发（thread_local 的矩形缓存失效必须在窗口线程自己做）。
+pub fn notify_display_changed_all() {
+    post_to_all_grid_windows(super::ffi_types::WM_USER_DISPLAY_RECONCILE);
 }
 
 /// 获取格子数量
@@ -2516,6 +2605,12 @@ pub fn collect_grid_layout() -> Vec<crate::config::BoxLayoutData> {
             display_names,
             grid_positions,
             style_overrides: None,
+            // 归属屏身份（含待搬回标记）：拔屏重定位 / 重连搬回 / 启动恢复的共同依据
+            monitor: data.monitor_origin.as_ref().map(|o| {
+                let mut m = crate::config::BoxMonitorOrigin::from(o);
+                m.relocated = data.monitor_relocated;
+                m
+            }),
         });
     }
 
@@ -2683,6 +2778,8 @@ mod tests {
             group_by: crate::config::app_config::GroupBy::None,
             config_id: uuid::Uuid::new_v4(),
             edit_box_callback: None,
+            monitor_hint: None,
+            monitor_dpi_hint: None,
         };
         assert!(params.locked);
 
@@ -2701,6 +2798,8 @@ mod tests {
             group_by: crate::config::app_config::GroupBy::None,
             config_id: uuid::Uuid::new_v4(),
             edit_box_callback: None,
+            monitor_hint: None,
+            monitor_dpi_hint: None,
         };
         assert!(!params2.locked);
     }
@@ -2723,6 +2822,8 @@ mod tests {
             group_by: crate::config::app_config::GroupBy::None,
             config_id: id,
             edit_box_callback: None,
+            monitor_hint: None,
+            monitor_dpi_hint: None,
         };
         assert_eq!(params.config_id, id);
         // 每个窗口应有独立的 UUID

@@ -181,6 +181,9 @@ pub fn create_box(
         group_by: config.box_defaults.group_by.clone(),
         config_id,
         edit_box_callback: Some(edit_box_callback(app)),
+        // 面板新建框无历史归属：建窗收尾自动收养当前所在屏
+        monitor_hint: None,
+        monitor_dpi_hint: None,
     })
     .map_err(|error| format!("创建分类框失败: {error}"))?;
 
