@@ -107,34 +107,54 @@ if (newVersion === oldVersion) fail(`Version is already ${oldVersion}, nothing t
 log(`Version: ${oldVersion} -> ${newVersion}`);
 
 // ---- File updates ----------------------------------------------------------
-function replaceInFile(relPath, replacer) {
+// 两阶段：先把所有替换算完并逐个校验命中，全部成功后才统一写盘。
+// 旧实现边算边写，Cargo.lock 一旦失配就 fail 退出，前面三个文件已经被改写，
+// 留下「版本号改了但没提交」的半改状态（2026-11-27 发 v0.1.0-beta.9 时实发踩中）。
+function eolOf(content) {
+  return content.includes("\r\n") ? "\r\n" : "\n";
+}
+
+const pending = [];
+function planReplace(relPath, replacer) {
   const fp = join(PROJECT_ROOT, relPath);
   const before = readFileSync(fp, "utf-8");
   const after = replacer(before);
-  if (after === before) fail(`Version string not found in ${relPath}`);
-  if (!opts.dryRun) writeFileSync(fp, after, "utf-8");
-  log(`  update ${relPath}`);
+  if (after === before) {
+    fail(
+      `Version string not found in ${relPath} (expected ${oldVersion} -> ${newVersion}). ` +
+        `No files were written; the working tree is untouched.`
+    );
+  }
+  pending.push({ fp, relPath, after });
 }
 
-replaceInFile("Cargo.toml", (c) =>
+planReplace("Cargo.toml", (c) =>
   c.replace(`version = "${oldVersion}"`, `version = "${newVersion}"`)
 );
-replaceInFile("tauri.conf.json", (c) =>
+planReplace("tauri.conf.json", (c) =>
   c.replace(`"version": "${oldVersion}"`, `"version": "${newVersion}"`)
 );
-replaceInFile("package.json", (c) =>
+planReplace("package.json", (c) =>
   c.replace(`"version": "${oldVersion}"`, `"version": "${newVersion}"`)
 );
-replaceInFile("Cargo.lock", (c) =>
-  c.replace(
-    `name = "ikun_organizer"\nversion = "${oldVersion}"`,
-    `name = "ikun_organizer"\nversion = "${newVersion}"`
-  )
-);
+// Cargo.lock 的换行符跟随文件实际风格：cargo 在 Windows 上可能写出 CRLF，
+// 硬编码 \n 会静默失配，正是上面那个半改状态的触发点。
+planReplace("Cargo.lock", (c) => {
+  const eol = eolOf(c);
+  return c.replace(
+    `name = "ikun_organizer"${eol}version = "${oldVersion}"`,
+    `name = "ikun_organizer"${eol}version = "${newVersion}"`
+  );
+});
 
 if (opts.dryRun) {
   log("Dry run: no files written, no commit/tag.");
   process.exit(0);
+}
+
+for (const { fp, relPath, after } of pending) {
+  writeFileSync(fp, after, "utf-8");
+  log(`  update ${relPath}`);
 }
 
 // ---- Commit + tag ----------------------------------------------------------
