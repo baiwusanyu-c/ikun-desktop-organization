@@ -13,7 +13,16 @@
  */
 
 import { execSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, mkdirSync, copyFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  mkdirSync,
+  rmSync,
+  copyFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join, resolve, basename, extname } from "node:path";
 import { platform, arch } from "node:os";
 import { createWriteStream } from "node:fs";
@@ -248,10 +257,16 @@ function buildTauri(opts) {
 }
 
 // ─── Artifact Collection ───────────────────────────────────────
-function ensureDir(dir) {
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+// 产物中转目录每次构建都必须从空开始。
+// CI 把整个 target 目录纳入了 Actions 缓存，而 target/dist 正是产物落点；
+// restore-keys 的前缀匹配会把上一次发版的产物一并恢复回来，于是本次 release 会混入
+// 旧版本 asset（v0.1.0-beta.9 实发踩中：beta.8 的 setup.exe / exe / zip 被一起上传）。
+// 更危险的是 latest.json 的 url 与 signature 可能配到陈旧文件上，用户会下到旧版本。
+function resetDir(dir) {
+  if (existsSync(dir)) {
+    rmSync(dir, { recursive: true, force: true });
   }
+  mkdirSync(dir, { recursive: true });
 }
 
 function copyIf(src, dest) {
@@ -276,7 +291,7 @@ function collectWindowsArtifacts(version, opts) {
   const prefix = `ikun_organizer-v${version}-windows-x64`;
 
   log("Collecting Windows artifacts...");
-  ensureDir(DIST_DIR);
+  resetDir(DIST_DIR);
 
   // Main executable
   const exe = join(targetDir, "ikun_organizer.exe");
